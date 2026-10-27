@@ -1,138 +1,93 @@
 <?php
-// Basis-Klassen (Theme Logik, identisch zum Profil)
-$bgClass = "bg-[#09090b]";
-$textClass = "text-white";
-$cardClass = "bg-white/5 border border-white/10 backdrop-blur-xl shadow-2xl rounded-[2rem]";
-$btnClass = "bg-white/10 hover:bg-white/20 border border-white/20 text-white shadow-lg";
-$inputClass = "bg-black/40 border border-white/20 text-white focus:border-white placeholder-white/40";
+// Termin-Anfrage (eingebauter Kalender) im Design der Profilseite.
+// Ohne Session/Cookies: Erfolg wird per ?ok=1 angezeigt.
+/** @var PDO $pdo */
+/** @var array $page */
 
-if ($user_data['theme'] === 'midnight') { $bgClass = "bg-gradient-to-br from-indigo-900 via-purple-900 to-black"; }
-if ($user_data['theme'] === 'forest') { $bgClass = "bg-gradient-to-br from-emerald-900 to-teal-900"; }
-if ($user_data['theme'] === 'sunset') { $bgClass = "bg-gradient-to-br from-rose-900 to-orange-900"; }
-if ($user_data['theme'] === 'ocean') { $bgClass = "bg-gradient-to-t from-blue-900 to-cyan-900"; }
-if ($user_data['theme'] === 'cherry') { $bgClass = "bg-gradient-to-r from-pink-900 to-rose-900"; }
+$slots = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00'];
+$selfUrl = oys_page_url($page, 'kalender');
+$error = null;
 
-if ($user_data['theme'] === 'glass') { 
-    $bgClass = "bg-gradient-to-tr from-gray-100 to-gray-300"; $textClass = "text-gray-900"; 
-    $cardClass = "bg-white/40 border border-white/50 backdrop-blur-2xl shadow-xl rounded-[2rem]";
-    $btnClass = "bg-white/50 hover:bg-white/80 border border-white/60 text-gray-900";
-    $inputClass = "bg-white/50 border border-white/60 text-gray-900 focus:border-gray-500 placeholder-gray-500";
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $name = oys_clean_text($_POST['guest_name'] ?? '', 80);
+    $email = trim((string) ($_POST['guest_email'] ?? ''));
+    $date = (string) ($_POST['booking_date'] ?? '');
+    $time = (string) ($_POST['booking_time'] ?? '');
+    $token = (string) ($_POST['t'] ?? '');
+    $validToken = preg_match('/^(\d{9,11})\.([a-f0-9]{32})$/', $token, $tm)
+        && hash_equals(substr(oys_hmac('booking|' . $page['id'] . '|' . $tm[1]), 0, 32), $tm[2])
+        && time() - (int) $tm[1] < 86400;
+
+    if (trim((string) ($_POST['website'] ?? '')) !== '' || !$validToken) {
+        oys_redirect($selfUrl . '?ok=1');
+    }
+    if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = 'Bitte gib deinen Namen und eine gültige E-Mail-Adresse an.';
+    } elseif (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $date < date('Y-m-d')) {
+        $error = 'Bitte wähle ein Datum ab heute.';
+    } elseif (!in_array($time, $slots, true)) {
+        $error = 'Bitte wähle eine Uhrzeit.';
+    } elseif (!oys_rate_limit($pdo, 'booking:' . $page['id'], 20, 3600)) {
+        $error = 'Gerade kommen sehr viele Anfragen an. Bitte versuche es später noch einmal.';
+    } else {
+        $pdo->prepare('INSERT INTO user_bookings (user_id, guest_name, guest_email, booking_date, booking_time) VALUES (?, ?, ?, ?, ?)')
+            ->execute([$page['user_id'], encryptData($name), encryptData($email), $date, $time]);
+        $dateDe = date('d.m.Y', strtotime($date));
+        oys_notify($pdo, (int) $page['user_id'], 'booking', 'Neue Termin-Anfrage von ' . $name, $dateDe . ' um ' . $time . ' Uhr', '/dashboard#nachrichten');
+        $owner = $pdo->prepare('SELECT email, full_name FROM users WHERE id = ?');
+        $owner->execute([$page['user_id']]);
+        if ($user = $owner->fetch()) {
+            sendCustomEmail($user['email'], 'new_booking', [
+                'full_name' => e($user['full_name'] ?: $page['title']),
+                'guest_name' => e($name),
+                'guest_email' => e($email),
+                'booking_date' => e($dateDe),
+                'booking_time' => e($time),
+                'dashboard_url' => e(oys_main_url('/dashboard')),
+            ], 'Neuer Termin: ' . $name . ' am ' . $dateDe, $email);
+        }
+        oys_redirect($selfUrl . '?ok=1');
+    }
 }
-if ($user_data['theme'] === 'minimal') { 
-    $bgClass = "bg-gray-50"; $textClass = "text-black"; 
-    $cardClass = "bg-white border border-gray-200 shadow-2xl rounded-[2rem]";
-    $btnClass = "bg-black hover:bg-gray-800 text-white border border-black";
-    $inputClass = "bg-white border border-gray-300 text-black focus:border-black placeholder-gray-400";
-}
-if ($user_data['theme'] === 'cyberpunk') { 
-    $bgClass = "bg-[#fcee0a]"; $textClass = "text-black font-semibold";
-    $cardClass = "bg-[#fcee0a] border-[6px] border-black rounded-none shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]";
-    $btnClass = "bg-black hover:bg-gray-900 border-2 border-black text-[#fcee0a] rounded-none shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] uppercase";
-    $inputClass = "bg-white border-4 border-black text-black focus:border-black placeholder-gray-500 rounded-none shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]";
-}
-if ($user_data['theme'] === 'hacker') { 
-    $bgClass = "bg-black"; $textClass = "text-green-500 font-mono"; 
-    $cardClass = "bg-black border border-green-500 rounded-none shadow-[0_0_30px_rgba(34,197,94,0.15)]";
-    $btnClass = "bg-green-500 hover:bg-green-600 text-black border border-green-500 rounded-none font-mono";
-    $inputClass = "bg-black border border-green-500 text-green-400 focus:border-green-400 placeholder-green-700 rounded-none font-mono";
-}
+
+$ts = time();
+$token = $ts . '.' . substr(oys_hmac('booking|' . $page['id'] . '|' . $ts), 0, 32);
+$avatar = !empty($page['avatar']) ? oys_upload_url($page['avatar']) : '';
+$name = $page['title'] ?: $page['slug'];
+
+ob_start();
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Book a Meeting | <?php echo htmlspecialchars($user_data['full_name']); ?></title>
-    <link rel="icon" type="image/png" href="/static/images/favicon.png">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
-    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        <?php if($user_data['theme'] === 'hacker') echo "body { font-family: 'Fira Code', monospace; }"; ?>
-        <?php echo htmlspecialchars_decode($user_data['custom_css'] ?? ''); ?>
-    </style>
-</head>
-<body class="<?php echo $bgClass; ?> <?php echo $textClass; ?> min-h-screen flex items-center justify-center p-4">
+<div class="oys-card">
+  <a class="oys-back" href="<?= e(oys_page_url($page)) ?>"><?= oys_ui_icon('left') ?> Zurück zum Profil</a>
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+    <div class="oys-avatar" style="--avatar-size:56px;margin:0"><div class="oys-avatar-inner">
+      <?php if ($avatar): ?><img src="<?= e($avatar) ?>" alt=""><?php else: ?><span class="oys-initials" style="font-size:1.1em"><?= e(oys_initials($name)) ?></span><?php endif; ?>
+    </div></div>
+    <div><h1 style="margin:0">Termin anfragen</h1><p style="margin:0">bei <?= e($name) ?></p></div>
+  </div>
 
-    <?php if(!empty($user_data['bg_image'])): ?>
-        <div class="fixed inset-0 z-0 pointer-events-none" style="background-image: url('/static/uploads/<?php echo htmlspecialchars($user_data['bg_image']); ?>'); background-size: cover; background-position: center; <?php echo ($user_data['theme'] === 'glass' || $user_data['theme'] === 'minimal') ? 'opacity-30' : 'opacity-50 mix-blend-overlay'; ?>"></div>
-    <?php endif; ?>
-
-    <div class="w-full max-w-lg relative z-10 <?php echo $cardClass; ?> p-8 md:p-10">
-        
-        <a href="https://<?php echo htmlspecialchars($user_data['username']); ?>.on-your.site" class="inline-flex items-center gap-2 text-sm font-semibold opacity-60 hover:opacity-100 transition-opacity mb-8 border-b border-transparent hover:border-current pb-0.5">
-            <i class='bx bx-left-arrow-alt text-lg'></i> Back to Profile
-        </a>
-
-        <div class="flex items-center gap-4 mb-8">
-            <div class="w-16 h-16 rounded-full overflow-hidden shrink-0 border border-current/20">
-                <?php if(!empty($user_data['profile_image'])): ?>
-                    <img src="/static/uploads/<?php echo htmlspecialchars($user_data['profile_image']); ?>" class="w-full h-full object-cover">
-                <?php else: ?>
-                    <div class="w-full h-full bg-black/20 flex items-center justify-center"><i class='bx bx-user text-2xl'></i></div>
-                <?php endif; ?>
-            </div>
-            <div>
-                <h1 class="text-2xl font-black tracking-tight">Book a Meeting</h1>
-                <p class="text-sm opacity-70">with <?php echo htmlspecialchars($user_data['full_name']); ?></p>
-            </div>
-        </div>
-
-        <?php if(isset($_SESSION['booking_success'])): ?>
-            <div class="p-6 rounded-2xl bg-green-500/20 border border-green-500/40 text-center mb-6">
-                <i class='bx bx-check-circle text-4xl text-green-500 mb-2'></i>
-                <h3 class="font-bold text-lg mb-1">Request Sent!</h3>
-                <p class="text-sm opacity-80"><?php echo $_SESSION['booking_success']; unset($_SESSION['booking_success']); ?></p>
-            </div>
-        <?php else: ?>
-            
-            <?php if(isset($_SESSION['booking_error'])): ?>
-                <div class="p-4 mb-6 rounded-xl bg-red-500/20 border border-red-500/40 text-red-500 text-sm font-semibold text-center">
-                    <?php echo $_SESSION['booking_error']; unset($_SESSION['booking_error']); ?>
-                </div>
-            <?php endif; ?>
-
-            <form action="/kalender" method="POST" class="space-y-5">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    <div>
-                        <label class="block text-sm font-bold opacity-80 mb-1.5">Your Name</label>
-                        <input type="text" name="guest_name" required class="w-full px-4 py-3 outline-none transition-all <?php echo $inputClass; ?>" placeholder="John Doe">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold opacity-80 mb-1.5">Your Email</label>
-                        <input type="email" name="guest_email" required class="w-full px-4 py-3 outline-none transition-all <?php echo $inputClass; ?>" placeholder="john@example.com">
-                    </div>
-                </div>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    <div>
-                        <label class="block text-sm font-bold opacity-80 mb-1.5">Preferred Date</label>
-                        <input type="date" name="booking_date" required min="<?php echo date('Y-m-d'); ?>" class="w-full px-4 py-3 outline-none transition-all <?php echo $inputClass; ?>">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold opacity-80 mb-1.5">Time</label>
-                        <select name="booking_time" required class="w-full px-4 py-3 outline-none transition-all appearance-none <?php echo $inputClass; ?>">
-                            <option value="" disabled selected>Select time...</option>
-                            <option value="09:00">09:00 AM</option>
-                            <option value="10:00">10:00 AM</option>
-                            <option value="11:00">11:00 AM</option>
-                            <option value="13:00">01:00 PM</option>
-                            <option value="14:00">02:00 PM</option>
-                            <option value="15:00">03:00 PM</option>
-                            <option value="16:00">04:00 PM</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="pt-4">
-                    <button type="submit" class="w-full py-4 font-black tracking-wide transition-all duration-300 flex items-center justify-center gap-2 <?php echo $btnClass; ?>">
-                        <i class='bx bx-calendar-check text-xl'></i> Request Appointment
-                    </button>
-                </div>
-            </form>
-        <?php endif; ?>
-
-    </div>
-</body>
-</html>
+  <?php if (isset($_GET['ok'])): ?>
+    <div class="oys-alert ok"><?= oys_ui_icon('check') ?> Deine Anfrage ist angekommen! Du bekommst eine Antwort per E-Mail.</div>
+  <?php else: ?>
+    <?php if ($error): ?><div class="oys-alert err"><?= e($error) ?></div><?php endif; ?>
+    <form class="oys-contact" method="post" action="<?= e($selfUrl) ?>">
+      <input type="hidden" name="t" value="<?= e($token) ?>">
+      <div class="oys-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+      <label class="oys-field"><span>Dein Name</span><input type="text" name="guest_name" required maxlength="80" autocomplete="name" value="<?= e($_POST['guest_name'] ?? '') ?>"></label>
+      <label class="oys-field"><span>Deine E-Mail</span><input type="email" name="guest_email" required autocomplete="email" value="<?= e($_POST['guest_email'] ?? '') ?>"></label>
+      <div class="oys-grid2">
+        <label class="oys-field"><span>Wunschdatum</span><input type="date" name="booking_date" required min="<?= date('Y-m-d') ?>" value="<?= e($_POST['booking_date'] ?? '') ?>"></label>
+        <label class="oys-field"><span>Uhrzeit</span>
+          <select name="booking_time" required>
+            <option value="" disabled<?= empty($_POST['booking_time']) ? ' selected' : '' ?>>Bitte wählen …</option>
+            <?php foreach ($slots as $slot): ?><option value="<?= $slot ?>"<?= ($_POST['booking_time'] ?? '') === $slot ? ' selected' : '' ?>><?= $slot ?> Uhr</option><?php endforeach; ?>
+          </select>
+        </label>
+      </div>
+      <button class="oys-contact-send" type="submit"><?= oys_ui_icon('calendar') ?><span>Termin anfragen</span></button>
+      <p class="oys-contact-note">Deine Angaben werden verschlüsselt gespeichert und nur für die Terminabsprache verwendet.</p>
+    </form>
+  <?php endif; ?>
+</div>
+<?php
+echo oys_render_simple($page, 'Termin anfragen | ' . $name, (string) ob_get_clean());

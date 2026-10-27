@@ -7,7 +7,7 @@ require_once __DIR__ . '/PHPMailer/src/Exception.php';
 require_once __DIR__ . '/PHPMailer/src/PHPMailer.php';
 require_once __DIR__ . '/PHPMailer/src/SMTP.php';
 
-function sendCustomEmail($to_email, $template_name, $variables = [], $subject_override = null) {
+function sendCustomEmail($to_email, $template_name, $variables = [], $subject_override = null, $reply_to = null) {
     $email_dir = __DIR__ . '/email/';
     $smtp_file = $email_dir . 'smtp.json';
     $template_file = $email_dir . $template_name . '.json';
@@ -57,6 +57,9 @@ function sendCustomEmail($to_email, $template_name, $variables = [], $subject_ov
 
         $mail->setFrom($smtp_config['from_email'], $smtp_config['from_name']);
         $mail->addAddress($to_email);
+        if (!empty($reply_to) && filter_var($reply_to, FILTER_VALIDATE_EMAIL)) {
+            $mail->addReplyTo($reply_to);
+        }
 
         $mail->isHTML(true);
         $mail->Subject = $subject;

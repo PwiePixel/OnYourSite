@@ -1,122 +1,91 @@
 <?php
-// API Headers
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *'); // Falls gewünscht, anpassen z.B. auf 'https://on-your.site'
+// Öffentliche JSON-API: https://on-your.site/api.php?user=name
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
 
-// Fehlerunterdrückung für sauberen JSON Output
-ini_set('display_errors', 0);
-error_reporting(0);
+require __DIR__ . '/lib/bootstrap.php';
+ini_set('display_errors', '0');
 
-require_once 'db.php';
-
-// Checken ob ein Username (Subdomain) angefragt wurde
-$username = $_GET['user'] ?? '';
-
-if (empty($username)) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'No user parameter provided.'
-    ]);
+$slug = oys_normalize_slug($_GET['user'] ?? '');
+if ($slug === '') {
+    echo json_encode(['status' => 'error', 'message' => 'No user parameter provided.']);
     exit;
 }
 
 try {
-    // 1. User Daten holen
-    $stmt = $pdo->prepare("SELECT id, full_name, username, bio, profession, detailed_bio, profile_image, bg_image, theme, layout_type, booking_url, cv_file, discord_id, hide_branding FROM users WHERE username = ?");
-    $stmt->execute([$username]);
-    $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$user_data) {
-        echo json_encode([
-            'status' => 'error',
-            'message' => 'User not found.'
-        ]);
+    $page = oys_load_page_by_slug($pdo, $slug);
+    if (!$page) {
+        echo json_encode(['status' => 'error', 'message' => 'User not found.']);
         exit;
     }
+    $settings = oys_page_settings($page);
+    $theme = oys_theme_key($page['theme']);
+    $themeMeta = oys_themes()[$theme];
+    $tz = new DateTimeZone(oys_config('timezone', 'Europe/Berlin'));
+    $now = new DateTimeImmutable('now', $tz);
 
-    // 2. Links des Users holen
-    $stmtLinks = $pdo->prepare("SELECT id, title, url, icon_class, sort_order FROM user_links WHERE user_id = ? ORDER BY sort_order ASC");
-    $stmtLinks->execute([$user_data['id']]);
-    $user_links = $stmtLinks->fetchAll(PDO::FETCH_ASSOC);
-
-    // 3. Theme Logik (analog zur user_profile.php) umwandeln für die API
-    $layout = $user_data['layout_type'] ?: 'link-tree';
-    $theme = $user_data['theme'] ?: 'deep-dark';
-    
-    // Fallback Styling Infos, falls das Frontend diese direkt nutzen will
-    $styleData = [
-        'bgClass' => 'bg-[#09090b]',
-        'textClass' => 'text-white',
-        'isDark' => true
-    ];
-
-    if ($theme === 'midnight') { $styleData['bgClass'] = "bg-gradient-to-br from-indigo-900 via-purple-900 to-black"; }
-    if ($theme === 'forest') { $styleData['bgClass'] = "bg-gradient-to-br from-emerald-900 to-teal-900"; }
-    if ($theme === 'sunset') { $styleData['bgClass'] = "bg-gradient-to-br from-rose-900 to-orange-900"; }
-    if ($theme === 'ocean') { $styleData['bgClass'] = "bg-gradient-to-t from-blue-900 to-cyan-900"; }
-    if ($theme === 'cherry') { $styleData['bgClass'] = "bg-gradient-to-r from-pink-900 to-rose-900"; }
-    
-    if ($theme === 'glass') { 
-        $styleData['bgClass'] = "bg-gradient-to-tr from-gray-100 to-gray-300"; 
-        $styleData['textClass'] = "text-gray-900"; 
-        $styleData['isDark'] = false;
-    }
-    if ($theme === 'minimal') { 
-        $styleData['bgClass'] = "bg-gray-50"; 
-        $styleData['textClass'] = "text-black"; 
-        $styleData['isDark'] = false;
-    }
-    if ($theme === 'cyberpunk') { 
-        $styleData['bgClass'] = "bg-[#fcee0a]"; 
-        $styleData['textClass'] = "text-black";
-        $styleData['isDark'] = false;
-    }
-    if ($theme === 'hacker') { 
-        $styleData['bgClass'] = "bg-black"; 
-        $styleData['textClass'] = "text-green-500"; 
+    $links = [];
+    $socials = [];
+    $position = 0;
+    foreach (oys_load_blocks($pdo, (int) $page['id']) as $b) {
+        if (!$b['is_visible'] || !oys_schedule_active($b['schedule'], $now)) {
+            continue;
+        }
+        $d = $b['data'];
+        if ($b['type'] === 'link' && !empty($d['url'])) {
+            $protected = $b['protection'] !== 'none';
+            $icon = (string) ($d['icon'] ?? '');
+            $links[] = [
+                'id' => $b['id'],
+                'title' => ($d['title'] ?? '') ?: oys_pretty_url($d['url']),
+                // Geschützte Links verraten ihre Zieladresse nicht
+                'url' => $protected ? oys_page_url($page) . '/_/go/' . $b['id'] : $d['url'],
+                'icon_class' => strpos($icon, 'bx') === 0 ? $icon : '',
+                'platform' => strpos($icon, 'brand:') === 0 ? substr($icon, 6) : oys_detect_brand($d['url']),
+                'protected' => $protected ? $b['protection'] : false,
+                'sort_order' => $position++,
+            ];
+        }
+        if ($b['type'] === 'socials') {
+            foreach ($d['items'] ?? [] as $item) {
+                $url = oys_social_url($item['p'], (string) $item['v']);
+                if ($url !== '') {
+                    $socials[] = ['platform' => $item['p'], 'url' => $url];
+                }
+            }
+        }
     }
 
-    // 4. Pfade für Bilder generieren
-    $profile_img_url = !empty($user_data['profile_image']) ? 'https://on-your.site/static/uploads/' . $user_data['profile_image'] : null;
-    $bg_img_url = !empty($user_data['bg_image']) ? 'https://on-your.site/static/uploads/' . $user_data['bg_image'] : null;
-    $cv_file_url = !empty($user_data['cv_file']) ? 'https://on-your.site/static/uploads/' . $user_data['cv_file'] : null;
+    $mediaUrl = fn($f) => $f ? oys_main_url(oys_upload_url($f)) : null;
 
-    // 5. JSON Response zusammenbauen
-    $response = [
+    echo json_encode([
         'status' => 'success',
         'data' => [
             'profile' => [
-                'full_name' => $user_data['full_name'],
-                'username' => $user_data['username'],
-                'url' => 'https://' . $user_data['username'] . '.on-your.site',
-                'bio' => $user_data['bio'],
-                'profession' => $user_data['profession'],
-                'detailed_bio' => $user_data['detailed_bio'],
-                'discord_id' => $user_data['discord_id'],
-                'booking_url' => $user_data['booking_url'] ?: 'https://' . $user_data['username'] . '.on-your.site/kalender',
-                'hide_branding' => (bool)$user_data['hide_branding']
+                'full_name' => $page['title'],
+                'username' => $page['slug'],
+                'url' => oys_page_url($page),
+                'urls' => oys_page_urls($page),
+                'bio' => $page['bio'],
+                'profession' => $page['subtitle'],
+                'hide_branding' => (bool) $settings['hide_branding'],
             ],
             'media' => [
-                'profile_image' => $profile_img_url,
-                'background_image' => $bg_img_url,
-                'cv_file' => $cv_file_url,
+                'profile_image' => $mediaUrl($page['avatar']),
+                'background_image' => $mediaUrl($page['bg_image']),
             ],
             'design' => [
-                'layout' => $layout,
                 'theme' => $theme,
-                'styling' => $styleData
+                'theme_name' => $themeMeta['name'],
+                'layout' => oys_layout_key($page['layout']),
+                'accent' => $settings['accent'] ?: $themeMeta['accent'],
+                'is_dark' => (bool) $themeMeta['dark'],
             ],
-            'links' => $user_links
-        ]
-    ];
-
-    echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-
-} catch (PDOException $e) {
-    // Error Handling
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Database error occurred.'
-    ]);
+            'links' => $links,
+            'socials' => $socials,
+        ],
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+} catch (Throwable $e) {
+    error_log('API-Fehler: ' . $e->getMessage());
+    echo json_encode(['status' => 'error', 'message' => 'Database error occurred.']);
 }
-?>

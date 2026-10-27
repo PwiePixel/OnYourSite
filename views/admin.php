@@ -9,6 +9,13 @@ if (!isset($_SESSION['user_id']) || !$user_data['is_admin']) {
 require_once __DIR__ . '/../mail.php';
 require_once __DIR__ . '/../security.php'; // NEU: Damit der Admin die Daten lesen kann
 
+// Alle Admin-Formulare sind gegen CSRF geschützt
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !oys_csrf_check($_POST['csrf'] ?? null)) {
+    $_SESSION['admin_error'] = "Session expired – please try again.";
+    header("Location: /admin");
+    exit;
+}
+
 // Ordner für E-Mails und Config sicherstellen
 $email_dir = __DIR__ . '/../email/';
 if (!is_dir($email_dir)) {
@@ -38,6 +45,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user_id'])) {
     if ($delete_id === $_SESSION['user_id']) {
         $_SESSION['admin_error'] = "You cannot delete your own admin account!";
     } else {
+        foreach (oys_user_pages($pdo, $delete_id) as $delPage) {
+            oys_delete_page($pdo, $delPage);
+        }
+        foreach (['notifications', 'messages', 'user_links', 'user_bookings', 'user_certificates'] as $tbl) {
+            $pdo->prepare("DELETE FROM $tbl WHERE user_id = ?")->execute([$delete_id]);
+        }
         $stmtDel = $pdo->prepare("DELETE FROM users WHERE id = ?");
         $stmtDel->execute([$delete_id]);
         $_SESSION['admin_success'] = "User successfully deleted.";
@@ -140,6 +153,13 @@ foreach ($all_users as &$u) {
 }
 unset($u);
 
+// Seiten (bis zu 3 je Nutzer) für die Tabelle
+$pagesByUser = [];
+foreach ($pdo->query("SELECT * FROM pages ORDER BY position, id")->fetchAll() as $pg) {
+    $pagesByUser[(int) $pg['user_id']][] = $pg;
+}
+$total_pages = array_sum(array_map('count', $pagesByUser));
+
 $total_users = count($all_users);
 $total_admins = count(array_filter($all_users, fn($u) => $u['is_admin'] == 1));
 $total_domains = count(array_filter($all_users, fn($u) => !empty($u['username'])));
@@ -189,7 +209,7 @@ if (file_exists($smtp_file)) {
 
     <aside class="w-20 lg:w-64 border-r border-bordercolor bg-card flex flex-col justify-between py-6 transition-all z-20 shrink-0">
         <div>
-            <a href="https://on-your.site" class="px-6 mb-8 flex items-center gap-2 cursor-pointer transition-transform hover:scale-105 group block">
+            <a href="<?php echo htmlspecialchars(oys_main_url('/')); ?>" class="px-6 mb-8 flex items-center gap-2 cursor-pointer transition-transform hover:scale-105 group block">
                 <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center shadow-lg shadow-brand-500/20">
                     <i class='bx bx-hive text-xl text-white'></i>
                 </div>
@@ -235,7 +255,7 @@ if (file_exists($smtp_file)) {
                 <span class="bg-emerald-500/20 text-emerald-400 text-[10px] uppercase px-2 py-0.5 rounded border border-emerald-500/30 font-bold flex items-center gap-1"><i class='bx bxs-shield'></i> System Admin</span>
             </div>
             <div class="flex items-center gap-4">
-                <a href="https://on-your.site" target="_blank" class="text-sm text-gray-400 hover:text-brand-400 hidden sm:flex items-center gap-1.5 transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-bordercolor hover:border-brand-500/30">
+                <a href="<?php echo htmlspecialchars(oys_main_url('/')); ?>" target="_blank" class="text-sm text-gray-400 hover:text-brand-400 hidden sm:flex items-center gap-1.5 transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-bordercolor hover:border-brand-500/30">
                     View Live Site <i class='bx bx-link-external'></i>
                 </a>
             </div>
@@ -262,7 +282,7 @@ if (file_exists($smtp_file)) {
                     </div>
                     <div class="bg-card border border-bordercolor rounded-xl p-6 flex items-center gap-4">
                         <div class="w-12 h-12 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400"><i class='bx bx-globe text-2xl'></i></div>
-                        <div><p class="text-sm text-gray-500 font-medium mb-1">Claimed Domains</p><h3 class="text-2xl font-bold text-white"><?php echo $total_domains; ?></h3></div>
+                        <div><p class="text-sm text-gray-500 font-medium mb-1">Claimed Domains / Pages</p><h3 class="text-2xl font-bold text-white"><?php echo $total_domains; ?> <span class="text-base text-gray-500">/ <?php echo $total_pages; ?></span></h3></div>
                     </div>
                     <div class="bg-card border border-bordercolor rounded-xl p-6 flex items-center gap-4">
                         <div class="w-12 h-12 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400"><i class='bx bx-shield-check text-2xl'></i></div>
@@ -306,8 +326,10 @@ if (file_exists($smtp_file)) {
                                     </td>
                                     <td class="px-6 py-4">
                                         <div class="flex flex-col gap-1.5">
-                                            <?php if(!empty($u['username'])): ?>
-                                                <a href="https://<?php echo htmlspecialchars($u['username']); ?>.on-your.site" target="_blank" class="text-brand-400 hover:text-brand-300 text-xs flex items-center gap-1 transition-colors search-target font-mono"><i class='bx bx-globe'></i> <?php echo htmlspecialchars($u['username']); ?>.on-your.site</a>
+                                            <?php if(!empty($pagesByUser[(int) $u['id']])): ?>
+                                                <?php foreach ($pagesByUser[(int) $u['id']] as $pg): ?>
+                                                <a href="<?php echo htmlspecialchars(oys_page_url($pg)); ?>" target="_blank" class="text-brand-400 hover:text-brand-300 text-xs flex items-center gap-1 transition-colors search-target font-mono"><i class='bx bx-globe'></i> <?php echo htmlspecialchars(oys_page_display_url($pg)); ?> <span class="text-gray-600">(<?php echo (int) $pg['views']; ?> views)</span></a>
+                                                <?php endforeach; ?>
                                             <?php else: ?>
                                                 <span class="text-gray-600 text-xs italic"><i class='bx bx-ghost'></i> No domain</span>
                                             <?php endif; ?>
@@ -334,12 +356,12 @@ if (file_exists($smtp_file)) {
 
                                             <button type="button" onclick="openPwdModal(<?php echo $u['id']; ?>, '<?php echo htmlspecialchars(addslashes($u['full_name'])); ?>')" class="p-1.5 text-gray-500 hover:text-white hover:bg-white/10 rounded-md transition-all shadow-sm border border-transparent hover:border-bordercolor" title="Force Password Reset"><i class='bx bx-key text-lg'></i></button>
                                             
-                                            <form action="/admin" method="POST" class="inline-block m-0 p-0" onsubmit="return confirm('Change admin privileges for this user?');">
+                                            <form action="/admin" method="POST" class="inline-block m-0 p-0" onsubmit="return confirm('Change admin privileges for this user?');"><?= oys_csrf_field() ?>
                                                 <input type="hidden" name="toggle_admin_id" value="<?php echo $u['id']; ?>">
                                                 <button type="submit" class="p-1.5 text-gray-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-md transition-all shadow-sm border border-transparent hover:border-emerald-500/20" title="<?php echo $u['is_admin'] ? 'Remove Admin Rights' : 'Make Admin'; ?>" <?php echo ($u['id'] === $_SESSION['user_id']) ? 'disabled class="p-1.5 text-gray-700 cursor-not-allowed"' : ''; ?>><i class='bx <?php echo $u['is_admin'] ? 'bx-shield-minus' : 'bx-shield-plus'; ?> text-lg'></i></button>
                                             </form>
                                             
-                                            <form action="/admin" method="POST" class="inline-block m-0 p-0" onsubmit="return confirm('WARNING: Are you sure you want to completely delete this user and all their data? This cannot be undone.');">
+                                            <form action="/admin" method="POST" class="inline-block m-0 p-0" onsubmit="return confirm('WARNING: Are you sure you want to completely delete this user and all their data? This cannot be undone.');"><?= oys_csrf_field() ?>
                                                 <input type="hidden" name="delete_user_id" value="<?php echo $u['id']; ?>">
                                                 <button type="submit" class="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-all shadow-sm border border-transparent hover:border-red-500/20" title="Delete User" <?php echo ($u['id'] === $_SESSION['user_id']) ? 'disabled class="p-1.5 text-gray-700 cursor-not-allowed"' : ''; ?>><i class='bx bx-trash text-lg'></i></button>
                                             </form>
@@ -371,6 +393,7 @@ if (file_exists($smtp_file)) {
                     <h2 class="text-base font-semibold text-white mb-6 border-b border-bordercolor pb-4">Compose Campaign</h2>
                     
                     <form action="/admin" method="POST" class="space-y-6">
+                        <?= oys_csrf_field() ?>
                         <input type="hidden" name="send_newsletter" value="1">
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -432,6 +455,7 @@ if (file_exists($smtp_file)) {
                     </div>
                     
                     <form action="/admin" method="POST" class="space-y-6">
+                        <?= oys_csrf_field() ?>
                         <input type="hidden" name="save_smtp" value="1">
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -486,6 +510,7 @@ if (file_exists($smtp_file)) {
                 <button type="button" onclick="closePwdModal()" class="text-gray-500 hover:text-white transition-colors"><i class='bx bx-x text-2xl'></i></button>
             </div>
             <form action="/admin" method="POST" class="p-6 bg-background">
+                <?= oys_csrf_field() ?>
                 <input type="hidden" name="reset_password_id" id="resetUserId" value="">
                 <p class="text-sm text-gray-400 mb-4">Set a new password for <strong id="resetUserName" class="text-white"></strong>. They will need this new password to log in.</p>
                 <div class="mb-6">
