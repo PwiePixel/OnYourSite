@@ -1,0 +1,5 @@
+# Hochgeladene Dateien niemals als Skript ausführen
+<FilesMatch "\.(php[0-9]?|phtml|phar|pl|py|cgi|sh|html?|svg|js)$">
+    Require all denied
+</FilesMatch>
+Options -Indexes -ExecCGI

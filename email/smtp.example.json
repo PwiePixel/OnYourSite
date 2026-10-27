@@ -1,0 +1,8 @@
+{
+    "host": "mail.on-your.site",
+    "port": "465",
+    "username": "noreply@on-your.site",
+    "password": "",
+    "from_email": "noreply@on-your.site",
+    "from_name": "OnYourSite"
+}
