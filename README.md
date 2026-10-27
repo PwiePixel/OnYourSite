@@ -15,7 +15,7 @@ Deine eigene Link-in-Bio-Seite unter `name.on-your.site` oder `on-your.site/name
 | **Zeitsteuerung** | „Jetzt live“ nur freitags 18–23 Uhr? Blöcke erscheinen und verschwinden automatisch. |
 | **13 Anordnungen** | Knöpfe, breite Karten, Kacheln, App-Raster, Zeitstrahl, Wolke, zwei Spalten, Baum, Bento, Karussell, Polaroid, Magazin, Stapel. |
 | **Effekte** | Animierter Ring ums Profilbild, Glanz/Wackeln/Pulsieren für einzelne Links, Schnee, Konfetti oder Glühwürmchen und Funken hinter dem Mauszeiger. |
-| **Geschützte Links** | Einzelne Links nur mit Passwort oder nach „Ab 18“-Bestätigung. Die Zieladresse steht nie im Quelltext. |
+| **Geschützte Links** | Einzelne Links nur mit Passwort (mind. 6 Zeichen) oder nach „Ab 18“-Bestätigung. Die Zieladresse steht nie im Quelltext und nicht in der API. |
 | **Bis zu 3 Seiten** | Eigene Adresse und Statistik je Seite, umschaltbar im Editor. |
 | **Wochenbericht** | Auf Wunsch jeden Montag eine Mail mit Aufrufen, Klicks und dem besten Link. |
 | **Eingang mit Musik** | Besucher tippen zum Betreten, die Seite öffnet sich mit Animation und die Musik startet. |
@@ -37,7 +37,9 @@ Bestehendes bleibt: eingebauter Terminkalender (`/kalender`), Datei-Download (PD
 
 Voraussetzungen: PHP 7.4 oder neuer (8.x empfohlen) mit PDO MySQL, OpenSSL, mbstring, fileinfo und GD (mit WebP); Wildcard-DNS und -SSL für `*.on-your.site` wie bisher.
 
-Uploads: Fotos werden schon im Browser verkleinert und passen daher auch unter kleine Server-Limits. Für Musik beim „Eingang mit Musik“ (bis 15 MB) in Plesk unter *PHP-Einstellungen* `upload_max_filesize` und `post_max_size` auf mindestens `16M` setzen.
+Uploads: Fotos werden schon im Browser verkleinert und passen daher auch unter kleine Server-Limits. Für Musik beim „Eingang mit Musik“ (bis 15 MB) in Plesk unter *PHP-Einstellungen* `upload_max_filesize` und `post_max_size` auf mindestens `16M` setzen. Jedes Konto hat 200 MB Speicher (Premium/Admin 1 GB); hochgeladene, aber nie gespeicherte Dateien werden nach zwei Tagen automatisch entfernt.
+
+Der eingebaute Terminkalender (`/kalender`) ist nur erreichbar, wenn die Seite einen sichtbaren Termin-Block hat, der auf ihn zeigt – ist dieser Block geschützt, öffnet sich der Kalender erst nach dem Passwort.
 
 Tests: `php tests/unit.php` (nur Kommandozeile) prüft Zeitsteuerung, Einbettungen, Adressen, Spamfilter und URL-Prüfung.
 
@@ -66,4 +68,4 @@ cron/weekly_report.php Wochenbericht
 
 ## Datenschutz
 
-Profilseiten setzen keine Cookies und laden nichts von fremden Servern (Schriften und Icons liegen lokal; YouTube, Twitch und Spotify erst nach Antippen). Statistik speichert nur Zähler pro Tag. Nachrichten aus dem Kontaktformular und Termin-Anfragen werden verschlüsselt gespeichert. Bitte passe deine Datenschutzerklärung an die neuen Funktionen an (Kontaktformular, Terminkalender, Einbettungen, Statistik).
+Profilseiten setzen keine Cookies und laden nichts von fremden Servern (Schriften und Icons liegen lokal; YouTube, Twitch und Spotify erst nach Antippen). Auch eigenes CSS kann keine fremden Adressen laden – `url(https://…)` und `@import` werden entfernt. Statistik speichert nur Zähler pro Tag, keine IP-Adressen. Gegen Passwort-Raten und Spam (Kontaktformular, Kalender, Login) zählt OnYourSite Versuche kurzzeitig je Absender – dafür wird statt der IP nur ein nicht umkehrbarer, täglich wechselnder Schlüssel verwendet, der nach spätestens einem Tag gelöscht wird. Nachrichten aus dem Kontaktformular und Termin-Anfragen werden verschlüsselt gespeichert. Bitte passe deine Datenschutzerklärung an die neuen Funktionen an (Kontaktformular, Terminkalender, Einbettungen, Statistik).

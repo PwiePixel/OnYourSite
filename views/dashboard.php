@@ -65,7 +65,7 @@ unset($_SESSION['success'], $_SESSION['error']);
     <?php if ($is_impersonating): ?>
     <div class="bg-emerald-500 text-white text-center py-2.5 text-sm font-bold flex items-center justify-center gap-2 shadow-lg relative z-[200] shrink-0 w-full">
         <i class='bx bx-mask text-xl'></i> Admin-Modus: Du bearbeitest <?= e($user_data['full_name']) ?>
-        <a href="/admin_return.php" class="ml-4 bg-white/20 hover:bg-white/30 px-3 py-1 rounded-md transition-colors border border-white/20 flex items-center gap-1 shadow-sm"><i class='bx bx-left-arrow-alt'></i> Zurück zum Admin-Panel</a>
+        <form method="post" action="/admin_return.php" class="ml-4 m-0"><?= oys_csrf_field() ?><button type="submit" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-md transition-colors border border-white/20 flex items-center gap-1 shadow-sm"><i class='bx bx-left-arrow-alt'></i> Zurück zum Admin-Panel</button></form>
     </div>
     <?php endif; ?>
 
@@ -88,7 +88,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                 <?php if (!empty($user_data['is_admin'])): ?>
                 <a href="/admin" class="flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-white transition-colors"><i class='bx bx-shield-quarter text-xl'></i> <span class="hidden lg:block text-sm">Admin</span></a>
                 <?php endif; ?>
-                <a href="/logout" class="flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"><i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Abmelden</span></a>
+                <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?><button type="submit" class="w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"><i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Abmelden</span></button></form>
             </div>
         </aside>
 

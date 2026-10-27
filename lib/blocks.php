@@ -27,6 +27,29 @@ function oys_block_is_clickable(string $type): bool
 
 const OYS_EFFECTS = ['none', 'shine', 'wobble', 'pulse'];
 const OYS_PROTECTIONS = ['none', 'password', 'age'];
+const OYS_LINK_PASSWORD_MIN = 6;
+
+// Zeigt ein Termin-Block auf den eingebauten Kalender dieser Seite? ('', '/kalender' oder die volle eigene Adresse)
+function oys_booking_is_internal(array $data, array $page): bool
+{
+    $url = strtolower(rtrim(trim((string) ($data['url'] ?? '')), '/'));
+    if ($url === '' || $url === '/kalender') {
+        return true;
+    }
+    $url = preg_replace('#^https?://#', '', $url);
+    foreach (oys_page_urls($page) as $own) {
+        if ($url === strtolower(preg_replace('#^https?://#', '', $own)) . '/kalender') {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Schlüssel, mit dem ein geschützter Termin-Block den Kalender freigibt (ändert sich mit dem Passwort)
+function oys_calendar_key(array $page, array $block): string
+{
+    return substr(oys_hmac('calendar|' . $page['id'] . '|' . $block['id'] . '|' . ($block['password_hash'] ?? '')), 0, 24);
+}
 
 function oys_pick($value, array $allowed, $default)
 {
@@ -167,24 +190,30 @@ function oys_block_normalize(array $in, int $userId, ?array $existing = null, bo
     if (!oys_block_is_clickable($type)) {
         $protection = 'none';
     }
+    $visible = !isset($in['visible']) || !empty($in['visible']) ? 1 : 0;
     if ($protection === 'password') {
         $newPassword = is_string($in['password'] ?? null) ? trim($in['password']) : '';
+        if ($newPassword !== '' && mb_strlen($newPassword) < OYS_LINK_PASSWORD_MIN) {
+            $newPassword = '';
+            $warning = 'Link-Passwörter brauchen mindestens ' . OYS_LINK_PASSWORD_MIN . ' Zeichen – das neue Passwort wurde nicht übernommen.';
+        }
         if ($newPassword !== '') {
             // In der Vorschau wird nicht gehasht (zu langsam bei jedem Tastendruck)
             $passwordHash = $forPreview ? 'preview' : password_hash(mb_substr($newPassword, 0, 100), PASSWORD_DEFAULT);
-        } elseif ($forPreview && !empty($in['has_password'])) {
+        } elseif ($forPreview) {
             $passwordHash = 'preview';
         } elseif ($existing && !empty($existing['password_hash'])) {
             $passwordHash = $existing['password_hash'];
         } else {
-            $protection = 'none';
-            $warning = 'Für den geschützten Link fehlt noch ein Passwort – er ist vorerst ungeschützt.';
+            // Nie stillschweigend ungeschützt veröffentlichen: ohne Passwort bleibt der Link ausgeblendet
+            $visible = 0;
+            $warning = 'Für den geschützten Link fehlt ein Passwort – er ist deshalb ausgeblendet. Lege ein Passwort fest und blende ihn wieder ein.';
         }
     }
 
     return [
         'type' => $type,
-        'is_visible' => !isset($in['visible']) || !empty($in['visible']) ? 1 : 0,
+        'is_visible' => $visible,
         'data' => $data,
         'schedule' => oys_schedule_normalize($in['schedule'] ?? null),
         'protection' => $protection,

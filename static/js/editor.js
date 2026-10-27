@@ -79,6 +79,7 @@
   function apiGet(action) { return api(action); }
 
   // Große Fotos schon im Browser verkleinern (viele Server erlauben nur 2 MB pro Datei)
+  var PW_MIN = 6; // Mindestlänge für Link-Passwörter (wie OYS_LINK_PASSWORD_MIN)
   var MAX_PX = { avatar: 900, bg: 2200, image: 1800, gallery: 1800, thumb: 1000 };
   var EXT = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };
   function shrinkImage(kind, file) {
@@ -346,13 +347,15 @@
 
   function save() {
     if (!state.page || saving) return;
-    var missingPw = state.blocks.filter(function (b) { return b.protection === 'password' && !b.has_password && !b.password; });
-    if (missingPw.length) {
-      openBlocks[missingPw[0].id] = true;
-      extrasTab[missingPw[0].id] = 'protect';
+    var badPw = state.blocks.filter(function (b) {
+      return b.protection === 'password' && ((!b.has_password && !b.password) || (b.password && b.password.trim().length < PW_MIN));
+    });
+    if (badPw.length) {
+      openBlocks[badPw[0].id] = true;
+      extrasTab[badPw[0].id] = 'protect';
       switchTab('inhalte');
       renderBlocks();
-      toast('Bitte lege für den geschützten Link ein Passwort fest.', 'err');
+      toast(badPw[0].password ? 'Das Passwort für den geschützten Link braucht mindestens ' + PW_MIN + ' Zeichen.' : 'Bitte lege für den geschützten Link ein Passwort fest.', 'err');
       return;
     }
     saving = true;
@@ -1170,7 +1173,7 @@
   function protectPane(b) {
     var html = '<div class="blk-pane">' + chips('protection', { none: 'Kein Schutz', password: '🔒 Passwort', age: '🔞 Ab 18' }, b.protection);
     if (b.protection === 'password') {
-      html += '<div><label class="lbl">Passwort</label><input class="field" type="text" autocomplete="off" data-f="password" placeholder="' + (b.has_password ? 'Passwort ist gesetzt – neues eingeben zum Ändern' : 'Passwort festlegen') + '" maxlength="100">' +
+      html += '<div><label class="lbl">Passwort</label><input class="field" type="text" autocomplete="off" data-f="password" placeholder="' + (b.has_password ? 'Passwort ist gesetzt – neues eingeben zum Ändern' : 'Passwort festlegen (mind. ' + PW_MIN + ' Zeichen)') + '" maxlength="100">' +
         '<p class="hint">Besucher müssen das Passwort eingeben, bevor der Link aufgeht. Die Zieladresse steht nicht im Quelltext deiner Seite.</p></div>';
     } else if (b.protection === 'age') {
       html += '<p class="hint" style="margin:0">Besucher bestätigen vorher, dass sie mindestens 18 Jahre alt sind. Die Zieladresse steht nicht im Quelltext deiner Seite.</p>';
@@ -1264,13 +1267,15 @@
       var copy = normBlock(clone(b));
       copy.id = 'n' + (++newCounter);
       copy.clicks = 0;
+      // Der Schutz bleibt; ein Passwort-Link bekommt vor dem Speichern ein eigenes Passwort
       copy.has_password = false;
-      if (copy.protection === 'password') copy.protection = 'none';
+      copy.password = '';
       state.blocks.splice(state.blocks.indexOf(b) + 1, 0, copy);
       openBlocks[copy.id] = true;
+      if (copy.protection === 'password') extrasTab[copy.id] = 'protect';
       renderBlocks();
       markDirty({ fast: true });
-      toast('Block dupliziert' + (b.protection === 'password' ? ' – das Passwort musst du neu setzen.' : '.'), 'info');
+      toast('Block dupliziert' + (b.protection === 'password' ? ' – lege für die Kopie ein Passwort fest.' : '.'), 'info');
       return;
     }
     if (action === 'icon') { openIconPicker(b); return; }
@@ -1806,7 +1811,7 @@
       '<div class="flex items-center justify-between gap-4"><div><div class="text-sm text-white font-medium flex items-center gap-2">„Erstellt mit OnYourSite“ ausblenden ' + (E.premium ? '' : '<span class="premium-pill"><i class="bx bxs-lock"></i> Premium</span>') + '</div><p class="hint" style="margin-top:2px">Entfernt den Hinweis unten auf deiner Seite.</p></div>' +
       '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (E.premium ? '' : ' disabled') + '><span class="track"></span></label></div>' +
       '<div><label class="lbl">Eigenes CSS <small>(für Profis)</small></label><textarea class="field css-editor" rows="6" data-bind="page.settings.custom_css" placeholder="/* z. B. .oys-name { letter-spacing: .1em; } */"></textarea>' +
-      '<p class="hint">Alle Elemente haben Klassen wie <code>.oys-name</code>, <code>.oys-link</code>, <code>.oys-socials</code>.</p></div></div></section>' +
+      '<p class="hint">Alle Elemente haben Klassen wie <code>.oys-name</code>, <code>.oys-link</code>, <code>.oys-socials</code>. Adressen fremder Server (<code>url(https://…)</code>, <code>@import</code>) werden aus Datenschutzgründen entfernt – lade Bilder lieber hier im Editor hoch.</p></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Integrationen</h2><div class="panel space-y-3">' +
       '<label class="lbl flex items-center gap-2">Discord-ID <span class="text-[10px] text-[#5865F2] bg-[#5865F2]/10 px-1.5 rounded">Auto-Rolle</span></label>' +

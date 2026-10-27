@@ -33,6 +33,12 @@ function oys_serve_page(PDO $pdo, array $page, string $sub): void
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('X-Content-Type-Options: nosniff');
     if ($sub === 'kalender') {
+        $calendarKey = oys_calendar_access($pdo, $page, (string) ($_GET['k'] ?? ''));
+        if ($calendarKey === null) {
+            http_response_code(404);
+            require __DIR__ . '/views/404.php';
+            exit;
+        }
         require __DIR__ . '/views/kalender.php';
         exit;
     }

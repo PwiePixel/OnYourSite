@@ -35,8 +35,11 @@ function oys_block_target(array $block, array $page): string
     $d = $block['data'];
     switch ($block['type']) {
         case 'booking':
-            $url = (string) ($d['url'] ?? '/kalender');
-            return ($url === '' || $url === '/kalender') ? oys_page_url($page, 'kalender') : oys_clean_url($url, true);
+            if (oys_booking_is_internal($d, $page)) {
+                // Geschützter Termin-Block: Kalender nur mit Schlüssel (sonst ließe sich der Schutz über /kalender umgehen)
+                return oys_page_url($page, 'kalender') . ($block['protection'] !== 'none' ? '?k=' . oys_calendar_key($page, $block) : '');
+            }
+            return oys_clean_url((string) ($d['url'] ?? ''), true);
         case 'file':
             return !empty($d['src']) ? oys_main_url(oys_upload_url($d['src'])) : '';
         default:
@@ -62,7 +65,8 @@ function oys_render_gate(array $page, array $block, string $kind, ?string $error
         $body = '<div class="oys-card">' . $back
             . '<div class="oys-modal-icon" style="margin:0 0 12px">18+</div><h1>Ab 18 Jahren</h1>'
             . '<p>„' . e($title) . '“ ist nur für Erwachsene. Bist du mindestens 18 Jahre alt?</p>'
-            . '<p><a class="oys-cd-link" href="/_/go/' . (int) $block['id'] . '?age=yes">Ja, ich bin 18 oder älter</a></p></div>';
+            . '<form method="post" action="/_/go/' . (int) $block['id'] . '"><input type="hidden" name="age" value="yes">'
+            . '<button class="oys-contact-send" type="submit"><span>Ja, ich bin 18 oder älter</span></button></form></div>';
     } else {
         $body = '<form class="oys-card oys-contact" method="post" action="/_/go/' . (int) $block['id'] . '">' . $back
             . '<h1>Geschützter Link</h1><p>„' . e($title) . '“ ist mit einem Passwort geschützt.</p>'
@@ -111,18 +115,20 @@ if ($path === '/_/unlock' && $method === 'POST') {
         oys_json(['ok' => false, 'error' => 'Dieser Link ist gerade nicht verfügbar.'], 404);
     }
     $block = $found['block'];
-    if (!oys_rate_limit($pdo, 'pw:' . $block['id'], 20, 900)) {
+    if (!oys_attempts_allowed($pdo, 'pw:' . $block['id'], 10, 200, 900)) {
         oys_json(['ok' => false, 'error' => 'Zu viele Versuche. Bitte warte ein paar Minuten.'], 429);
     }
     $pw = (string) ($_POST['pw'] ?? '');
     if ($pw === '' || !password_verify($pw, (string) $block['password_hash'])) {
+        oys_attempt_failed($pdo, 'pw:' . $block['id'], 900);
         oys_json(['ok' => false, 'error' => 'Das Passwort stimmt nicht.']);
     }
     oys_record_click($pdo, (int) $found['page']['id'], (int) $block['id']);
     oys_json(['ok' => true, 'url' => oys_block_target($block, $found['page'])]);
 }
 
-// --- Weiterleitung /_/go/123 (geschützte Links, Ab-18-Bestätigung, Fallback ohne JS) ---
+// --- Weiterleitung /_/go/123 (nur geschützte Links: Passwort, Ab-18-Bestätigung, Fallback ohne JS) ---
+// Weitergeleitet wird nur nach einem POST – so taugt /_/go nicht als offene Weiterleitung.
 if (preg_match('#^/_/go/(\d+)$#', $path, $m)) {
     $found = oys_public_block($pdo, $m[1]);
     if (!$found || !$found['block']['active'] || !oys_block_is_clickable($found['block']['type'])) {
@@ -132,26 +138,34 @@ if (preg_match('#^/_/go/(\d+)$#', $path, $m)) {
     }
     $block = $found['block'];
     $page = $found['page'];
+    if ($block['protection'] === 'none') {
+        oys_redirect(oys_page_url($page));
+    }
+    if (!oys_on_page_host($page)) {
+        oys_redirect(oys_page_origin($page) . '/_/go/' . (int) $block['id']);
+    }
     $target = oys_block_target($block, $page);
     if ($target === '') {
         oys_redirect(oys_page_url($page));
     }
     header('Cache-Control: no-store');
 
-    if ($block['protection'] === 'age' && ($_GET['age'] ?? '') !== 'yes') {
-        echo oys_render_gate($page, $block, 'age');
-        exit;
-    }
-    if ($block['protection'] === 'password') {
+    if ($block['protection'] === 'age') {
+        if ($method !== 'POST' || ($_POST['age'] ?? '') !== 'yes') {
+            echo oys_render_gate($page, $block, 'age');
+            exit;
+        }
+    } else {
         if ($method !== 'POST') {
             echo oys_render_gate($page, $block, 'password');
             exit;
         }
-        if (!oys_rate_limit($pdo, 'pw:' . $block['id'], 20, 900)) {
+        if (!oys_attempts_allowed($pdo, 'pw:' . $block['id'], 10, 200, 900)) {
             echo oys_render_gate($page, $block, 'password', 'Zu viele Versuche. Bitte warte ein paar Minuten.');
             exit;
         }
         if (!password_verify((string) ($_POST['pw'] ?? ''), (string) $block['password_hash'])) {
+            oys_attempt_failed($pdo, 'pw:' . $block['id'], 900);
             echo oys_render_gate($page, $block, 'password', 'Das Passwort stimmt nicht.');
             exit;
         }
@@ -159,7 +173,7 @@ if (preg_match('#^/_/go/(\d+)$#', $path, $m)) {
     if (!oys_is_bot($_SERVER['HTTP_USER_AGENT'] ?? '')) {
         oys_record_click($pdo, (int) $page['id'], (int) $block['id']);
     }
-    oys_redirect($target);
+    oys_redirect($target, 303);
 }
 
 // --- Kontaktformular ---

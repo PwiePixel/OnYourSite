@@ -67,15 +67,35 @@ t('reserviert dashboard', oys_slug_problem($pdo, 'dashboard') !== null, true);
 t('Spam: viele Links', oys_looks_like_spam('see http://a.de http://b.de http://c.de'), true);
 t('Spam: casino', oys_looks_like_spam('Best Casino bonus'), true);
 t('Kein Spam', oys_looks_like_spam('Hallo, ich habe eine Frage zu deinem Merch.'), false);
-// Eigenes CSS kann nicht aus <style> ausbrechen
+// Eigenes CSS kann nicht aus <style> ausbrechen und lädt nichts von fremden Servern
 t('CSS ohne <', strpos(oys_clean_css('a{color:red}</style><script>alert(1)</script>'), '<'), false);
+t('CSS: url(https://…) entfernt', oys_clean_css('b{background:url(https://evil.example/x.png)}'), 'b{background:url("")}');
+t('CSS: getarntes u\\72l( entfernt', oys_clean_css('b{background:u\\72l(https://evil.example)}'), 'b{background:url("")}');
+t('CSS: @\\69mport entfernt', strpos(oys_clean_css('@\\69mport "https://evil.example/a.css"; a{color:red}'), 'evil'), false);
+t('CSS: image-set fremd entfernt', strpos(oys_clean_css('b{background:image-set("https://evil.example/a.png" 1x)}'), 'evil'), false);
+t('CSS: eigene Bilder bleiben', oys_clean_css('b{background:url(/static/uploads/bg_3_1_ab.webp)}'), 'b{background:url(/static/uploads/bg_3_1_ab.webp)}');
+t('CSS: Text mit Doppelpunkt bleibt', oys_clean_css('.a::before{content:"Tipp: https://x"}'), '.a::before{content:"Tipp: https://x"}');
+// Texte: Steuerzeichen raus, Emoji-Verbinder bleiben
+t('Emoji mit ZWJ bleibt', oys_clean_text("Dev 👨\u{200D}💻"), "Dev 👨\u{200D}💻");
+t('Richtungs-Override entfernt', oys_clean_text("abc\u{202E}fed"), 'abcfed');
+t('Steuerzeichen entfernt, Umbruch bleibt', oys_clean_text("a\x07b\nc", 50, true), "ab\nc");
+// Termin-Block: eingebauter Kalender?
+$cp = ['id' => 1, 'slug' => 'mia', 'address_mode' => 'subdomain'];
+t('Kalender: /kalender intern', oys_booking_is_internal(['url' => '/kalender'], $cp), true);
+t('Kalender: eigene volle Adresse intern', oys_booking_is_internal(['url' => oys_page_urls($cp)['path'] . '/kalender'], $cp), true);
+t('Kalender: Calendly extern', oys_booking_is_internal(['url' => 'https://calendly.com/mia'], $cp), false);
+t('Kalender: fremde Seite extern', oys_booking_is_internal(['url' => oys_page_urls(['slug' => 'tom'] + $cp)['subdomain'] . '/kalender'], $cp), false);
 // Block-Validierung: fremde Datei wird abgelehnt
 $b = oys_block_normalize(['type' => 'image', 'data' => ['src' => 'img_99_123_abc.webp']], 3);
 t('Fremde Upload-Datei abgelehnt', $b['data']['src'], '');
 $b = oys_block_normalize(['type' => 'image', 'data' => ['src' => '../../config.php']], 3);
 t('Pfad-Traversal abgelehnt', $b['data']['src'], '');
 $b = oys_block_normalize(['type' => 'link', 'protection' => 'password', 'password' => '', 'data' => ['url' => 'https://a.de']], 3);
-t('Passwortschutz ohne Passwort → ungeschützt + Warnung', $b['protection'] . '|' . ($b['warning'] ? 'w' : ''), 'none|w');
+t('Passwortschutz ohne Passwort → geschützt, aber ausgeblendet + Warnung', $b['protection'] . '|' . $b['is_visible'] . '|' . ($b['warning'] ? 'w' : ''), 'password|0|w');
+$b = oys_block_normalize(['type' => 'link', 'protection' => 'password', 'password' => '1234', 'data' => ['url' => 'https://a.de']], 3);
+t('Zu kurzes Link-Passwort wird nicht übernommen', $b['is_visible'] . '|' . ($b['password_hash'] === null ? 'kein Hash' : 'Hash'), '0|kein Hash');
+$b = oys_block_normalize(['type' => 'link', 'protection' => 'password', 'password' => '', 'data' => ['url' => 'https://a.de']], 3, ['password_hash' => '$2y$10$abc']);
+t('Bestehendes Passwort bleibt beim Speichern', $b['password_hash'] . '|' . $b['is_visible'], '$2y$10$abc|1');
 $b = oys_block_normalize(['type' => 'heading', 'protection' => 'password', 'password' => 'x', 'data' => ['text' => 'Hi']], 3);
 t('Schutz nur für klickbare Blöcke', $b['protection'], 'none');
 echo $fails ? "\n$fails FEHLER\n" : "\nAlle Tests bestanden\n";

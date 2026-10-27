@@ -258,7 +258,7 @@ function oys_migrate_legacy_users(PDO $pdo): void
                     'description' => (string) $col($user, 'seo_description', ''),
                     'keywords' => (string) $col($user, 'seo_keywords', ''),
                 ],
-                'custom_css' => (string) $col($user, 'custom_css', ''),
+                'custom_css' => oys_clean_css((string) $col($user, 'custom_css', '')),
                 'hide_branding' => (bool) $col($user, 'hide_branding', 0),
             ];
             $theme = (string) ($col($user, 'theme') ?: 'deep-dark');

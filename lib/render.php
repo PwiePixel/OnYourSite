@@ -235,6 +235,7 @@ function oys_render_link(array $b, array $ctx, int $index): string
     $id = (string) $b['id'];
     $attrs = [];
     $download = false;
+    $protection = $b['protection'] ?? 'none';
 
     if ($type === 'booking') {
         $title = ($d['title'] ?? '') ?: 'Termin buchen';
@@ -256,7 +257,8 @@ function oys_render_link(array $b, array $ctx, int $index): string
         if ($title === '') {
             $title = $url !== '' ? oys_pretty_url($url) : 'Neuer Link';
         }
-        $icon = oys_icon_html((string) ($d['icon'] ?? ''), $url);
+        // Bei geschützten Links kein aus der Zieladresse erkanntes Symbol (verriete z. B. „Discord“)
+        $icon = oys_icon_html((string) ($d['icon'] ?? ''), $protection === 'none' ? $url : '');
         $sub = ($d['subtitle'] ?? '') !== '' ? $d['subtitle'] : ($url !== '' ? oys_pretty_url($url) : '');
     }
 
@@ -268,7 +270,6 @@ function oys_render_link(array $b, array $ctx, int $index): string
     if (!empty($b['_off'])) $classes[] = 'is-off';
     if ($url === '') $classes[] = 'is-empty';
 
-    $protection = $b['protection'] ?? 'none';
     if ($protection !== 'none') {
         // Die Zieladresse darf bei geschützten Links nirgends im HTML auftauchen
         $sub = ($d['subtitle'] ?? '') !== '' ? $d['subtitle'] : ($protection === 'age' ? 'Ab 18 Jahren' : 'Passwortgeschützt');

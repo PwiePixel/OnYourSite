@@ -32,16 +32,18 @@ try {
             continue;
         }
         $d = $b['data'];
-        if ($b['type'] === 'link' && !empty($d['url'])) {
+        $url = $b['type'] === 'link' ? oys_clean_url((string) ($d['url'] ?? '')) : '';
+        if ($url !== '') {
             $protected = $b['protection'] !== 'none';
             $icon = (string) ($d['icon'] ?? '');
+            $explicitBrand = strpos($icon, 'brand:') === 0 ? substr($icon, 6) : null;
+            // Geschützte Links verraten ihre Zieladresse nicht – weder als Titel noch über die erkannte Plattform
             $links[] = [
                 'id' => $b['id'],
-                'title' => ($d['title'] ?? '') ?: oys_pretty_url($d['url']),
-                // Geschützte Links verraten ihre Zieladresse nicht
-                'url' => $protected ? oys_page_url($page) . '/_/go/' . $b['id'] : $d['url'],
+                'title' => ($d['title'] ?? '') ?: ($protected ? 'Geschützter Link' : oys_pretty_url($url)),
+                'url' => $protected ? oys_page_origin($page) . '/_/go/' . $b['id'] : $url,
                 'icon_class' => strpos($icon, 'bx') === 0 ? $icon : '',
-                'platform' => strpos($icon, 'brand:') === 0 ? substr($icon, 6) : oys_detect_brand($d['url']),
+                'platform' => $explicitBrand ?? ($protected ? null : oys_detect_brand($url)),
                 'protected' => $protected ? $b['protection'] : false,
                 'sort_order' => $position++,
             ];

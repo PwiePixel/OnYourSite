@@ -65,9 +65,13 @@ if ($path === '/') {
 }
 
 if ($path === '/logout') {
-    $_SESSION = [];
-    session_destroy();
-    oys_redirect('/');
+    // Nur per POST mit CSRF-Token – sonst könnte jede fremde Seite (oder eigenes CSS) abmelden
+    if ($method === 'POST' && oys_csrf_check($_POST['csrf'] ?? null)) {
+        $_SESSION = [];
+        session_destroy();
+        oys_redirect('/');
+    }
+    oys_redirect(empty($_SESSION['user_id']) ? '/' : '/dashboard');
 }
 
 // ---------------------------------------------------------------
@@ -91,6 +95,9 @@ if ($path === '/register') {
             oys_flash('error', 'Dein Passwort muss mindestens 8 Zeichen lang sein.');
         } elseif ($problem = oys_slug_problem($pdo, $slug)) {
             oys_flash('error', $problem);
+        } elseif (!oys_rate_limit($pdo, 'register:' . oys_client_key(), 5, 3600)) {
+            // Massen-Anmeldungen bremsen (jedes Konto bekommt Speicherplatz)
+            oys_flash('error', 'Von hier wurden gerade sehr viele Konten angelegt. Bitte versuche es später noch einmal.');
         } else {
             $check = $pdo->prepare('SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1');
             $check->execute([$email, $slug]);
@@ -128,15 +135,19 @@ if ($path === '/login') {
     if ($method === 'POST') {
         $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         $password = (string) ($_POST['password'] ?? '');
+        $loginKey = 'login:' . substr(hash('sha256', $email), 0, 40);
         if (!oys_csrf_check($_POST['csrf'] ?? null)) {
             oys_flash('error', 'Die Sitzung ist abgelaufen. Bitte versuche es erneut.');
-        } elseif (!oys_rate_limit($pdo, 'login:' . substr(hash('sha256', $email), 0, 40), 10, 900)) {
+        } elseif (!oys_attempts_allowed($pdo, $loginKey, 10, 50, 900)) {
             oys_flash('error', 'Zu viele Versuche. Bitte warte 15 Minuten.');
         } else {
             $stmt = $pdo->prepare('SELECT * FROM users WHERE email = ?');
             $stmt->execute([$email]);
             $user = $stmt->fetch();
-            if ($user && password_verify($password, $user['password'])) {
+            if (!$user || !password_verify($password, $user['password'])) {
+                // Nur Fehlversuche zählen – je Absender und je Konto
+                oys_attempt_failed($pdo, $loginKey, 900);
+            } else {
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = (int) $user['id'];
                 $pdo->prepare('UPDATE users SET last_ip = ? WHERE id = ?')->execute([encryptData($_SERVER['REMOTE_ADDR'] ?? ''), $user['id']]);
@@ -185,9 +196,28 @@ if (strpos($path, '/dashboard/api/') === 0) {
         oys_json(['ok' => false, 'error' => 'Sitzung abgelaufen – bitte lade die Seite neu.'], 419);
     }
     $isJsonBody = stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false;
-    $input = $isPost && $isJsonBody ? oys_json_input() : [];
+    $raw = $isPost && $isJsonBody ? (string) file_get_contents('php://input') : '';
+    $input = $raw !== '' ? json_decode($raw, true) : [];
+    if (!is_array($input)) {
+        // Kaputtes JSON nie als „leere Seite“ speichern
+        oys_json(['ok' => false, 'error' => 'Die Daten kamen nicht vollständig an. Bitte versuche es erneut.'], 400);
+    }
     $requestedPage = $input['page']['id'] ?? ($input['page_id'] ?? ($_POST['page_id'] ?? ($_GET['page'] ?? null)));
-    $page = oys_current_page($pdo, $user, $requestedPage);
+    $requestedPage = is_scalar($requestedPage) && (int) $requestedPage > 0 ? (int) $requestedPage : null;
+    if ($requestedPage !== null && $action !== 'page-create') {
+        // Nie still auf eine andere Seite ausweichen: gelöschte Seite (anderer Tab) oder inzwischen
+        // ein anderes Konto (Admin-Modus in einem zweiten Tab) → ablehnen statt die falsche Seite zu überschreiben
+        $page = oys_load_page($pdo, $requestedPage);
+        if (!$page || (int) $page['user_id'] !== $userId) {
+            oys_json(['ok' => false, 'error' => 'Diese Seite gibt es nicht mehr oder du bist inzwischen mit einem anderen Konto angemeldet. Bitte lade den Editor neu.', 'reload' => true], 409);
+        }
+        $_SESSION['page_id'] = $requestedPage;
+    } else {
+        $page = oys_current_page($pdo, $user);
+    }
+    if (in_array($action, ['save', 'address'], true) && $requestedPage === null) {
+        oys_json(['ok' => false, 'error' => 'Es fehlt die Angabe, welche Seite gemeint ist. Bitte lade den Editor neu.', 'reload' => true], 400);
+    }
 
     // Seite anlegen geht auch ohne bestehende Seite
     if ($action === 'page-create' && $isPost) {
@@ -253,6 +283,9 @@ if (strpos($path, '/dashboard/api/') === 0) {
 
         case 'save':
             if (!$isPost) break;
+            if (!is_array($input['page'] ?? null) || !is_array($input['blocks'] ?? null)) {
+                oys_json(['ok' => false, 'error' => 'Die Daten kamen nicht vollständig an. Bitte versuche es erneut.'], 400);
+            }
             try {
                 $result = oys_save_page($pdo, $page, $input, $userId, $premium);
             } catch (Throwable $e) {
@@ -272,6 +305,15 @@ if (strpos($path, '/dashboard/api/') === 0) {
             $kind = (string) ($_POST['kind'] ?? '');
             if (empty($_FILES['file'])) {
                 oys_json(['ok' => false, 'error' => 'Keine Datei empfangen (evtl. zu groß für den Server).']);
+            }
+            if (!oys_rate_limit($pdo, 'upload:' . $userId, 120, 3600)) {
+                oys_json(['ok' => false, 'error' => 'Sehr viele Uploads in kurzer Zeit – bitte warte etwas.']);
+            }
+            // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
+            $quotaMb = $premium ? OYS_UPLOAD_QUOTA_PREMIUM_MB : OYS_UPLOAD_QUOTA_MB;
+            $usedBytes = array_sum(oys_sweep_uploads($pdo, $userId, oys_user_upload_files($userId)));
+            if ($usedBytes + (int) ($_FILES['file']['size'] ?? 0) > $quotaMb * 1048576) {
+                oys_json(['ok' => false, 'error' => 'Dein Speicherplatz (' . $quotaMb . ' MB) ist voll. Entferne nicht mehr benötigte Bilder, Musik oder Dateien und speichere.']);
             }
             $res = oys_handle_upload($_FILES['file'], $kind, $userId);
             if (isset($res['error'])) {

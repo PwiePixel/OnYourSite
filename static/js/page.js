@@ -87,10 +87,14 @@
         '<h2 id="oys-modal-title">Ab 18 Jahren</h2>' +
         '<p>„' + esc(title) + '“ ist nur für Erwachsene. Bist du mindestens 18 Jahre alt?</p>' + previewNote +
         (isPublic
-          ? '<a class="oys-btn" href="/_/go/' + encodeURIComponent(id) + '?age=yes" target="_blank" rel="noopener noreferrer" data-close>Ja, ich bin 18 oder älter</a>'
+          ? '<form class="oys-age" method="post" action="/_/go/' + encodeURIComponent(id) + '" target="_blank" rel="noopener noreferrer">' +
+            '<input type="hidden" name="age" value="yes"><button type="submit" class="oys-btn">Ja, ich bin 18 oder älter</button></form>'
           : '<button type="button" class="oys-btn" data-close>Ja, ich bin 18 oder älter</button>') +
         '<button type="button" class="oys-btn ghost" data-close>Nein, zurück</button>'
       );
+      // Bestätigung per POST (die Weiterleitung klappt nicht per einfachem Link); Dialog erst danach schließen
+      var ageForm = $('.oys-age', modalBody);
+      if (ageForm) ageForm.addEventListener('submit', function () { setTimeout(closeModal, 0); });
       return;
     }
 

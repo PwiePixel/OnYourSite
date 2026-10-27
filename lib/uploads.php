@@ -14,6 +14,42 @@ function oys_upload_kinds(): array
     ];
 }
 
+// Speicherplatz je Konto (Premium/Admin: mehr)
+const OYS_UPLOAD_QUOTA_MB = 200;
+const OYS_UPLOAD_QUOTA_PREMIUM_MB = 1000;
+
+// Alle hochgeladenen Dateien eines Nutzers (Name => Bytes)
+function oys_user_upload_files(int $userId): array
+{
+    $files = [];
+    foreach (glob(dirname(__DIR__) . '/static/uploads/*_' . $userId . '_*') ?: [] as $path) {
+        $name = basename($path);
+        if (oys_valid_upload($name, $userId) && is_file($path)) {
+            $files[$name] = (int) filesize($path);
+        }
+    }
+    return $files;
+}
+
+// Räumt Dateien auf, die hochgeladen, aber nie gespeichert wurden (älter als 2 Tage, von keiner Seite benutzt).
+// Betrifft nur Dateien dieser Version (name_ID_zeit_zufall.ext) – alte Uploads bleiben unangetastet.
+function oys_sweep_uploads(PDO $pdo, int $userId, array $files): array
+{
+    $cutoff = time() - 2 * 86400;
+    $used = null;
+    $dir = dirname(__DIR__) . '/static/uploads/';
+    foreach ($files as $name => $bytes) {
+        if (!preg_match('/^[a-z]+_\d+_(\d{9,11})_[0-9a-f]{8}\.[a-z0-9]{2,5}$/', $name, $m) || (int) $m[1] > $cutoff) {
+            continue;
+        }
+        $used = $used ?? oys_used_files($pdo, $userId);
+        if (!isset($used[$name]) && @unlink($dir . $name)) {
+            unset($files[$name]);
+        }
+    }
+    return $files;
+}
+
 // Größte Datei, die PHP auf diesem Server annimmt (upload_max_filesize / post_max_size), in MB
 function oys_upload_limit_mb(): float
 {

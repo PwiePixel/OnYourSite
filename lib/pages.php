@@ -37,6 +37,8 @@ function oys_page_settings(array $page): array
     foreach (['entrance', 'seo'] as $nested) {
         $settings[$nested] = array_replace($defaults[$nested], is_array($stored[$nested] ?? null) ? $stored[$nested] : []);
     }
+    // Auch übernommenes CSS aus der alten Version nie ungeprüft ausgeben
+    $settings['custom_css'] = oys_clean_css($settings['custom_css']);
     return $settings;
 }
 
@@ -81,12 +83,96 @@ function oys_settings_normalize($in, int $userId, bool $premium, array $old): ar
 }
 
 // Eigenes CSS: darf nicht aus dem <style>-Tag ausbrechen
+// Eigenes CSS: kann nicht aus <style> ausbrechen und lädt nichts von fremden Servern
+// (url(), @import, image-set() nur mit eigenen Pfaden oder data:). Auch mit CSS-Escapes wie u\72l( nicht umgehbar.
 function oys_clean_css($css): string
 {
-    $css = is_string($css) ? $css : '';
-    $css = str_replace(["\0", '<'], '', $css);
-    $css = preg_replace('/@import/i', '', $css);
-    return mb_substr(trim((string) $css), 0, 20000);
+    $css = mb_substr(is_string($css) ? str_replace("\0", '', $css) : '', 0, 20000);
+    if (trim($css) === '') {
+        return '';
+    }
+    $urlFunctions = ['url', 'image', 'image-set', '-webkit-image-set', 'cross-fade', '-webkit-cross-fade', 'src'];
+    $out = '';
+    $word = '';    // Bezeichner direkt vor der aktuellen Stelle (für Funktionsnamen)
+    $stack = [];   // offene Funktionen, z. B. ['image-set']
+    $inUrl = 0;    // wie viele davon laden Adressen (url, image-set …)
+    $len = strlen($css);
+    for ($i = 0; $i < $len; $i++) {
+        $c = $css[$i];
+        if ($c === '/' && ($css[$i + 1] ?? '') === '*') {
+            // Kommentare entfernen (sie trennen Wörter: u/**/rl ist kein url)
+            $end = strpos($css, '*/', $i + 2);
+            $i = $end === false ? $len : $end + 1;
+            $out .= ' ';
+            $word = '';
+        } elseif ($c === '"' || $c === "'") {
+            $j = $i + 1;
+            while ($j < $len && $css[$j] !== $c && $css[$j] !== "\n") {
+                $j += $css[$j] === '\\' ? 2 : 1;
+            }
+            $string = substr($css, $i, min($j, $len - 1) - $i + 1);
+            $out .= $inUrl > 0 && oys_css_external(oys_css_unescape(substr($string, 1, -1))) ? $c . $c : $string;
+            $i = $j;
+            $word = '';
+        } elseif ($c === '\\') {
+            // Escapes außerhalb von Zeichenketten: Buchstaben/Ziffern auflösen, damit Tarnungen wie u\72l( auffallen
+            if (preg_match('/\G\\\\([0-9a-fA-F]{1,6})[ \t\n\f]?|\G\\\\(.)/su', $css, $m, 0, $i)) {
+                $char = $m[1] !== '' ? mb_chr(hexdec($m[1]) ?: 0xFFFD, 'UTF-8') : $m[2];
+                if (is_string($char) && preg_match('/^[a-zA-Z0-9-]$/', $char)) {
+                    $out .= $char;
+                    $word .= $char;
+                } else {
+                    $out .= $m[0];
+                    $word = '';
+                }
+                $i += strlen($m[0]) - 1;
+            } else {
+                $out .= $c;
+                $word = '';
+            }
+        } elseif ($c === '(') {
+            $name = strtolower($word);
+            $word = '';
+            if ($name === 'url' && preg_match('/\G\(\s*([^\s"\')][^)]*?)\s*(?:\)|\z)/', $css, $m, 0, $i)) {
+                // url(ohne Anführungszeichen) – auch ohne schließende Klammer am Ende
+                $out .= oys_css_external(oys_css_unescape($m[1])) ? '("")' : $m[0];
+                $i += strlen($m[0]) - 1;
+                continue;
+            }
+            $stack[] = $name;
+            $inUrl += in_array($name, $urlFunctions, true) ? 1 : 0;
+            $out .= $c;
+        } else {
+            if ($c === ')' && $stack) {
+                $inUrl -= in_array(array_pop($stack), $urlFunctions, true) ? 1 : 0;
+            }
+            $word = ctype_alnum($c) || $c === '-' ? $word . $c : '';
+            $out .= $c;
+        }
+    }
+    $out = preg_replace('/@import\b[^;{}]*;?/i', '', $out);
+    return trim(str_replace('<', '', (string) $out));
+}
+
+// Löst CSS-Escapes (\72, \") in einem Wert auf
+function oys_css_unescape(string $value): string
+{
+    return (string) preg_replace_callback('/\\\\([0-9a-fA-F]{1,6})[ \t\n\f]?|\\\\(\n)|\\\\(.)/su', function ($m) {
+        if ($m[1] !== '') {
+            return (string) mb_chr(hexdec($m[1]) ?: 0xFFFD, 'UTF-8');
+        }
+        return ($m[2] ?? '') !== '' ? '' : ($m[3] ?? '');
+    }, $value);
+}
+
+// Zeigt eine Adresse in CSS auf einen fremden Server? (Erlaubt: /pfad, relativ, #id, data:)
+function oys_css_external(string $url): bool
+{
+    $url = (string) preg_replace('/[\x00-\x20\x7f]+/', '', $url);
+    if ($url === '' || $url[0] === '#' || stripos($url, 'data:') === 0) {
+        return false;
+    }
+    return (bool) preg_match('#^([a-z][a-z0-9+.\-]*:|[/\\\\]{2})#i', $url);
 }
 
 // ---------------------------------------------------------------
@@ -325,18 +411,46 @@ function oys_page_files(array $page, array $blocks): array
     return array_values(array_unique($files));
 }
 
-// Löscht Dateien, die von keiner Seite des Nutzers mehr verwendet werden
-function oys_cleanup_files(PDO $pdo, int $userId, array $candidates): void
+// Darf der eingebaute Kalender gezeigt werden? Nur mit aktivem Termin-Block, der auf ihn zeigt.
+// '' = frei zugänglich, Schlüssel = über einen geschützten Termin-Block freigegeben, null = nein.
+function oys_calendar_access(PDO $pdo, array $page, string $given): ?string
 {
-    if (!$candidates) {
-        return;
+    $now = new DateTimeImmutable('now', new DateTimeZone(oys_config('timezone', 'Europe/Berlin')));
+    $access = null;
+    foreach (oys_load_blocks($pdo, (int) $page['id']) as $b) {
+        if ($b['type'] !== 'booking' || !$b['is_visible'] || !oys_schedule_active($b['schedule'], $now) || !oys_booking_is_internal($b['data'], $page)) {
+            continue;
+        }
+        if ($b['protection'] === 'none') {
+            return '';
+        }
+        $key = oys_calendar_key($page, $b);
+        if ($given !== '' && hash_equals($key, $given)) {
+            $access = $key;
+        }
     }
+    return $access;
+}
+
+// Alle Dateien, die eine Seite des Nutzers verwendet (Name => true)
+function oys_used_files(PDO $pdo, int $userId): array
+{
     $used = [];
     foreach (oys_user_pages($pdo, $userId) as $p) {
         foreach (oys_page_files($p, oys_load_blocks($pdo, (int) $p['id'])) as $f) {
             $used[$f] = true;
         }
     }
+    return $used;
+}
+
+// Löscht Dateien, die von keiner Seite des Nutzers mehr verwendet werden
+function oys_cleanup_files(PDO $pdo, int $userId, array $candidates): void
+{
+    if (!$candidates) {
+        return;
+    }
+    $used = oys_used_files($pdo, $userId);
     $dir = dirname(__DIR__) . '/static/uploads/';
     foreach ($candidates as $file) {
         if (!isset($used[$file]) && oys_valid_upload($file, $userId) && is_file($dir . $file)) {

@@ -241,9 +241,11 @@ if (file_exists($smtp_file)) {
             </nav>
         </div>
         <div class="px-3">
-            <a href="/logout" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors">
-                <i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Log Out</span>
-            </a>
+            <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?>
+                <button type="submit" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors">
+                    <i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Log Out</span>
+                </button>
+            </form>
         </div>
     </aside>
 
@@ -348,10 +350,13 @@ if (file_exists($smtp_file)) {
                                     <td class="px-6 py-4 text-right">
                                         <div class="flex justify-end items-center gap-2">
                                             
-                                            <?php if($u['id'] !== $_SESSION['user_id']): ?>
-                                            <a href="/admin_impersonate.php?id=<?php echo $u['id']; ?>" onclick="return confirm('Log in as <?php echo htmlspecialchars(addslashes($u['full_name'])); ?>?');" class="p-1.5 text-gray-500 hover:text-brand-400 hover:bg-brand-500/10 rounded-md transition-all shadow-sm border border-transparent hover:border-brand-500/20" title="Login as this User">
-                                                <i class='bx bx-log-in-circle text-lg'></i>
-                                            </a>
+                                            <?php if ((int) $u['id'] !== (int) $_SESSION['user_id']): ?>
+                                            <form action="/admin_impersonate.php" method="POST" class="inline-block m-0 p-0" data-confirm="<?= e('Log in as ' . $u['full_name'] . '?') ?>" onsubmit="return confirm(this.dataset.confirm);"><?= oys_csrf_field() ?>
+                                                <input type="hidden" name="id" value="<?= (int) $u['id'] ?>">
+                                                <button type="submit" class="p-1.5 text-gray-500 hover:text-brand-400 hover:bg-brand-500/10 rounded-md transition-all shadow-sm border border-transparent hover:border-brand-500/20" title="Login as this User">
+                                                    <i class='bx bx-log-in-circle text-lg'></i>
+                                                </button>
+                                            </form>
                                             <?php endif; ?>
 
                                             <button type="button" onclick="openPwdModal(<?php echo $u['id']; ?>, '<?php echo htmlspecialchars(addslashes($u['full_name'])); ?>')" class="p-1.5 text-gray-500 hover:text-white hover:bg-white/10 rounded-md transition-all shadow-sm border border-transparent hover:border-bordercolor" title="Force Password Reset"><i class='bx bx-key text-lg'></i></button>

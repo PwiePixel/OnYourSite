@@ -87,6 +87,22 @@ function oys_page_display_url(array $page): string
     return preg_replace('#^https?://#', '', oys_page_url($page));
 }
 
+// Ursprung der Hauptadresse – dort liegen die Endpunkte unter /_/ (z. B. https://name.on-your.site)
+function oys_page_origin(array $page): string
+{
+    return ($page['address_mode'] ?? 'subdomain') === 'path' ? oys_main_url('') : oys_page_urls($page)['subdomain'];
+}
+
+// Läuft die Anfrage auf der Hauptadresse dieser Seite?
+function oys_on_page_host(array $page): bool
+{
+    $host = oys_request_host();
+    if (($page['address_mode'] ?? 'subdomain') === 'path') {
+        return oys_is_main_host($host);
+    }
+    return $host === strtolower((string) $page['slug']) . '.' . oys_base_host();
+}
+
 // ---------------------------------------------------------------
 // Antworten
 // ---------------------------------------------------------------
@@ -164,10 +180,11 @@ function oys_csrf_from_request(): ?string
 function oys_clean_text($value, int $max = 255, bool $multiline = false): string
 {
     $value = is_scalar($value) ? (string) $value : '';
-    // Steuerzeichen entfernen (Zeilenumbrüche nur bei mehrzeiligen Feldern behalten)
+    // Steuerzeichen und Schreibrichtungs-Tricks entfernen (Zeilenumbrüche nur bei mehrzeiligen Feldern behalten).
+    // Unsichtbare Verbinder in Emoji wie 👨‍💻 bleiben erhalten.
     $value = $multiline
-        ? preg_replace('/[^\P{C}\n]+/u', '', str_replace("\r\n", "\n", $value))
-        : preg_replace('/\p{C}+/u', '', $value);
+        ? preg_replace('/[^\P{Cc}\n]+|[\x{202A}-\x{202E}\x{2066}-\x{2069}]+/u', '', str_replace("\r\n", "\n", $value))
+        : preg_replace('/[\p{Cc}\x{202A}-\x{202E}\x{2066}-\x{2069}]+/u', '', $value);
     $value = trim((string) $value);
     if ($multiline) {
         $value = preg_replace("/\n{3,}/", "\n\n", $value);
@@ -298,22 +315,57 @@ function oys_hmac(string $data): string
 
 // Einfache Begrenzung ohne IP-Adressen (z. B. pro Seite oder pro Link).
 // Gibt true zurück, wenn die Aktion erlaubt ist.
+// Zählt einen Versuch und sagt, ob er noch erlaubt ist
 function oys_rate_limit(PDO $pdo, string $key, int $max, int $windowSeconds): bool
 {
-    $now = time();
+    if (!oys_rate_ok($pdo, $key, $max, $windowSeconds)) {
+        return false;
+    }
+    oys_rate_hit($pdo, $key, $windowSeconds);
+    return true;
+}
+
+// Sind unter $key noch Versuche frei? (zählt nicht mit)
+function oys_rate_ok(PDO $pdo, string $key, int $max, int $windowSeconds): bool
+{
     $stmt = $pdo->prepare('SELECT hits, UNIX_TIMESTAMP(window_start) AS ws FROM rate_limits WHERE rl_key = ?');
     $stmt->execute([$key]);
     $row = $stmt->fetch();
-    if (!$row || ($now - (int) $row['ws']) >= $windowSeconds) {
-        $pdo->prepare('REPLACE INTO rate_limits (rl_key, hits, window_start) VALUES (?, 1, FROM_UNIXTIME(?))')
-            ->execute([$key, $now]);
-        return true;
+    return !$row || (time() - (int) $row['ws']) >= $windowSeconds || (int) $row['hits'] < $max;
+}
+
+// Zählt einen Versuch (z. B. ein falsches Passwort)
+function oys_rate_hit(PDO $pdo, string $key, int $windowSeconds): void
+{
+    $now = time();
+    $pdo->prepare('INSERT INTO rate_limits (rl_key, hits, window_start) VALUES (?, 1, FROM_UNIXTIME(?))
+        ON DUPLICATE KEY UPDATE hits = IF(window_start <= FROM_UNIXTIME(?), 1, hits + 1),
+            window_start = IF(window_start <= FROM_UNIXTIME(?), FROM_UNIXTIME(?), window_start)')
+        ->execute([$key, $now, $now - $windowSeconds, $now - $windowSeconds, $now]);
+    if (random_int(1, 50) === 1) {
+        $pdo->prepare('DELETE FROM rate_limits WHERE window_start < FROM_UNIXTIME(?)')->execute([$now - 86400]);
     }
-    if ((int) $row['hits'] >= $max) {
-        return false;
-    }
-    $pdo->prepare('UPDATE rate_limits SET hits = hits + 1 WHERE rl_key = ?')->execute([$key]);
-    return true;
+}
+
+// Kurzlebige Kennung des Absenders für Rate-Limits: nicht umkehrbar, wechselt täglich –
+// die IP-Adresse selbst wird nie gespeichert.
+function oys_client_key(): string
+{
+    return substr(oys_hmac('client|' . gmdate('Y-m-d') . '|' . ($_SERVER['REMOTE_ADDR'] ?? '')), 0, 16);
+}
+
+// Fehlversuche zählen, damit niemand Passwörter durchprobieren kann – je Absender und insgesamt.
+// Richtige Eingaben verbrauchen nichts.
+function oys_attempts_allowed(PDO $pdo, string $key, int $perClient, int $total, int $windowSeconds): bool
+{
+    return oys_rate_ok($pdo, $key . ':' . oys_client_key(), $perClient, $windowSeconds)
+        && oys_rate_ok($pdo, $key, $total, $windowSeconds);
+}
+
+function oys_attempt_failed(PDO $pdo, string $key, int $windowSeconds): void
+{
+    oys_rate_hit($pdo, $key . ':' . oys_client_key(), $windowSeconds);
+    oys_rate_hit($pdo, $key, $windowSeconds);
 }
 
 function oys_upload_url(?string $file): string

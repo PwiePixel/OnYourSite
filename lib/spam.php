@@ -45,8 +45,10 @@ function oys_contact_check(PDO $pdo, array $page, string $blockId, array $post):
         return [true, null, true];
     }
 
-    // 4. Begrenzung pro Seite: max. 10 Nachrichten pro Stunde
-    if (!oys_rate_limit($pdo, 'contact:' . $page['id'], 10, 3600)) {
+    // 4. Begrenzung: je Absender 5, je Seite 30 Nachrichten pro Stunde
+    //    (ein Störer allein kann das Formular so nicht für alle sperren)
+    if (!oys_rate_limit($pdo, 'contact:' . $page['id'] . ':' . oys_client_key(), 5, 3600)
+        || !oys_rate_limit($pdo, 'contact:' . $page['id'], 30, 3600)) {
         return [false, 'Gerade kommen sehr viele Nachrichten an. Bitte versuche es später noch einmal.', false];
     }
 

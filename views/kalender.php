@@ -3,9 +3,11 @@
 // Ohne Session/Cookies: Erfolg wird per ?ok=1 angezeigt.
 /** @var PDO $pdo */
 /** @var array $page */
+/** @var string $calendarKey  '' oder Schlüssel eines geschützten Termin-Blocks */
 
 $slots = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00'];
-$selfUrl = oys_page_url($page, 'kalender');
+$selfUrl = oys_page_url($page, 'kalender') . ($calendarKey !== '' ? '?k=' . rawurlencode($calendarKey) : '');
+$okUrl = $selfUrl . ($calendarKey !== '' ? '&' : '?') . 'ok=1';
 $error = null;
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
@@ -19,15 +21,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         && time() - (int) $tm[1] < 86400;
 
     if (trim((string) ($_POST['website'] ?? '')) !== '' || !$validToken) {
-        oys_redirect($selfUrl . '?ok=1');
+        oys_redirect($okUrl, 303);
     }
     if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = 'Bitte gib deinen Namen und eine gültige E-Mail-Adresse an.';
-    } elseif (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $date < date('Y-m-d')) {
-        $error = 'Bitte wähle ein Datum ab heute.';
+    } elseif (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $dm) || !checkdate((int) $dm[2], (int) $dm[3], (int) $dm[1])
+        || $date < date('Y-m-d') || $date > date('Y-m-d', strtotime('+1 year'))) {
+        $error = 'Bitte wähle ein Datum zwischen heute und in einem Jahr.';
     } elseif (!in_array($time, $slots, true)) {
         $error = 'Bitte wähle eine Uhrzeit.';
-    } elseif (!oys_rate_limit($pdo, 'booking:' . $page['id'], 20, 3600)) {
+    } elseif (!oys_rate_limit($pdo, 'booking:' . $page['id'] . ':' . oys_client_key(), 5, 3600)
+        || !oys_rate_limit($pdo, 'booking:' . $page['id'], 30, 3600)) {
         $error = 'Gerade kommen sehr viele Anfragen an. Bitte versuche es später noch einmal.';
     } else {
         $pdo->prepare('INSERT INTO user_bookings (user_id, guest_name, guest_email, booking_date, booking_time) VALUES (?, ?, ?, ?, ?)')
@@ -46,7 +50,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 'dashboard_url' => e(oys_main_url('/dashboard')),
             ], 'Neuer Termin: ' . $name . ' am ' . $dateDe, $email);
         }
-        oys_redirect($selfUrl . '?ok=1');
+        oys_redirect($okUrl, 303);
     }
 }
 
@@ -76,7 +80,7 @@ ob_start();
       <label class="oys-field"><span>Dein Name</span><input type="text" name="guest_name" required maxlength="80" autocomplete="name" value="<?= e($_POST['guest_name'] ?? '') ?>"></label>
       <label class="oys-field"><span>Deine E-Mail</span><input type="email" name="guest_email" required autocomplete="email" value="<?= e($_POST['guest_email'] ?? '') ?>"></label>
       <div class="oys-grid2">
-        <label class="oys-field"><span>Wunschdatum</span><input type="date" name="booking_date" required min="<?= date('Y-m-d') ?>" value="<?= e($_POST['booking_date'] ?? '') ?>"></label>
+        <label class="oys-field"><span>Wunschdatum</span><input type="date" name="booking_date" required min="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d', strtotime('+1 year')) ?>" value="<?= e($_POST['booking_date'] ?? '') ?>"></label>
         <label class="oys-field"><span>Uhrzeit</span>
           <select name="booking_time" required>
             <option value="" disabled<?= empty($_POST['booking_time']) ? ' selected' : '' ?>>Bitte wählen …</option>
