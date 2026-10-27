@@ -18,7 +18,7 @@ if (!isset($pdo)) {
         // Gleiche Zeitzone wie PHP, damit "heute" in Statistik und Zeitsteuerung übereinstimmt
         $pdo->exec("SET time_zone = '" . date('P') . "'");
     } catch (PDOException $e) {
-        error_log('DB-Verbindung fehlgeschlagen: ' . $e->getMessage());
-        oys_setup_error('Datenbankverbindung fehlgeschlagen.', 'Bitte prüfe die Zugangsdaten in <code>config.php</code>.');
+        error_log('DB connection failed: ' . $e->getMessage());
+        oys_setup_error('Database connection failed.', 'Please check the credentials in <code>config.php</code>.');
     }
 }

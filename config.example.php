@@ -1,11 +1,11 @@
 <?php
 // ---------------------------------------------------------------
-// OnYourSite – Konfiguration
-// Kopiere diese Datei nach "config.php" und trage deine Daten ein.
-// config.php wird NICHT ins Git-Repo übernommen (siehe .gitignore).
+// OnYourSite – configuration
+// Copy this file to "config.php" and fill in your details.
+// config.php is NOT committed to the Git repo (see .gitignore).
 // ---------------------------------------------------------------
 return [
-    // Datenbank (bei Plesk meistens localhost)
+    // Database (on Plesk usually localhost)
     'db' => [
         'host' => 'localhost',
         'name' => 'onyoursite_',
@@ -13,31 +13,31 @@ return [
         'pass' => '',
     ],
 
-    // AES-256-Schlüssel, EXAKT 32 Zeichen.
-    // WICHTIG beim Update: den alten Wert aus deiner bisherigen security.php
-    // (define('AES_256_KEY', '...')) hier eintragen – sonst können bereits
-    // verschlüsselte Daten (Discord-IDs, Termin-Anfragen) nicht mehr gelesen werden.
+    // AES-256 key, EXACTLY 32 characters.
+    // IMPORTANT when updating: enter the old value from your previous security.php
+    // (define('AES_256_KEY', '...')) here – otherwise data that is already
+    // encrypted (Discord IDs, booking requests) can no longer be read.
     'aes_key' => '',
 
-    // Zufälliger, geheimer Text (mind. 32 Zeichen) für Formular-Signaturen
-    // (Spamschutz im Kontaktformular). Einfach einmal z. B. mit
-    // php -r "echo bin2hex(random_bytes(32));" erzeugen.
+    // Random secret text (at least 32 characters) for form signatures
+    // (spam protection in the contact form). Just generate it once, e.g. with
+    // php -r "echo bin2hex(random_bytes(32));"
     'app_secret' => '',
 
-    // Hauptdomain ohne "www" – Profile liegen unter name.DOMAIN oder DOMAIN/name
+    // Main domain without "www" – profiles live at name.DOMAIN or DOMAIN/name
     'base_domain' => 'on-your.site',
     'scheme' => 'https',
 
     'timezone' => 'Europe/Berlin',
 
-    // Wie viele Seiten ein Konto anlegen darf
+    // How many pages an account may create
     'max_pages' => 3,
 
-    // Optional: Geheimnis, um den Wochenbericht per Web-Cron aufzurufen
-    // (https://on-your.site/cron/weekly_report.php ist gesperrt; nutze stattdessen
-    // die Plesk-Aufgabe "PHP-Skript ausführen" – dann wird das hier nicht gebraucht).
+    // Optional: secret for running the weekly report via web cron
+    // (https://on-your.site/cron/weekly_report.php is blocked; use the Plesk
+    // task "Run a PHP script" instead – then you don’t need this).
     'cron_secret' => '',
 
-    // Fehler im Browser anzeigen (nur zum Testen auf true setzen)
+    // Show errors in the browser (only set to true for testing)
     'debug' => false,
 ];

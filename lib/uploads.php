@@ -71,19 +71,19 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
 {
     $kinds = oys_upload_kinds();
     if (!isset($kinds[$kind])) {
-        return ['error' => 'Unbekannte Upload-Art.'];
+        return ['error' => 'Unknown upload type.'];
     }
     $cfg = $kinds[$kind];
 
     $err = $upload['error'] ?? UPLOAD_ERR_NO_FILE;
     if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
-        return ['error' => 'Die Datei ist zu groß für den Server (upload_max_filesize in Plesk erhöhen).'];
+        return ['error' => 'The file is too large for the server (increase upload_max_filesize in Plesk).'];
     }
     if ($err !== UPLOAD_ERR_OK || !is_uploaded_file($upload['tmp_name'] ?? '')) {
-        return ['error' => 'Upload fehlgeschlagen (Fehlercode ' . (int) $err . ').'];
+        return ['error' => 'Upload failed (error code ' . (int) $err . ').'];
     }
     if (($upload['size'] ?? 0) > $cfg['max_mb'] * 1024 * 1024) {
-        return ['error' => 'Die Datei ist zu groß (max. ' . $cfg['max_mb'] . ' MB).'];
+        return ['error' => 'The file is too large (max. ' . $cfg['max_mb'] . ' MB).'];
     }
 
     $ext = strtolower(pathinfo((string) ($upload['name'] ?? ''), PATHINFO_EXTENSION));
@@ -91,14 +91,14 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
         $ext = 'jpg';
     }
     if (!in_array($ext, $cfg['exts'], true)) {
-        return ['error' => 'Dieses Dateiformat ist nicht erlaubt (' . implode(', ', $cfg['exts']) . ').'];
+        return ['error' => 'This file type isn’t allowed (' . implode(', ', $cfg['exts']) . ').'];
     }
 
     // Inhalt prüfen, nicht nur die Endung
     $mime = function_exists('finfo_open') ? (string) finfo_file(finfo_open(FILEINFO_MIME_TYPE), $upload['tmp_name']) : '';
     $isImage = in_array($ext, OYS_IMAGE_EXTS, true);
     if ($isImage && !@getimagesize($upload['tmp_name'])) {
-        return ['error' => 'Das ist kein gültiges Bild.'];
+        return ['error' => 'That’s not a valid image.'];
     }
     $allowedMimes = [
         'mp3' => ['audio/mpeg', 'audio/mp3', 'application/octet-stream'],
@@ -110,7 +110,7 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
         'zip' => ['application/zip', 'application/x-zip-compressed'],
     ];
     if (!$isImage && $mime !== '' && isset($allowedMimes[$ext]) && !in_array($mime, $allowedMimes[$ext], true)) {
-        return ['error' => 'Der Dateiinhalt passt nicht zur Endung .' . $ext . '.'];
+        return ['error' => 'The file’s content doesn’t match its .' . $ext . ' extension.'];
     }
 
     $dir = dirname(__DIR__) . '/static/uploads/';
@@ -127,7 +127,7 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
     }
     $name = $base . '.' . $ext;
     if (!move_uploaded_file($upload['tmp_name'], $dir . $name)) {
-        return ['error' => 'Der Ordner static/uploads/ ist nicht beschreibbar (Rechte 755 prüfen).'];
+        return ['error' => 'The static/uploads/ folder isn’t writable (check that its permissions are 755).'];
     }
     @chmod($dir . $name, 0644);
     return ['file' => $name];

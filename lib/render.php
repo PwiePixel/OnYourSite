@@ -12,7 +12,7 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     $mode = $opts['mode'] ?? 'public';
     $isPreview = $mode !== 'public';
     $settings = oys_page_settings($page);
-    $theme = oys_theme_key($page['theme'] ?? 'trs');
+    $theme = oys_theme_key($page['theme'] ?? OYS_DEFAULT_THEME);
     $layout = oys_layout_key($page['layout'] ?? 'buttons');
     $themeMeta = oys_themes()[$theme];
     $tz = new DateTimeZone(oys_config('timezone', 'Europe/Berlin'));
@@ -86,7 +86,7 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     ob_start();
     ?>
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -143,13 +143,13 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     }
     $flush();
     if (!$visible && $isPreview) {
-        echo '<p class="oys-empty">Füge links im Editor Links oder Blöcke hinzu – sie erscheinen sofort hier.</p>';
+        echo '<p class="oys-empty">Add links or blocks in the editor on the left – they’ll show up here right away.</p>';
     }
 ?>
   </section>
 
   <?php if (empty($settings['hide_branding'])): ?>
-  <footer class="oys-foot"><a href="<?= e(oys_main_url('/')) ?>" target="_blank" rel="noopener">Erstellt mit <strong>OnYourSite</strong></a></footer>
+  <footer class="oys-foot"><a href="<?= e(oys_main_url('/')) ?>" target="_blank" rel="noopener">Made with <strong>OnYourSite</strong></a></footer>
   <?php endif; ?>
 </main>
 
@@ -165,12 +165,12 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
 <?php endif; ?>
 <?php if ($music && $showEntrance): ?>
 <audio id="oys-audio" src="<?= e($music) ?>" preload="none"<?= $entrance['loop'] ? ' loop' : '' ?>></audio>
-<button type="button" class="oys-mute" hidden aria-label="Musik stumm schalten"><?= oys_ui_icon('volume', 'oys-ico on') ?><?= oys_ui_icon('mute', 'oys-ico off') ?></button>
+<button type="button" class="oys-mute" hidden aria-label="Mute music"><?= oys_ui_icon('volume', 'oys-ico on') ?><?= oys_ui_icon('mute', 'oys-ico off') ?></button>
 <?php endif; ?>
 
 <div class="oys-modal" id="oys-modal" hidden>
   <div class="oys-modal-box" role="dialog" aria-modal="true" aria-labelledby="oys-modal-title">
-    <button type="button" class="oys-modal-close" aria-label="Schließen"><?= oys_ui_icon('close') ?></button>
+    <button type="button" class="oys-modal-close" aria-label="Close"><?= oys_ui_icon('close') ?></button>
     <div class="oys-modal-body"></div>
   </div>
 </div>
@@ -238,24 +238,24 @@ function oys_render_link(array $b, array $ctx, int $index): string
     $protection = $b['protection'] ?? 'none';
 
     if ($type === 'booking') {
-        $title = ($d['title'] ?? '') ?: 'Termin buchen';
+        $title = ($d['title'] ?? '') ?: 'Book a meeting';
         $url = ($d['url'] ?? '/kalender') === '/kalender' || ($d['url'] ?? '') === ''
             ? (isset($page['slug']) ? oys_page_url($page, 'kalender') : '#')
             : oys_clean_url((string) $d['url'], true);
         $icon = oys_ui_icon('calendar');
-        $sub = 'Termin anfragen';
+        $sub = 'Request a meeting';
     } elseif ($type === 'file') {
-        $title = ($d['title'] ?? '') ?: 'Datei herunterladen';
+        $title = ($d['title'] ?? '') ?: 'Download file';
         $url = oys_upload_url($d['src'] ?? '');
         $ext = strtolower(pathinfo((string) ($d['src'] ?? ''), PATHINFO_EXTENSION));
         $icon = oys_ui_icon($ext === 'vcf' ? 'user' : 'download');
-        $sub = strtoupper($ext) . '-Datei';
+        $sub = strtoupper($ext) . ' file';
         $download = true;
     } else {
         $url = oys_clean_url((string) ($d['url'] ?? ''), true);
         $title = (string) ($d['title'] ?? '');
         if ($title === '') {
-            $title = $url !== '' ? oys_pretty_url($url) : 'Neuer Link';
+            $title = $url !== '' ? oys_pretty_url($url) : 'New link';
         }
         // Bei geschützten Links kein aus der Zieladresse erkanntes Symbol (verriete z. B. „Discord“)
         $icon = oys_icon_html((string) ($d['icon'] ?? ''), $protection === 'none' ? $url : '');
@@ -272,9 +272,9 @@ function oys_render_link(array $b, array $ctx, int $index): string
 
     if ($protection !== 'none') {
         // Die Zieladresse darf bei geschützten Links nirgends im HTML auftauchen
-        $sub = ($d['subtitle'] ?? '') !== '' ? $d['subtitle'] : ($protection === 'age' ? 'Ab 18 Jahren' : 'Passwortgeschützt');
+        $sub = ($d['subtitle'] ?? '') !== '' ? $d['subtitle'] : ($protection === 'age' ? '18+ only' : 'Password protected');
         if ($title === oys_pretty_url($url)) {
-            $title = 'Geschützter Link';
+            $title = 'Protected link';
         }
         $classes[] = 'is-protected';
         $attrs['data-protect'] = $protection;
@@ -314,7 +314,7 @@ function oys_render_link(array $b, array $ctx, int $index): string
     }
     $html .= '</span><span class="oys-link-end">' . $end . '</span>';
     if (!empty($b['_off'])) {
-        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' gerade ausgeblendet</span>';
+        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' Hidden right now</span>';
     }
     return $html . '</a>';
 }
@@ -328,7 +328,7 @@ function oys_render_block(array $b, array $ctx): string
     $d = $b['data'];
     $id = (string) $b['id'];
     $off = !empty($b['_off']) ? ' is-off' : '';
-    $badge = !empty($b['_off']) ? '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' gerade ausgeblendet</span>' : '';
+    $badge = !empty($b['_off']) ? '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' Hidden right now</span>' : '';
 
     switch ($b['type']) {
         case 'socials':
@@ -376,11 +376,11 @@ function oys_render_block(array $b, array $ctx): string
             }
             $html .= '</div>';
             if (count($images) > 1) {
-                $html .= '<button type="button" class="oys-gal-nav prev" aria-label="Vorheriges Bild">' . oys_ui_icon('left') . '</button>';
-                $html .= '<button type="button" class="oys-gal-nav next" aria-label="Nächstes Bild">' . oys_ui_icon('right') . '</button>';
+                $html .= '<button type="button" class="oys-gal-nav prev" aria-label="Previous image">' . oys_ui_icon('left') . '</button>';
+                $html .= '<button type="button" class="oys-gal-nav next" aria-label="Next image">' . oys_ui_icon('right') . '</button>';
                 $html .= '<div class="oys-gal-dots">';
                 foreach ($images as $i => $img) {
-                    $html .= '<button type="button" aria-label="Bild ' . ($i + 1) . '"' . ($i === 0 ? ' class="on"' : '') . '></button>';
+                    $html .= '<button type="button" aria-label="Image ' . ($i + 1) . '"' . ($i === 0 ? ' class="on"' : '') . '></button>';
                 }
                 $html .= '</div>';
             }
@@ -416,7 +416,7 @@ function oys_render_embed(array $b, array $ctx): string
     $embed = oys_parse_embed((string) ($d['url'] ?? ''));
     $off = !empty($b['_off']) ? ' is-off' : '';
     if (!$embed) {
-        return '<div class="oys-block oys-embed is-invalid' . $off . '"><div class="oys-embed-load"><span class="oys-embed-title">Diese Adresse kann nicht eingebettet werden.</span><span class="oys-embed-note">Unterstützt werden YouTube, Twitch und Spotify.</span></div></div>';
+        return '<div class="oys-block oys-embed is-invalid' . $off . '"><div class="oys-embed-load"><span class="oys-embed-title">This address can’t be embedded.</span><span class="oys-embed-note">YouTube, Twitch and Spotify are supported.</span></div></div>';
     }
     $names = ['youtube' => 'YouTube', 'twitch' => 'Twitch', 'spotify' => 'Spotify'];
     $provider = $embed['provider'];
@@ -424,7 +424,7 @@ function oys_render_embed(array $b, array $ctx): string
     $ratio = $provider === 'spotify' ? (in_array($kind, ['track', 'episode'], true) ? 'spotify-s' : 'spotify-l') : 'video';
     $label = $d['title'] ?? '';
     if ($label === '') {
-        $label = $provider === 'spotify' ? 'Auf Spotify anhören' : ($provider === 'twitch' && $kind === 'channel' ? 'Livestream ansehen' : 'Video abspielen');
+        $label = $provider === 'spotify' ? 'Listen on Spotify' : ($provider === 'twitch' && $kind === 'channel' ? 'Watch the livestream' : 'Play video');
     }
     $brand = $provider === 'spotify' ? 'spotify' : $provider;
 
@@ -433,9 +433,9 @@ function oys_render_embed(array $b, array $ctx): string
         . '<span class="oys-embed-logo">' . oys_brand_svg($brand) . '</span>'
         . '<span class="oys-embed-play">' . oys_ui_icon('play') . '</span>'
         . '<span class="oys-embed-title">' . e($label) . '</span>'
-        . '<span class="oys-embed-note">Erst beim Antippen wird ' . e($names[$provider]) . ' geladen (Datenschutz).</span>'
+        . '<span class="oys-embed-note">' . e($names[$provider]) . ' only loads once you tap (privacy).</span>'
         . '</button>'
-        . (!empty($b['_off']) ? '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' gerade ausgeblendet</span>' : '')
+        . (!empty($b['_off']) ? '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' Hidden right now</span>' : '')
         . '</div>';
 }
 
@@ -454,7 +454,7 @@ function oys_render_countdown(array $b, array $ctx): string
         'm' => intdiv($diff % 3600, 60),
         's' => $diff % 60,
     ];
-    $labels = ['d' => 'Tage', 'h' => 'Std.', 'm' => 'Min.', 's' => 'Sek.'];
+    $labels = ['d' => 'days', 'h' => 'hours', 'm' => 'min', 's' => 'sec'];
     $done = $diff === 0;
     $off = !empty($b['_off']) ? ' is-off' : '';
 
@@ -467,13 +467,13 @@ function oys_render_countdown(array $b, array $ctx): string
         $html .= '<div class="oys-cd-cell"><span class="oys-cd-num" data-u="' . $unit . '">' . str_pad((string) $value, 2, '0', STR_PAD_LEFT) . '</span><span class="oys-cd-label">' . $labels[$unit] . '</span></div>';
     }
     $html .= '</div>';
-    $html .= '<div class="oys-cd-done"' . ($done ? '' : ' hidden') . '>' . e(($d['done_text'] ?? '') ?: 'Es ist so weit!') . '</div>';
+    $html .= '<div class="oys-cd-done"' . ($done ? '' : ' hidden') . '>' . e(($d['done_text'] ?? '') ?: 'It’s time!') . '</div>';
     $cdUrl = oys_clean_url((string) ($d['url'] ?? ''));
     if ($cdUrl !== '') {
-        $html .= '<a class="oys-cd-link" href="' . e($cdUrl) . '" target="_blank" rel="noopener noreferrer" data-b="' . e((string) $b['id']) . '">' . e(($d['url_label'] ?? '') ?: 'Mehr erfahren') . ' ' . oys_ui_icon('arrow') . '</a>';
+        $html .= '<a class="oys-cd-link" href="' . e($cdUrl) . '" target="_blank" rel="noopener noreferrer" data-b="' . e((string) $b['id']) . '">' . e(($d['url_label'] ?? '') ?: 'Learn more') . ' ' . oys_ui_icon('arrow') . '</a>';
     }
     if (!empty($b['_off'])) {
-        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' gerade ausgeblendet</span>';
+        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' Hidden right now</span>';
     }
     return $html . '</div>';
 }
@@ -490,22 +490,22 @@ function oys_render_contact(array $b, array $ctx): string
     $sent = ($ctx['notice'] ?? null) === 'sent:' . $blockId;
     $off = !empty($b['_off']) ? ' is-off' : '';
 
-    $html = '<form class="oys-block oys-card oys-contact' . $off . '" id="kontakt-' . e($blockId) . '" method="post" action="/_/contact" novalidate>';
-    $html .= '<h3 class="oys-contact-title">' . e(($d['title'] ?? '') ?: 'Schreib mir') . '</h3>';
+    $html = '<form class="oys-block oys-card oys-contact' . $off . '" id="contact-' . e($blockId) . '" method="post" action="/_/contact" novalidate>';
+    $html .= '<h3 class="oys-contact-title">' . e(($d['title'] ?? '') ?: 'Message me') . '</h3>';
     if (!empty($d['intro'])) {
         $html .= '<p class="oys-contact-intro">' . nl2br(e($d['intro'])) . '</p>';
     }
     $html .= '<input type="hidden" name="b" value="' . e($blockId) . '"><input type="hidden" name="t" value="' . e($token) . '">';
     $html .= '<div class="oys-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
-    $html .= '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Dein Name"></label>';
-    $html .= '<label class="oys-field"><span>E-Mail</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="du@beispiel.de"></label>';
-    $html .= '<label class="oys-field"><span>Nachricht</span><textarea name="message" rows="4" maxlength="2000" required placeholder="Deine Nachricht …"></textarea></label>';
-    $html .= '<button type="submit" class="oys-contact-send">' . oys_ui_icon('send') . '<span>' . e(($d['button'] ?? '') ?: 'Nachricht senden') . '</span></button>';
-    $html .= '<p class="oys-contact-status' . ($sent ? ' ok' : '') . '" role="status" data-success="' . e(($d['success'] ?? '') ?: 'Danke! Deine Nachricht ist angekommen.') . '">'
-        . ($sent ? e(($d['success'] ?? '') ?: 'Danke! Deine Nachricht ist angekommen.') : '') . '</p>';
-    $html .= '<p class="oys-contact-note">Deine Nachricht geht direkt an ' . e($name !== '' ? $name : 'den Seiteninhaber') . '. Deine Angaben werden nur zur Beantwortung verwendet.</p>';
+    $html .= '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Your name"></label>';
+    $html .= '<label class="oys-field"><span>Email</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="you@example.com"></label>';
+    $html .= '<label class="oys-field"><span>Message</span><textarea name="message" rows="4" maxlength="2000" required placeholder="Your message…"></textarea></label>';
+    $html .= '<button type="submit" class="oys-contact-send">' . oys_ui_icon('send') . '<span>' . e(($d['button'] ?? '') ?: 'Send message') . '</span></button>';
+    $html .= '<p class="oys-contact-status' . ($sent ? ' ok' : '') . '" role="status" data-success="' . e(($d['success'] ?? '') ?: 'Thanks! Your message has been sent.') . '">'
+        . ($sent ? e(($d['success'] ?? '') ?: 'Thanks! Your message has been sent.') : '') . '</p>';
+    $html .= '<p class="oys-contact-note">Your message goes directly to ' . e($name !== '' ? $name : 'the page owner') . '. Your details are only used to reply to you.</p>';
     if (!empty($b['_off'])) {
-        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' gerade ausgeblendet</span>';
+        $html .= '<span class="oys-off-badge">' . oys_ui_icon('clock') . ' Hidden right now</span>';
     }
     return $html . '</form>';
 }
@@ -514,12 +514,12 @@ function oys_render_contact(array $b, array $ctx): string
 function oys_render_simple(array $page, string $title, string $bodyHtml): string
 {
     $settings = oys_page_settings($page);
-    $theme = oys_theme_key($page['theme'] ?? 'trs');
+    $theme = oys_theme_key($page['theme'] ?? OYS_DEFAULT_THEME);
     $classes = ['oys', 't-' . $theme, 'l-buttons', 'mode-simple'];
     if ($settings['font']) $classes[] = 'f-' . $settings['font'];
     if ($settings['button']) $classes[] = 'btn-' . $settings['button'];
     $style = $settings['accent'] ? ' style="--accent:' . e($settings['accent']) . '"' : '';
-    return '<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+    return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . e($title) . '</title><meta name="robots" content="noindex"><link rel="icon" type="image/png" href="/static/images/favicon.png">'
         . '<link rel="stylesheet" href="' . e(oys_asset('/static/css/fonts.css')) . '">'
         . '<link rel="stylesheet" href="' . e(oys_asset('/static/css/themes.css')) . '">'

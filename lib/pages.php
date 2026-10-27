@@ -14,7 +14,7 @@ function oys_default_settings(): array
         'bg_overlay' => 45,
         'entrance' => [
             'enabled' => false,
-            'text' => 'Tippe zum Betreten',
+            'text' => 'Tap to enter',
             'animation' => 'zoom',
             'music' => '',
             'music_url' => '',
@@ -60,7 +60,7 @@ function oys_settings_normalize($in, int $userId, bool $premium, array $old): ar
     $en = is_array($in['entrance'] ?? null) ? $in['entrance'] : [];
     $s['entrance'] = [
         'enabled' => !empty($en['enabled']),
-        'text' => oys_clean_text($en['text'] ?? '', 60) ?: 'Tippe zum Betreten',
+        'text' => oys_clean_text($en['text'] ?? '', 60) ?: 'Tap to enter',
         'animation' => oys_pick($en['animation'] ?? 'zoom', ['fade', 'zoom', 'curtain', 'blur', 'flip'], 'zoom'),
         'music' => oys_valid_upload($en['music'] ?? '', $userId, ['mp3', 'm4a', 'ogg', 'wav']) ?? '',
         'music_url' => preg_match('#^https://#i', (string) ($en['music_url'] ?? '')) ? oys_clean_url($en['music_url']) : '',
@@ -277,14 +277,14 @@ function oys_create_page(PDO $pdo, int $userId, string $slug, string $title): in
     $now = date('Y-m-d H:i:s');
 
     $pdo->prepare('INSERT INTO pages (user_id, slug, position, title, subtitle, bio, theme, layout, address_mode, settings, created_at, updated_at)
-        VALUES (?, ?, ?, ?, \'\', \'\', \'trs\', \'buttons\', \'subdomain\', ?, ?, ?)')
-        ->execute([$userId, $slug, $position, mb_substr($title, 0, 120), json_encode(oys_default_settings(), JSON_UNESCAPED_UNICODE), $now, $now]);
+        VALUES (?, ?, ?, ?, \'\', \'\', ?, \'buttons\', \'subdomain\', ?, ?, ?)')
+        ->execute([$userId, $slug, $position, mb_substr($title, 0, 120), OYS_DEFAULT_THEME, json_encode(oys_default_settings(), JSON_UNESCAPED_UNICODE), $now, $now]);
     $pageId = (int) $pdo->lastInsertId();
 
     // Startinhalt, damit niemand vor einer leeren Seite sitzt
     $starter = [
         ['socials', ['items' => [['p' => 'instagram', 'v' => ''], ['p' => 'tiktok', 'v' => ''], ['p' => 'youtube', 'v' => '']], 'style' => 'icons']],
-        ['link', ['title' => 'Mein erster Link', 'url' => '', 'subtitle' => '', 'icon' => '', 'thumb' => '', 'featured' => false]],
+        ['link', ['title' => 'My first link', 'url' => '', 'subtitle' => '', 'icon' => '', 'thumb' => '', 'featured' => false]],
     ];
     $insert = $pdo->prepare('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, ?, 1, ?, ?)');
     foreach ($starter as $i => [$type, $data]) {
@@ -309,7 +309,7 @@ function oys_save_page(PDO $pdo, array $page, array $input, int $userId, bool $p
         'bio' => oys_clean_text($p['bio'] ?? '', 1000, true),
         'avatar' => oys_valid_upload($p['avatar'] ?? '', $userId, OYS_IMAGE_EXTS),
         'bg_image' => oys_valid_upload($p['bg_image'] ?? '', $userId, OYS_IMAGE_EXTS),
-        'theme' => oys_theme_key($p['theme'] ?? 'trs'),
+        'theme' => oys_theme_key($p['theme'] ?? OYS_DEFAULT_THEME),
         'layout' => oys_layout_key($p['layout'] ?? 'buttons'),
         'settings' => json_encode(oys_settings_normalize($p['settings'] ?? [], $userId, $premium, $oldSettings), JSON_UNESCAPED_UNICODE),
         'updated_at' => date('Y-m-d H:i:s'),
@@ -481,7 +481,7 @@ function oys_sync_username(PDO $pdo, int $userId): void
         try {
             $pdo->prepare('UPDATE users SET username = ? WHERE id = ?')->execute([$pages[0]['slug'], $userId]);
         } catch (PDOException $e) {
-            error_log('username-Sync fehlgeschlagen: ' . $e->getMessage());
+            error_log('username sync failed: ' . $e->getMessage());
         }
     }
 }

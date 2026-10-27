@@ -79,18 +79,18 @@
   function openProtected(a) {
     var id = a.dataset.b;
     var title = ($('.oys-link-title', a) || a).textContent.trim();
-    var previewNote = isPublic ? '' : '<p class="oys-err">Vorschau: Speichere und teste den Link auf deiner echten Seite.</p>';
+    var previewNote = isPublic ? '' : '<p class="oys-err">Preview: Save and test the link on your live page.</p>';
 
     if (a.dataset.protect === 'age') {
       openModal(
         '<div class="oys-modal-icon">18+</div>' +
-        '<h2 id="oys-modal-title">Ab 18 Jahren</h2>' +
-        '<p>„' + esc(title) + '“ ist nur für Erwachsene. Bist du mindestens 18 Jahre alt?</p>' + previewNote +
+        '<h2 id="oys-modal-title">Adults only</h2>' +
+        '<p>“' + esc(title) + '” is for adults only. Are you at least 18 years old?</p>' + previewNote +
         (isPublic
           ? '<form class="oys-age" method="post" action="/_/go/' + encodeURIComponent(id) + '" target="_blank" rel="noopener noreferrer">' +
-            '<input type="hidden" name="age" value="yes"><button type="submit" class="oys-btn">Ja, ich bin 18 oder älter</button></form>'
-          : '<button type="button" class="oys-btn" data-close>Ja, ich bin 18 oder älter</button>') +
-        '<button type="button" class="oys-btn ghost" data-close>Nein, zurück</button>'
+            '<input type="hidden" name="age" value="yes"><button type="submit" class="oys-btn">Yes, I’m 18 or older</button></form>'
+          : '<button type="button" class="oys-btn" data-close>Yes, I’m 18 or older</button>') +
+        '<button type="button" class="oys-btn ghost" data-close>No, take me back</button>'
       );
       // Bestätigung per POST (die Weiterleitung klappt nicht per einfachem Link); Dialog erst danach schließen
       var ageForm = $('.oys-age', modalBody);
@@ -100,12 +100,12 @@
 
     openModal(
       '<div class="oys-modal-icon">' + ICON_LOCK + '</div>' +
-      '<h2 id="oys-modal-title">Geschützter Link</h2>' +
-      '<p>„' + esc(title) + '“ ist mit einem Passwort geschützt.</p>' + previewNote +
+      '<h2 id="oys-modal-title">Protected link</h2>' +
+      '<p>“' + esc(title) + '” is password protected.</p>' + previewNote +
       '<form class="oys-unlock" autocomplete="off">' +
-      '<input type="password" name="pw" placeholder="Passwort" required maxlength="100" aria-label="Passwort">' +
+      '<input type="password" name="pw" placeholder="Password" required maxlength="100" aria-label="Password">' +
       '<p class="oys-err" hidden></p>' +
-      '<button type="submit" class="oys-btn">' + ICON_LOCK + '<span>Entsperren</span></button>' +
+      '<button type="submit" class="oys-btn">' + ICON_LOCK + '<span>Unlock</span></button>' +
       '</form>'
     );
     var form = $('.oys-unlock', modalBody);
@@ -125,20 +125,20 @@
         if (res && res.ok && res.url) {
           modalBody.innerHTML =
             '<div class="oys-modal-icon">' + ICON_OPEN + '</div>' +
-            '<h2 id="oys-modal-title">Entsperrt</h2>' +
-            '<p>Du kannst „' + esc(title) + '“ jetzt öffnen.</p>' +
-            '<a class="oys-btn" href="' + esc(res.url) + '" target="_blank" rel="noopener noreferrer" data-close>' + ICON_OPEN + '<span>Link öffnen</span></a>';
+            '<h2 id="oys-modal-title">Unlocked</h2>' +
+            '<p>You can now open “' + esc(title) + '”.</p>' +
+            '<a class="oys-btn" href="' + esc(res.url) + '" target="_blank" rel="noopener noreferrer" data-close>' + ICON_OPEN + '<span>Open link</span></a>';
           var open = $('a.oys-btn', modalBody);
           if (open) open.focus();
         } else {
           err.hidden = false;
-          err.textContent = (res && res.error) || 'Das Passwort stimmt nicht.';
+          err.textContent = (res && res.error) || 'Wrong password.';
           form.pw.select();
         }
       }).catch(function () {
         btn.disabled = false;
         err.hidden = false;
-        err.textContent = 'Verbindung fehlgeschlagen. Bitte versuche es erneut.';
+        err.textContent = 'Connection failed. Please try again.';
       });
     });
   }
@@ -158,7 +158,7 @@
       }
       var frame = document.createElement('iframe');
       frame.src = src;
-      frame.title = ($('.oys-embed-title', box) || {}).textContent || 'Eingebetteter Inhalt';
+      frame.title = ($('.oys-embed-title', box) || {}).textContent || 'Embedded content';
       frame.allow = 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
       frame.setAttribute('allowfullscreen', '');
       frame.loading = 'lazy';
@@ -242,12 +242,12 @@
       status.className = 'oys-contact-status';
       if (!isPublic) {
         status.classList.add('err');
-        status.textContent = 'Vorschau: Das Formular sendet erst auf deiner echten Seite.';
+        status.textContent = 'Preview: The form only works on your live page.';
         return;
       }
       if (!form.checkValidity()) {
         status.classList.add('err');
-        status.textContent = 'Bitte fülle alle Felder richtig aus.';
+        status.textContent = 'Please fill in all fields correctly.';
         return;
       }
       var btn = $('.oys-contact-send', form);
@@ -262,13 +262,13 @@
             status.textContent = status.dataset.success;
           } else {
             status.classList.add('err');
-            status.textContent = (res && res.error) || 'Senden fehlgeschlagen.';
+            status.textContent = (res && res.error) || 'Sending failed.';
           }
         })
         .catch(function () {
           btn.disabled = false;
           status.classList.add('err');
-          status.textContent = 'Verbindung fehlgeschlagen. Bitte versuche es erneut.';
+          status.textContent = 'Connection failed. Please try again.';
         });
     });
   });
@@ -302,11 +302,11 @@
       if (audio.paused) {
         audio.play();
         mute.classList.remove('is-muted');
-        mute.setAttribute('aria-label', 'Musik stumm schalten');
+        mute.setAttribute('aria-label', 'Mute music');
       } else {
         audio.pause();
         mute.classList.add('is-muted');
-        mute.setAttribute('aria-label', 'Musik abspielen');
+        mute.setAttribute('aria-label', 'Play music');
       }
     });
   }

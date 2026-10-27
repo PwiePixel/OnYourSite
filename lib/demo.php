@@ -7,12 +7,13 @@ function oys_demo_page(string $theme): ?array
         return null;
     }
     $layouts = [
-        'trs' => 'buttons', 'galaxy' => 'cards', 'notebook' => 'timeline', 'comic' => 'tiles',
+        'deep-dark' => 'buttons', 'galaxy' => 'cards', 'notebook' => 'timeline', 'comic' => 'tiles',
+        'holo' => 'cards', 'sakura' => 'buttons', 'blueprint' => 'cards', 'chalkboard' => 'buttons', 'noir' => 'buttons', 'dune' => 'cards',
         'ocean' => 'buttons', 'midnight' => 'cards', 'retro' => 'buttons', 'pixel' => 'columns',
         'newspaper' => 'magazine', 'candy' => 'cloud', 'brutal' => 'bento', 'zen' => 'buttons',
         'glass' => 'apps', 'code' => 'cards', 'cafe' => 'cards', 'neon' => 'buttons', 'luxe' => 'buttons',
     ];
-    $rings = ['trs' => 'accent', 'galaxy' => 'rainbow', 'neon' => 'accent', 'retro' => 'accent', 'candy' => 'story'];
+    $rings = ['deep-dark' => 'accent', 'galaxy' => 'rainbow', 'neon' => 'accent', 'retro' => 'accent', 'candy' => 'story', 'holo' => 'rainbow', 'sakura' => 'story'];
     $settings = oys_default_settings();
     $settings['avatar_ring'] = $rings[$theme] ?? 'none';
     $settings['particles'] = $theme === 'midnight' ? 'fireflies' : 'none';
@@ -21,8 +22,8 @@ function oys_demo_page(string $theme): ?array
         'id' => 0,
         'slug' => 'mia',
         'title' => 'Mia Sommer',
-        'subtitle' => 'Musik & Livestreams',
-        'bio' => 'Neue Single am Freitag 🎧 Live auf Twitch – jeden Freitag ab 18 Uhr.',
+        'subtitle' => 'Music & livestreams',
+        'bio' => 'New single out Friday 🎧 Live on Twitch – every Friday from 6 pm.',
         'avatar' => '',
         'bg_image' => '',
         'theme' => $theme,
@@ -43,23 +44,23 @@ function oys_demo_page(string $theme): ?array
             ['p' => 'instagram', 'v' => 'mia'], ['p' => 'tiktok', 'v' => 'mia'], ['p' => 'youtube', 'v' => 'mia'],
             ['p' => 'twitch', 'v' => 'mia'], ['p' => 'discord', 'v' => 'mia'], ['p' => 'spotify', 'v' => 'https://open.spotify.com/artist/0'],
         ]]),
-        $block('link', ['title' => 'Jetzt live auf Twitch', 'url' => 'https://twitch.tv/mia', 'subtitle' => 'Freitags 18–23 Uhr', 'icon' => '', 'thumb' => '', 'featured' => false], 'shine'),
-        $block('link', ['title' => 'Neue Single hören', 'url' => 'https://open.spotify.com/artist/0', 'subtitle' => 'Spotify', 'icon' => '', 'thumb' => '', 'featured' => false]),
-        $block('link', ['title' => 'Merch-Shop', 'url' => 'https://example.com/shop', 'subtitle' => 'Hoodies & Sticker', 'icon' => 'bx bx-shopping-bag', 'thumb' => '', 'featured' => false], 'wobble'),
-        $block('link', ['title' => 'Tourdaten 2026', 'url' => 'https://example.com/tour', 'subtitle' => '12 Städte', 'icon' => 'bx bx-calendar', 'thumb' => '', 'featured' => false]),
-        $block('countdown', ['title' => 'Neue Single erscheint in', 'target' => $release, 'done_text' => 'Jetzt überall hören!', 'url' => '', 'url_label' => '']),
+        $block('link', ['title' => 'Live now on Twitch', 'url' => 'https://twitch.tv/mia', 'subtitle' => 'Fridays 6–11 pm', 'icon' => '', 'thumb' => '', 'featured' => false], 'shine'),
+        $block('link', ['title' => 'Listen to the new single', 'url' => 'https://open.spotify.com/artist/0', 'subtitle' => 'Spotify', 'icon' => '', 'thumb' => '', 'featured' => false]),
+        $block('link', ['title' => 'Merch shop', 'url' => 'https://example.com/shop', 'subtitle' => 'Hoodies & stickers', 'icon' => 'bx bx-shopping-bag', 'thumb' => '', 'featured' => false], 'wobble'),
+        $block('link', ['title' => 'Tour dates 2026', 'url' => 'https://example.com/tour', 'subtitle' => '12 cities', 'icon' => 'bx bx-calendar', 'thumb' => '', 'featured' => false]),
+        $block('countdown', ['title' => 'New single drops in', 'target' => $release, 'done_text' => 'Out now everywhere!', 'url' => '', 'url_label' => '']),
     ];
     return ['page' => $page, 'blocks' => $blocks];
 }
 
-// Kleine statische Vorschau eines Designs (Startseite: Leiste mit allen 25 Designs)
+// Kleine statische Vorschau eines Designs (Startseite: Leiste mit allen Designs)
 function oys_mini_html(string $theme, string $layout = 'buttons'): string
 {
-    $links = [['Instagram', 'instagram'], ['Neues Video', 'youtube'], ['Meine Website', 'website']];
+    $links = [['Instagram', 'instagram'], ['New video', 'youtube'], ['My website', 'website']];
     $html = '<div class="oys oys-mini t-' . e($theme) . ' l-' . e($layout) . '">'
         . '<div class="oys-bg"><span class="oys-deco oys-deco-1"></span><span class="oys-deco oys-deco-2"></span><span class="oys-deco oys-deco-3"></span></div>'
         . '<div class="oys-main"><header class="oys-head"><div class="oys-avatar shape-circle ring-none"><div class="oys-avatar-inner"><span class="oys-initials">MS</span></div></div>'
-        . '<h1 class="oys-name">Mia Sommer</h1><p class="oys-sub">Musik &amp; Livestreams</p><p class="oys-bio">Neue Single am Freitag 🎧</p></header>'
+        . '<h1 class="oys-name">Mia Sommer</h1><p class="oys-sub">Music &amp; livestreams</p><p class="oys-bio">New single out Friday 🎧</p></header>'
         . '<section class="oys-blocks"><div class="oys-links lay-' . e($layout) . '">';
     foreach ($links as $i => [$title, $brand]) {
         $html .= '<span class="oys-link" style="--i:' . $i . '"><span class="oys-link-media"><span class="oys-link-icon">' . oys_brand_svg($brand) . '</span></span>'

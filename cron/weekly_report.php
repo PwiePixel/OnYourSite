@@ -1,20 +1,20 @@
 <?php
-// Wochenbericht: jeden Montag eine kurze Mail mit Aufrufen, Klicks und dem besten Link.
+// Weekly report: every Monday a short email with views, clicks and the best link.
 //
-// Plesk: "Geplante Aufgaben" → "PHP-Skript ausführen"
-//   Skript:   /httpdocs/cron/weekly_report.php   (Pfad an deine Installation anpassen)
-//   Zeitplan: Montags, 8:00 Uhr   (Cron: 0 8 * * 1)
+// Plesk: "Scheduled Tasks" → "Run a PHP script"
+//   Script:   /httpdocs/cron/weekly_report.php   (adjust the path to your installation)
+//   Schedule: Mondays, 8:00   (cron: 0 8 * * 1)
 //
-// Alternativ per Web-Cron (wenn 'cron_secret' in config.php gesetzt ist):
-//   https://on-your.site/_/cron/weekly-report?key=DEIN_GEHEIMNIS
+// Alternatively as a web cron (if 'cron_secret' is set in config.php):
+//   https://on-your.site/_/cron/weekly-report?key=YOUR_SECRET
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
-    exit('Nur über die Kommandozeile / Plesk-Aufgabe.');
+    exit('Command line / Plesk task only.');
 }
 
 chdir(dirname(__DIR__));
 require dirname(__DIR__) . '/lib/bootstrap.php';
 
 $result = oys_run_weekly_reports($pdo);
-echo date('Y-m-d H:i') . ' – Wochenberichte gesendet: ' . $result['sent'] . ', fehlgeschlagen: ' . $result['failed'] . PHP_EOL;
+echo date('Y-m-d H:i') . ' – Weekly reports sent: ' . $result['sent'] . ', failed: ' . $result['failed'] . PHP_EOL;
