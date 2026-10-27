@@ -14,6 +14,22 @@ function oys_upload_kinds(): array
     ];
 }
 
+// Größte Datei, die PHP auf diesem Server annimmt (upload_max_filesize / post_max_size), in MB
+function oys_upload_limit_mb(): float
+{
+    $toBytes = function ($v) {
+        $v = trim((string) $v);
+        if ($v === '' || $v === '-1') {
+            return PHP_INT_MAX;
+        }
+        $unit = strtolower(substr($v, -1));
+        $n = (float) $v;
+        return (int) ($unit === 'g' ? $n * 1073741824 : ($unit === 'm' ? $n * 1048576 : ($unit === 'k' ? $n * 1024 : $n)));
+    };
+    $bytes = min($toBytes(ini_get('upload_max_filesize')), $toBytes(ini_get('post_max_size')));
+    return round(min($bytes, 100 * 1048576) / 1048576, 1);
+}
+
 // Gibt ['file' => name] oder ['error' => text] zurück
 function oys_handle_upload(array $upload, string $kind, int $userId): array
 {

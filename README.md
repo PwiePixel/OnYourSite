@@ -37,6 +37,10 @@ Bestehendes bleibt: eingebauter Terminkalender (`/kalender`), Datei-Download (PD
 
 Voraussetzungen: PHP 7.4 oder neuer (8.x empfohlen) mit PDO MySQL, OpenSSL, mbstring, fileinfo und GD (mit WebP); Wildcard-DNS und -SSL für `*.on-your.site` wie bisher.
 
+Uploads: Fotos werden schon im Browser verkleinert und passen daher auch unter kleine Server-Limits. Für Musik beim „Eingang mit Musik“ (bis 15 MB) in Plesk unter *PHP-Einstellungen* `upload_max_filesize` und `post_max_size` auf mindestens `16M` setzen.
+
+Tests: `php tests/unit.php` (nur Kommandozeile) prüft Zeitsteuerung, Einbettungen, Adressen, Spamfilter und URL-Prüfung.
+
 > **Wichtig:** Bisher konnte `email/smtp.json` (mit dem SMTP-Passwort) direkt über `https://on-your.site/email/smtp.json` abgerufen werden. Das ist jetzt gesperrt (`.htaccess`). Bitte prüfe, ob die Datei bei dir erreichbar war, und **ändere vorsichtshalber das Passwort des Mail-Kontos**.
 
 ## Aufbau

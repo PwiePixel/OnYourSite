@@ -26,6 +26,7 @@ $editorData = [
     'baseHost' => oys_base_authority(),
     'scheme' => oys_scheme(),
     'timezone' => oys_config('timezone', 'Europe/Berlin'),
+    'uploadLimitMb' => oys_upload_limit_mb(),
     'slugDaysLeft' => $page && $page['slug_changed_at'] && !$has_premium_access ? max(0, 30 - (int) floor((time() - strtotime($page['slug_changed_at'])) / 86400)) : 0,
     'user' => [
         'name' => $user_data['full_name'] ?? '',
@@ -111,7 +112,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                         </button>
                         <div id="bellMenu" class="dropdown hidden w-80 right-0"></div>
                     </div>
-                    <a id="viewPageLink" href="#" target="_blank" rel="noopener" class="text-sm text-gray-400 hover:text-brand-400 hidden sm:flex items-center gap-1.5 transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-bordercolor hover:border-brand-500/30 max-w-[220px]">
+                    <a id="viewPageLink" href="#" target="_blank" rel="noopener"<?= $page ? '' : ' style="display:none"' ?> class="text-sm text-gray-400 hover:text-brand-400 hidden sm:flex items-center gap-1.5 transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-bordercolor hover:border-brand-500/30 max-w-[220px]">
                         <span class="truncate" id="viewPageLabel"></span> <i class='bx bx-link-external shrink-0'></i>
                     </a>
                     <button type="button" id="saveBtn" class="bg-white text-black hover:bg-gray-200 px-4 sm:px-5 py-1.5 rounded-md text-sm font-semibold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-60">
@@ -162,7 +163,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                     </div>
                 </main>
 
-                <aside id="previewPane" class="preview-pane hidden lg:flex">
+                <aside id="previewPane" class="preview-pane hidden lg:flex"<?= $page ? '' : ' style="display:none"' ?>>
                     <div class="preview-stage" id="previewStage">
                         <div class="preview-glow" id="previewGlow"></div>
                         <div class="phone-wrap" id="phoneWrap">

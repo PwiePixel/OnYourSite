@@ -136,7 +136,9 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
   border-radius: inherit;
   overflow: hidden;
   border: var(--avatar-border);
-  background: var(--avatar-bg);
+  /* deckender Untergrund, damit ein Ring nicht durch die Initialen scheint */
+  background-color: var(--bg-solid);
+  background-image: linear-gradient(var(--avatar-bg), var(--avatar-bg));
   display: grid;
   place-items: center;
 }
@@ -274,7 +276,7 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 .lay-tiles .oys-link.has-thumb .oys-link-media { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }
 .lay-tiles .oys-link.has-thumb .oys-link-thumb { border-radius: 0; }
 .lay-tiles .oys-link.has-thumb .oys-link-media::after { content: ''; position: absolute; inset: 0; background: linear-gradient(transparent 40%, rgba(0, 0, 0, .75)); }
-.lay-tiles .oys-link.has-thumb .oys-link-body { position: relative; margin-top: auto; }
+.lay-tiles .oys-link.has-thumb .oys-link-body { position: relative; margin-top: auto; flex: none; width: 100%; }
 .lay-tiles .oys-link:last-child:nth-child(odd) { grid-column: span 2; aspect-ratio: auto; min-height: 84px; flex-direction: row; align-items: center; }
 
 /* App-Raster */

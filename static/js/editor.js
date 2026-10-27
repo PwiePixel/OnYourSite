@@ -78,7 +78,40 @@
   }
   function apiGet(action) { return api(action); }
 
+  // Große Fotos schon im Browser verkleinern (viele Server erlauben nur 2 MB pro Datei)
+  var MAX_PX = { avatar: 900, bg: 2200, image: 1800, gallery: 1800, thumb: 1000 };
+  var EXT = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };
+  function shrinkImage(kind, file) {
+    if (!MAX_PX[kind] || !EXT[file.type] || !window.createImageBitmap) return Promise.resolve(file);
+    return createImageBitmap(file, { imageOrientation: 'from-image' }).then(function (bmp) {
+      var scale = Math.min(1, MAX_PX[kind] / Math.max(bmp.width, bmp.height));
+      if (scale === 1 && file.size < 1.5 * 1048576) return file;
+      var c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * scale);
+      c.height = Math.round(bmp.height * scale);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      // Fotos als JPEG (kann jeder Browser), sonst WebP – Safari liefert dafür PNG, das Transparenz behält
+      var type = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/webp';
+      return new Promise(function (resolve) {
+        c.toBlob(function (blob) {
+          if (!blob || !EXT[blob.type] || blob.size >= file.size) { resolve(file); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, '') + '.' + EXT[blob.type], { type: blob.type }));
+        }, type, .9);
+      });
+    }).catch(function () { return file; });
+  }
+
   function upload(kind, file) {
+    return shrinkImage(kind, file).then(function (f) {
+      var limit = E.uploadLimitMb || 0;
+      if (limit && f.size > limit * 1048576) {
+        return { ok: false, error: 'Die Datei ist ' + (f.size / 1048576).toFixed(1).replace('.', ',') + ' MB groß – der Server erlaubt nur ' + String(limit).replace('.', ',') + ' MB (in Plesk unter PHP-Einstellungen „upload_max_filesize“ erhöhen).' };
+      }
+      return uploadRaw(kind, f);
+    });
+  }
+
+  function uploadRaw(kind, file) {
     var fd = new FormData();
     fd.append('kind', kind);
     fd.append('file', file);
@@ -1296,6 +1329,7 @@
       var dn = Number(day.dataset.day);
       var days = b.schedule.days && b.schedule.days.length ? b.schedule.days.slice() : [1, 2, 3, 4, 5, 6, 7];
       var i = days.indexOf(dn);
+      if (i !== -1 && days.length === 1) { toast('Mindestens ein Wochentag muss ausgewählt sein.', 'info'); return; }
       if (i === -1) days.push(dn); else days.splice(i, 1);
       b.schedule.days = days.sort();
       rerenderBlock(b); updateHead(b); markDirty();
@@ -1430,7 +1464,7 @@
       (s.entrance.enabled ?
         '<div class="field-row cols-2"><div><label class="lbl">Text zum Antippen</label><input class="field" data-bind="page.settings.entrance.text" maxlength="60"></div>' +
         '<div><label class="lbl">Animation</label>' + designChips('entrance.animation', { zoom: 'Zoom', fade: 'Einblenden', curtain: 'Vorhang', blur: 'Unschärfe', flip: 'Kippen' }, s.entrance.animation) + '</div></div>' +
-        '<div><label class="lbl">Musik <small>(MP3, M4A, OGG – max. 15 MB)</small></label><div class="upload-box"><span class="thumb"><i class="bx bx-music"></i></span>' +
+        '<div><label class="lbl">Musik <small>(MP3, M4A, OGG – max. ' + String(Math.min(15, E.uploadLimitMb || 15)).replace('.', ',') + ' MB)</small></label><div class="upload-box"><span class="thumb"><i class="bx bx-music"></i></span>' +
         '<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">' + (s.entrance.music ? esc(s.entrance.music) : 'Noch keine Musik') + '</div>' +
         (s.entrance.music ? '<audio controls preload="none" src="' + esc(uploadUrl(s.entrance.music)) + '" class="mt-2 w-full" style="height:32px"></audio>' : '<div class="text-xs text-gray-500">Startet, sobald jemand eintritt</div>') + '</div>' +
         '<button type="button" class="btn-secondary" id="musicUp"><i class="bx bx-upload"></i>' + (s.entrance.music ? 'Ersetzen' : 'Hochladen') + '</button>' +
