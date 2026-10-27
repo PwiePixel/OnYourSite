@@ -712,7 +712,7 @@
     activeTab = name;
     $$('.tab-content').forEach(function (t) { t.classList.add('hidden'); });
     $('#tab-' + name).classList.remove('hidden');
-    $$('#mainNav .nav-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === name); });
+    $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === name); });
     $('#pageTitle').textContent = TAB_TITLES[name];
     if (history.replaceState) history.replaceState(null, '', '#' + name);
     $('#editorScroll').scrollTop = 0;
@@ -722,7 +722,7 @@
     if (name === 'messages') loadMessages();
     if (name === 'settings') renderSettings();
   }
-  $$('#mainNav .nav-btn').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
+  $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
   $('#tab-design').addEventListener('click', function (ev) { onDesignClick(ev); });
 
   // ================================================================
@@ -798,7 +798,7 @@
       '<button type="button" class="btn-primary" data-action="quick-add"><i class="bx bx-plus"></i><span class="hidden sm:inline">Link</span></button></div>' +
       '<div class="blocks" id="blockList"></div>' +
       '<button type="button" data-action="add-block" class="w-full mt-3 py-3 rounded-xl border border-dashed border-bordercolor text-gray-500 hover:text-white hover:border-brand-500 transition-colors text-sm font-medium flex items-center justify-center gap-2"><i class="bx bx-plus text-lg"></i> Add block</button>' +
-      '<p class="hint text-center mt-3"><i class="bx bx-info-circle"></i> Drag blocks by the handle on the left to reorder them. Ctrl + S saves.</p>' +
+      '<p class="hint text-center mt-3"><i class="bx bx-info-circle"></i> Drag blocks by the handle on the left to reorder them.<span class="hover-only"> Ctrl + S saves.</span></p>' +
       '</section>';
 
     bindAll(root);
@@ -1431,7 +1431,7 @@
     var filters = { all: 'All', standard: 'Standard', special: 'Special templates', dark: 'Dark', light: 'Light' };
 
     root.innerHTML =
-      '<section><h2 class="section-title">Theme <small>' + counts.all + ' themes · Hover over one to see it in the preview right away</small></h2>' +
+      '<section><h2 class="section-title">Theme <small>' + counts.all + ' themes · <span class="hover-only">Hover over one to see it in the preview right away</span><span class="touch-only">Tap one to try it – check it with Preview</span></small></h2>' +
       '<div class="chips mb-4" id="themeFilter">' + Object.keys(filters).map(function (k) {
         return '<button type="button" class="chip' + (themeFilter === k ? ' on' : '') + '" data-filter="' + k + '">' + filters[k] + ' <span class="cnt">' + counts[k] + '</span></button>';
       }).join('') + '</div>' +
@@ -1913,6 +1913,8 @@
     $('#mobilePreview').classList.remove('hidden');
     setTimeout(function () { fitPhone(); preview.refreshIfStale(); }, 30);
   });
+  // Auf dem Handy sitzt „Preview“ in der Leiste unten
+  $('#navPreviewBtn').addEventListener('click', function () { $('#mobilePreviewBtn').click(); });
   $('#mobilePreviewClose').addEventListener('click', function () {
     $('#mobilePreview').classList.add('hidden');
     paneHome.appendChild(pane);
@@ -1942,6 +1944,7 @@
   } else {
     $('#saveBtn').disabled = true;
     $('#mobilePreviewBtn').classList.add('hidden');
+    $('#navPreviewBtn').classList.add('hidden');
     $('#viewPageLink').classList.add('hidden');
     $('#psLabel').textContent = 'No page yet';
   }

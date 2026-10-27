@@ -183,6 +183,10 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 /* ---------- Blöcke allgemein ---------- */
 .oys-blocks { display: flex; flex-direction: column; gap: 16px; margin-top: 28px; }
 .oys-block { position: relative; }
+/* Gedämpfte Texte in Karten aus deren Textfarbe ableiten (lesbar, auch wenn Karte und Seite verschieden hell sind) */
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  .oys-card { --muted: color-mix(in srgb, var(--card-text) 70%, transparent); }
+}
 .oys-card {
   background: var(--card-bg);
   color: var(--card-text);
@@ -196,7 +200,7 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 .oys-empty { text-align: center; color: var(--muted); font-size: .9em; padding: 24px 8px; border: 2px dashed var(--divider); border-radius: 16px; }
 
 .oys-foot { margin-top: auto; padding-top: 40px; text-align: center; font-size: .78em; }
-.oys-foot a { text-decoration: none; color: var(--muted); opacity: .75; transition: opacity .2s; }
+.oys-foot a { display: inline-block; padding: 10px 14px; text-decoration: none; color: var(--muted); opacity: .75; transition: opacity .2s; }
 .oys-foot a:hover { opacity: 1; }
 
 /* ---------- Links: Grundform (Knöpfe) ---------- */
@@ -243,7 +247,7 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 .has-thumb .oys-link-icon { display: none; }
 .oys-link-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .oys-link-title { overflow-wrap: anywhere; }
-.oys-link-sub { display: none; font-size: .78em; font-weight: 400; opacity: .7; text-transform: none; letter-spacing: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oys-link-sub { display: none; font-size: max(11px, .78em); font-weight: 400; opacity: .7; text-transform: none; letter-spacing: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .oys-link-end { flex: none; display: grid; place-items: center; width: 22px; opacity: .55; }
 .oys-link-end .oys-ico { width: 18px; height: 18px; }
 .oys-badge18 { font-size: 11px; font-weight: 800; line-height: 1; padding: 4px 6px; border-radius: 6px; background: #ef4444; color: #fff; letter-spacing: 0; }
@@ -534,7 +538,7 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 .oys-contact-intro { margin: -4px 0 0; font-size: .9em; opacity: .8; }
 .oys-field { display: flex; flex-direction: column; gap: 5px; font-size: .78em; font-weight: 600; opacity: .95; }
 .oys-field input, .oys-field textarea {
-  width: 100%; padding: 11px 13px; font: inherit; font-size: 15px; font-weight: 400;
+  width: 100%; padding: 11px 13px; font: inherit; font-size: 16px; font-weight: 400;
   color: var(--input-text); background: var(--input-bg); border: var(--input-border); border-radius: min(12px, var(--card-radius));
   outline: none; transition: box-shadow .2s, border-color .2s; resize: vertical;
 }
@@ -675,9 +679,10 @@ html:has(.mode-preview)::-webkit-scrollbar, html:has(.mode-demo)::-webkit-scroll
 .oys-simple .oys-card { padding: 28px 24px; }
 .oys-simple h1 { margin: 0 0 6px; font-family: var(--font-head); font-weight: var(--head-weight); text-transform: var(--head-transform); font-size: 1.5em; }
 .oys-simple p { color: var(--muted); }
-.oys-simple .oys-back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 18px; color: var(--muted); text-decoration: none; font-size: .9em; }
-.oys-simple .oys-field select { width: 100%; padding: 11px 13px; font: inherit; font-size: 15px; color: var(--input-text); background: var(--input-bg); border: var(--input-border); border-radius: 12px; }
+.oys-simple .oys-back { display: inline-flex; align-items: center; gap: 6px; margin: -8px 0 10px; padding: 8px 0; color: var(--muted); text-decoration: none; font-size: .9em; }
+.oys-simple .oys-field select { width: 100%; padding: 11px 13px; font: inherit; font-size: 16px; color: var(--input-text); background: var(--input-bg); border: var(--input-border); border-radius: 12px; }
 .oys-simple .oys-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 420px) { .oys-simple .oys-grid2 { grid-template-columns: 1fr; } }
 .oys-simple .oys-alert { padding: 12px 14px; border-radius: 12px; font-size: .9em; font-weight: 600; margin-bottom: 14px; }
 .oys-simple .oys-alert.ok { background: rgba(34, 197, 94, .15); color: #16a34a; }
 .oys-simple .oys-alert.err { background: rgba(239, 68, 68, .15); color: #ef4444; }
