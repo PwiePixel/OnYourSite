@@ -1,0 +1,14 @@
+# Zugangsdaten (nie ins Repo)
+/config.php
+/email/smtp.json
+
+# Uploads der Nutzer (Profilbilder, Hintergründe, Musik ...)
+/static/uploads/*
+!/static/uploads/.gitkeep
+!/static/uploads/.htaccess
+
+# Lokales / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
