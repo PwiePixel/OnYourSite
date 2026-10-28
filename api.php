@@ -40,7 +40,7 @@ try {
             // Geschützte Links verraten ihre Zieladresse nicht – weder als Titel noch über die erkannte Plattform
             $links[] = [
                 'id' => $b['id'],
-                'title' => ($d['title'] ?? '') ?: ($protected ? 'Geschützter Link' : oys_pretty_url($url)),
+                'title' => ($d['title'] ?? '') ?: ($protected ? 'Protected link' : oys_pretty_url($url)),
                 'url' => $protected ? oys_page_origin($page) . '/_/go/' . $b['id'] : $url,
                 'icon_class' => strpos($icon, 'bx') === 0 ? $icon : '',
                 'platform' => $explicitBrand ?? ($protected ? null : oys_detect_brand($url)),
@@ -88,6 +88,6 @@ try {
         ],
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
-    error_log('API-Fehler: ' . $e->getMessage());
+    error_log('API error: ' . $e->getMessage());
     echo json_encode(['status' => 'error', 'message' => 'Database error occurred.']);
 }

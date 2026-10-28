@@ -256,24 +256,24 @@ function oys_normalize_slug($slug): string
 function oys_slug_problem(PDO $pdo, string $slug, ?int $exceptPageId = null): ?string
 {
     if ($slug === '') {
-        return 'Bitte gib eine Adresse ein.';
+        return 'Please enter an address.';
     }
     if (strlen($slug) < 2 || strlen($slug) > 30) {
-        return 'Die Adresse muss 2–30 Zeichen lang sein.';
+        return 'The address must be 2–30 characters long.';
     }
     if (!preg_match('/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/', $slug) || strpos($slug, '--') !== false) {
-        return 'Erlaubt sind nur a–z, 0–9 und einzelne Bindestriche (nicht am Anfang oder Ende).';
+        return 'Only a–z, 0–9 and single hyphens are allowed (not at the start or end).';
     }
     if (function_exists('is_forbidden_subdomain') && is_forbidden_subdomain($slug)) {
-        return "Die Adresse „{$slug}“ ist reserviert oder nicht erlaubt.";
+        return "The address “{$slug}” is reserved or not allowed.";
     }
     if (in_array($slug, oys_reserved_paths(), true)) {
-        return "Die Adresse „{$slug}“ ist reserviert.";
+        return "The address “{$slug}” is reserved.";
     }
     $stmt = $pdo->prepare('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1');
     $stmt->execute([$slug, (int) $exceptPageId]);
     if ($stmt->fetch()) {
-        return "Die Adresse „{$slug}“ ist leider schon vergeben.";
+        return "Sorry, the address “{$slug}” is already taken.";
     }
     return null;
 }
@@ -386,14 +386,14 @@ function oys_time_ago(?string $datetime): string
         return '';
     }
     $diff = time() - strtotime($datetime);
-    if ($diff < 60) return 'gerade eben';
-    if ($diff < 3600) return 'vor ' . floor($diff / 60) . ' Min.';
-    if ($diff < 86400) return 'vor ' . floor($diff / 3600) . ' Std.';
+    if ($diff < 60) return 'just now';
+    if ($diff < 3600) return ($m = (int) floor($diff / 60)) === 1 ? '1 minute ago' : "$m minutes ago";
+    if ($diff < 86400) return ($h = (int) floor($diff / 3600)) === 1 ? '1 hour ago' : "$h hours ago";
     if ($diff < 86400 * 7) {
         $d = (int) floor($diff / 86400);
-        return $d === 1 ? 'gestern' : "vor $d Tagen";
+        return $d === 1 ? 'yesterday' : "$d days ago";
     }
-    return date('d.m.Y', strtotime($datetime));
+    return date('M j, Y', strtotime($datetime));
 }
 
 function oys_initials(string $name): string

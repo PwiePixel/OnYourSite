@@ -33,7 +33,7 @@ if ($target_user_id > 0 && $exists->fetchColumn()) {
     $_SESSION['user_id'] = $target_user_id;
     unset($_SESSION['page_id']);
 
-    $_SESSION['success'] = 'Eingeloggt als Nutzer #' . $target_user_id;
+    $_SESSION['success'] = 'Logged in as user #' . $target_user_id;
     header('Location: /dashboard');
     exit;
 }

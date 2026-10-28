@@ -12,11 +12,11 @@ $isFree = $requested !== '' && isset($pdo) && function_exists('oys_slug_problem'
 $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'https://on-your.site';
 ?>
 <!DOCTYPE html>
-<html lang="de" class="scroll-smooth">
+<html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $isFree ? 'Adresse frei' : 'Nicht gefunden' ?> | OnYourSite</title>
+    <title><?= $isFree ? 'Address available' : 'Not found' ?> | OnYourSite</title>
     <link rel="icon" type="image/png" href="/static/images/favicon.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/vendor/boxicons/css/boxicons.min.css">
@@ -48,12 +48,12 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
                     <span class="font-bold text-xl text-white tracking-tight">OnYourSite</span>
                 </a>
                 <div class="hidden md:flex items-center space-x-8">
-                    <a href="<?= htmlspecialchars($mainUrl) ?>/#features" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Funktionen</a>
-                    <a href="<?= htmlspecialchars($mainUrl) ?>/#how-it-works" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">So geht's</a>
+                    <a href="<?= htmlspecialchars($mainUrl) ?>/#features" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Features</a>
+                    <a href="<?= htmlspecialchars($mainUrl) ?>/#how-it-works" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">How it works</a>
                     <div class="h-5 w-px bg-bordercolor"></div>
-                    <a href="<?= htmlspecialchars($mainUrl) ?>/login" class="text-sm font-medium text-white hover:text-brand-400 transition-colors">Anmelden</a>
+                    <a href="<?= htmlspecialchars($mainUrl) ?>/login" class="text-sm font-medium text-white hover:text-brand-400 transition-colors">Log in</a>
                     <a href="<?= htmlspecialchars($mainUrl) ?>/register<?= $isFree ? '?name=' . rawurlencode($requested) : '' ?>" class="text-sm font-medium bg-white text-black px-5 py-2.5 rounded-full hover:bg-gray-200 transition-all duration-300 transform hover:scale-105 shadow-[0_0_15px_rgba(255,255,255,0.1)]">
-                        Kostenlos starten
+                        Start for free
                     </a>
                 </div>
             </div>
@@ -68,7 +68,7 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
             <?php if ($isFree): ?>
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 backdrop-blur-sm text-xs font-medium text-emerald-400 mb-8">
                 <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                Diese Adresse ist frei
+                This address is available
             </div>
             <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg break-all">
                 <span class="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-purple-500">
@@ -76,22 +76,22 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
                 </span>
             </h1>
             <p class="mt-4 max-w-2xl mx-auto text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
-                Hier ist noch nichts. Sichere dir genau diese Adresse und starte deine eigene Seite in wenigen Sekunden.
+                Nothing here yet. Claim this exact address and start your own page in seconds.
             </p>
             <?php else: ?>
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-bordercolor bg-white/5 text-xs font-medium text-gray-400 mb-8">404</div>
-            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg">Seite nicht gefunden</h1>
+            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg">Page not found</h1>
             <p class="mt-4 max-w-2xl mx-auto text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
-                Diese Adresse gibt es nicht (mehr). Vielleicht hat sich der Name geändert?
+                This address doesn’t exist (anymore). Maybe the name has changed?
             </p>
             <?php endif; ?>
             
             <div class="flex flex-col sm:flex-row justify-center items-center gap-4">
                 <a href="<?= htmlspecialchars($mainUrl) ?>/register<?= $isFree ? '?name=' . rawurlencode($requested) : '' ?>" class="w-full sm:w-auto inline-flex justify-center items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white px-8 py-3.5 rounded-full font-semibold transition-all duration-300 shadow-[0_0_30px_rgba(99,102,241,0.3)] hover:shadow-[0_0_40px_rgba(99,102,241,0.5)] transform hover:-translate-y-1">
-                    <?= $isFree ? 'Jetzt sichern' : 'Eigene Seite erstellen' ?> <i class='bx bx-rocket text-xl'></i>
+                    <?= $isFree ? 'Claim it now' : 'Create your own page' ?> <i class='bx bx-rocket text-xl'></i>
                 </a>
                 <a href="<?= htmlspecialchars($mainUrl) ?>/" class="w-full sm:w-auto inline-flex justify-center items-center gap-2 bg-card border border-bordercolor hover:border-brand-500/50 text-white px-8 py-3.5 rounded-full font-medium transition-all duration-300">
-                    Mehr erfahren
+                    Learn more
                 </a>
             </div>
             
@@ -112,14 +112,14 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
                 </a>
             </div>
 			<div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
-                <a href="/imprint" class="hover:text-white transition-colors">Impressum</a>
+                <a href="/imprint" class="hover:text-white transition-colors">Legal notice</a>
                 <span>&bull;</span>
-                <a href="/privacy" class="hover:text-white transition-colors">Datenschutz</a>
+                <a href="/privacy" class="hover:text-white transition-colors">Privacy</a>
                 <span>&bull;</span>
-                <a href="/terms" class="hover:text-white transition-colors">Nutzungsbedingungen</a>
+                <a href="/terms" class="hover:text-white transition-colors">Terms</a>
             </div>
             <p class="text-gray-500 text-sm">
-                &copy; <?php echo date("Y"); ?> OnYourSite. Mit <i class='bx bxs-heart text-red-500 mx-1'></i> für die Community gemacht.
+                &copy; <?php echo date("Y"); ?> OnYourSite. Made with <i class='bx bxs-heart text-red-500 mx-1'></i> for the community.
             </p>
         </div>
     </footer>
