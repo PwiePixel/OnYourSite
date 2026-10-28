@@ -26,5 +26,6 @@ require_once __DIR__ . '/stats.php';
 require_once __DIR__ . '/spam.php';
 require_once __DIR__ . '/uploads.php';
 require_once __DIR__ . '/report.php';
+require_once __DIR__ . '/updates.php';
 
 oys_ensure_schema($pdo);

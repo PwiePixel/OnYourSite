@@ -56,7 +56,7 @@ function oys_serve_page(PDO $pdo, array $page, string $sub): void
 
 // --- 2. Hauptdomain: App (Login, Editor …) und Profile im Pfad-Modus ---
 if (oys_is_main_host($host)) {
-    $appRoutes = ['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms'];
+    $appRoutes = ['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/updates', '/updates/feed.xml', '/roadmap'];
     if (in_array($path, $appRoutes, true) || strpos($path, '/dashboard/') === 0) {
         require __DIR__ . '/lib/routes_app.php';
         exit;

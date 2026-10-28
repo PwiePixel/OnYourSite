@@ -4,8 +4,9 @@
 /** @var string $path */
 /** @var string $method */
 
-// Session nur, wenn nötig: Die Startseite setzt für Besucher kein Cookie.
-if ($path !== '/' || isset($_COOKIE[session_name()])) {
+// Session nur, wenn nötig: Startseite und Updates setzen für Besucher kein Cookie.
+$cookieless = in_array($path, ['/', '/updates', '/updates/feed.xml', '/roadmap'], true);
+if (!$cookieless || isset($_COOKIE[session_name()])) {
     oys_start_session();
 }
 
@@ -61,6 +62,20 @@ if (isset($static[$path])) {
 if ($path === '/') {
     $user_data = session_status() === PHP_SESSION_ACTIVE ? oys_current_user($pdo) : null;
     require dirname(__DIR__) . '/views/landingpage.php';
+    exit;
+}
+
+// Updates & Roadmap (öffentlich)
+if ($path === '/roadmap') {
+    oys_redirect('/updates#roadmap', 301);
+}
+if ($path === '/updates') {
+    $user_data = session_status() === PHP_SESSION_ACTIVE ? oys_current_user($pdo) : null;
+    require dirname(__DIR__) . '/views/updates.php';
+    exit;
+}
+if ($path === '/updates/feed.xml') {
+    require dirname(__DIR__) . '/views/updates_feed.php';
     exit;
 }
 

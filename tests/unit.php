@@ -98,4 +98,44 @@ $b = oys_block_normalize(['type' => 'link', 'protection' => 'password', 'passwor
 t('Existing password is kept on save', $b['password_hash'] . '|' . $b['is_visible'], '$2y$10$abc|1');
 $b = oys_block_normalize(['type' => 'heading', 'protection' => 'password', 'password' => 'x', 'data' => ['text' => 'Hi']], 3);
 t('Protection only for clickable blocks', $b['protection'], 'none');
+// Updates: Markdown wird sicher umgewandelt
+t('Markdown: bold, HTML stays text', oys_markdown('**Hi** <img src=x onerror=alert(1)>'), '<p><strong>Hi</strong> &lt;img src=x onerror=alert(1)&gt;</p>');
+t('Markdown: javascript: link is not a link', strpos(oys_markdown('[x](javascript:alert(1))'), 'href'), false);
+t('Markdown: link', oys_markdown('[OnYourSite](https://on-your.site)'), '<p><a href="https://on-your.site" target="_blank" rel="noopener noreferrer">OnYourSite</a></p>');
+t('Markdown: no attribute break-out', strpos(oys_markdown('[x](https://a.de/"onmouseover=alert(1))'), '"onmouseover'), false);
+t('Markdown: list and heading', oys_markdown("## New\n- a\n- b"), '<h4>New</h4><ul><li>a</li><li>b</li></ul>');
+t('Markdown: code is not formatted', oys_markdown('`**<b>**`'), '<p><code>**&lt;b&gt;**</code></p>');
+t('Markdown: placeholder characters from input are removed', oys_markdown("a\x010\x02b"), '<p>a0b</p>');
+t('Markdown: bare link without the trailing dot', strpos(oys_markdown('See https://a.de/x.'), 'href="https://a.de/x"') !== false, true);
+t('Markdown: underscores inside links stay', strpos(oys_markdown('*https://a.de/x_y_z*'), 'href="https://a.de/x_y_z"') !== false, true);
+t('Markdown: bold link', oys_markdown('**https://a.de/x**'), '<p><strong><a href="https://a.de/x" target="_blank" rel="noopener noreferrer">' . e(oys_pretty_url('https://a.de/x')) . '</a></strong></p>');
+t('Markdown: brackets inside a bare link', strpos(oys_markdown('https://en.wikipedia.org/wiki/Foo_(bar)'), 'href="https://en.wikipedia.org/wiki/Foo_(bar)"') !== false, true);
+t('Markdown: link in brackets keeps the bracket outside', strpos(oys_markdown('(see https://a.de/x)'), 'href="https://a.de/x"') !== false, true);
+t('Markdown: brackets inside a [link](…)', strpos(oys_markdown('[wiki](https://en.wikipedia.org/wiki/Foo_(bar))'), 'href="https://en.wikipedia.org/wiki/Foo_(bar)"') !== false, true);
+t('Markdown: plain text for feeds', oys_md_plain("**Bold** [link](https://x.de)\n`code`"), 'Bold link code');
+// Roadmap: Fortschritt nur aus abgehakten Aufgaben
+$task = fn($done) => ['id' => 1, 'title' => 't', 'is_done' => $done, 'done_at' => null];
+t('Progress 1 of 3', oys_milestone_progress(['status' => 'now', 'tasks' => [$task(true), $task(false), $task(false)]]), ['done' => 1, 'total' => 3, 'percent' => 33]);
+t('Progress without tasks', oys_milestone_progress(['status' => 'next', 'tasks' => []]), null);
+t('Shipped = 100%', oys_milestone_progress(['status' => 'done', 'tasks' => [$task(false)]])['percent'], 100);
+// Discord: nur echte Webhook-Links von Discord
+$tok = str_repeat('aB3_-', 8);
+t('Webhook: discord.com', oys_discord_parse_webhook('https://discord.com/api/webhooks/123456789012345678/' . $tok), ['123456789012345678', $tok]);
+t('Webhook: discordapp.com with API version', oys_discord_parse_webhook('https://discordapp.com/api/v10/webhooks/123456789012345678/' . $tok) !== null, true);
+t('Webhook: canary', oys_discord_parse_webhook('https://canary.discord.com/api/webhooks/123456789012345678/' . $tok) !== null, true);
+t('Webhook: http rejected', oys_discord_parse_webhook('http://discord.com/api/webhooks/123456789012345678/' . $tok), null);
+t('Webhook: look-alike host rejected', oys_discord_parse_webhook('https://discord.com.evil.io/api/webhooks/123456789012345678/' . $tok), null);
+t('Webhook: hidden in a query rejected', oys_discord_parse_webhook('https://evil.io/?u=https://discord.com/api/webhooks/123456789012345678/' . $tok), null);
+t('Webhook: extra path rejected', oys_discord_parse_webhook('https://discord.com/api/webhooks/123456789012345678/' . $tok . '/messages/1'), null);
+$ds = array_replace(oys_discord_defaults(), ['webhook_url' => 'https://discord.com/api/webhooks/123456789012345678/' . $tok, 'username' => 'News']);
+t('Discord: nobody is pinged by default', oys_discord_with_mention(['embeds' => []], $ds), ['embeds' => [], 'allowed_mentions' => ['parse' => []], 'username' => 'News']);
+$m = oys_discord_with_mention([], array_replace($ds, ['mention' => '987654321098765432']));
+t('Discord: role ping only for that role', [$m['content'], $m['allowed_mentions']], ['<@&987654321098765432>', ['parse' => [], 'roles' => ['987654321098765432']]]);
+$m = oys_discord_with_mention([], array_replace($ds, ['mention' => 'everyone', 'mode' => 'bot']));
+t('Discord: @everyone, bot without webhook name', [$m['content'], $m['allowed_mentions']['parse'], isset($m['username'])], ['@everyone', ['everyone'], false]);
+$u = ['id' => 7, 'title' => 'Big one', 'version' => '3.0', 'category' => 'new', 'body' => str_repeat('word ', 1200), 'published_at' => '2026-10-28 12:00:00'];
+$emb = oys_discord_update_payload($u, $ds)['embeds'][0];
+t('Discord: long text is shortened with a link', mb_strlen($emb['description']) <= 4096 && strpos($emb['description'], 'Read the full update') !== false, true);
+t('Discord: title with version', $emb['title'], '3.0 – Big one');
+t('Discord: message from another target is never touched', oys_discord_change($ds, 'bot:1', '123456', null)['error'], 'gone');
 echo $fails ? "\n$fails FAILED\n" : "\nAll tests passed\n";
