@@ -121,7 +121,7 @@ function oys_create_tables(PDO $pdo): void
         bio TEXT NULL,
         avatar VARCHAR(255) NULL,
         bg_image VARCHAR(255) NULL,
-        theme VARCHAR(40) NOT NULL DEFAULT 'trs',
+        theme VARCHAR(40) NOT NULL DEFAULT 'deep-dark',
         layout VARCHAR(40) NOT NULL DEFAULT 'buttons',
         address_mode VARCHAR(12) NOT NULL DEFAULT 'subdomain',
         settings MEDIUMTEXT NULL,
@@ -290,19 +290,19 @@ function oys_migrate_legacy_users(PDO $pdo): void
             // Termin-Button und Datei standen früher über den Links
             $booking = function_exists('decryptData') ? decryptData((string) $col($user, 'booking_url', '')) : (string) $col($user, 'booking_url', '');
             if ($booking !== '' && strpos($booking, 'ENC:') !== 0) {
-                $add('booking', ['title' => 'Termin buchen', 'url' => $booking]);
+                $add('booking', ['title' => 'Book a meeting', 'url' => $booking]);
             }
             $cv = (string) $col($user, 'cv_file', '');
             if ($cv !== '') {
                 $ext = strtolower(pathinfo($cv, PATHINFO_EXTENSION));
-                $title = $ext === 'pdf' ? 'Lebenslauf herunterladen' : ($ext === 'vcf' ? 'Kontakt speichern' : 'Datei herunterladen');
+                $title = $ext === 'pdf' ? 'Download CV' : ($ext === 'vcf' ? 'Save contact' : 'Download file');
                 $add('file', ['title' => $title, 'src' => $cv]);
             }
 
             $about = trim((string) $col($user, 'detailed_bio', ''));
             $aboutAfterLinks = ($col($user, 'layout_type') === 'bento-grid');
             if ($about !== '' && !$aboutAfterLinks) {
-                $add('heading', ['text' => 'Über mich', 'size' => 'm', 'align' => 'center']);
+                $add('heading', ['text' => 'About me', 'size' => 'm', 'align' => 'center']);
                 $add('text', ['text' => $about, 'align' => 'center']);
             }
 
@@ -326,7 +326,7 @@ function oys_migrate_legacy_users(PDO $pdo): void
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
-            error_log('Migration für Nutzer #' . $user['id'] . ' fehlgeschlagen: ' . $e->getMessage());
+            error_log('Migration for user #' . $user['id'] . ' failed: ' . $e->getMessage());
         }
     }
 }

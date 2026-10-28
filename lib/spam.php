@@ -12,18 +12,18 @@ function oys_contact_check(PDO $pdo, array $page, string $blockId, array $post):
     // 2. Zeit-Token: signiert, mind. 3 Sekunden alt, höchstens 1 Tag
     $token = (string) ($post['t'] ?? '');
     if (!preg_match('/^(\d{9,11})\.([a-f0-9]{32})$/', $token, $m)) {
-        return [false, 'Das Formular ist abgelaufen. Bitte lade die Seite neu.', false];
+        return [false, 'This form has expired. Please reload the page.', false];
     }
     $expected = substr(oys_hmac($page['id'] . '|' . $blockId . '|' . $m[1]), 0, 32);
     if (!hash_equals($expected, $m[2])) {
-        return [false, 'Das Formular ist abgelaufen. Bitte lade die Seite neu.', false];
+        return [false, 'This form has expired. Please reload the page.', false];
     }
     $age = time() - (int) $m[1];
     if ($age < 3) {
         return [true, null, true];
     }
     if ($age > 86400) {
-        return [false, 'Das Formular ist abgelaufen. Bitte lade die Seite neu.', false];
+        return [false, 'This form has expired. Please reload the page.', false];
     }
 
     $name = oys_clean_text($post['name'] ?? '', 80);
@@ -31,13 +31,13 @@ function oys_contact_check(PDO $pdo, array $page, string $blockId, array $post):
     $message = oys_clean_text($post['message'] ?? '', 2000, true);
 
     if ($name === '' || $message === '') {
-        return [false, 'Bitte fülle Name und Nachricht aus.', false];
+        return [false, 'Please fill in your name and message.', false];
     }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL) || mb_strlen($email) > 190) {
-        return [false, 'Bitte gib eine gültige E-Mail-Adresse an.', false];
+        return [false, 'Please enter a valid email address.', false];
     }
     if (mb_strlen($message) < 5) {
-        return [false, 'Deine Nachricht ist etwas kurz.', false];
+        return [false, 'Your message is a bit short.', false];
     }
 
     // 3. Inhaltsfilter
@@ -49,7 +49,7 @@ function oys_contact_check(PDO $pdo, array $page, string $blockId, array $post):
     //    (ein Störer allein kann das Formular so nicht für alle sperren)
     if (!oys_rate_limit($pdo, 'contact:' . $page['id'] . ':' . oys_client_key(), 5, 3600)
         || !oys_rate_limit($pdo, 'contact:' . $page['id'], 30, 3600)) {
-        return [false, 'Gerade kommen sehr viele Nachrichten an. Bitte versuche es später noch einmal.', false];
+        return [false, 'A lot of messages are coming in right now. Please try again later.', false];
     }
 
     return [true, null, false];
@@ -91,7 +91,7 @@ function oys_store_message(PDO $pdo, array $page, array $post): int
         ->execute([$page['id'], $page['user_id'], encryptData($name), encryptData($email), encryptData($message), $now]);
     $id = (int) $pdo->lastInsertId();
 
-    oys_notify($pdo, (int) $page['user_id'], 'message', 'Neue Nachricht von ' . $name, mb_substr($message, 0, 120), '/dashboard#nachrichten');
+    oys_notify($pdo, (int) $page['user_id'], 'message', 'New message from ' . $name, mb_substr($message, 0, 120), '/dashboard#messages');
 
     $settings = oys_page_settings($page);
     if ($settings['notify_email']) {
@@ -106,7 +106,7 @@ function oys_store_message(PDO $pdo, array $page, array $post): int
                 'message' => e($message),
                 'page_url' => e(oys_page_display_url($page)),
                 'dashboard_url' => e(oys_main_url('/dashboard')),
-            ], 'Neue Nachricht von ' . $name, $email);
+            ], 'New message from ' . $name, $email);
         }
     }
     return $id;

@@ -3,41 +3,42 @@
 require_once dirname(__DIR__) . '/lib/demo.php';
 $base = oys_base_authority();
 $loggedIn = !empty($user_data);
-$heroThemes = ['trs', 'galaxy', 'notebook', 'comic'];
+$heroThemes = ['holo', 'galaxy', 'sakura', 'blueprint'];
+$themeCount = count(oys_themes());
 $features = [
-    ['bx-link', 'Links & Social-Icons', 'Beliebig viele Links mit passendem Symbol, dazu Icons für Instagram, TikTok, YouTube, Twitch, Discord und 22 weitere.', '#818cf8'],
-    ['bx-play-circle', 'Videos, Musik & Bilder', 'YouTube, Twitch und Spotify direkt auf der Seite, dazu Bilder, Überschriften und Text.', '#ef4444'],
-    ['bx-palette', '25 Designs', 'TRS-Design als Standard, dazu Glas, Brutal, Candy, Zen, Code, Café und mehr – und besondere Vorlagen wie Galaxie, Notizbuch, Comic, Ozean oder Mitternacht.', '#ff7a1a'],
-    ['bx-mobile-alt', 'Live-Vorschau', 'Rechts im Editor siehst du sofort, wie deine Seite auf dem Handy aussieht.', '#22c55e'],
-    ['bx-bar-chart-alt-2', 'Statistik ohne Cookies', 'Aufrufe und Klicks je Link – ohne Cookies, ohne IP-Adressen, ohne Cookie-Banner für deine Besucher.', '#38bdf8'],
-    ['bx-globe', 'Zwei Adressen', $base . '/name oder name.' . $base . ' – du wählst, die andere leitet weiter.', '#a78bfa'],
-    ['bx-time-five', 'Zeitsteuerung', '„Jetzt live“ nur freitags 18–23 Uhr? Links erscheinen und verschwinden automatisch.', '#f59e0b'],
-    ['bx-grid-alt', '13 Anordnungen', 'Knöpfe, breite Karten, Kacheln, App-Raster, Zeitstrahl, Wolke, zwei Spalten – oder Baum, Bento, Karussell, Polaroid, Magazin und Stapel.', '#14b8a6'],
-    ['bx-star', 'Effekte', 'Animierter Ring ums Profilbild, Glanz oder Wackeln für einzelne Links, Schnee, Konfetti oder Glühwürmchen über der Seite und Funken hinter dem Mauszeiger.', '#facc15'],
-    ['bx-lock-alt', 'Geschützte Links', 'Einzelne Links nur mit Passwort oder erst nach „Ab 18“-Bestätigung.', '#f87171'],
-    ['bx-copy', 'Bis zu 3 Seiten', 'Eine Seite für dich, eine fürs Projekt – mit eigener Adresse und Statistik, umschaltbar im Editor.', '#818cf8'],
-    ['bx-envelope', 'Wochenbericht', 'Auf Wunsch jeden Montag eine kurze Mail mit Aufrufen, Klicks und deinem besten Link.', '#60a5fa'],
-    ['bx-music', 'Eingang mit Musik', 'Besucher tippen zum Betreten, die Seite öffnet sich mit Animation und deine Musik startet.', '#ec4899'],
-    ['bx-timer', 'Countdown & Galerie', 'Zähl bis zum nächsten Release herunter oder zeig mehrere Bilder zum Wischen.', '#fb923c'],
-    ['bx-message-square-dots', 'Kontaktformular', 'Besucher schreiben dir direkt – mit Schutzfilter gegen Spam und Hinweis über die Glocke.', '#34d399'],
+    ['bx-link', 'Links & social icons', 'As many links as you like, each with a matching icon, plus icons for Instagram, TikTok, YouTube, Twitch, Discord and 20+ more.', '#818cf8'],
+    ['bx-play-circle', 'Videos, music & images', 'YouTube, Twitch and Spotify right on your page, plus images, headings and text.', '#ef4444'],
+    ['bx-palette', $themeCount . ' themes', 'Deep Dark, Glass, Brutal, Candy, Zen, Code, Café, Noir, Holo and many more – plus special templates like Galaxy, Notebook, Comic, Ocean, Midnight, Blueprint or Sakura.', '#ff7a1a'],
+    ['bx-mobile-alt', 'Live preview', 'On the right side of the editor you instantly see how your page looks on a phone.', '#22c55e'],
+    ['bx-bar-chart-alt-2', 'Stats without cookies', 'Views and clicks per link – no cookies, no IP addresses, no cookie banner for your visitors.', '#38bdf8'],
+    ['bx-globe', 'Two addresses', $base . '/name or name.' . $base . ' – you choose, the other one redirects.', '#a78bfa'],
+    ['bx-time-five', 'Scheduling', '“Live now” only on Fridays from 6 to 11 pm? Links appear and disappear automatically.', '#f59e0b'],
+    ['bx-grid-alt', '13 layouts', 'Buttons, wide cards, tiles, app grid, timeline, cloud, two columns – or tree, bento, carousel, polaroid, magazine and stack.', '#14b8a6'],
+    ['bx-star', 'Effects', 'An animated ring around your profile picture, shine or wobble for single links, snow, confetti or fireflies across the page and sparks behind the mouse cursor.', '#facc15'],
+    ['bx-lock-alt', 'Protected links', 'Single links only with a password or after an “18+” confirmation.', '#f87171'],
+    ['bx-copy', 'Up to 3 pages', 'One page for you, one for your project – each with its own address and stats, switchable in the editor.', '#818cf8'],
+    ['bx-envelope', 'Weekly report', 'If you like, a short email every Monday with views, clicks and your best link.', '#60a5fa'],
+    ['bx-music', 'Entrance with music', 'Visitors tap to enter, the page opens with an animation and your music starts.', '#ec4899'],
+    ['bx-timer', 'Countdown & gallery', 'Count down to your next release or show several images to swipe through.', '#fb923c'],
+    ['bx-message-square-dots', 'Contact form', 'Visitors message you directly – with a spam filter and a heads-up via the bell.', '#34d399'],
 ];
 $themes = oys_themes();
 ?>
 <!DOCTYPE html>
-<html lang="de" class="scroll-smooth">
+<html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>OnYourSite | Deine Link-in-Bio-Seite mit 25 Designs</title>
-    <meta name="description" content="Deine eigene Link-in-Bio-Seite unter name.<?= e($base) ?>: 25 Designs, 13 Anordnungen, Live-Vorschau, Statistik ohne Cookies, Zeitsteuerung, geschützte Links, Kontaktformular und mehr – kostenlos.">
-    <meta name="keywords" content="link in bio, linktree alternative, eigene seite, social links, creator seite, statistik ohne cookies">
+    <title>OnYourSite | Your link-in-bio page with <?= $themeCount ?> themes</title>
+    <meta name="description" content="Your own link-in-bio page at name.<?= e($base) ?>: <?= $themeCount ?> themes, 13 layouts, live preview, stats without cookies, scheduling, protected links, contact form and more – for free.">
+    <meta name="keywords" content="link in bio, linktree alternative, personal page, social links, creator page, stats without cookies">
     <meta name="author" content="OnYourSite">
 
     <meta property="og:type" content="website">
     <meta property="og:url" content="<?= e(oys_main_url('/')) ?>">
-    <meta property="og:title" content="OnYourSite | Deine Link-in-Bio-Seite mit 25 Designs">
-    <meta property="og:description" content="Links, Videos, Musik, Countdown und Kontaktformular auf einer Seite – mit Live-Vorschau und Statistik ohne Cookies.">
+    <meta property="og:title" content="OnYourSite | Your link-in-bio page with <?= $themeCount ?> themes">
+    <meta property="og:description" content="Links, videos, music, countdown and contact form on one page – with live preview and stats without cookies.">
     <meta property="og:image" content="<?= e(oys_main_url('/static/images/favicon.png')) ?>">
 
     <link rel="icon" type="image/png" href="/static/images/favicon.png">
@@ -78,12 +79,15 @@ $themes = oys_themes();
         .hero-screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: #0b0b0d; }
         .hero-screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; transition: opacity .6s ease; pointer-events: none; }
         .hero-screen iframe.on { opacity: 1; pointer-events: auto; }
-        .hero-dots { display: flex; gap: 7px; justify-content: center; margin-top: 18px; position: relative; }
-        .hero-dots button { width: 8px; height: 8px; border-radius: 99px; background: #3f3f46; transition: all .3s; }
-        .hero-dots button.on { width: 26px; background: var(--dot, #ff7a1a); }
+        .hero-dots { display: flex; gap: 0; justify-content: center; margin-top: 8px; position: relative; }
+        /* große Tippfläche, kleiner sichtbarer Punkt */
+        .hero-dots button { position: relative; width: 32px; height: 32px; background: none; transition: width .3s; }
+        .hero-dots button::before { content: ''; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 99px; background: #3f3f46; transition: all .3s; }
+        .hero-dots button.on { width: 40px; }
+        .hero-dots button.on::before { width: 26px; background: var(--dot, #ff7a1a); }
         .hero-caption { margin-top: 10px; font-size: 13px; color: #a1a1aa; position: relative; min-height: 20px; }
 
-        /* Leiste mit allen 25 Designs */
+        /* Leiste mit allen Designs */
         .theme-strip { display: flex; gap: 18px; overflow-x: auto; scroll-snap-type: x proximity; padding: 8px 4px 24px; scrollbar-width: thin; scrollbar-color: #27272a transparent; }
         .theme-tile { flex: 0 0 168px; scroll-snap-align: start; text-align: left; display: flex; flex-direction: column; justify-content: flex-start; }
         .theme-tile .mini-frame { position: relative; width: 168px; height: 276px; border-radius: 18px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .08); box-shadow: 0 16px 36px -16px rgba(0, 0, 0, .9); transition: transform .25s, border-color .25s; }
@@ -104,22 +108,22 @@ $themes = oys_themes();
                     <span class="font-bold text-xl text-white tracking-tight">OnYourSite</span>
                 </div>
                 <div class="hidden md:flex items-center space-x-8">
-                    <a href="#features" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Funktionen</a>
-                    <a href="#designs" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Designs</a>
-                    <a href="#how-it-works" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">So geht's</a>
+                    <a href="#features" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Features</a>
+                    <a href="#designs" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Themes</a>
+                    <a href="#how-it-works" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">How it works</a>
                     <a href="#faq" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">FAQ</a>
                     <a href="https://discord.on-your.site" target="_blank" rel="noopener" class="text-sm font-medium text-[#5865F2] hover:text-[#4752C4] transition-colors flex items-center gap-1"><i class='bx bxl-discord-alt text-lg'></i> Community</a>
                     <div class="h-5 w-px bg-bordercolor"></div>
                     <?php if ($loggedIn): ?>
-                    <a href="/dashboard" class="text-sm font-medium bg-white text-black px-5 py-2.5 rounded-full hover:bg-gray-200 transition-all duration-300 transform hover:scale-105 shadow-[0_0_15px_rgba(255,255,255,0.1)]">Zum Editor</a>
+                    <a href="/dashboard" class="text-sm font-medium bg-white text-black px-5 py-2.5 rounded-full hover:bg-gray-200 transition-all duration-300 transform hover:scale-105 shadow-[0_0_15px_rgba(255,255,255,0.1)]">Open editor</a>
                     <?php else: ?>
-                    <a href="/login" class="text-sm font-medium text-white hover:text-brand-400 transition-colors">Anmelden</a>
+                    <a href="/login" class="text-sm font-medium text-white hover:text-brand-400 transition-colors">Log in</a>
                     <a href="/register" class="text-sm font-medium bg-white text-black px-5 py-2.5 rounded-full hover:bg-gray-200 transition-all duration-300 transform hover:scale-105 shadow-[0_0_15px_rgba(255,255,255,0.1)]">
-                        Kostenlos starten
+                        Start for free
                     </a>
                     <?php endif; ?>
                 </div>
-                <a href="<?= $loggedIn ? '/dashboard' : '/register' ?>" class="md:hidden text-sm font-medium bg-white text-black px-4 py-2 rounded-full"><?= $loggedIn ? 'Editor' : 'Starten' ?></a>
+                <a href="<?= $loggedIn ? '/dashboard' : '/register' ?>" class="md:hidden text-sm font-medium bg-white text-black px-4 py-2 rounded-full"><?= $loggedIn ? 'Editor' : 'Get started' ?></a>
             </div>
         </div>
     </nav>
@@ -130,28 +134,28 @@ $themes = oys_themes();
             <div class="text-center lg:text-left">
                 <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-bordercolor bg-white/5 backdrop-blur-sm text-xs font-medium text-gray-300 mb-8 animate-fade-in">
                     <span class="flex h-2 w-2 rounded-full bg-brand-500 animate-pulse"></span>
-                    Neu: 25 Designs, 13 Anordnungen & Live-Vorschau
+                    New: <?= $themeCount ?> themes, 13 layouts & live preview
                 </div>
                 <h1 class="text-5xl md:text-6xl xl:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg">
-                    Alles von dir auf<br class="hidden md:block">
-                    <span class="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-purple-500">einer Seite.</span>
+                    Everything you do,<br class="hidden md:block">
+                    <span class="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-purple-500">on one page.</span>
                 </h1>
                 <p class="mt-4 max-w-xl mx-auto lg:mx-0 text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
-                    Links, Social-Icons, Videos, Musik, Countdown und Kontaktformular – in 25 Designs, mit Live-Vorschau und Statistik ohne Cookies. Unter deiner eigenen Adresse:
+                    Links, social icons, videos, music, countdown and contact form – in <?= $themeCount ?> themes, with live preview and stats without cookies. At your own address:
                     <span class="text-white font-medium bg-white/10 px-2 py-0.5 rounded whitespace-nowrap">name.<?= e($base) ?></span>
                 </p>
                 <div class="flex flex-col sm:flex-row justify-center lg:justify-start gap-4">
                     <a href="<?= $loggedIn ? '/dashboard' : '/register' ?>" class="inline-flex justify-center items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white px-8 py-3.5 rounded-full font-semibold transition-all duration-300 shadow-[0_0_30px_rgba(99,102,241,0.3)] hover:shadow-[0_0_40px_rgba(99,102,241,0.5)] transform hover:-translate-y-1">
-                        <?= $loggedIn ? 'Zum Editor' : 'Adresse sichern' ?> <i class='bx bx-rocket text-xl'></i>
+                        <?= $loggedIn ? 'Open editor' : 'Claim your address' ?> <i class='bx bx-rocket text-xl'></i>
                     </a>
                     <a href="#features" class="inline-flex justify-center items-center gap-2 bg-card border border-bordercolor hover:border-brand-500/50 text-white px-8 py-3.5 rounded-full font-medium transition-all duration-300">
-                        Alle Funktionen
+                        All features
                     </a>
                 </div>
                 <div class="mt-10 flex flex-wrap justify-center lg:justify-start gap-x-6 gap-y-2 text-sm text-gray-500">
-                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> Kostenlos</span>
-                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> Ohne Cookie-Banner</span>
-                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> SSL inklusive</span>
+                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> Free</span>
+                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> No cookie banner</span>
+                    <span class="flex items-center gap-1.5"><i class='bx bx-check-circle text-emerald-400'></i> SSL included</span>
                 </div>
             </div>
 
@@ -162,17 +166,17 @@ $themes = oys_themes();
                         <div class="hero-island"></div>
                         <div class="hero-screen" id="heroScreen">
                             <?php foreach ($heroThemes as $i => $t): ?>
-                                <iframe title="Beispielseite im Design <?= e($themes[$t]['name']) ?>" src="/_/demo/<?= e($t) ?>" data-theme="<?= e($t) ?>" class="<?= $i === 0 ? 'on' : '' ?>" <?= $i === 0 ? '' : 'loading="lazy"' ?>></iframe>
+                                <iframe title="Example page in the <?= e($themes[$t]['name']) ?> theme" src="/_/demo/<?= e($t) ?>" data-theme="<?= e($t) ?>" class="<?= $i === 0 ? 'on' : '' ?>" <?= $i === 0 ? '' : 'loading="lazy"' ?>></iframe>
                             <?php endforeach; ?>
                         </div>
                     </div>
                 </div>
                 <div class="hero-dots" id="heroDots">
                     <?php foreach ($heroThemes as $i => $t): ?>
-                        <button type="button" class="<?= $i === 0 ? 'on' : '' ?>" data-i="<?= $i ?>" aria-label="Design <?= e($themes[$t]['name']) ?>"></button>
+                        <button type="button" class="<?= $i === 0 ? 'on' : '' ?>" data-i="<?= $i ?>" aria-label="<?= e($themes[$t]['name']) ?> theme"></button>
                     <?php endforeach; ?>
                 </div>
-                <div class="hero-caption" id="heroCaption">Design: <b class="text-white"><?= e($themes[$heroThemes[0]]['name']) ?></b></div>
+                <div class="hero-caption" id="heroCaption">Theme: <b class="text-white"><?= e($themes[$heroThemes[0]]['name']) ?></b></div>
             </div>
         </div>
     </main>
@@ -180,8 +184,8 @@ $themes = oys_themes();
     <section id="features" class="py-24 border-t border-bordercolor bg-background relative">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center max-w-3xl mx-auto mb-16">
-                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4">Alles, was du brauchst.</h2>
-                <p class="text-lg text-gray-400">Keine komplizierten Baukästen. Du füllst Blöcke aus – und siehst rechts sofort das Ergebnis.</p>
+                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4">Everything you need.</h2>
+                <p class="text-lg text-gray-400">No complicated site builders. You fill in blocks – and instantly see the result on the right.</p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -197,10 +201,10 @@ $themes = oys_themes();
             </div>
 
             <div class="mt-10 flex flex-wrap justify-center gap-3 text-sm">
-                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-lock-alt text-blue-400'></i> Kostenloses SSL</span>
-                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-calendar-check text-purple-400'></i> Eingebauter Terminkalender</span>
-                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-code-block text-yellow-400'></i> Eigenes CSS & SEO</span>
-                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bxl-discord-alt text-[#5865F2]'></i> Discord-Rolle</span>
+                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-lock-alt text-blue-400'></i> Free SSL</span>
+                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-calendar-check text-purple-400'></i> Built-in booking calendar</span>
+                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bx-code-block text-yellow-400'></i> Custom CSS & SEO</span>
+                <span class="px-4 py-2 rounded-full bg-card border border-bordercolor text-gray-400"><i class='bx bxl-discord-alt text-[#5865F2]'></i> Discord role</span>
             </div>
         </div>
     </section>
@@ -208,15 +212,15 @@ $themes = oys_themes();
     <section id="designs" class="py-24 border-t border-bordercolor bg-[#0a0a0c] relative overflow-hidden">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
             <div class="text-center max-w-3xl mx-auto mb-12">
-                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4">25 Designs. Ein Klick.</h2>
-                <p class="text-lg text-gray-400">Tippe auf ein Design – oben im Handy siehst du es sofort in Aktion.</p>
+                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4"><?= $themeCount ?> themes. One click.</h2>
+                <p class="text-lg text-gray-400">Tap a theme – the phone above shows it in action right away.</p>
             </div>
             <div class="theme-strip" id="themeStrip">
                 <?php foreach ($themes as $key => $t): ?>
                 <button type="button" class="theme-tile" data-theme="<?= e($key) ?>">
                     <div class="mini-frame"><?= oys_mini_html($key) ?></div>
                     <div class="mt-3 px-1 flex items-center justify-between gap-2">
-                        <span><b class="text-white text-sm"><?= e($t['name']) ?></b><?php if ($key === 'trs'): ?> <span class="text-[10px] font-bold uppercase tracking-wide text-[#ff7a1a]">Standard</span><?php elseif ($t['group'] === 'special'): ?> <span class="text-[10px] font-bold uppercase tracking-wide text-brand-400">Vorlage</span><?php endif; ?>
+                        <span><b class="text-white text-sm"><?= e($t['name']) ?></b><?php if ($key === OYS_DEFAULT_THEME): ?> <span class="text-[11px] font-bold uppercase tracking-wide text-[#ff7a1a]">Default</span><?php elseif ($t['group'] === 'special'): ?> <span class="text-[11px] font-bold uppercase tracking-wide text-brand-400">Template</span><?php endif; ?>
                             <small class="block text-xs text-gray-500"><?= e($t['desc']) ?></small></span>
                         <span class="w-3 h-3 rounded-full shrink-0" style="background: <?= e($t['accent']) ?>"></span>
                     </div>
@@ -229,26 +233,26 @@ $themes = oys_themes();
     <section id="how-it-works" class="py-24 border-t border-bordercolor bg-background relative overflow-hidden">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
             <div class="text-center max-w-3xl mx-auto mb-16">
-                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4">So geht's</h2>
-                <p class="text-lg text-gray-400">In drei Schritten zu deiner eigenen Seite.</p>
+                <h2 class="text-3xl md:text-5xl font-bold text-white mb-4">How it works</h2>
+                <p class="text-lg text-gray-400">Your own page in three steps.</p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-12 text-center relative">
                 <div class="hidden md:block absolute top-10 left-[20%] right-[20%] h-0.5 bg-gradient-to-r from-transparent via-brand-500/50 to-transparent -z-10"></div>
                 <div>
                     <div class="w-20 h-20 mx-auto bg-card border border-bordercolor rounded-full flex items-center justify-center text-2xl font-bold text-brand-400 mb-6 shadow-[0_0_20px_rgba(99,102,241,0.2)]">1</div>
-                    <h4 class="text-xl font-bold text-white mb-2">Adresse sichern</h4>
-                    <p class="text-gray-400 text-sm leading-relaxed px-4">Wähle deinen Namen: <em>name.<?= e($base) ?></em> oder <em><?= e($base) ?>/name</em>.</p>
+                    <h4 class="text-xl font-bold text-white mb-2">Claim your address</h4>
+                    <p class="text-gray-400 text-sm leading-relaxed px-4">Pick your name: <em>name.<?= e($base) ?></em> or <em><?= e($base) ?>/name</em>.</p>
                 </div>
                 <div>
                     <div class="w-20 h-20 mx-auto bg-card border border-bordercolor rounded-full flex items-center justify-center text-2xl font-bold text-brand-400 mb-6 shadow-[0_0_20px_rgba(99,102,241,0.2)]">2</div>
-                    <h4 class="text-xl font-bold text-white mb-2">Blöcke hinzufügen</h4>
-                    <p class="text-gray-400 text-sm leading-relaxed px-4">Links einfügen, Social-Icons, Videos, Countdown oder Kontaktformular – die Vorschau zeigt alles live.</p>
+                    <h4 class="text-xl font-bold text-white mb-2">Add blocks</h4>
+                    <p class="text-gray-400 text-sm leading-relaxed px-4">Add links, social icons, videos, a countdown or a contact form – the preview shows everything live.</p>
                 </div>
                 <div>
                     <div class="w-20 h-20 mx-auto bg-brand-500 border border-brand-400 rounded-full flex items-center justify-center text-2xl font-bold text-white mb-6 shadow-[0_0_30px_rgba(99,102,241,0.5)]">3</div>
-                    <h4 class="text-xl font-bold text-white mb-2">Design wählen & teilen</h4>
-                    <p class="text-gray-400 text-sm leading-relaxed px-4">Eins von 25 Designs und 13 Anordnungen aussuchen, speichern, Link in deine Bio – fertig.</p>
+                    <h4 class="text-xl font-bold text-white mb-2">Pick a theme & share</h4>
+                    <p class="text-gray-400 text-sm leading-relaxed px-4">Pick one of <?= $themeCount ?> themes and 13 layouts, save, put the link in your bio – done.</p>
                 </div>
             </div>
         </div>
@@ -257,30 +261,30 @@ $themes = oys_themes();
     <section id="faq" class="py-24 border-t border-bordercolor bg-[#0a0a0c]">
         <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Häufige Fragen</h2>
-                <p class="text-gray-400">Alles Wichtige zu OnYourSite.</p>
+                <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Frequently asked questions</h2>
+                <p class="text-gray-400">Everything you need to know about OnYourSite.</p>
             </div>
 
             <div class="space-y-6">
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
-                    <h3 class="text-lg font-bold text-white mb-2">Ist OnYourSite wirklich kostenlos?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Ja! Adresse, Seite, alle 25 Designs und die Statistik sind kostenlos. Wir betreiben OnYourSite als Community-Projekt.</p>
+                    <h3 class="text-lg font-bold text-white mb-2">Is OnYourSite really free?</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Yes! Your address, your page, all <?= $themeCount ?> themes and the stats are free. We run OnYourSite as a community project.</p>
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
-                    <h3 class="text-lg font-bold text-white mb-2">Brauchen meine Besucher einen Cookie-Banner?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Nein. Deine Seite setzt keine Cookies und speichert keine IP-Adressen – gezählt werden nur Aufrufe und Klicks pro Tag. Videos von YouTube, Twitch oder Spotify laden erst, wenn jemand darauf tippt.</p>
+                    <h3 class="text-lg font-bold text-white mb-2">Do I need a cookie banner for my visitors?</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">No. Your page sets no cookies and stores no IP addresses – only views and clicks per day are counted. Videos from YouTube, Twitch or Spotify only load once someone taps them.</p>
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
-                    <h3 class="text-lg font-bold text-white mb-2">Kann ich Design und Anordnung später ändern?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Jederzeit. Fahr im Editor mit der Maus über ein Design und du siehst es sofort in der Handy-Vorschau – erst beim Speichern wird es live.</p>
+                    <h3 class="text-lg font-bold text-white mb-2">Can I change the theme and layout later?</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Anytime. Hover over or tap a theme in the editor and you instantly see it in the phone preview – it only goes live when you save.</p>
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
-                    <h3 class="text-lg font-bold text-white mb-2">Kann ich meine Adresse ändern?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Ja, alle 30 Tage. Ob <em>name.<?= e($base) ?></em> oder <em><?= e($base) ?>/name</em> die Hauptadresse ist, kannst du jederzeit umstellen – die andere leitet automatisch weiter.</p>
+                    <h3 class="text-lg font-bold text-white mb-2">Can I change my address?</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Yes, every 30 days. Whether <em>name.<?= e($base) ?></em> or <em><?= e($base) ?>/name</em> is your primary address, you can switch anytime – the other one redirects automatically.</p>
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
-                    <h3 class="text-lg font-bold text-white mb-2">Muss ich programmieren können?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Überhaupt nicht. Wer mag, kann trotzdem eigenes CSS einfügen und SEO-Angaben selbst festlegen.</p>
+                    <h3 class="text-lg font-bold text-white mb-2">Do I need to know how to code?</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Not at all. If you like, you can still add your own CSS and set your own SEO details.</p>
                 </div>
             </div>
         </div>
@@ -289,10 +293,10 @@ $themes = oys_themes();
     <section class="py-24 border-t border-bordercolor bg-background relative overflow-hidden">
         <div class="absolute inset-0 bg-brand-500/5"></div>
         <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
-            <h2 class="text-3xl md:text-5xl font-extrabold text-white mb-6">Bereit für deine Seite?</h2>
-            <p class="text-lg text-gray-400 mb-10">Registrieren, Adresse wählen, loslegen. Dauert keine Minute.</p>
+            <h2 class="text-3xl md:text-5xl font-extrabold text-white mb-6">Ready for your page?</h2>
+            <p class="text-lg text-gray-400 mb-10">Sign up, pick an address, get started. Takes less than a minute.</p>
             <a href="<?= $loggedIn ? '/dashboard' : '/register' ?>" class="inline-flex justify-center items-center gap-2 bg-white text-black hover:bg-gray-200 px-10 py-4 rounded-full font-bold transition-all duration-300 transform hover:scale-105 shadow-xl text-lg">
-                <?= $loggedIn ? 'Zum Editor' : 'Seite erstellen' ?> <i class='bx bx-right-arrow-alt text-2xl'></i>
+                <?= $loggedIn ? 'Open editor' : 'Create your page' ?> <i class='bx bx-right-arrow-alt text-2xl'></i>
             </a>
         </div>
     </section>
@@ -312,15 +316,15 @@ $themes = oys_themes();
             </div>
 
             <div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
-                <a href="/imprint" class="hover:text-white transition-colors">Impressum</a>
+                <a href="/imprint" class="inline-block py-2 hover:text-white transition-colors">Legal notice</a>
                 <span>&bull;</span>
-                <a href="/privacy" class="hover:text-white transition-colors">Datenschutz</a>
+                <a href="/privacy" class="inline-block py-2 hover:text-white transition-colors">Privacy</a>
                 <span>&bull;</span>
-                <a href="/terms" class="hover:text-white transition-colors">Nutzungsbedingungen</a>
+                <a href="/terms" class="inline-block py-2 hover:text-white transition-colors">Terms</a>
             </div>
 
             <p class="text-gray-500 text-sm">
-                &copy; <?php echo date("Y"); ?> OnYourSite. Mit <i class='bx bxs-heart text-red-500 mx-1'></i> für die Community gemacht.
+                &copy; <?php echo date("Y"); ?> OnYourSite. Made with <i class='bx bxs-heart text-red-500 mx-1'></i> for the community.
             </p>
         </div>
     </footer>
@@ -343,7 +347,7 @@ $themes = oys_themes();
             var t = themes[key] || {};
             stage.style.setProperty('--glow', hexA(t.accent || '#ff7a1a', .32));
             stage.style.setProperty('--dot', t.accent || '#ff7a1a');
-            caption.innerHTML = 'Design: <b class="text-white">' + (t.name || key) + '</b>';
+            caption.innerHTML = 'Theme: <b class="text-white">' + (t.name || key) + '</b>';
         }
         function show(i) {
             index = (i + frames.length) % frames.length;
@@ -366,7 +370,7 @@ $themes = oys_themes();
             var existing = frames.filter(function (f) { return f.dataset.theme === key; })[0];
             if (existing) { show(frames.indexOf(existing)); }
             else {
-                if (!custom) { custom = document.createElement('iframe'); custom.title = 'Beispielseite'; screen.appendChild(custom); }
+                if (!custom) { custom = document.createElement('iframe'); custom.title = 'Example page'; screen.appendChild(custom); }
                 custom.dataset.theme = key;
                 custom.src = '/_/demo/' + key;
                 frames.forEach(function (f) { f.classList.remove('on'); });

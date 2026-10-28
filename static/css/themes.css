@@ -1,48 +1,11 @@
 /* =============================================================
-   OnYourSite – 25 Designs
+   OnYourSite – 30 Designs
    Jedes Design setzt Variablen (Farben, Schriften, Knöpfe) und
    optional Deko über .oys-deco-1/2/3 im festen Hintergrund.
    Keine vw/vh-Angaben, damit die Mini-Vorschauen im Editor stimmen.
    ============================================================= */
 
-/* ============ 1. TRS (Standard) ============ */
-.t-trs {
-  --bg: radial-gradient(120% 55% at 50% -6%, rgba(255, 122, 26, .32), transparent 62%), radial-gradient(70% 45% at 100% 100%, rgba(255, 90, 0, .10), transparent 65%), #0c0907;
-  --bg-solid: #0c0907;
-  --text: #fff6ee;
-  --muted: rgba(255, 238, 224, .64);
-  --accent: #ff7a1a;
-  --on-accent: #1a0d03;
-  --font: 'Inter', system-ui, sans-serif;
-  --font-head: 'Outfit', 'Inter', sans-serif;
-  --head-weight: 800;
-  --name-size: 1.85em;
-  --btn-bg: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .02));
-  --btn-border: 1px solid rgba(255, 122, 26, .3);
-  --btn-radius: 16px;
-  --btn-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
-  --btn-hover-bg: linear-gradient(180deg, rgba(255, 122, 26, .18), rgba(255, 122, 26, .06));
-  --btn-hover-border: 1px solid rgba(255, 122, 26, .8);
-  --btn-hover-shadow: 0 12px 36px -10px rgba(255, 122, 26, .6), inset 0 1px 0 rgba(255, 255, 255, .08);
-  --icon-color: var(--accent);
-  --icon-bg: rgba(255, 122, 26, .13);
-  --surface: #18110c;
-  --card-bg: rgba(255, 255, 255, .035);
-  --card-border: 1px solid rgba(255, 122, 26, .22);
-  --input-bg: rgba(0, 0, 0, .35);
-  --input-border: 1px solid rgba(255, 122, 26, .28);
-  --avatar-border: 3px solid rgba(255, 122, 26, .6);
-  --divider: rgba(255, 122, 26, .25);
-  --overlay-rgb: 12, 9, 7;
-}
-.t-trs .oys-avatar-inner { box-shadow: 0 0 70px -8px rgba(255, 122, 26, .65); }
-@supports (color: color-mix(in srgb, red 50%, blue)) {
-  .t-trs .oys-name { background: linear-gradient(180deg, #fff 35%, color-mix(in srgb, var(--accent) 55%, #fff)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-}
-.t-trs .oys-deco-1 { display: block; left: 50%; top: -30%; width: 140%; height: 70%; transform: translateX(-50%); background: radial-gradient(closest-side, rgba(255, 122, 26, .2), transparent); filter: blur(30px); animation: oys-breathe 9s ease-in-out infinite; }
-.t-trs .oys-deco-2 { display: block; inset: 0; background-image: radial-gradient(rgba(255, 160, 90, .5) 1px, transparent 1.5px); background-size: 46px 46px; opacity: .08; mask-image: linear-gradient(transparent, #000 40%, transparent); -webkit-mask-image: linear-gradient(transparent, #000 40%, transparent); }
-
-/* ============ 2. Dunkel ============ */
+/* ============ 1. Dunkel ============ */
 .t-deep-dark {
   --bg: radial-gradient(80% 50% at 50% 0%, rgba(255, 255, 255, .06), transparent 70%), #09090b;
   --bg-solid: #09090b;
@@ -66,7 +29,7 @@
   --overlay-rgb: 9, 9, 11;
 }
 
-/* ============ 3. Minimal ============ */
+/* ============ 2. Minimal ============ */
 .t-minimal {
   --bg: #fafafa;
   --bg-solid: #fafafa;
@@ -96,7 +59,7 @@
 }
 .t-minimal .oys-avatar-inner { box-shadow: 0 8px 24px rgba(0, 0, 0, .1); }
 
-/* ============ 4. Glas ============ */
+/* ============ 3. Glas ============ */
 .t-glass {
   --bg: radial-gradient(60% 45% at 12% 8%, #c7d2fe, transparent 70%), radial-gradient(50% 40% at 92% 22%, #fbcfe8, transparent 70%), radial-gradient(70% 50% at 50% 100%, #bae6fd, transparent 70%), #eef2ff;
   --bg-solid: #eef2ff;
@@ -128,7 +91,7 @@
 .t-glass .oys-deco-1 { display: block; width: 260px; height: 260px; left: -70px; top: 32%; border-radius: 50%; background: linear-gradient(135deg, #a5b4fc, #f0abfc); filter: blur(46px); opacity: .6; animation: oys-float 13s ease-in-out infinite; }
 .t-glass .oys-deco-2 { display: block; width: 220px; height: 220px; right: -50px; top: 6%; border-radius: 50%; background: linear-gradient(135deg, #7dd3fc, #c4b5fd); filter: blur(46px); opacity: .55; animation: oys-float 16s ease-in-out infinite reverse; }
 
-/* ============ 5. Brutal ============ */
+/* ============ 4. Brutal ============ */
 .t-brutal {
   --bg: radial-gradient(rgba(0, 0, 0, .2) 1px, transparent 1.5px) 0 0 / 18px 18px, #fff8e7;
   --bg-solid: #fff8e7;
@@ -178,7 +141,7 @@
 .t-brutal .oys-countdown .oys-cd-cell { background: #ffd23f; border: 3px solid #000; }
 .t-brutal .oys-cd-num { color: #000; }
 
-/* ============ 6. Candy ============ */
+/* ============ 5. Candy ============ */
 .t-candy {
   --bg: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, .85) 0 2px, transparent 3px) 0 0 / 34px 34px, radial-gradient(circle at 70% 60%, rgba(255, 150, 200, .7) 0 2px, transparent 3px) 0 0 / 46px 46px, linear-gradient(180deg, #ffd6ea 0%, #e6ddff 55%, #d2ebff 100%);
   --bg-solid: #ffe3f1;
@@ -221,7 +184,7 @@
 .t-candy .oys-deco-1 { display: block; width: 90px; height: 90px; left: 6%; top: 10%; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff, #ffb3d6 70%); opacity: .7; animation: oys-float 10s ease-in-out infinite; }
 .t-candy .oys-deco-2 { display: block; width: 60px; height: 60px; right: 8%; top: 46%; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff, #c7b3ff 70%); opacity: .7; animation: oys-float 12s ease-in-out infinite reverse; }
 
-/* ============ 7. Zen ============ */
+/* ============ 6. Zen ============ */
 .t-zen {
   --bg: radial-gradient(circle at 50% 25%, rgba(255, 255, 255, .65), transparent 60%), #f2ede3;
   --bg-solid: #f2ede3;
@@ -262,7 +225,7 @@
 .t-zen .oys-deco-1 { display: block; width: 460px; height: 460px; right: -170px; top: -140px; border-radius: 50%; border: 22px solid rgba(43, 42, 39, .06); border-left-color: transparent; border-bottom-color: rgba(43, 42, 39, .03); transform: rotate(-25deg); }
 .t-zen .oys-deco-2 { display: block; width: 34px; height: 34px; left: 22px; top: 22px; border-radius: 6px; background: #b33a3a; opacity: .82; transform: rotate(5deg); box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .25); }
 
-/* ============ 8. Code ============ */
+/* ============ 7. Code ============ */
 .t-code {
   --bg: linear-gradient(90deg, #19191c 0 34px, #2a2a2e 34px 35px, transparent 35px), #1e1e1e;
   --bg-solid: #1e1e1e;
@@ -315,7 +278,7 @@
 .t-code .oys-deco-1 { display: block; left: 0; top: 0; bottom: 0; width: 34px; overflow: hidden; }
 .t-code .oys-deco-1::before { content: '1\A 2\A 3\A 4\A 5\A 6\A 7\A 8\A 9\A 10\A 11\A 12\A 13\A 14\A 15\A 16\A 17\A 18\A 19\A 20\A 21\A 22\A 23\A 24\A 25\A 26\A 27\A 28\A 29\A 30\A 31\A 32\A 33\A 34\A 35\A 36\A 37\A 38\A 39\A 40\A 41\A 42\A 43\A 44\A 45\A 46\A 47\A 48\A 49\A 50\A 51\A 52\A 53\A 54\A 55\A 56\A 57\A 58\A 59\A 60'; white-space: pre; display: block; padding: 18px 8px 0 0; text-align: right; font: 12px/24px 'Fira Code', monospace; color: #5a5a5a; }
 
-/* ============ 9. Café ============ */
+/* ============ 8. Café ============ */
 .t-cafe {
   --bg: radial-gradient(ellipse at top, #fdf6ee, transparent 60%), #f3e6d8;
   --bg-solid: #f3e6d8;
@@ -359,7 +322,7 @@
 .t-cafe .oys-deco-1 { display: block; width: 190px; height: 190px; right: -55px; top: 70px; border-radius: 50%; border: 11px solid rgba(111, 78, 55, .1); box-shadow: inset 0 0 0 4px rgba(111, 78, 55, .05); }
 .t-cafe .oys-deco-2 { display: block; width: 120px; height: 120px; left: -40px; bottom: 12%; border-radius: 50%; border: 8px solid rgba(111, 78, 55, .07); }
 
-/* ============ 10. Wald ============ */
+/* ============ 9. Wald ============ */
 .t-forest {
   --bg: radial-gradient(90% 50% at 50% 0%, rgba(52, 211, 153, .2), transparent 70%), linear-gradient(170deg, #064e3b 0%, #022c22 70%, #011a14 100%);
   --bg-solid: #032b22;
@@ -385,7 +348,7 @@
 .t-forest .oys-deco-1 { display: block; left: 0; right: 0; bottom: 0; height: 150px; opacity: .55; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 150'%3E%3Cpath fill='%23011a14' d='M0 150 L22 82 L32 104 L48 48 L64 104 L74 86 L96 150 Z M84 150 L112 64 L126 98 L142 36 L162 104 L178 72 L204 150 Z M192 150 L216 78 L230 108 L252 42 L274 112 L288 82 L320 150 Z'/%3E%3C/svg%3E") repeat-x left bottom / 320px 150px; }
 .t-forest .oys-deco-2 { display: block; left: 0; right: 0; bottom: 0; height: 90px; opacity: .8; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 90'%3E%3Cpath fill='%23010f0b' d='M0 90 L18 40 L30 64 L44 22 L60 70 L74 46 L92 90 Z M100 90 L120 34 L134 60 L150 18 L168 66 L182 44 L206 90 Z M196 90 L214 50 L226 72 L240 40 L240 90 Z'/%3E%3C/svg%3E") repeat-x 80px bottom / 240px 90px; }
 
-/* ============ 11. Sunset ============ */
+/* ============ 10. Sunset ============ */
 .t-sunset {
   --bg: radial-gradient(70% 40% at 50% 100%, rgba(251, 146, 60, .55), transparent 70%), linear-gradient(175deg, #2e0a2e 0%, #6b1236 42%, #b3361f 80%, #e2632b 100%);
   --bg-solid: #5a1131;
@@ -411,7 +374,7 @@
 }
 .t-sunset .oys-deco-1 { display: block; width: 280px; height: 280px; left: 50%; bottom: -140px; margin-left: -140px; border-radius: 50%; background: radial-gradient(circle, #ffd8a8, #ff8a3d 55%, transparent 70%); opacity: .75; }
 
-/* ============ 12. Kirsche ============ */
+/* ============ 11. Kirsche ============ */
 .t-cherry {
   --bg: radial-gradient(80% 50% at 50% 0%, rgba(251, 113, 133, .26), transparent 70%), linear-gradient(160deg, #4c0519 0%, #881337 55%, #3f0613 100%);
   --bg-solid: #5c0a22;
@@ -439,7 +402,7 @@
 .t-cherry .oys-deco-2 { left: 52%; animation-delay: 5s; width: 9px; height: 12px; }
 .t-cherry .oys-deco-3 { left: 82%; animation-delay: 9s; }
 
-/* ============ 13. Hacker ============ */
+/* ============ 12. Hacker ============ */
 .t-hacker {
   --bg: repeating-linear-gradient(0deg, rgba(34, 197, 94, .05) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, #031a0a, #000 70%);
   --bg-solid: #000;
@@ -484,7 +447,7 @@
 .t-hacker .lay-apps .oys-link-title::before { content: none; }
 .t-hacker .oys-deco-1 { display: block; inset: 0; background: linear-gradient(transparent 50%, rgba(34, 197, 94, .04) 50%) 0 0 / 100% 4px; }
 
-/* ============ 14. Cyber ============ */
+/* ============ 13. Cyber ============ */
 .t-cyberpunk {
   --bg: linear-gradient(135deg, transparent 0 70%, rgba(0, 229, 255, .2) 70% 71.5%, transparent 71.5%), repeating-linear-gradient(-45deg, rgba(0, 0, 0, .05) 0 2px, transparent 2px 12px), #fcee0a;
   --bg-solid: #fcee0a;
@@ -535,7 +498,7 @@
 .t-cyberpunk .oys-cd-label { color: #000; }
 .t-cyberpunk .oys-deco-1 { display: block; right: -10%; top: 12%; width: 60%; height: 10px; background: #0a0a0a; transform: rotate(-35deg); opacity: .12; }
 
-/* ============ 15. Neon ============ */
+/* ============ 14. Neon ============ */
 .t-neon {
   --bg: linear-gradient(rgba(255, 43, 214, .07) 1px, transparent 1px) 0 0 / 100% 34px, linear-gradient(90deg, rgba(0, 229, 255, .06) 1px, transparent 1px) 0 0 / 34px 100%, radial-gradient(ellipse at 50% 0%, #1d0b33, #07040f 70%);
   --bg-solid: #07040f;
@@ -576,7 +539,7 @@
 .t-neon .oys-cd-num { text-shadow: 0 0 10px var(--accent); }
 @keyframes oys-neon-flicker { 0%, 92%, 96%, 100% { opacity: 1; } 93% { opacity: .55; } 95% { opacity: .8; } }
 
-/* ============ 16. Luxus ============ */
+/* ============ 15. Luxus ============ */
 .t-luxe {
   --bg: radial-gradient(60% 40% at 50% 0%, rgba(212, 175, 55, .15), transparent 70%), #0a0a0a;
   --bg-solid: #0a0a0a;
@@ -619,7 +582,7 @@
 .t-luxe .oys-sub { color: #d4af37; letter-spacing: .3em; }
 .t-luxe .oys-heading { color: #d4af37; }
 
-/* ============ 17. Aurora ============ */
+/* ============ 16. Aurora ============ */
 .t-aurora {
   --bg: #050816;
   --bg-solid: #050816;
@@ -652,7 +615,7 @@
 @keyframes oys-aurora-a { from { transform: translate(0, 0) rotate(0deg); } to { transform: translate(18%, 8%) rotate(12deg); } }
 @keyframes oys-aurora-b { from { transform: translate(0, 0) scale(1); } to { transform: translate(-22%, 12%) scale(1.2); } }
 
-/* ============ 18. Galaxie (besondere Vorlage) ============ */
+/* ============ 17. Galaxie (besondere Vorlage) ============ */
 .t-galaxy {
   --bg: radial-gradient(40% 30% at 18% 18%, rgba(139, 92, 246, .38), transparent 70%), radial-gradient(35% 28% at 86% 34%, rgba(236, 72, 153, .26), transparent 70%), radial-gradient(55% 40% at 50% 100%, rgba(59, 130, 246, .32), transparent 70%), #05010f;
   --bg-solid: #05010f;
@@ -702,7 +665,7 @@
 .t-galaxy .oys-deco-3::after { content: ''; position: absolute; left: -32%; top: 41%; width: 164%; height: 18%; border-radius: 50%; border: 3px solid rgba(221, 214, 254, .6); transform: rotate(-18deg); }
 .t-galaxy .oys-name { text-shadow: 0 0 24px rgba(167, 139, 250, .6); }
 
-/* ============ 19. Notizbuch (besondere Vorlage) ============ */
+/* ============ 18. Notizbuch (besondere Vorlage) ============ */
 .t-notebook {
   --bg: linear-gradient(90deg, transparent 0 38px, rgba(239, 68, 68, .45) 38px 40px, transparent 40px), repeating-linear-gradient(180deg, transparent 0 31px, rgba(59, 130, 246, .22) 31px 32px), #fffdf5;
   --bg-solid: #fffdf5;
@@ -750,7 +713,7 @@
 .t-notebook .oys-heading { font-size: 1.6em; }
 .t-notebook .oys-cd-num { color: #ef4444; font-family: 'Caveat', cursive; }
 
-/* ============ 20. Comic (besondere Vorlage) ============ */
+/* ============ 19. Comic (besondere Vorlage) ============ */
 .t-comic {
   --bg: radial-gradient(rgba(0, 0, 0, .16) 22%, transparent 24%) 0 0 / 14px 14px, radial-gradient(circle at 50% 0%, #fff27a, #ffd400 60%, #ffb800);
   --bg-solid: #ffd400;
@@ -799,7 +762,7 @@
 .t-comic .oys-cd-num { font-family: 'Bangers', sans-serif; color: #ef4444; -webkit-text-stroke: 1px #111; }
 .t-comic .oys-deco-1 { display: block; width: 420px; height: 420px; left: 50%; top: -90px; margin-left: -210px; border-radius: 50%; background: repeating-conic-gradient(rgba(255, 255, 255, .55) 0 8deg, transparent 8deg 16deg); -webkit-mask-image: radial-gradient(circle, #000 35%, transparent 70%); mask-image: radial-gradient(circle, #000 35%, transparent 70%); animation: oys-spin 60s linear infinite; }
 
-/* ============ 21. Ozean (besondere Vorlage) ============ */
+/* ============ 20. Ozean (besondere Vorlage) ============ */
 .t-ocean {
   --bg: radial-gradient(80% 50% at 50% 0%, rgba(34, 211, 238, .26), transparent 70%), linear-gradient(180deg, #075985 0%, #0c4a6e 45%, #082f49 100%);
   --bg-solid: #0c4a6e;
@@ -836,7 +799,7 @@
 @keyframes oys-wave2 { to { background-position-x: -500px; } }
 @keyframes oys-rise { 0% { transform: translateY(0); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(-900px); opacity: 0; } }
 
-/* ============ 22. Mitternacht (besondere Vorlage) ============ */
+/* ============ 21. Mitternacht (besondere Vorlage) ============ */
 .t-midnight {
   --bg: radial-gradient(60% 40% at 82% 8%, rgba(165, 180, 252, .2), transparent 70%), linear-gradient(180deg, #070b1f 0%, #111538 55%, #1e1b4b 100%);
   --bg-solid: #0d1130;
@@ -871,7 +834,7 @@
 .t-midnight .oys-deco-2 { background-image: radial-gradient(1px 1px at 30px 40px, #fff, transparent), radial-gradient(1px 1px at 120px 90px, #e0e7ff, transparent), radial-gradient(1.5px 1.5px at 200px 30px, #fff, transparent), radial-gradient(1px 1px at 70px 170px, #fff, transparent), radial-gradient(1px 1px at 240px 200px, #c7d2fe, transparent); background-size: 260px 260px; animation: oys-twinkle 4s ease-in-out infinite alternate; mask-image: linear-gradient(#000 40%, transparent 85%); -webkit-mask-image: linear-gradient(#000 40%, transparent 85%); }
 .t-midnight .oys-deco-3 { background-image: radial-gradient(1.5px 1.5px at 80px 60px, #fff, transparent), radial-gradient(1px 1px at 300px 150px, #fff, transparent), radial-gradient(2px 2px at 180px 260px, #e0e7ff, transparent); background-size: 340px 340px; animation: oys-twinkle 6s ease-in-out 2s infinite alternate-reverse; mask-image: linear-gradient(#000 30%, transparent 80%); -webkit-mask-image: linear-gradient(#000 30%, transparent 80%); }
 
-/* ============ 23. Retro (besondere Vorlage) ============ */
+/* ============ 22. Retro (besondere Vorlage) ============ */
 .t-retro {
   --bg: linear-gradient(180deg, #0d0024 0%, #2a0052 30%, #7a0a6a 52%, #ff2e88 61.5%, #12002b 62%, #0d0024 100%);
   --bg-solid: #1a0136;
@@ -918,7 +881,7 @@
 .t-retro .oys-deco-2 { display: block; left: -50%; right: -50%; top: 62%; height: 60%; background: linear-gradient(rgba(0, 240, 255, .75) 2px, transparent 2px) 0 0 / 100% 38px, linear-gradient(90deg, rgba(0, 240, 255, .75) 2px, transparent 2px) 0 0 / 56px 100%; transform: perspective(260px) rotateX(62deg); transform-origin: top; animation: oys-grid 2.4s linear infinite; -webkit-mask-image: linear-gradient(#000, transparent 85%); mask-image: linear-gradient(#000, transparent 85%); }
 @keyframes oys-grid { to { background-position: 0 38px, 0 0; } }
 
-/* ============ 24. Pixel (besondere Vorlage) ============ */
+/* ============ 23. Pixel (besondere Vorlage) ============ */
 .t-pixel {
   --bg: #1b1b3a;
   --bg-solid: #1b1b3a;
@@ -969,7 +932,7 @@
 .t-pixel .oys-deco-1 { display: block; inset: 0; background-image: linear-gradient(#fff, #fff), linear-gradient(#fff, #fff), linear-gradient(#fbbf24, #fbbf24), linear-gradient(#fff, #fff), linear-gradient(#a5b4fc, #a5b4fc), linear-gradient(#fff, #fff); background-size: 4px 4px; background-repeat: no-repeat; background-position: 8% 12%, 82% 8%, 64% 30%, 18% 46%, 90% 58%, 40% 76%; animation: oys-blink 2.4s steps(1) infinite; opacity: .8; }
 .t-pixel .oys-deco-2 { display: block; inset: 0; background-image: linear-gradient(#fff, #fff), linear-gradient(#fff, #fff), linear-gradient(#fff, #fff), linear-gradient(#fbbf24, #fbbf24); background-size: 4px 4px; background-repeat: no-repeat; background-position: 30% 6%, 92% 26%, 6% 70%, 70% 88%; opacity: .6; }
 
-/* ============ 25. Zeitung (besondere Vorlage) ============ */
+/* ============ 24. Zeitung (besondere Vorlage) ============ */
 .t-newspaper {
   --bg: radial-gradient(rgba(0, 0, 0, .03) 1px, transparent 1px) 0 0 / 4px 4px, #f4f1ea;
   --bg-solid: #f4f1ea;
@@ -1017,3 +980,266 @@
 .t-newspaper .oys-link, .t-newspaper .oys-link:hover { border-top: 1px solid #111; border-bottom: 3px double #111; }
 .t-newspaper .lay-apps .oys-link, .t-newspaper .lay-polaroid .oys-link { border: 0; }
 .t-newspaper .oys-heading { border-bottom: 2px solid #111; padding-bottom: 4px; }
+
+/* ============ 25. Noir ============ */
+.t-noir {
+  --bg: radial-gradient(70% 45% at 50% -5%, rgba(255, 255, 255, .16), transparent 70%), radial-gradient(120% 80% at 50% 120%, rgba(255, 255, 255, .05), transparent 60%), #050505;
+  --bg-solid: #050505;
+  --text: #f5f5f5;
+  --muted: rgba(245, 245, 245, .62);
+  --accent: #f5f5f5;
+  --on-accent: #050505;
+  --font: 'Inter', system-ui, sans-serif;
+  --font-head: 'Playfair Display', Georgia, serif;
+  --head-weight: 700;
+  --head-spacing: 0;
+  --name-size: 2.05em;
+  --btn-bg: rgba(5, 5, 5, .35);
+  --btn-border: 1px solid rgba(245, 245, 245, .8);
+  --btn-radius: 0;
+  --btn-weight: 500;
+  --btn-transform: uppercase;
+  --btn-spacing: .14em;
+  --btn-size: .86em;
+  --btn-hover-bg: #f5f5f5;
+  --btn-hover-border: 1px solid #f5f5f5;
+  --btn-hover-shadow: 0 0 40px -6px rgba(255, 255, 255, .45);
+  --btn-hover-transform: none;
+  --icon-bg: rgba(255, 255, 255, .08);
+  --icon-fg: #f5f5f5;
+  --surface: #111;
+  --card-bg: rgba(255, 255, 255, .03);
+  --card-border: 1px solid rgba(245, 245, 245, .35);
+  --card-radius: 0;
+  --input-bg: rgba(255, 255, 255, .04);
+  --input-border: 1px solid rgba(245, 245, 245, .4);
+  --avatar-border: 1px solid rgba(245, 245, 245, .85);
+  --divider: rgba(245, 245, 245, .4);
+  --overlay-rgb: 5, 5, 5;
+  --pill-radius: 0;
+}
+.t-noir .oys-links:not(.lay-apps) .oys-link:hover, .t-noir .oys-links:not(.lay-apps) .oys-link:focus-visible { color: #050505; }
+.t-noir .oys-name { font-style: italic; }
+.t-noir .oys-sub { letter-spacing: .32em; }
+.t-noir .oys-avatar-inner img, .t-noir .oys-link-thumb { filter: grayscale(1) contrast(1.08); }
+/* Lichtkegel von oben, Vignette und flimmerndes Filmkorn */
+.t-noir .oys-deco-1 { display: block; left: 50%; top: -10%; width: 90%; height: 85%; transform: translateX(-50%); background: conic-gradient(from 180deg at 50% 0%, transparent 155deg, rgba(255, 255, 255, .08) 172deg, rgba(255, 255, 255, .08) 188deg, transparent 205deg); filter: blur(6px); }
+.t-noir .oys-deco-2 { display: block; inset: 0; background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, .78) 100%); }
+.t-noir .oys-deco-3 { display: block; inset: -20%; background: radial-gradient(rgba(255, 255, 255, .07) 1px, transparent 1.4px) 0 0 / 3px 3px, radial-gradient(rgba(255, 255, 255, .05) 1px, transparent 1.4px) 1px 2px / 7px 7px; opacity: .55; animation: oys-grain 1.2s steps(4) infinite; }
+@keyframes oys-grain { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-2%, 1%); } 50% { transform: translate(1%, -2%); } 75% { transform: translate(-1%, -1%); } }
+
+/* ============ 26. Holo ============ */
+.t-holo {
+  --bg: linear-gradient(135deg, #e8f7ff 0%, #f6ecff 32%, #ffeef6 58%, #eafff6 82%, #fff9e6 100%);
+  --bg-solid: #f6f1ff;
+  --text: #1e1b3a;
+  --muted: #5d5a85;
+  --accent: #7c3aed;
+  --on-accent: #fff;
+  --font: 'Outfit', 'Inter', sans-serif;
+  --font-head: 'Outfit', sans-serif;
+  --head-weight: 800;
+  --btn-bg: linear-gradient(120deg, rgba(255, 255, 255, .88), rgba(255, 255, 255, .55));
+  --btn-text: #1e1b3a;
+  --btn-border: 1px solid rgba(255, 255, 255, .95);
+  --btn-radius: 18px;
+  --btn-shadow: 0 10px 30px -16px rgba(91, 33, 182, .45), inset 0 1px 0 #fff;
+  --btn-blur: blur(10px);
+  --btn-hover-bg: linear-gradient(120deg, #d6f4ff, #f0dcff 35%, #ffdcec 65%, #d9fff0);
+  --btn-hover-border: 1px solid #fff;
+  --btn-hover-shadow: 0 16px 36px -14px rgba(124, 58, 237, .55), inset 0 1px 0 #fff;
+  --icon-bg: #efe7ff;
+  --icon-fg: #7c3aed;
+  --surface: #fff;
+  --card-bg: rgba(255, 255, 255, .62);
+  --card-border: 1px solid rgba(255, 255, 255, .95);
+  --card-shadow: 0 10px 30px -18px rgba(91, 33, 182, .35);
+  --card-blur: blur(12px);
+  --input-bg: rgba(255, 255, 255, .85);
+  --input-border: 1px solid rgba(124, 58, 237, .2);
+  --avatar-border: 4px solid #fff;
+  --avatar-bg: #ede9fe;
+  --divider: rgba(124, 58, 237, .25);
+  --overlay-rgb: 246, 241, 255;
+}
+.t-holo .oys-avatar-inner { box-shadow: 0 0 0 2px rgba(124, 58, 237, .18), 0 14px 34px -12px rgba(124, 58, 237, .55); }
+.t-holo .oys-name { background: linear-gradient(90deg, #7c3aed, #db2777 50%, #0891b2); -webkit-background-clip: text; background-clip: text; color: transparent; }
+/* schillernde Farbflecken und ein wandernder Glanz */
+.t-holo .oys-deco-1 { display: block; width: 320px; height: 320px; left: -110px; top: -60px; border-radius: 50%; background: conic-gradient(from 0deg, #a5f3fc, #c4b5fd, #f9a8d4, #fde68a, #a7f3d0, #a5f3fc); filter: blur(50px); opacity: .7; animation: oys-spin 24s linear infinite; }
+.t-holo .oys-deco-2 { display: block; width: 280px; height: 280px; right: -100px; bottom: 6%; border-radius: 50%; background: conic-gradient(from 90deg, #f9a8d4, #a5b4fc, #99f6e4, #fde68a, #f9a8d4); filter: blur(50px); opacity: .6; animation: oys-spin 30s linear infinite reverse; }
+.t-holo .oys-deco-3 { display: block; inset: 0; background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, .6) 45%, transparent 60%) 0 0 / 250% 100%; animation: oys-holo-sheen 9s ease-in-out infinite; }
+@keyframes oys-holo-sheen { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
+
+/* ============ 27. Dune ============ */
+.t-dune {
+  --bg: linear-gradient(180deg, #ffe9cf 0%, #fbd3a6 55%, #f3b77e 100%);
+  --bg-solid: #fbd9b3;
+  --text: #4a2511;
+  --muted: #84512c;
+  --accent: #c2410c;
+  --on-accent: #fff7ed;
+  --font: 'Inter', system-ui, sans-serif;
+  --font-head: 'DM Serif Display', Georgia, serif;
+  --head-weight: 400;
+  --head-spacing: 0;
+  --name-size: 2.1em;
+  --btn-bg: rgba(255, 247, 237, .8);
+  --btn-text: #4a2511;
+  --btn-border: 1px solid rgba(194, 65, 12, .22);
+  --btn-radius: 14px;
+  --btn-shadow: 0 8px 20px -12px rgba(124, 45, 18, .45);
+  --btn-blur: blur(6px);
+  --btn-hover-bg: #fff7ed;
+  --btn-hover-border: 1px solid rgba(194, 65, 12, .55);
+  --btn-hover-shadow: 0 14px 28px -12px rgba(124, 45, 18, .55);
+  --icon-bg: #fde3c8;
+  --icon-fg: #c2410c;
+  --surface: #fff7ed;
+  --card-bg: rgba(255, 247, 237, .72);
+  --card-border: 1px solid rgba(194, 65, 12, .2);
+  --input-bg: #fffaf3;
+  --input-border: 1px solid rgba(194, 65, 12, .3);
+  --avatar-border: 4px solid #fff7ed;
+  --divider: rgba(124, 45, 18, .3);
+  --overlay-rgb: 251, 217, 179;
+}
+.t-dune .oys-avatar-inner { box-shadow: 0 12px 30px -12px rgba(124, 45, 18, .55); }
+/* Wüstensonne und zwei Dünen */
+.t-dune .oys-deco-1 { display: block; width: 190px; height: 190px; right: -30px; top: 6%; border-radius: 50%; background: radial-gradient(circle at 45% 45%, #fff6d8 0 38%, #ffd88a 60%, rgba(255, 196, 102, 0) 72%); }
+.t-dune .oys-deco-2 { display: block; left: -30%; bottom: -14%; width: 120%; height: 32%; border-radius: 50% 50% 0 0 / 100% 100% 0 0; background: linear-gradient(180deg, #e9a46a, #d4874f); opacity: .55; }
+.t-dune .oys-deco-3 { display: block; right: -35%; bottom: -20%; width: 130%; height: 30%; border-radius: 50% 50% 0 0 / 100% 100% 0 0; background: linear-gradient(180deg, #d98c55, #b8693a); opacity: .5; }
+
+/* ============ 28. Blueprint (besondere Vorlage) ============ */
+.t-blueprint {
+  --bg: linear-gradient(rgba(255, 255, 255, .13) 1px, transparent 1px) 0 0 / 120px 120px, linear-gradient(90deg, rgba(255, 255, 255, .13) 1px, transparent 1px) 0 0 / 120px 120px, linear-gradient(rgba(255, 255, 255, .055) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgba(255, 255, 255, .055) 1px, transparent 1px) 0 0 / 24px 24px, radial-gradient(120% 80% at 50% 0%, #1d5bc4, #0f3c8c 70%), #0f3c8c;
+  --bg-solid: #0f3c8c;
+  --text: #eef5ff;
+  --muted: rgba(238, 245, 255, .72);
+  --accent: #ffd166;
+  --on-accent: #0f3c8c;
+  --font: 'Fira Code', ui-monospace, monospace;
+  --font-head: 'Space Grotesk', 'Inter', sans-serif;
+  --head-weight: 700;
+  --head-transform: uppercase;
+  --head-spacing: .08em;
+  --name-size: 1.5em;
+  --btn-bg: rgba(15, 60, 140, .6);
+  --btn-text: #eef5ff;
+  --btn-border: 1.5px solid rgba(238, 245, 255, .85);
+  --btn-radius: 3px;
+  --btn-shadow: 4px 4px 0 rgba(238, 245, 255, .14);
+  --btn-hover-bg: rgba(255, 209, 102, .12);
+  --btn-hover-border: 1.5px solid #ffd166;
+  --btn-hover-shadow: 6px 6px 0 rgba(255, 209, 102, .3);
+  --btn-hover-transform: translate(-2px, -2px);
+  --btn-weight: 500;
+  --btn-size: .92em;
+  --icon-bg: rgba(238, 245, 255, .1);
+  --icon-fg: #ffd166;
+  --surface: #133f8f;
+  --card-bg: rgba(15, 60, 140, .6);
+  --card-border: 1.5px dashed rgba(238, 245, 255, .6);
+  --card-radius: 3px;
+  --input-bg: rgba(10, 40, 100, .6);
+  --input-border: 1.5px dashed rgba(238, 245, 255, .55);
+  --avatar-border: 2px dashed rgba(238, 245, 255, .9);
+  --divider: rgba(238, 245, 255, .5);
+  --overlay-rgb: 15, 60, 140;
+  --pill-radius: 3px;
+  --link-color: #ffd166;
+}
+.t-blueprint .oys-avatar { outline: 1px solid rgba(238, 245, 255, .3); outline-offset: 9px; }
+.t-blueprint .oys-sub::before { content: '// '; color: var(--accent); }
+/* Zirkelkreise wie auf einer Bauzeichnung */
+.t-blueprint .oys-deco-1 { display: block; width: 300px; height: 300px; right: -120px; top: -90px; border: 1px dashed rgba(238, 245, 255, .3); border-radius: 50%; }
+.t-blueprint .oys-deco-2 { display: block; width: 180px; height: 180px; left: -70px; bottom: 12%; border: 1px solid rgba(238, 245, 255, .22); border-radius: 50%; box-shadow: 0 0 0 26px rgba(238, 245, 255, .03), inset 0 0 0 26px rgba(238, 245, 255, .03); }
+
+/* ============ 29. Chalkboard (besondere Vorlage) ============ */
+.t-chalkboard {
+  --bg: radial-gradient(60% 40% at 25% 20%, rgba(255, 255, 255, .06), transparent 70%), radial-gradient(50% 35% at 80% 75%, rgba(255, 255, 255, .05), transparent 70%), linear-gradient(160deg, #2b4a3c, #1e362c 60%, #183026);
+  --bg-solid: #1f382d;
+  --text: #f3f1e7;
+  --muted: rgba(243, 241, 231, .72);
+  --accent: #ffe27a;
+  --on-accent: #1f382d;
+  --fs: 17px;
+  --font: 'Patrick Hand', 'Comic Neue', cursive;
+  --font-head: 'Caveat', cursive;
+  --head-weight: 700;
+  --head-spacing: 0;
+  --name-size: 2.7em;
+  --btn-bg: rgba(255, 255, 255, .03);
+  --btn-text: #f3f1e7;
+  --btn-border: 2px solid rgba(243, 241, 231, .8);
+  --btn-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  --btn-hover-bg: rgba(255, 226, 122, .1);
+  --btn-hover-border: 2px solid #ffe27a;
+  --btn-hover-transform: rotate(-.6deg) scale(1.01);
+  --btn-weight: 400;
+  --btn-font: 'Patrick Hand', cursive;
+  --btn-size: 1.1em;
+  --icon-bg: rgba(255, 255, 255, .06);
+  --icon-fg: #ffe27a;
+  --surface: #23402f;
+  --card-bg: rgba(255, 255, 255, .03);
+  --card-border: 2px dashed rgba(243, 241, 231, .5);
+  --card-radius: 18px 6px 22px 8px;
+  --input-bg: rgba(0, 0, 0, .15);
+  --input-border: 2px dashed rgba(243, 241, 231, .45);
+  --avatar-border: 3px solid rgba(243, 241, 231, .85);
+  --divider: rgba(243, 241, 231, .55);
+  --overlay-rgb: 31, 56, 45;
+  --pill-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+}
+.t-chalkboard .oys-name, .t-chalkboard .oys-heading { text-shadow: 0 0 1px rgba(255, 255, 255, .7), 0 0 8px rgba(255, 255, 255, .15); }
+.t-chalkboard .oys-name { text-decoration: underline 2px #ffe27a; text-underline-offset: 10px; }
+.t-chalkboard .oys-sub { color: #ffe27a; font-family: 'Caveat', cursive; font-size: 1.35em; letter-spacing: 0; text-transform: none; }
+.t-chalkboard .oys-link:nth-child(odd) { rotate: -.4deg; }
+.t-chalkboard .oys-link:nth-child(even) { rotate: .4deg; }
+/* Wischspuren und ein Holzrahmen */
+.t-chalkboard .oys-deco-1 { display: block; width: 260px; height: 90px; left: -40px; top: 18%; border-radius: 50%; background: rgba(255, 255, 255, .05); filter: blur(18px); transform: rotate(-12deg); }
+.t-chalkboard .oys-deco-2 { display: block; width: 220px; height: 70px; right: -50px; bottom: 22%; border-radius: 50%; background: rgba(255, 255, 255, .045); filter: blur(16px); transform: rotate(8deg); }
+.t-chalkboard .oys-deco-3 { display: block; inset: 0; border: 12px solid #7a4e2a; box-shadow: inset 0 0 0 3px #5c3a1e, inset 0 0 30px rgba(0, 0, 0, .45); }
+
+/* ============ 30. Sakura (besondere Vorlage) ============ */
+.t-sakura {
+  --bg: radial-gradient(70% 45% at 85% -5%, rgba(255, 192, 214, .65), transparent 70%), linear-gradient(180deg, #fff7fa 0%, #ffe9f0 60%, #ffdce8 100%);
+  --bg-solid: #fff2f6;
+  --text: #4c1d2f;
+  --muted: #8d4c64;
+  --accent: #e75480;
+  --on-accent: #fff;
+  --font: 'Quicksand', 'Inter', sans-serif;
+  --font-head: 'Cormorant Garamond', Georgia, serif;
+  --head-weight: 700;
+  --head-spacing: .01em;
+  --name-size: 2.25em;
+  --btn-bg: rgba(255, 255, 255, .74);
+  --btn-text: #4c1d2f;
+  --btn-border: 1px solid rgba(231, 84, 128, .22);
+  --btn-radius: 999px;
+  --btn-shadow: 0 8px 22px -14px rgba(190, 24, 93, .45);
+  --btn-blur: blur(8px);
+  --btn-hover-bg: #fff;
+  --btn-hover-border: 1px solid rgba(231, 84, 128, .6);
+  --btn-hover-shadow: 0 12px 28px -12px rgba(190, 24, 93, .5);
+  --icon-bg: #ffe4ee;
+  --icon-fg: #e75480;
+  --surface: #fff;
+  --card-bg: rgba(255, 255, 255, .74);
+  --card-border: 1px solid rgba(231, 84, 128, .18);
+  --card-blur: blur(8px);
+  --input-bg: #fff;
+  --input-border: 1px solid rgba(231, 84, 128, .28);
+  --avatar-border: 4px solid #fff;
+  --divider: rgba(231, 84, 128, .3);
+  --overlay-rgb: 255, 242, 246;
+}
+.t-sakura .oys-avatar-inner { box-shadow: 0 12px 30px -12px rgba(231, 84, 128, .6); }
+.t-sakura .oys-name { font-style: italic; }
+/* Blütenblätter, die langsam herabschweben, und ein heller Morgenhimmel */
+.t-sakura .oys-deco-1 { display: block; inset: 0; background-image: radial-gradient(ellipse 9px 6px at 20% 10%, #f9a8c4 98%, transparent 100%), radial-gradient(ellipse 6px 9px at 70% 35%, #fbc4d6 98%, transparent 100%), radial-gradient(ellipse 9px 6px at 40% 62%, #f7a1bf 98%, transparent 100%), radial-gradient(ellipse 6px 8px at 85% 85%, #fdd5e2 98%, transparent 100%); background-size: 260px 600px; opacity: .85; animation: oys-petals 22s linear infinite; }
+.t-sakura .oys-deco-2 { display: block; inset: 0; background-image: radial-gradient(ellipse 6px 4px at 10% 20%, #f9a8c4 98%, transparent 100%), radial-gradient(ellipse 4px 6px at 55% 50%, #fbc4d6 98%, transparent 100%), radial-gradient(ellipse 6px 4px at 80% 75%, #f7a1bf 98%, transparent 100%); background-size: 190px 460px; opacity: .55; animation: oys-petals-2 30s linear infinite; }
+.t-sakura .oys-deco-3 { display: block; width: 240px; height: 240px; right: -70px; top: -60px; border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .9), rgba(255, 214, 228, .4) 55%, transparent 70%); }
+@keyframes oys-petals { from { background-position: 0 0; } to { background-position: 260px 600px; } }
+@keyframes oys-petals-2 { from { background-position: 0 0; } to { background-position: -190px 460px; } }

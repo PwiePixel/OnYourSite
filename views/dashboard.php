@@ -19,6 +19,7 @@ $editorData = [
     'maxPages' => (int) oys_config('max_pages', 3),
     'premium' => (bool) $has_premium_access,
     'themes' => oys_themes(),
+    'defaultTheme' => OYS_DEFAULT_THEME,
     'layouts' => oys_layouts(),
     'fonts' => oys_font_choices(),
     'brands' => $brands,
@@ -41,7 +42,7 @@ $flashError = $_SESSION['error'] ?? null;
 unset($_SESSION['success'], $_SESSION['error']);
 ?>
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -64,31 +65,32 @@ unset($_SESSION['success'], $_SESSION['error']);
 
     <?php if ($is_impersonating): ?>
     <div class="bg-emerald-500 text-white text-center py-2.5 text-sm font-bold flex items-center justify-center gap-2 shadow-lg relative z-[200] shrink-0 w-full">
-        <i class='bx bx-mask text-xl'></i> Admin-Modus: Du bearbeitest <?= e($user_data['full_name']) ?>
-        <form method="post" action="/admin_return.php" class="ml-4 m-0"><?= oys_csrf_field() ?><button type="submit" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-md transition-colors border border-white/20 flex items-center gap-1 shadow-sm"><i class='bx bx-left-arrow-alt'></i> Zurück zum Admin-Panel</button></form>
+        <i class='bx bx-mask text-xl'></i> Admin mode: You’re editing <?= e($user_data['full_name']) ?>
+        <form method="post" action="/admin_return.php" class="ml-4 m-0"><?= oys_csrf_field() ?><button type="submit" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-md transition-colors border border-white/20 flex items-center gap-1 shadow-sm"><i class='bx bx-left-arrow-alt'></i> Back to admin panel</button></form>
     </div>
     <?php endif; ?>
 
     <div class="flex-1 flex overflow-hidden">
-        <aside class="w-16 sm:w-20 lg:w-64 border-r border-bordercolor bg-card flex flex-col justify-between py-6 transition-all z-20 shrink-0">
+        <aside class="app-rail w-16 sm:w-20 lg:w-64 border-r border-bordercolor bg-card flex flex-col justify-between py-6 transition-all z-20 shrink-0">
             <div>
-                <a href="/" class="px-3 sm:px-6 mb-8 flex items-center justify-center lg:justify-start gap-2 transition-transform hover:scale-105">
+                <a href="/" class="rail-logo px-3 sm:px-6 mb-8 flex items-center justify-center lg:justify-start gap-2 transition-transform hover:scale-105">
                     <i class='bx bx-hive text-3xl text-brand-500'></i><span class="font-bold text-xl text-white tracking-tight hidden lg:block">OnYourSite</span>
                 </a>
-                <div class="px-4 mb-2 hidden lg:block"><p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Menü</p></div>
+                <div class="rail-label px-4 mb-2 hidden lg:block"><p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Menu</p></div>
                 <nav class="space-y-1 px-2 sm:px-3" id="mainNav">
-                    <button type="button" data-tab="inhalte" class="nav-btn"><i class='bx bx-layout text-xl'></i> <span class="hidden lg:block text-sm">Inhalte</span></button>
+                    <button type="button" data-tab="content" class="nav-btn"><i class='bx bx-layout text-xl'></i> <span class="hidden lg:block text-sm">Content</span></button>
                     <button type="button" data-tab="design" class="nav-btn"><i class='bx bx-palette text-xl'></i> <span class="hidden lg:block text-sm">Design</span></button>
-                    <button type="button" data-tab="statistik" class="nav-btn"><i class='bx bx-bar-chart-alt-2 text-xl'></i> <span class="hidden lg:block text-sm">Statistik</span></button>
-                    <button type="button" data-tab="nachrichten" class="nav-btn"><i class='bx bx-envelope text-xl'></i> <span class="hidden lg:block text-sm">Nachrichten</span><span class="nav-badge" id="navMsgBadge" hidden>0</span></button>
-                    <button type="button" data-tab="einstellungen" class="nav-btn"><i class='bx bx-cog text-xl'></i> <span class="hidden lg:block text-sm">Einstellungen</span></button>
+                    <button type="button" data-tab="stats" class="nav-btn"><i class='bx bx-bar-chart-alt-2 text-xl'></i> <span class="hidden lg:block text-sm">Stats</span></button>
+                    <button type="button" data-tab="messages" class="nav-btn"><i class='bx bx-envelope text-xl'></i> <span class="hidden lg:block text-sm">Messages</span><span class="nav-badge" id="navMsgBadge" hidden>0</span></button>
+                    <button type="button" data-tab="settings" class="nav-btn"><i class='bx bx-cog text-xl'></i> <span class="hidden lg:block text-sm">Settings</span></button>
+                    <button type="button" id="navPreviewBtn" class="nav-btn nav-preview"><i class='bx bx-mobile-alt text-xl'></i> <span class="hidden lg:block text-sm">Preview</span></button>
                 </nav>
             </div>
-            <div class="px-2 sm:px-3 space-y-1">
+            <div class="rail-foot px-2 sm:px-3 space-y-1">
                 <?php if (!empty($user_data['is_admin'])): ?>
                 <a href="/admin" class="flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-white transition-colors"><i class='bx bx-shield-quarter text-xl'></i> <span class="hidden lg:block text-sm">Admin</span></a>
                 <?php endif; ?>
-                <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?><button type="submit" class="w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"><i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Abmelden</span></button></form>
+                <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?><button type="submit" class="w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"><i class='bx bx-log-out text-xl'></i> <span class="hidden lg:block text-sm">Log out</span></button></form>
             </div>
         </aside>
 
@@ -98,16 +100,16 @@ unset($_SESSION['success'], $_SESSION['error']);
                     <div class="relative" id="pageSwitcher">
                         <button type="button" id="pageSwitcherBtn" class="flex items-center gap-2 max-w-[42vw] sm:max-w-xs bg-white/5 hover:bg-white/10 border border-bordercolor rounded-lg pl-1.5 pr-2.5 py-1.5 transition-colors">
                             <span class="ps-avatar" id="psAvatar"></span>
-                            <span class="text-sm text-white font-medium truncate hidden min-[420px]:inline" id="psLabel">Seite</span>
+                            <span class="text-sm text-white font-medium truncate hidden min-[420px]:inline" id="psLabel">Page</span>
                             <i class='bx bx-chevron-down text-gray-400'></i>
                         </button>
                         <div id="pageMenu" class="dropdown hidden w-72 left-0"></div>
                     </div>
-                    <h1 class="text-base font-semibold text-white tracking-tight hidden md:block" id="pageTitle">Inhalte</h1>
+                    <h1 class="text-base font-semibold text-white tracking-tight hidden md:block" id="pageTitle">Content</h1>
                 </div>
                 <div class="flex items-center gap-2 sm:gap-3">
                     <div class="relative">
-                        <button type="button" id="bellBtn" class="relative w-9 h-9 rounded-lg hover:bg-white/5 border border-transparent hover:border-bordercolor flex items-center justify-center text-gray-400 hover:text-white transition-colors" aria-label="Benachrichtigungen">
+                        <button type="button" id="bellBtn" class="relative w-9 h-9 rounded-lg hover:bg-white/5 border border-transparent hover:border-bordercolor flex items-center justify-center text-gray-400 hover:text-white transition-colors" aria-label="Notifications">
                             <i class='bx bx-bell text-xl'></i><span id="bellBadge" class="bell-badge" hidden>0</span>
                         </button>
                         <div id="bellMenu" class="dropdown hidden w-80 right-0"></div>
@@ -116,7 +118,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                         <span class="truncate" id="viewPageLabel"></span> <i class='bx bx-link-external shrink-0'></i>
                     </a>
                     <button type="button" id="saveBtn" class="bg-white text-black hover:bg-gray-200 px-4 sm:px-5 py-1.5 rounded-md text-sm font-semibold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-60">
-                        <i class='bx bx-check text-lg hidden' id="saveIcon"></i><span id="saveLabel">Speichern</span>
+                        <i class='bx bx-check text-lg hidden' id="saveIcon"></i><span id="saveLabel">Save</span>
                     </button>
                 </div>
             </header>
@@ -126,38 +128,45 @@ unset($_SESSION['success'], $_SESSION['error']);
                     <?php if (!$page): ?>
                         <div class="max-w-lg mx-auto mt-10 bg-card border border-bordercolor rounded-2xl p-8 text-center">
                             <div class="w-14 h-14 mx-auto rounded-2xl bg-brand-500/20 text-brand-400 flex items-center justify-center text-3xl mb-4"><i class='bx bx-rocket'></i></div>
-                            <h2 class="text-xl font-bold text-white mb-2">Lege deine erste Seite an</h2>
-                            <p class="text-gray-400 text-sm mb-6">Wähle eine Adresse – du kannst sie später noch ändern.</p>
-                            <button type="button" class="btn-primary mx-auto" data-action="new-page"><i class='bx bx-plus'></i> Seite anlegen</button>
+                            <h2 class="text-xl font-bold text-white mb-2">Create your first page</h2>
+                            <p class="text-gray-400 text-sm mb-6">Choose an address – you can still change it later.</p>
+                            <button type="button" class="btn-primary mx-auto" data-action="new-page"><i class='bx bx-plus'></i> Create page</button>
                         </div>
                     <?php endif; ?>
-                    <div id="tab-inhalte" class="tab-content"></div>
+                    <div id="tab-content" class="tab-content"></div>
                     <div id="tab-design" class="tab-content hidden"></div>
-                    <div id="tab-statistik" class="tab-content hidden"></div>
-                    <div id="tab-nachrichten" class="tab-content hidden"></div>
-                    <div id="tab-einstellungen" class="tab-content hidden">
+                    <div id="tab-stats" class="tab-content hidden"></div>
+                    <div id="tab-messages" class="tab-content hidden"></div>
+                    <div id="tab-settings" class="tab-content hidden">
                         <div id="settingsDynamic"></div>
                         <section class="max-w-3xl mx-auto mt-8">
-                            <h2 class="section-title">Konto</h2>
+                            <h2 class="section-title">Account</h2>
                             <div class="grid gap-6 md:grid-cols-2">
                                 <form action="/dashboard" method="POST" class="panel space-y-4">
                                     <?= oys_csrf_field() ?>
                                     <input type="hidden" name="update_action" value="email">
-                                    <h3 class="text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-envelope text-brand-400'></i> E-Mail-Adresse ändern</h3>
-                                    <p class="text-xs text-gray-500">Aktuell: <span class="text-gray-300"><?= e($user_data['email'] ?? '') ?></span></p>
-                                    <input type="email" name="new_email" required placeholder="Neue E-Mail-Adresse" class="field">
-                                    <input type="password" name="current_password_email" required placeholder="Aktuelles Passwort" class="field">
-                                    <button type="submit" class="btn-secondary w-full justify-center">E-Mail ändern</button>
+                                    <h3 class="text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-envelope text-brand-400'></i> Change email address</h3>
+                                    <p class="text-xs text-gray-500">Current: <span class="text-gray-300"><?= e($user_data['email'] ?? '') ?></span></p>
+                                    <input type="email" name="new_email" required placeholder="New email address" class="field">
+                                    <input type="password" name="current_password_email" required placeholder="Current password" class="field">
+                                    <button type="submit" class="btn-secondary w-full justify-center">Change email</button>
                                 </form>
                                 <form action="/dashboard" method="POST" class="panel space-y-4">
                                     <?= oys_csrf_field() ?>
                                     <input type="hidden" name="update_action" value="password">
-                                    <h3 class="text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-lock-alt text-brand-400'></i> Passwort ändern</h3>
-                                    <input type="password" name="new_password" required minlength="8" placeholder="Neues Passwort (min. 8 Zeichen)" class="field">
-                                    <input type="password" name="confirm_new_password" required minlength="8" placeholder="Neues Passwort wiederholen" class="field">
-                                    <input type="password" name="current_password_pwd" required placeholder="Aktuelles Passwort" class="field">
-                                    <button type="submit" class="btn-secondary w-full justify-center">Passwort ändern</button>
+                                    <h3 class="text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-lock-alt text-brand-400'></i> Change password</h3>
+                                    <input type="password" name="new_password" required minlength="8" placeholder="New password (min. 8 characters)" class="field">
+                                    <input type="password" name="confirm_new_password" required minlength="8" placeholder="Repeat new password" class="field">
+                                    <input type="password" name="current_password_pwd" required placeholder="Current password" class="field">
+                                    <button type="submit" class="btn-secondary w-full justify-center">Change password</button>
                                 </form>
+                            </div>
+                            <!-- Auf dem Handy gibt es keine Seitenleiste: Admin und Abmelden hier -->
+                            <div class="sm:hidden mt-6 grid gap-3">
+                                <?php if (!empty($user_data['is_admin'])): ?>
+                                <a href="/admin" class="btn-secondary w-full justify-center"><i class='bx bx-shield-quarter'></i> Admin panel</a>
+                                <?php endif; ?>
+                                <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?><button type="submit" class="btn-secondary w-full justify-center text-red-400"><i class='bx bx-log-out'></i> Log out</button></form>
                             </div>
                         </section>
                     </div>
@@ -170,8 +179,8 @@ unset($_SESSION['success'], $_SESSION['error']);
                             <div class="phone" id="phone">
                                 <div class="phone-island"></div>
                                 <div class="phone-screen">
-                                    <iframe class="pv-frame on" title="Vorschau" id="pvA"></iframe>
-                                    <iframe class="pv-frame" title="Vorschau" id="pvB"></iframe>
+                                    <iframe class="pv-frame on" title="Preview" id="pvA"></iframe>
+                                    <iframe class="pv-frame" title="Preview" id="pvB"></iframe>
                                     <div class="pv-loading" id="pvLoading"><i class='bx bx-loader-alt bx-spin'></i></div>
                                 </div>
                             </div>
@@ -179,12 +188,12 @@ unset($_SESSION['success'], $_SESSION['error']);
                         <div class="preview-dots" id="previewDots"></div>
                     </div>
                     <div class="preview-bar">
-                        <span class="pv-live"><span></span> Live-Vorschau</span>
+                        <span class="pv-live"><span></span> Live preview</span>
                         <div class="flex items-center gap-1">
-                            <button type="button" class="pv-btn" id="pvEntrance" title="Eingang in der Vorschau abspielen" hidden><i class='bx bx-play-circle'></i></button>
-                            <button type="button" class="pv-btn" id="pvReload" title="Neu laden"><i class='bx bx-refresh'></i></button>
-                            <button type="button" class="pv-btn" id="pvBig" title="Großansicht (Desktop)"><i class='bx bx-desktop'></i></button>
-                            <a class="pv-btn" id="pvOpen" href="#" target="_blank" rel="noopener" title="Seite öffnen"><i class='bx bx-link-external'></i></a>
+                            <button type="button" class="pv-btn" id="pvEntrance" title="Play entrance in preview" hidden><i class='bx bx-play-circle'></i></button>
+                            <button type="button" class="pv-btn" id="pvReload" title="Reload"><i class='bx bx-refresh'></i></button>
+                            <button type="button" class="pv-btn" id="pvBig" title="Large view (desktop)"><i class='bx bx-desktop'></i></button>
+                            <a class="pv-btn" id="pvOpen" href="#" target="_blank" rel="noopener" title="Open page"><i class='bx bx-link-external'></i></a>
                         </div>
                     </div>
                 </aside>
@@ -192,7 +201,7 @@ unset($_SESSION['success'], $_SESSION['error']);
         </div>
     </div>
 
-    <button type="button" id="mobilePreviewBtn" class="mobile-preview-btn lg:hidden"><i class='bx bx-mobile-alt'></i> Vorschau</button>
+    <button type="button" id="mobilePreviewBtn" class="mobile-preview-btn lg:hidden"><i class='bx bx-mobile-alt'></i> Preview</button>
     <div id="mobilePreview" class="mobile-preview hidden">
         <button type="button" class="mobile-preview-close" id="mobilePreviewClose"><i class='bx bx-x'></i></button>
         <div class="mobile-preview-holder" id="mobilePreviewHolder"></div>
@@ -201,7 +210,7 @@ unset($_SESSION['success'], $_SESSION['error']);
     <div id="bigPreview" class="big-preview hidden">
         <div class="big-preview-box">
             <div class="big-preview-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="big-preview-url" id="bigPreviewUrl"></span><button type="button" id="bigPreviewClose"><i class='bx bx-x'></i></button></div>
-            <iframe id="bigPreviewFrame" title="Großansicht"></iframe>
+            <iframe id="bigPreviewFrame" title="Large view"></iframe>
         </div>
     </div>
 

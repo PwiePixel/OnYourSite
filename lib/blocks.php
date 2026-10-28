@@ -5,17 +5,17 @@ function oys_block_types(): array
 {
     return [
         'link'      => 'Link',
-        'socials'   => 'Social-Icons',
-        'heading'   => 'Überschrift',
+        'socials'   => 'Social icons',
+        'heading'   => 'Heading',
         'text'      => 'Text',
-        'divider'   => 'Trenner',
-        'image'     => 'Bild',
-        'gallery'   => 'Galerie',
-        'embed'     => 'Video & Musik',
+        'divider'   => 'Divider',
+        'image'     => 'Image',
+        'gallery'   => 'Gallery',
+        'embed'     => 'Video & music',
         'countdown' => 'Countdown',
-        'contact'   => 'Kontaktformular',
-        'booking'   => 'Termin buchen',
-        'file'      => 'Datei',
+        'contact'   => 'Contact form',
+        'booking'   => 'Book a meeting',
+        'file'      => 'File',
     ];
 }
 
@@ -151,7 +151,7 @@ function oys_block_normalize(array $in, int $userId, ?array $existing = null, bo
             $data['provider'] = oys_pick($d['provider'] ?? '', ['youtube', 'twitch', 'spotify', ''], '');
             $parsed = $data['url'] !== '' ? oys_parse_embed($data['url']) : null;
             if ($data['url'] !== '' && !$parsed) {
-                $warning = 'Diese Adresse kann nicht eingebettet werden (unterstützt: YouTube, Twitch, Spotify).';
+                $warning = 'This address can’t be embedded (supported: YouTube, Twitch, Spotify).';
             }
             if ($parsed) {
                 $data['provider'] = $parsed['provider'];
@@ -195,7 +195,7 @@ function oys_block_normalize(array $in, int $userId, ?array $existing = null, bo
         $newPassword = is_string($in['password'] ?? null) ? trim($in['password']) : '';
         if ($newPassword !== '' && mb_strlen($newPassword) < OYS_LINK_PASSWORD_MIN) {
             $newPassword = '';
-            $warning = 'Link-Passwörter brauchen mindestens ' . OYS_LINK_PASSWORD_MIN . ' Zeichen – das neue Passwort wurde nicht übernommen.';
+            $warning = 'Link passwords need at least ' . OYS_LINK_PASSWORD_MIN . ' characters – the new password wasn’t saved.';
         }
         if ($newPassword !== '') {
             // In der Vorschau wird nicht gehasht (zu langsam bei jedem Tastendruck)
@@ -207,7 +207,7 @@ function oys_block_normalize(array $in, int $userId, ?array $existing = null, bo
         } else {
             // Nie stillschweigend ungeschützt veröffentlichen: ohne Passwort bleibt der Link ausgeblendet
             $visible = 0;
-            $warning = 'Für den geschützten Link fehlt ein Passwort – er ist deshalb ausgeblendet. Lege ein Passwort fest und blende ihn wieder ein.';
+            $warning = 'The protected link has no password, so it’s been hidden. Set a password and show it again.';
         }
     }
 

@@ -1,71 +1,71 @@
 # OnYourSite
 
-Deine eigene Link-in-Bio-Seite unter `name.on-your.site` oder `on-your.site/name` – in PHP, ohne Framework.
+Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in PHP, without a framework.
 
-## Funktionen
+## Features
 
 | | |
 |---|---|
-| **Links & Social-Icons** | Beliebig viele Links mit automatisch passendem Symbol, dazu Icons für Instagram, TikTok, YouTube, Twitch, Discord und 22 weitere. |
-| **Videos, Musik & Bilder** | YouTube, Twitch und Spotify direkt auf der Seite (laden erst nach Antippen – datenschutzfreundlich), dazu Bilder, Überschriften und Text. |
-| **25 Designs** | TRS-Design als Standard, dazu Glas, Brutal, Candy, Zen, Code, Café und mehr – und besondere Vorlagen wie Galaxie, Notizbuch, Comic, Ozean oder Mitternacht. |
-| **Live-Vorschau** | Rechts im Editor siehst du sofort, wie deine Seite auf dem Handy aussieht – erzeugt vom selben Code wie die echte Seite. Designs und Anordnungen wechseln schon beim Drüberfahren. |
-| **Statistik ohne Cookies** | Aufrufe und Klicks je Link – ohne Cookies, ohne IP-Adressen, ohne Cookie-Banner. |
-| **Zwei Adressen** | `on-your.site/name` oder `name.on-your.site` – du wählst, die andere leitet weiter. |
-| **Zeitsteuerung** | „Jetzt live“ nur freitags 18–23 Uhr? Blöcke erscheinen und verschwinden automatisch. |
-| **13 Anordnungen** | Knöpfe, breite Karten, Kacheln, App-Raster, Zeitstrahl, Wolke, zwei Spalten, Baum, Bento, Karussell, Polaroid, Magazin, Stapel. |
-| **Effekte** | Animierter Ring ums Profilbild, Glanz/Wackeln/Pulsieren für einzelne Links, Schnee, Konfetti oder Glühwürmchen und Funken hinter dem Mauszeiger. |
-| **Geschützte Links** | Einzelne Links nur mit Passwort (mind. 6 Zeichen) oder nach „Ab 18“-Bestätigung. Die Zieladresse steht nie im Quelltext und nicht in der API. |
-| **Bis zu 3 Seiten** | Eigene Adresse und Statistik je Seite, umschaltbar im Editor. |
-| **Wochenbericht** | Auf Wunsch jeden Montag eine Mail mit Aufrufen, Klicks und dem besten Link. |
-| **Eingang mit Musik** | Besucher tippen zum Betreten, die Seite öffnet sich mit Animation und die Musik startet. |
-| **Countdown & Galerie** | Countdown bis zum nächsten Release, Bildergalerie zum Wischen. |
-| **Kontaktformular** | Mit Spamschutz (unsichtbare Falle, Zeitprüfung, Inhaltsfilter) und Hinweis über die Glocke. |
+| **Links & social icons** | As many links as you like, each with a matching icon, plus icons for Instagram, TikTok, YouTube, Twitch, Discord and 20+ more. |
+| **Videos, music & images** | YouTube, Twitch and Spotify right on your page, plus images, headings and text. |
+| **30 themes** | Deep Dark (default), Glass, Brutal, Candy, Zen, Code, Café, Noir, Holo, Dune and more – plus special templates like Galaxy, Notebook, Comic, Ocean, Midnight, Blueprint, Chalkboard or Sakura. |
+| **Live preview** | On the right side of the editor you instantly see how your page looks on a phone – rendered by the same code as the real page. Themes and layouts preview as soon as you hover over them. |
+| **Stats without cookies** | Views and clicks per link – no cookies, no IP addresses, no cookie banner for your visitors. |
+| **Two addresses** | `on-your.site/name` or `name.on-your.site` – you choose, the other one redirects. |
+| **Scheduling** | “Live now” only on Fridays from 6 to 11 pm? Links appear and disappear automatically. |
+| **13 layouts** | Buttons, wide cards, tiles, app grid, timeline, cloud, two columns – or tree, bento, carousel, polaroid, magazine and stack. |
+| **Effects** | An animated ring around your profile picture, shine or wobble for single links, snow, confetti or fireflies across the page and sparks behind the mouse cursor. |
+| **Protected links** | Single links only with a password (at least 6 characters) or after an “18+” confirmation. The target never appears in the page source or the API. |
+| **Up to 3 pages** | One page for you, one for your project – each with its own address and stats, switchable in the editor. |
+| **Weekly report** | If you like, a short email every Monday with views, clicks and your best link. |
+| **Entrance with music** | Visitors tap to enter, the page opens with an animation and your music starts. |
+| **Countdown & gallery** | Count down to your next release or show several images to swipe through. |
+| **Contact form** | Visitors message you directly – with a spam filter (invisible trap, timing check, content filter) and a heads-up via the bell. |
 
-Bestehendes bleibt: eingebauter Terminkalender (`/kalender`), Datei-Download (PDF/vcf), SEO-Angaben, eigenes CSS, Branding ausblenden (Premium), Discord-ID, Admin-Panel mit „Als Nutzer einloggen“ und Newsletter.
+Everything you already had stays: the built-in booking calendar (`/kalender`), file download (PDF/vcf), SEO settings, custom CSS, “Hide branding” (premium), Discord ID, and the admin panel with “Log in as user” and newsletter.
 
-## Update einer bestehenden Installation (Plesk)
+## Updating an existing installation (Plesk)
 
-1. **Backup** von Datenbank und Dateien machen.
-2. Neue Dateien hochladen bzw. per Git deployen. `static/uploads/` (Bilder deiner Nutzer) und `email/smtp.json` sind nicht im Repo und bleiben auf dem Server unverändert.
-3. **`config.php` anlegen:** `config.example.php` kopieren und ausfüllen
-   - `db`: Werte aus deiner alten `db.php`
-   - `aes_key`: **exakt** der alte Wert aus `security.php` (`AES_256_KEY`) – sonst sind Discord-IDs und Termin-Anfragen nicht mehr lesbar
-   - `app_secret`: neuen Zufallswert erzeugen, z. B. `php -r "echo bin2hex(random_bytes(32));"`
-4. Die Startseite einmal aufrufen. Beim ersten Aufruf legt OnYourSite die neuen Tabellen an und übernimmt alle bestehenden Profile automatisch (Links inkl. Klickzahlen, Design, Termin-Button, Datei, „Über mich“-Text). **Alte Tabellen werden nicht gelöscht.**
-5. Wochenbericht einrichten: Plesk → *Geplante Aufgaben* → *PHP-Skript ausführen* → `cron/weekly_report.php`, Zeitplan montags 8:00 (`0 8 * * 1`).
+1. **Back up** your database and files.
+2. Upload the new files or deploy them via Git. `static/uploads/` (your users’ images) and `email/smtp.json` aren’t in the repo and stay unchanged on the server.
+3. **Create `config.php`:** copy `config.example.php` and fill it in
+   - `db`: the values from your old `db.php`
+   - `aes_key`: **exactly** the old value from `security.php` (`AES_256_KEY`) – otherwise Discord IDs and booking requests can no longer be read
+   - `app_secret`: generate a new random value, e.g. `php -r "echo bin2hex(random_bytes(32));"`
+4. Open the home page once. On the first request, OnYourSite creates the new tables and automatically migrates all existing profiles (links incl. click counts, theme, booking button, file, “About me” text). **Old tables are not deleted.**
+5. Set up the weekly report: Plesk → *Scheduled Tasks* → *Run a PHP script* → `cron/weekly_report.php`, schedule Mondays at 8:00 (`0 8 * * 1`).
 
-Voraussetzungen: PHP 7.4 oder neuer (8.x empfohlen) mit PDO MySQL, OpenSSL, mbstring, fileinfo und GD (mit WebP); Wildcard-DNS und -SSL für `*.on-your.site` wie bisher.
+Requirements: PHP 7.4 or newer (8.x recommended) with PDO MySQL, OpenSSL, mbstring, fileinfo and GD (with WebP); wildcard DNS and wildcard SSL for `*.on-your.site` as before.
 
-Uploads: Fotos werden schon im Browser verkleinert und passen daher auch unter kleine Server-Limits. Für Musik beim „Eingang mit Musik“ (bis 15 MB) in Plesk unter *PHP-Einstellungen* `upload_max_filesize` und `post_max_size` auf mindestens `16M` setzen. Jedes Konto hat 200 MB Speicher (Premium/Admin 1 GB); hochgeladene, aber nie gespeicherte Dateien werden nach zwei Tagen automatisch entfernt.
+Uploads: photos are already resized in the browser, so they fit under small server limits too. For music in the “Entrance with music” (up to 15 MB), set `upload_max_filesize` and `post_max_size` to at least `16M` in Plesk under *PHP Settings*. Each account has 200 MB of storage (premium/admin: 1 GB); files that were uploaded but never saved are removed automatically after two days.
 
-Der eingebaute Terminkalender (`/kalender`) ist nur erreichbar, wenn die Seite einen sichtbaren Termin-Block hat, der auf ihn zeigt – ist dieser Block geschützt, öffnet sich der Kalender erst nach dem Passwort.
+The built-in booking calendar (`/kalender`) is only reachable if the page has a visible booking block that points to it – if that block is protected, the calendar only opens after the password has been entered.
 
-Tests: `php tests/unit.php` (nur Kommandozeile) prüft Zeitsteuerung, Einbettungen, Adressen, Spamfilter und URL-Prüfung.
+Tests: `php tests/unit.php` (command line only) checks scheduling, embeds, addresses, the spam filter and URL validation.
 
-> **Wichtig:** Bisher konnte `email/smtp.json` (mit dem SMTP-Passwort) direkt über `https://on-your.site/email/smtp.json` abgerufen werden. Das ist jetzt gesperrt (`.htaccess`). Bitte prüfe, ob die Datei bei dir erreichbar war, und **ändere vorsichtshalber das Passwort des Mail-Kontos**.
+> **Important:** Until now, `email/smtp.json` (which contains the SMTP password) could be downloaded directly via `https://on-your.site/email/smtp.json`. This is now blocked (`.htaccess`). Please check whether the file was reachable on your server and, to be safe, **change the password of the mail account**.
 
-## Aufbau
+## Structure
 
 ```
-index.php              Zentrale Weiterleitung (Hauptdomain, Subdomains, /_/-Endpunkte)
-config.example.php     Vorlage für config.php (Zugangsdaten – nicht im Repo)
+index.php              Central router (main domain, subdomains, /_/ endpoints)
+config.example.php     Template for config.php (credentials – not in the repo)
 lib/
-  bootstrap.php        Lädt alles, startet die automatische Migration
-  schema.php           Tabellen + Übernahme der alten Profile
-  render.php           Erzeugt die Profilseite (öffentlich UND Editor-Vorschau)
-  routes_app.php       Login, Registrierung, Editor-API, Admin
-  routes_public.php    Zähler, Entsperren, Kontakt, Weiterleitungen – ohne Cookies
-  themes.php           25 Designs und 13 Anordnungen (Namen, Farben)
-  blocks.php           Blocktypen, Prüfung, YouTube/Twitch/Spotify, Zeitsteuerung
+  bootstrap.php        Loads everything, starts the automatic migration
+  schema.php           Tables + migration of the old profiles
+  render.php           Renders the profile page (public AND editor preview)
+  routes_app.php       Login, sign-up, editor API, admin
+  routes_public.php    Counters, unlocking, contact, redirects – without cookies
+  themes.php           30 themes and 13 layouts (names, colors)
+  blocks.php           Block types, validation, YouTube/Twitch/Spotify, scheduling
   pages.php, stats.php, spam.php, uploads.php, report.php, social.php, demo.php
-views/                 Startseite, Editor (dashboard.php), Login, Admin, Kalender …
-static/css/            page.css (Aufbau & Anordnungen), themes.css (25 Designs), editor.css
-static/js/             page.js (Profilseite), editor.js (Editor)
-static/fonts/          Selbst gehostete Schriften (keine Google-Anfragen auf Profilseiten)
-cron/weekly_report.php Wochenbericht
+views/                 Home page, editor (dashboard.php), login, admin, calendar …
+static/css/            page.css (structure & layouts), themes.css (30 themes), editor.css
+static/js/             page.js (profile page), editor.js (editor)
+static/fonts/          Self-hosted fonts (no Google requests on profile pages)
+cron/weekly_report.php Weekly report
 ```
 
-## Datenschutz
+## Privacy
 
-Profilseiten setzen keine Cookies und laden nichts von fremden Servern (Schriften und Icons liegen lokal; YouTube, Twitch und Spotify erst nach Antippen). Auch eigenes CSS kann keine fremden Adressen laden – `url(https://…)` und `@import` werden entfernt. Statistik speichert nur Zähler pro Tag, keine IP-Adressen. Gegen Passwort-Raten und Spam (Kontaktformular, Kalender, Login) zählt OnYourSite Versuche kurzzeitig je Absender – dafür wird statt der IP nur ein nicht umkehrbarer, täglich wechselnder Schlüssel verwendet, der nach spätestens einem Tag gelöscht wird. Nachrichten aus dem Kontaktformular und Termin-Anfragen werden verschlüsselt gespeichert. Bitte passe deine Datenschutzerklärung an die neuen Funktionen an (Kontaktformular, Terminkalender, Einbettungen, Statistik).
+Profile pages don’t set any cookies and don’t load anything from third-party servers (fonts and icons are hosted locally; YouTube, Twitch and Spotify only load after a tap). Custom CSS can’t load external addresses either – `url(https://…)` and `@import` are removed. Stats only store counters per day, no IP addresses. To stop password guessing and spam (contact form, calendar, login), OnYourSite briefly counts attempts per sender – instead of the IP address it only uses a non-reversible key that changes daily and is deleted after one day at the latest. Messages from the contact form and booking requests are stored encrypted. Please update your privacy policy to cover the new features (contact form, booking calendar, embeds, stats).

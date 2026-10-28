@@ -24,20 +24,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         oys_redirect($okUrl, 303);
     }
     if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Bitte gib deinen Namen und eine gültige E-Mail-Adresse an.';
+        $error = 'Please enter your name and a valid email address.';
     } elseif (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $dm) || !checkdate((int) $dm[2], (int) $dm[3], (int) $dm[1])
         || $date < date('Y-m-d') || $date > date('Y-m-d', strtotime('+1 year'))) {
-        $error = 'Bitte wähle ein Datum zwischen heute und in einem Jahr.';
+        $error = 'Please choose a date between today and one year from now.';
     } elseif (!in_array($time, $slots, true)) {
-        $error = 'Bitte wähle eine Uhrzeit.';
+        $error = 'Please choose a time.';
     } elseif (!oys_rate_limit($pdo, 'booking:' . $page['id'] . ':' . oys_client_key(), 5, 3600)
         || !oys_rate_limit($pdo, 'booking:' . $page['id'], 30, 3600)) {
-        $error = 'Gerade kommen sehr viele Anfragen an. Bitte versuche es später noch einmal.';
+        $error = 'There are a lot of requests right now. Please try again later.';
     } else {
         $pdo->prepare('INSERT INTO user_bookings (user_id, guest_name, guest_email, booking_date, booking_time) VALUES (?, ?, ?, ?, ?)')
             ->execute([$page['user_id'], encryptData($name), encryptData($email), $date, $time]);
-        $dateDe = date('d.m.Y', strtotime($date));
-        oys_notify($pdo, (int) $page['user_id'], 'booking', 'Neue Termin-Anfrage von ' . $name, $dateDe . ' um ' . $time . ' Uhr', '/dashboard#nachrichten');
+        $dateDe = date('M j, Y', strtotime($date));
+        oys_notify($pdo, (int) $page['user_id'], 'booking', 'New booking request from ' . $name, $dateDe . ' at ' . $time, '/dashboard#messages');
         $owner = $pdo->prepare('SELECT email, full_name FROM users WHERE id = ?');
         $owner->execute([$page['user_id']]);
         if ($user = $owner->fetch()) {
@@ -48,7 +48,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 'booking_date' => e($dateDe),
                 'booking_time' => e($time),
                 'dashboard_url' => e(oys_main_url('/dashboard')),
-            ], 'Neuer Termin: ' . $name . ' am ' . $dateDe, $email);
+            ], 'New booking: ' . $name . ' on ' . $dateDe, $email);
         }
         oys_redirect($okUrl, 303);
     }
@@ -62,36 +62,36 @@ $name = $page['title'] ?: $page['slug'];
 ob_start();
 ?>
 <div class="oys-card">
-  <a class="oys-back" href="<?= e(oys_page_url($page)) ?>"><?= oys_ui_icon('left') ?> Zurück zum Profil</a>
+  <a class="oys-back" href="<?= e(oys_page_url($page)) ?>"><?= oys_ui_icon('left') ?> Back to profile</a>
   <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
     <div class="oys-avatar" style="--avatar-size:56px;margin:0"><div class="oys-avatar-inner">
       <?php if ($avatar): ?><img src="<?= e($avatar) ?>" alt=""><?php else: ?><span class="oys-initials" style="font-size:1.1em"><?= e(oys_initials($name)) ?></span><?php endif; ?>
     </div></div>
-    <div><h1 style="margin:0">Termin anfragen</h1><p style="margin:0">bei <?= e($name) ?></p></div>
+    <div><h1 style="margin:0">Request a meeting</h1><p style="margin:0">with <?= e($name) ?></p></div>
   </div>
 
   <?php if (isset($_GET['ok'])): ?>
-    <div class="oys-alert ok"><?= oys_ui_icon('check') ?> Deine Anfrage ist angekommen! Du bekommst eine Antwort per E-Mail.</div>
+    <div class="oys-alert ok"><?= oys_ui_icon('check') ?> Your request has been sent! You’ll get a reply by email.</div>
   <?php else: ?>
     <?php if ($error): ?><div class="oys-alert err"><?= e($error) ?></div><?php endif; ?>
     <form class="oys-contact" method="post" action="<?= e($selfUrl) ?>">
       <input type="hidden" name="t" value="<?= e($token) ?>">
       <div class="oys-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
-      <label class="oys-field"><span>Dein Name</span><input type="text" name="guest_name" required maxlength="80" autocomplete="name" value="<?= e($_POST['guest_name'] ?? '') ?>"></label>
-      <label class="oys-field"><span>Deine E-Mail</span><input type="email" name="guest_email" required autocomplete="email" value="<?= e($_POST['guest_email'] ?? '') ?>"></label>
+      <label class="oys-field"><span>Your name</span><input type="text" name="guest_name" required maxlength="80" autocomplete="name" value="<?= e($_POST['guest_name'] ?? '') ?>"></label>
+      <label class="oys-field"><span>Your email</span><input type="email" name="guest_email" required autocomplete="email" value="<?= e($_POST['guest_email'] ?? '') ?>"></label>
       <div class="oys-grid2">
-        <label class="oys-field"><span>Wunschdatum</span><input type="date" name="booking_date" required min="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d', strtotime('+1 year')) ?>" value="<?= e($_POST['booking_date'] ?? '') ?>"></label>
-        <label class="oys-field"><span>Uhrzeit</span>
+        <label class="oys-field"><span>Preferred date</span><input type="date" name="booking_date" required min="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d', strtotime('+1 year')) ?>" value="<?= e($_POST['booking_date'] ?? '') ?>"></label>
+        <label class="oys-field"><span>Time</span>
           <select name="booking_time" required>
-            <option value="" disabled<?= empty($_POST['booking_time']) ? ' selected' : '' ?>>Bitte wählen …</option>
-            <?php foreach ($slots as $slot): ?><option value="<?= $slot ?>"<?= ($_POST['booking_time'] ?? '') === $slot ? ' selected' : '' ?>><?= $slot ?> Uhr</option><?php endforeach; ?>
+            <option value="" disabled<?= empty($_POST['booking_time']) ? ' selected' : '' ?>>Please choose…</option>
+            <?php foreach ($slots as $slot): ?><option value="<?= $slot ?>"<?= ($_POST['booking_time'] ?? '') === $slot ? ' selected' : '' ?>><?= $slot ?></option><?php endforeach; ?>
           </select>
         </label>
       </div>
-      <button class="oys-contact-send" type="submit"><?= oys_ui_icon('calendar') ?><span>Termin anfragen</span></button>
-      <p class="oys-contact-note">Deine Angaben werden verschlüsselt gespeichert und nur für die Terminabsprache verwendet.</p>
+      <button class="oys-contact-send" type="submit"><?= oys_ui_icon('calendar') ?><span>Request a meeting</span></button>
+      <p class="oys-contact-note">Your details are stored encrypted and only used to arrange the meeting.</p>
     </form>
   <?php endif; ?>
 </div>
 <?php
-echo oys_render_simple($page, 'Termin anfragen | ' . $name, (string) ob_get_clean());
+echo oys_render_simple($page, 'Request a meeting | ' . $name, (string) ob_get_clean());

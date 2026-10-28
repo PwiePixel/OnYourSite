@@ -86,39 +86,39 @@ if ($path === '/register') {
         $_SESSION['old'] = ['fullname' => $fullname, 'email' => $email, 'subdomain' => $slug];
 
         if (!oys_csrf_check($_POST['csrf'] ?? null)) {
-            oys_flash('error', 'Die Sitzung ist abgelaufen. Bitte versuche es erneut.');
+            oys_flash('error', 'Your session has expired. Please try again.');
         } elseif ($fullname === '' || $email === '' || $password === '' || $slug === '') {
-            oys_flash('error', 'Bitte fülle alle Felder aus.');
+            oys_flash('error', 'Please fill in all fields.');
         } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            oys_flash('error', 'Bitte gib eine gültige E-Mail-Adresse an.');
+            oys_flash('error', 'Please enter a valid email address.');
         } elseif (strlen($password) < 8) {
-            oys_flash('error', 'Dein Passwort muss mindestens 8 Zeichen lang sein.');
+            oys_flash('error', 'Your password must be at least 8 characters long.');
         } elseif ($problem = oys_slug_problem($pdo, $slug)) {
             oys_flash('error', $problem);
         } elseif (!oys_rate_limit($pdo, 'register:' . oys_client_key(), 5, 3600)) {
             // Massen-Anmeldungen bremsen (jedes Konto bekommt Speicherplatz)
-            oys_flash('error', 'Von hier wurden gerade sehr viele Konten angelegt. Bitte versuche es später noch einmal.');
+            oys_flash('error', 'A lot of accounts were just created from here. Please try again later.');
         } else {
             $check = $pdo->prepare('SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1');
             $check->execute([$email, $slug]);
             if ($check->fetch()) {
-                oys_flash('error', 'Diese E-Mail-Adresse oder Adresse ist schon registriert.');
+                oys_flash('error', 'This email address or page address is already registered.');
             } else {
                 try {
-                    $pdo->prepare("INSERT INTO users (email, password, full_name, username, layout_type, last_ip, theme) VALUES (?, ?, ?, ?, 'link-tree', ?, 'trs')")
-                        ->execute([$email, password_hash($password, PASSWORD_DEFAULT), $fullname, $slug, encryptData($_SERVER['REMOTE_ADDR'] ?? '')]);
+                    $pdo->prepare("INSERT INTO users (email, password, full_name, username, layout_type, last_ip, theme) VALUES (?, ?, ?, ?, 'link-tree', ?, ?)")
+                        ->execute([$email, password_hash($password, PASSWORD_DEFAULT), $fullname, $slug, encryptData($_SERVER['REMOTE_ADDR'] ?? ''), OYS_DEFAULT_THEME]);
                     $userId = (int) $pdo->lastInsertId();
                     $pageId = oys_create_page($pdo, $userId, $slug, $fullname);
                     session_regenerate_id(true);
                     $_SESSION['user_id'] = $userId;
                     $_SESSION['page_id'] = $pageId;
                     unset($_SESSION['old']);
-                    oys_flash('success', 'Willkommen! Deine Seite ist live.');
+                    oys_flash('success', 'Welcome! Your page is live.');
                     sendCustomEmail($email, 'register', ['full_name' => e($fullname), 'subdomain' => e($slug)]);
                     oys_redirect('/dashboard');
                 } catch (PDOException $e) {
-                    error_log('Registrierung fehlgeschlagen: ' . $e->getMessage());
-                    oys_flash('error', 'Diese E-Mail-Adresse ist schon registriert.');
+                    error_log('Sign-up failed: ' . $e->getMessage());
+                    oys_flash('error', 'This email address is already registered.');
                 }
             }
         }
@@ -137,9 +137,9 @@ if ($path === '/login') {
         $password = (string) ($_POST['password'] ?? '');
         $loginKey = 'login:' . substr(hash('sha256', $email), 0, 40);
         if (!oys_csrf_check($_POST['csrf'] ?? null)) {
-            oys_flash('error', 'Die Sitzung ist abgelaufen. Bitte versuche es erneut.');
+            oys_flash('error', 'Your session has expired. Please try again.');
         } elseif (!oys_attempts_allowed($pdo, $loginKey, 10, 50, 900)) {
-            oys_flash('error', 'Zu viele Versuche. Bitte warte 15 Minuten.');
+            oys_flash('error', 'Too many attempts. Please wait 15 minutes.');
         } else {
             $stmt = $pdo->prepare('SELECT * FROM users WHERE email = ?');
             $stmt->execute([$email]);
@@ -153,7 +153,7 @@ if ($path === '/login') {
                 $pdo->prepare('UPDATE users SET last_ip = ? WHERE id = ?')->execute([encryptData($_SERVER['REMOTE_ADDR'] ?? ''), $user['id']]);
                 oys_redirect('/dashboard');
             }
-            oys_flash('error', 'E-Mail oder Passwort ist falsch.');
+            oys_flash('error', 'Wrong email or password.');
         }
         oys_redirect('/login');
     }
@@ -167,7 +167,7 @@ if ($path === '/login') {
 $user = oys_current_user($pdo);
 if (!$user) {
     if (strpos($path, '/dashboard/api/') === 0) {
-        oys_json(['ok' => false, 'error' => 'Bitte melde dich erneut an.'], 401);
+        oys_json(['ok' => false, 'error' => 'Please log in again.'], 401);
     }
     oys_redirect('/login');
 }
@@ -193,14 +193,14 @@ if (strpos($path, '/dashboard/api/') === 0) {
     $action = substr($path, strlen('/dashboard/api/'));
     $isPost = $method === 'POST';
     if ($isPost && !oys_csrf_check(oys_csrf_from_request())) {
-        oys_json(['ok' => false, 'error' => 'Sitzung abgelaufen – bitte lade die Seite neu.'], 419);
+        oys_json(['ok' => false, 'error' => 'Session expired – please reload the page.'], 419);
     }
     $isJsonBody = stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false;
     $raw = $isPost && $isJsonBody ? (string) file_get_contents('php://input') : '';
     $input = $raw !== '' ? json_decode($raw, true) : [];
     if (!is_array($input)) {
         // Kaputtes JSON nie als „leere Seite“ speichern
-        oys_json(['ok' => false, 'error' => 'Die Daten kamen nicht vollständig an. Bitte versuche es erneut.'], 400);
+        oys_json(['ok' => false, 'error' => 'Not all of the data arrived. Please try again.'], 400);
     }
     $requestedPage = $input['page']['id'] ?? ($input['page_id'] ?? ($_POST['page_id'] ?? ($_GET['page'] ?? null)));
     $requestedPage = is_scalar($requestedPage) && (int) $requestedPage > 0 ? (int) $requestedPage : null;
@@ -209,14 +209,14 @@ if (strpos($path, '/dashboard/api/') === 0) {
         // ein anderes Konto (Admin-Modus in einem zweiten Tab) → ablehnen statt die falsche Seite zu überschreiben
         $page = oys_load_page($pdo, $requestedPage);
         if (!$page || (int) $page['user_id'] !== $userId) {
-            oys_json(['ok' => false, 'error' => 'Diese Seite gibt es nicht mehr oder du bist inzwischen mit einem anderen Konto angemeldet. Bitte lade den Editor neu.', 'reload' => true], 409);
+            oys_json(['ok' => false, 'error' => 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', 'reload' => true], 409);
         }
         $_SESSION['page_id'] = $requestedPage;
     } else {
         $page = oys_current_page($pdo, $user);
     }
     if (in_array($action, ['save', 'address'], true) && $requestedPage === null) {
-        oys_json(['ok' => false, 'error' => 'Es fehlt die Angabe, welche Seite gemeint ist. Bitte lade den Editor neu.', 'reload' => true], 400);
+        oys_json(['ok' => false, 'error' => 'The request doesn’t say which page it’s for. Please reload the editor.', 'reload' => true], 400);
     }
 
     // Seite anlegen geht auch ohne bestehende Seite
@@ -224,7 +224,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
         $count = count(oys_user_pages($pdo, $userId));
         $max = (int) oys_config('max_pages', 3);
         if ($count >= $max && !$premium) {
-            oys_json(['ok' => false, 'error' => "Du kannst höchstens $max Seiten anlegen."]);
+            oys_json(['ok' => false, 'error' => "You can create up to $max " . ($max === 1 ? 'page.' : 'pages.')]);
         }
         $slug = oys_normalize_slug($input['slug'] ?? '');
         if ($problem = oys_slug_problem($pdo, $slug)) {
@@ -240,7 +240,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
     }
 
     if (!$page) {
-        oys_json(['ok' => false, 'error' => 'Lege zuerst eine Seite an.'], 404);
+        oys_json(['ok' => false, 'error' => 'Create a page first.'], 404);
     }
 
     switch ($action) {
@@ -284,13 +284,13 @@ if (strpos($path, '/dashboard/api/') === 0) {
         case 'save':
             if (!$isPost) break;
             if (!is_array($input['page'] ?? null) || !is_array($input['blocks'] ?? null)) {
-                oys_json(['ok' => false, 'error' => 'Die Daten kamen nicht vollständig an. Bitte versuche es erneut.'], 400);
+                oys_json(['ok' => false, 'error' => 'Not all of the data arrived. Please try again.'], 400);
             }
             try {
                 $result = oys_save_page($pdo, $page, $input, $userId, $premium);
             } catch (Throwable $e) {
-                error_log('Speichern fehlgeschlagen: ' . $e->getMessage());
-                oys_json(['ok' => false, 'error' => 'Speichern fehlgeschlagen. Bitte versuche es erneut.'], 500);
+                error_log('Saving failed: ' . $e->getMessage());
+                oys_json(['ok' => false, 'error' => 'Saving failed. Please try again.'], 500);
             }
             oys_json([
                 'ok' => true,
@@ -304,16 +304,16 @@ if (strpos($path, '/dashboard/api/') === 0) {
             if (!$isPost) break;
             $kind = (string) ($_POST['kind'] ?? '');
             if (empty($_FILES['file'])) {
-                oys_json(['ok' => false, 'error' => 'Keine Datei empfangen (evtl. zu groß für den Server).']);
+                oys_json(['ok' => false, 'error' => 'No file received (it may be too large for the server).']);
             }
             if (!oys_rate_limit($pdo, 'upload:' . $userId, 120, 3600)) {
-                oys_json(['ok' => false, 'error' => 'Sehr viele Uploads in kurzer Zeit – bitte warte etwas.']);
+                oys_json(['ok' => false, 'error' => 'Too many uploads in a short time – please wait a moment.']);
             }
             // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
             $quotaMb = $premium ? OYS_UPLOAD_QUOTA_PREMIUM_MB : OYS_UPLOAD_QUOTA_MB;
             $usedBytes = array_sum(oys_sweep_uploads($pdo, $userId, oys_user_upload_files($userId)));
             if ($usedBytes + (int) ($_FILES['file']['size'] ?? 0) > $quotaMb * 1048576) {
-                oys_json(['ok' => false, 'error' => 'Dein Speicherplatz (' . $quotaMb . ' MB) ist voll. Entferne nicht mehr benötigte Bilder, Musik oder Dateien und speichere.']);
+                oys_json(['ok' => false, 'error' => 'Your storage (' . $quotaMb . ' MB) is full. Remove images, music or files you no longer need and save.']);
             }
             $res = oys_handle_upload($_FILES['file'], $kind, $userId);
             if (isset($res['error'])) {
@@ -329,7 +329,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
                 $last = $page['slug_changed_at'] ? strtotime($page['slug_changed_at']) : 0;
                 $daysLeft = 30 - (int) floor((time() - $last) / 86400);
                 if ($last && $daysLeft > 0 && !$premium) {
-                    oys_json(['ok' => false, 'error' => "Du kannst deine Adresse erst in $daysLeft Tagen wieder ändern."]);
+                    oys_json(['ok' => false, 'error' => "You can change your address again in $daysLeft " . ($daysLeft === 1 ? 'day.' : 'days.')]);
                 }
                 if ($problem = oys_slug_problem($pdo, $slug, (int) $page['id'])) {
                     oys_json(['ok' => false, 'error' => $problem]);
@@ -344,13 +344,13 @@ if (strpos($path, '/dashboard/api/') === 0) {
             if (!$isPost) break;
             $target = oys_load_page($pdo, (int) ($input['id'] ?? 0));
             if (!$target || (int) $target['user_id'] !== $userId) {
-                oys_json(['ok' => false, 'error' => 'Seite nicht gefunden.'], 404);
+                oys_json(['ok' => false, 'error' => 'Page not found.'], 404);
             }
             if (count(oys_user_pages($pdo, $userId)) <= 1) {
-                oys_json(['ok' => false, 'error' => 'Deine letzte Seite kannst du nicht löschen.']);
+                oys_json(['ok' => false, 'error' => 'You can’t delete your last page.']);
             }
             if (($input['confirm'] ?? '') !== $target['slug']) {
-                oys_json(['ok' => false, 'error' => 'Bitte tippe zur Bestätigung die Adresse der Seite ein.']);
+                oys_json(['ok' => false, 'error' => 'To confirm, please type the page’s address.']);
             }
             oys_delete_page($pdo, $target);
             unset($_SESSION['page_id']);
@@ -374,7 +374,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
                     'email' => decryptData($m['email']),
                     'message' => decryptData($m['message']),
                     'read' => (bool) $m['is_read'],
-                    'date' => date('d.m.Y H:i', strtotime((string) $m['created_at'])),
+                    'date' => date('M j, Y, H:i', strtotime((string) $m['created_at'])),
                     'ago' => oys_time_ago($m['created_at']),
                 ];
             }
@@ -386,7 +386,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
                     'id' => (int) $b['id'],
                     'name' => decryptData($b['guest_name'] ?? ''),
                     'email' => decryptData($b['guest_email'] ?? ''),
-                    'date' => $b['booking_date'] ? date('d.m.Y', strtotime($b['booking_date'])) : '',
+                    'date' => $b['booking_date'] ? date('M j, Y', strtotime($b['booking_date'])) : '',
                     'time' => $b['booking_time'],
                     'past' => $b['booking_date'] && $b['booking_date'] < date('Y-m-d'),
                 ];
@@ -439,10 +439,10 @@ if (strpos($path, '/dashboard/api/') === 0) {
         case 'weekly-test':
             if (!$isPost) break;
             if (!oys_rate_limit($pdo, 'weeklytest:' . $userId, 3, 3600)) {
-                oys_json(['ok' => false, 'error' => 'Du kannst höchstens 3 Testberichte pro Stunde senden.']);
+                oys_json(['ok' => false, 'error' => 'You can send up to 3 test reports per hour.']);
             }
             $ok = oys_send_weekly_report($pdo, $user);
-            oys_json($ok ? ['ok' => true] : ['ok' => false, 'error' => 'Die Mail konnte nicht gesendet werden. Bitte prüfe die Mail-Einstellungen im Admin-Bereich.']);
+            oys_json($ok ? ['ok' => true] : ['ok' => false, 'error' => 'The email couldn’t be sent. Please check the mail settings in the admin area.']);
 
         case 'discord':
             if (!$isPost) break;
@@ -450,7 +450,7 @@ if (strpos($path, '/dashboard/api/') === 0) {
             $pdo->prepare('UPDATE users SET discord_id = ? WHERE id = ?')->execute([$discord !== '' ? encryptData(substr($discord, 0, 25)) : '', $userId]);
             oys_json(['ok' => true]);
     }
-    oys_json(['ok' => false, 'error' => 'Unbekannte Aktion.'], 404);
+    oys_json(['ok' => false, 'error' => 'Unknown action.'], 404);
 }
 
 // ---------------------------------------------------------------
@@ -460,42 +460,42 @@ if ($path === '/dashboard') {
     // Klassische Formulare: E-Mail und Passwort ändern
     if ($method === 'POST') {
         if (!oys_csrf_check($_POST['csrf'] ?? null)) {
-            oys_flash('error', 'Die Sitzung ist abgelaufen. Bitte versuche es erneut.');
-            oys_redirect('/dashboard#einstellungen');
+            oys_flash('error', 'Your session has expired. Please try again.');
+            oys_redirect('/dashboard#settings');
         }
         $action = $_POST['update_action'] ?? '';
         if ($action === 'email') {
             $newEmail = strtolower(trim((string) ($_POST['new_email'] ?? '')));
             if (!password_verify((string) ($_POST['current_password_email'] ?? ''), $user['password'])) {
-                oys_flash('error', 'Das aktuelle Passwort ist falsch.');
+                oys_flash('error', 'Your current password is incorrect.');
             } elseif (!filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
-                oys_flash('error', 'Bitte gib eine gültige E-Mail-Adresse an.');
+                oys_flash('error', 'Please enter a valid email address.');
             } elseif ($newEmail === strtolower($user['email'])) {
-                oys_flash('error', 'Das ist bereits deine E-Mail-Adresse.');
+                oys_flash('error', 'That’s already your email address.');
             } else {
                 $check = $pdo->prepare('SELECT id FROM users WHERE email = ? AND id <> ?');
                 $check->execute([$newEmail, $userId]);
                 if ($check->fetch()) {
-                    oys_flash('error', 'Diese E-Mail-Adresse wird schon verwendet.');
+                    oys_flash('error', 'This email address is already in use.');
                 } else {
                     $pdo->prepare('UPDATE users SET email = ? WHERE id = ?')->execute([$newEmail, $userId]);
-                    oys_flash('success', 'E-Mail-Adresse geändert.');
+                    oys_flash('success', 'Email address changed.');
                 }
             }
         } elseif ($action === 'password') {
             $new = (string) ($_POST['new_password'] ?? '');
             if ($new !== (string) ($_POST['confirm_new_password'] ?? '')) {
-                oys_flash('error', 'Die neuen Passwörter stimmen nicht überein.');
+                oys_flash('error', 'The new passwords don’t match.');
             } elseif (strlen($new) < 8) {
-                oys_flash('error', 'Das neue Passwort muss mindestens 8 Zeichen lang sein.');
+                oys_flash('error', 'Your new password must be at least 8 characters long.');
             } elseif (!password_verify((string) ($_POST['current_password_pwd'] ?? ''), $user['password'])) {
-                oys_flash('error', 'Das aktuelle Passwort ist falsch.');
+                oys_flash('error', 'Your current password is incorrect.');
             } else {
                 $pdo->prepare('UPDATE users SET password = ? WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), $userId]);
-                oys_flash('success', 'Passwort geändert.');
+                oys_flash('success', 'Password changed.');
             }
         }
-        oys_redirect('/dashboard#einstellungen');
+        oys_redirect('/dashboard#settings');
     }
 
     $page = oys_current_page($pdo, $user, $_GET['page'] ?? null);

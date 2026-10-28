@@ -60,21 +60,21 @@ function oys_wants_json(): bool
 function oys_render_gate(array $page, array $block, string $kind, ?string $error = null): string
 {
     $title = ($block['data']['title'] ?? '') ?: 'Link';
-    $back = '<a class="oys-back" href="' . e(oys_page_url($page)) . '">' . oys_ui_icon('left') . ' Zurück zu ' . e($page['title'] ?: $page['slug']) . '</a>';
+    $back = '<a class="oys-back" href="' . e(oys_page_url($page)) . '">' . oys_ui_icon('left') . ' Back to ' . e($page['title'] ?: $page['slug']) . '</a>';
     if ($kind === 'age') {
         $body = '<div class="oys-card">' . $back
-            . '<div class="oys-modal-icon" style="margin:0 0 12px">18+</div><h1>Ab 18 Jahren</h1>'
-            . '<p>„' . e($title) . '“ ist nur für Erwachsene. Bist du mindestens 18 Jahre alt?</p>'
+            . '<div class="oys-modal-icon" style="margin:0 0 12px">18+</div><h1>Adults only</h1>'
+            . '<p>“' . e($title) . '” is for adults only. Are you at least 18 years old?</p>'
             . '<form method="post" action="/_/go/' . (int) $block['id'] . '"><input type="hidden" name="age" value="yes">'
-            . '<button class="oys-contact-send" type="submit"><span>Ja, ich bin 18 oder älter</span></button></form></div>';
+            . '<button class="oys-contact-send" type="submit"><span>Yes, I’m 18 or older</span></button></form></div>';
     } else {
         $body = '<form class="oys-card oys-contact" method="post" action="/_/go/' . (int) $block['id'] . '">' . $back
-            . '<h1>Geschützter Link</h1><p>„' . e($title) . '“ ist mit einem Passwort geschützt.</p>'
+            . '<h1>Protected link</h1><p>“' . e($title) . '” is password protected.</p>'
             . ($error ? '<div class="oys-alert err">' . e($error) . '</div>' : '')
-            . '<label class="oys-field"><span>Passwort</span><input type="password" name="pw" required autofocus></label>'
-            . '<button class="oys-contact-send" type="submit">' . oys_ui_icon('lock') . '<span>Entsperren</span></button></form>';
+            . '<label class="oys-field"><span>Password</span><input type="password" name="pw" required autofocus></label>'
+            . '<button class="oys-contact-send" type="submit">' . oys_ui_icon('lock') . '<span>Unlock</span></button></form>';
     }
-    return oys_render_simple($page, 'Geschützter Link', $body);
+    return oys_render_simple($page, 'Protected link', $body);
 }
 
 // --- Aufruf zählen ---
@@ -112,16 +112,16 @@ if ($path === '/_/c' && $method === 'POST') {
 if ($path === '/_/unlock' && $method === 'POST') {
     $found = oys_public_block($pdo, $_POST['b'] ?? '');
     if (!$found || !$found['block']['active'] || $found['block']['protection'] !== 'password') {
-        oys_json(['ok' => false, 'error' => 'Dieser Link ist gerade nicht verfügbar.'], 404);
+        oys_json(['ok' => false, 'error' => 'This link isn’t available right now.'], 404);
     }
     $block = $found['block'];
     if (!oys_attempts_allowed($pdo, 'pw:' . $block['id'], 10, 200, 900)) {
-        oys_json(['ok' => false, 'error' => 'Zu viele Versuche. Bitte warte ein paar Minuten.'], 429);
+        oys_json(['ok' => false, 'error' => 'Too many attempts. Please wait a few minutes.'], 429);
     }
     $pw = (string) ($_POST['pw'] ?? '');
     if ($pw === '' || !password_verify($pw, (string) $block['password_hash'])) {
         oys_attempt_failed($pdo, 'pw:' . $block['id'], 900);
-        oys_json(['ok' => false, 'error' => 'Das Passwort stimmt nicht.']);
+        oys_json(['ok' => false, 'error' => 'Wrong password.']);
     }
     oys_record_click($pdo, (int) $found['page']['id'], (int) $block['id']);
     oys_json(['ok' => true, 'url' => oys_block_target($block, $found['page'])]);
@@ -161,12 +161,12 @@ if (preg_match('#^/_/go/(\d+)$#', $path, $m)) {
             exit;
         }
         if (!oys_attempts_allowed($pdo, 'pw:' . $block['id'], 10, 200, 900)) {
-            echo oys_render_gate($page, $block, 'password', 'Zu viele Versuche. Bitte warte ein paar Minuten.');
+            echo oys_render_gate($page, $block, 'password', 'Too many attempts. Please wait a few minutes.');
             exit;
         }
         if (!password_verify((string) ($_POST['pw'] ?? ''), (string) $block['password_hash'])) {
             oys_attempt_failed($pdo, 'pw:' . $block['id'], 900);
-            echo oys_render_gate($page, $block, 'password', 'Das Passwort stimmt nicht.');
+            echo oys_render_gate($page, $block, 'password', 'Wrong password.');
             exit;
         }
     }
@@ -181,7 +181,7 @@ if ($path === '/_/contact' && $method === 'POST') {
     $found = oys_public_block($pdo, $_POST['b'] ?? '');
     $json = oys_wants_json();
     if (!$found || $found['block']['type'] !== 'contact' || !$found['block']['active']) {
-        $json ? oys_json(['ok' => false, 'error' => 'Dieses Formular ist nicht mehr verfügbar.'], 404) : oys_redirect(oys_main_url('/'));
+        $json ? oys_json(['ok' => false, 'error' => 'This form is no longer available.'], 404) : oys_redirect(oys_main_url('/'));
     }
     $page = $found['page'];
     $blockId = (string) $found['block']['id'];
@@ -192,7 +192,7 @@ if ($path === '/_/contact' && $method === 'POST') {
     if ($json) {
         oys_json($ok ? ['ok' => true] : ['ok' => false, 'error' => $error]);
     }
-    $back = oys_page_url($page) . ($ok ? '?sent=' . $blockId : '') . '#kontakt-' . $blockId;
+    $back = oys_page_url($page) . ($ok ? '?sent=' . $blockId : '') . '#contact-' . $blockId;
     oys_redirect($back);
 }
 
@@ -217,11 +217,11 @@ if ($path === '/_/cron/weekly-report') {
     $secret = (string) oys_config('cron_secret', '');
     if ($secret === '' || !hash_equals($secret, (string) ($_GET['key'] ?? ''))) {
         http_response_code(403);
-        exit('Verboten');
+        exit('Forbidden');
     }
     header('Content-Type: text/plain; charset=utf-8');
     $result = oys_run_weekly_reports($pdo);
-    exit('Wochenberichte gesendet: ' . $result['sent'] . ', fehlgeschlagen: ' . $result['failed']);
+    exit('Weekly reports sent: ' . $result['sent'] . ', failed: ' . $result['failed']);
 }
 
 http_response_code(404);

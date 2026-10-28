@@ -65,16 +65,16 @@ function oys_weekly_report_html(array $report): string
         if ($p['prev_views'] > 0) {
             $pct = (int) round(($p['views'] - $p['prev_views']) / $p['prev_views'] * 100);
             $color = $pct >= 0 ? '#34d399' : '#f87171';
-            $trend = '<span style="color:' . $color . ';font-size:12px;font-weight:bold;"> ' . ($pct >= 0 ? '+' : '') . $pct . '&nbsp;%</span>';
+            $trend = '<span style="color:' . $color . ';font-size:12px;font-weight:bold;"> ' . ($pct >= 0 ? '+' : '') . $pct . '%</span>';
         }
         $best = $p['best']
-            ? '🏆 Bester Link: <strong style="color:#ffffff;">' . e($p['best']['title']) . '</strong> (' . (int) $p['best']['clicks'] . ' Klicks)'
-            : 'Diese Woche wurde noch kein Link geklickt.';
+            ? '🏆 Best link: <strong style="color:#ffffff;">' . e($p['best']['title']) . '</strong> (' . (int) $p['best']['clicks'] . ((int) $p['best']['clicks'] === 1 ? ' click)' : ' clicks)')
+            : 'No links were clicked this week.';
         $rows .= '<div style="background-color:#0a0a0a;border:1px solid #27272a;border-radius:12px;padding:20px;margin:0 auto 16px auto;max-width:460px;text-align:left;">'
             . '<p style="margin:0 0 12px 0;font-size:14px;color:#818cf8;font-weight:bold;">' . e(oys_page_display_url($p['page'])) . '</p>'
             . '<table role="presentation" width="100%" style="border-collapse:collapse;"><tr>'
-            . '<td style="padding:0;width:50%;"><div style="font-size:26px;font-weight:bold;color:#ffffff;">' . number_format($p['views'], 0, ',', '.') . $trend . '</div><div style="font-size:12px;color:#9ca3af;">Aufrufe</div></td>'
-            . '<td style="padding:0;width:50%;"><div style="font-size:26px;font-weight:bold;color:#ffffff;">' . number_format($p['clicks'], 0, ',', '.') . '</div><div style="font-size:12px;color:#9ca3af;">Klicks</div></td>'
+            . '<td style="padding:0;width:50%;"><div style="font-size:26px;font-weight:bold;color:#ffffff;">' . number_format($p['views']) . $trend . '</div><div style="font-size:12px;color:#9ca3af;">Views</div></td>'
+            . '<td style="padding:0;width:50%;"><div style="font-size:26px;font-weight:bold;color:#ffffff;">' . number_format($p['clicks']) . '</div><div style="font-size:12px;color:#9ca3af;">Clicks</div></td>'
             . '</tr></table>'
             . '<p style="margin:14px 0 0 0;font-size:13px;color:#9ca3af;">' . $best . '</p></div>';
     }
@@ -87,15 +87,15 @@ function oys_send_weekly_report(PDO $pdo, array $user): bool
     if (!$report['pages']) {
         return false;
     }
-    $period = $report['from']->format('d.m.') . ' – ' . $report['to']->format('d.m.Y');
+    $period = $report['from']->format('M j') . ' – ' . $report['to']->format('M j, Y');
     return sendCustomEmail($user['email'], 'weekly_report', [
-        'full_name' => e($user['full_name'] ?: 'du'),
+        'full_name' => e($user['full_name'] ?: 'there'),
         'period' => e($period),
-        'views' => number_format($report['views'], 0, ',', '.'),
-        'clicks' => number_format($report['clicks'], 0, ',', '.'),
+        'views' => number_format($report['views']),
+        'clicks' => number_format($report['clicks']),
         'report_html' => oys_weekly_report_html($report),
         'dashboard_url' => e(oys_main_url('/dashboard')),
-    ], 'Dein Wochenbericht: ' . number_format($report['views'], 0, ',', '.') . ' Aufrufe, ' . number_format($report['clicks'], 0, ',', '.') . ' Klicks');
+    ], 'Your weekly report: ' . number_format($report['views']) . ($report['views'] === 1 ? ' view, ' : ' views, ') . number_format($report['clicks']) . ($report['clicks'] === 1 ? ' click' : ' clicks'));
 }
 
 // Für den Cronjob: schickt allen Nutzern mit Wochenbericht ihre Mail (max. einmal pro Tag)

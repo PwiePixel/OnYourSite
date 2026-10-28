@@ -95,7 +95,7 @@ function oys_stats(PDO $pdo, array $page, int $days): array
                     'id' => $b['id'],
                     'item' => $item['p'],
                     'title' => $brands[$item['p']]['name'],
-                    'kind' => 'Social-Icon',
+                    'kind' => 'Social icon',
                     'icon' => 'brand:' . $item['p'],
                     'clicks' => $clicksBy[$b['id'] . '|' . $item['p']] ?? 0,
                     'total' => null,
