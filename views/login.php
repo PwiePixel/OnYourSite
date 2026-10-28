@@ -26,12 +26,16 @@ unset($_SESSION['error'], $_SESSION['success']);
             }
         }
     </script>
+    <style>
+        /* iOS zoomt bei Eingaben unter 16px ungefragt in die Seite */
+        @media (max-width: 639px) { input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; } }
+    </style>
 </head>
-<body class="bg-background text-gray-300 font-sans min-h-screen flex flex-col items-center justify-center relative overflow-hidden selection:bg-brand-500/30">
+<body class="bg-background text-gray-300 font-sans min-h-screen flex flex-col items-center justify-center relative overflow-x-hidden selection:bg-brand-500/30 py-16">
 
     <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-white/5 rounded-full blur-[100px] -z-10 pointer-events-none"></div>
 
-    <a href="/" class="absolute top-8 left-8 text-gray-500 hover:text-white flex items-center gap-2 transition-colors">
+    <a href="/" class="absolute top-6 left-6 py-2 text-gray-500 hover:text-white flex items-center gap-2 transition-colors">
         <i class='bx bx-left-arrow-alt text-2xl'></i> Back to home
     </a>
 

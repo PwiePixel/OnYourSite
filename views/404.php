@@ -112,11 +112,11 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
                 </a>
             </div>
 			<div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
-                <a href="/imprint" class="hover:text-white transition-colors">Legal notice</a>
+                <a href="/imprint" class="inline-block py-2 hover:text-white transition-colors">Legal notice</a>
                 <span>&bull;</span>
-                <a href="/privacy" class="hover:text-white transition-colors">Privacy</a>
+                <a href="/privacy" class="inline-block py-2 hover:text-white transition-colors">Privacy</a>
                 <span>&bull;</span>
-                <a href="/terms" class="hover:text-white transition-colors">Terms</a>
+                <a href="/terms" class="inline-block py-2 hover:text-white transition-colors">Terms</a>
             </div>
             <p class="text-gray-500 text-sm">
                 &copy; <?php echo date("Y"); ?> OnYourSite. Made with <i class='bx bxs-heart text-red-500 mx-1'></i> for the community.

@@ -71,21 +71,22 @@ unset($_SESSION['success'], $_SESSION['error']);
     <?php endif; ?>
 
     <div class="flex-1 flex overflow-hidden">
-        <aside class="w-16 sm:w-20 lg:w-64 border-r border-bordercolor bg-card flex flex-col justify-between py-6 transition-all z-20 shrink-0">
+        <aside class="app-rail w-16 sm:w-20 lg:w-64 border-r border-bordercolor bg-card flex flex-col justify-between py-6 transition-all z-20 shrink-0">
             <div>
-                <a href="/" class="px-3 sm:px-6 mb-8 flex items-center justify-center lg:justify-start gap-2 transition-transform hover:scale-105">
+                <a href="/" class="rail-logo px-3 sm:px-6 mb-8 flex items-center justify-center lg:justify-start gap-2 transition-transform hover:scale-105">
                     <i class='bx bx-hive text-3xl text-brand-500'></i><span class="font-bold text-xl text-white tracking-tight hidden lg:block">OnYourSite</span>
                 </a>
-                <div class="px-4 mb-2 hidden lg:block"><p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Menu</p></div>
+                <div class="rail-label px-4 mb-2 hidden lg:block"><p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Menu</p></div>
                 <nav class="space-y-1 px-2 sm:px-3" id="mainNav">
                     <button type="button" data-tab="content" class="nav-btn"><i class='bx bx-layout text-xl'></i> <span class="hidden lg:block text-sm">Content</span></button>
                     <button type="button" data-tab="design" class="nav-btn"><i class='bx bx-palette text-xl'></i> <span class="hidden lg:block text-sm">Design</span></button>
                     <button type="button" data-tab="stats" class="nav-btn"><i class='bx bx-bar-chart-alt-2 text-xl'></i> <span class="hidden lg:block text-sm">Stats</span></button>
                     <button type="button" data-tab="messages" class="nav-btn"><i class='bx bx-envelope text-xl'></i> <span class="hidden lg:block text-sm">Messages</span><span class="nav-badge" id="navMsgBadge" hidden>0</span></button>
                     <button type="button" data-tab="settings" class="nav-btn"><i class='bx bx-cog text-xl'></i> <span class="hidden lg:block text-sm">Settings</span></button>
+                    <button type="button" id="navPreviewBtn" class="nav-btn nav-preview"><i class='bx bx-mobile-alt text-xl'></i> <span class="hidden lg:block text-sm">Preview</span></button>
                 </nav>
             </div>
-            <div class="px-2 sm:px-3 space-y-1">
+            <div class="rail-foot px-2 sm:px-3 space-y-1">
                 <?php if (!empty($user_data['is_admin'])): ?>
                 <a href="/admin" class="flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-white transition-colors"><i class='bx bx-shield-quarter text-xl'></i> <span class="hidden lg:block text-sm">Admin</span></a>
                 <?php endif; ?>
@@ -159,6 +160,13 @@ unset($_SESSION['success'], $_SESSION['error']);
                                     <input type="password" name="current_password_pwd" required placeholder="Current password" class="field">
                                     <button type="submit" class="btn-secondary w-full justify-center">Change password</button>
                                 </form>
+                            </div>
+                            <!-- Auf dem Handy gibt es keine Seitenleiste: Admin und Abmelden hier -->
+                            <div class="sm:hidden mt-6 grid gap-3">
+                                <?php if (!empty($user_data['is_admin'])): ?>
+                                <a href="/admin" class="btn-secondary w-full justify-center"><i class='bx bx-shield-quarter'></i> Admin panel</a>
+                                <?php endif; ?>
+                                <form method="post" action="/logout" class="m-0"><?= oys_csrf_field() ?><button type="submit" class="btn-secondary w-full justify-center text-red-400"><i class='bx bx-log-out'></i> Log out</button></form>
                             </div>
                         </section>
                     </div>

@@ -585,6 +585,9 @@ if (file_exists($smtp_file)) {
         function closePwdModal() { document.getElementById('pwdModal').classList.add('hidden'); }
     </script>
     <style>
+        @media (max-width: 639px) { input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; } }
+    </style>
+    <style>
         .custom-scrollbar::-webkit-scrollbar { width: 5px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 10px; }

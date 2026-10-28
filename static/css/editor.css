@@ -356,3 +356,32 @@ input[type=range].range { width: 100%; accent-color: var(--e-brand); }
 .page-row b { color: #fff; font-size: 14px; display: block; }
 .page-row small { color: var(--e-muted); font-size: 12px; }
 .css-editor { font-family: 'Fira Code', ui-monospace, monospace; font-size: 13px; color: #a5b4fc; background: #000; min-height: 160px; }
+
+/* ---------- Handy: Navigation unten, Menüs in voller Breite, keine Zoom-Sprünge ---------- */
+/* Hinweise je nach Eingabe: Maus (Drüberfahren) oder Finger (Antippen) */
+.touch-only { display: none; }
+@media (hover: none) { .hover-only { display: none; } .touch-only { display: inline; } }
+.nav-preview { display: none !important; }
+@supports (height: 100dvh) { body.h-screen { height: 100dvh; } }
+@media (max-width: 639px) {
+  aside.app-rail {
+    position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; width: auto; padding: 0 0 env(safe-area-inset-bottom);
+    flex-direction: row; border-right-width: 0; border-top: 1px solid var(--e-border);
+    background: rgba(10, 10, 12, .92); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  }
+  aside.app-rail > div:first-child { width: 100%; }
+  aside.app-rail .rail-logo, aside.app-rail .rail-label, aside.app-rail .rail-foot { display: none; }
+  #mainNav { display: flex; gap: 2px; padding: 4px 6px; }
+  #mainNav > .nav-btn { margin: 0 !important; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 3px; height: 54px; padding: 6px 2px; border-radius: 12px; }
+  #mainNav > .nav-btn > span.hidden { display: block; font-size: 10.5px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  #mainNav .nav-badge { top: 3px; right: calc(50% - 24px); }
+  #editorScroll { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  /* „Preview“ ist hier ein Punkt der Leiste statt eines schwebenden Knopfs */
+  .mobile-preview-btn { display: none !important; }
+  #mainNav > .nav-preview { display: flex !important; color: #fff; }
+  #mainNav > .nav-preview.hidden { display: none !important; }
+  #bellMenu, #pageMenu { position: fixed; top: 60px; left: 8px; right: 8px; width: auto; max-height: calc(100vh - 160px); overflow-y: auto; }
+  /* iOS zoomt bei Eingaben unter 16px ungefragt in die Seite */
+  .field, #tab-settings input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), .modal input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), .modal select, .modal textarea { font-size: 16px; }
+  .modal-body, .modal-box { overscroll-behavior: contain; }
+}

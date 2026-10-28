@@ -79,9 +79,12 @@ $themes = oys_themes();
         .hero-screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: #0b0b0d; }
         .hero-screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; transition: opacity .6s ease; pointer-events: none; }
         .hero-screen iframe.on { opacity: 1; pointer-events: auto; }
-        .hero-dots { display: flex; gap: 7px; justify-content: center; margin-top: 18px; position: relative; }
-        .hero-dots button { width: 8px; height: 8px; border-radius: 99px; background: #3f3f46; transition: all .3s; }
-        .hero-dots button.on { width: 26px; background: var(--dot, #ff7a1a); }
+        .hero-dots { display: flex; gap: 0; justify-content: center; margin-top: 8px; position: relative; }
+        /* große Tippfläche, kleiner sichtbarer Punkt */
+        .hero-dots button { position: relative; width: 32px; height: 32px; background: none; transition: width .3s; }
+        .hero-dots button::before { content: ''; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 99px; background: #3f3f46; transition: all .3s; }
+        .hero-dots button.on { width: 40px; }
+        .hero-dots button.on::before { width: 26px; background: var(--dot, #ff7a1a); }
         .hero-caption { margin-top: 10px; font-size: 13px; color: #a1a1aa; position: relative; min-height: 20px; }
 
         /* Leiste mit allen Designs */
@@ -217,7 +220,7 @@ $themes = oys_themes();
                 <button type="button" class="theme-tile" data-theme="<?= e($key) ?>">
                     <div class="mini-frame"><?= oys_mini_html($key) ?></div>
                     <div class="mt-3 px-1 flex items-center justify-between gap-2">
-                        <span><b class="text-white text-sm"><?= e($t['name']) ?></b><?php if ($key === OYS_DEFAULT_THEME): ?> <span class="text-[10px] font-bold uppercase tracking-wide text-[#ff7a1a]">Default</span><?php elseif ($t['group'] === 'special'): ?> <span class="text-[10px] font-bold uppercase tracking-wide text-brand-400">Template</span><?php endif; ?>
+                        <span><b class="text-white text-sm"><?= e($t['name']) ?></b><?php if ($key === OYS_DEFAULT_THEME): ?> <span class="text-[11px] font-bold uppercase tracking-wide text-[#ff7a1a]">Default</span><?php elseif ($t['group'] === 'special'): ?> <span class="text-[11px] font-bold uppercase tracking-wide text-brand-400">Template</span><?php endif; ?>
                             <small class="block text-xs text-gray-500"><?= e($t['desc']) ?></small></span>
                         <span class="w-3 h-3 rounded-full shrink-0" style="background: <?= e($t['accent']) ?>"></span>
                     </div>
@@ -273,7 +276,7 @@ $themes = oys_themes();
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
                     <h3 class="text-lg font-bold text-white mb-2">Can I change the theme and layout later?</h3>
-                    <p class="text-gray-400 text-sm leading-relaxed">Anytime. Hover over a theme in the editor and you instantly see it in the phone preview – it only goes live when you save.</p>
+                    <p class="text-gray-400 text-sm leading-relaxed">Anytime. Hover over or tap a theme in the editor and you instantly see it in the phone preview – it only goes live when you save.</p>
                 </div>
                 <div class="bg-card border border-bordercolor p-6 rounded-2xl">
                     <h3 class="text-lg font-bold text-white mb-2">Can I change my address?</h3>
@@ -313,11 +316,11 @@ $themes = oys_themes();
             </div>
 
             <div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
-                <a href="/imprint" class="hover:text-white transition-colors">Legal notice</a>
+                <a href="/imprint" class="inline-block py-2 hover:text-white transition-colors">Legal notice</a>
                 <span>&bull;</span>
-                <a href="/privacy" class="hover:text-white transition-colors">Privacy</a>
+                <a href="/privacy" class="inline-block py-2 hover:text-white transition-colors">Privacy</a>
                 <span>&bull;</span>
-                <a href="/terms" class="hover:text-white transition-colors">Terms</a>
+                <a href="/terms" class="inline-block py-2 hover:text-white transition-colors">Terms</a>
             </div>
 
             <p class="text-gray-500 text-sm">
