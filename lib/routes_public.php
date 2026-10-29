@@ -196,6 +196,11 @@ if ($path === '/_/contact' && $method === 'POST') {
     oys_redirect($back);
 }
 
+// --- Vorschaubild für geteilte Links (Discord, WhatsApp, X …) ---
+if (preg_match('#^/_/og/(\d+)-([0-9a-f]{12})\.png$#', $path, $m)) {
+    oys_og_serve($pdo, (int) $m[1], $m[2]);
+}
+
 // --- Demo-Seiten für die Startseite ---
 if (preg_match('#^/_/demo/([a-z0-9-]+)$#', $path, $m)) {
     require_once __DIR__ . '/demo.php';

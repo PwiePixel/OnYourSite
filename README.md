@@ -21,6 +21,7 @@ Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in P
 | **Entrance with music** | Visitors tap to enter, the page opens with an animation and your music starts. |
 | **Countdown & gallery** | Count down to your next release or show several images to swipe through. |
 | **Contact form** | Visitors message you directly – with a spam filter (invisible trap, timing check, content filter) and a heads-up via the bell. |
+| **QR code & sharing** | Every page has a QR code (download as PNG or SVG) and a share window with copy link, WhatsApp, X and Discord. Visitors get a share button on the page (can be switched off), and shared links show a preview card with picture, name and address in the colors of the page. |
 | **Updates & roadmap** | A public page at `/updates` with the full changelog and a roadmap: what you’re working on now, what’s up next, what comes later and what has shipped. Progress bars come from real, ticked-off tasks – no made-up percentages. New updates can be announced in your Discord automatically. |
 
 Everything you already had stays: the built-in booking calendar (`/kalender`), file download (PDF/vcf), SEO settings, custom CSS, “Hide branding” (premium), Discord ID, and the admin panel with “Log in as user” and newsletter.
@@ -74,10 +75,12 @@ lib/
   themes.php           30 themes and 13 layouts (names, colors)
   blocks.php           Block types, validation, YouTube/Twitch/Spotify, scheduling
   updates.php          Updates, roadmap, Markdown and Discord (webhook or bot)
+  share.php            Preview card for shared links (/_/og/…png, cached in static/uploads/og/)
   pages.php, stats.php, spam.php, uploads.php, report.php, social.php, demo.php
 views/                 Home page, editor (dashboard.php), login, admin, calendar, updates …
 static/css/            page.css (structure & layouts), themes.css (30 themes), editor.css
-static/js/             page.js (profile page), editor.js (editor)
+static/js/             page.js (profile page), editor.js (editor), share.js (QR code & sharing)
+static/vendor/qrcode/  QR code generator (qrcode-generator, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 cron/weekly_report.php Weekly report
 ```

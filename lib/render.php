@@ -23,6 +23,10 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     $description = $settings['seo']['description'] ?: mb_substr(trim(preg_replace('/\s+/u', ' ', (string) ($page['bio'] ?? ''))), 0, 160);
     $canonical = isset($page['slug']) ? oys_page_url($page) : '';
     $avatarUrl = !empty($page['avatar']) ? oys_upload_url($page['avatar']) : '';
+    // Vorschaubild für geteilte Links: eigene Karte, sonst das Profilbild
+    $ogCard = !$isPreview && !empty($page['id']) && $canonical !== '' && oys_og_supported();
+    $ogImage = $ogCard ? oys_og_url($page) : ($avatarUrl ? oys_main_url($avatarUrl) : '');
+    $shareTitle = $title !== '' ? $title : (string) ($page['slug'] ?? '');
 
     // Sichtbare Blöcke bestimmen
     $visible = [];
@@ -81,6 +85,7 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
         'volume' => $entrance['volume'] / 100,
         'loop' => (bool) $entrance['loop'],
         'hosts' => array_values(array_unique(array_filter([$opts['host'] ?? '', oys_base_host()]))),
+        'share' => $settings['share_button'] && $canonical !== '' && $mode !== 'demo' ? ['url' => $canonical, 'title' => $shareTitle, 'js' => oys_asset('/static/js/share.js'), 'qr' => oys_asset('/static/vendor/qrcode/qrcode.js')] : null,
     ];
 
     ob_start();
@@ -98,7 +103,13 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
 <meta property="og:type" content="profile">
 <?php if ($canonical): ?><meta property="og:url" content="<?= e($canonical) ?>"><?php endif; ?>
 <?php if ($description !== ''): ?><meta property="og:description" content="<?= e($description) ?>"><?php endif; ?>
-<?php if ($avatarUrl): ?><meta property="og:image" content="<?= e(oys_main_url($avatarUrl)) ?>"><?php endif; ?>
+<?php if ($ogImage !== ''): ?><meta property="og:image" content="<?= e($ogImage) ?>">
+<?php if ($ogCard): ?><meta property="og:image:width" content="<?= OYS_OG_WIDTH ?>"><meta property="og:image:height" content="<?= OYS_OG_HEIGHT ?>"><meta property="og:image:alt" content="<?= e($shareTitle) ?> on OnYourSite"><?php endif; ?>
+<?php endif; ?>
+<meta name="twitter:card" content="<?= $ogCard ? 'summary_large_image' : 'summary' ?>">
+<meta name="twitter:title" content="<?= e($seoTitle) ?>">
+<?php if ($description !== ''): ?><meta name="twitter:description" content="<?= e($description) ?>"><?php endif; ?>
+<?php if ($ogImage !== ''): ?><meta name="twitter:image" content="<?= e($ogImage) ?>"><?php endif; ?>
 <meta name="theme-color" content="<?= e($themeMeta['dark'] ? '#0b0b0d' : '#ffffff') ?>">
 <link rel="icon" type="image/png" href="/static/images/favicon.png">
 <link rel="preload" href="/static/fonts/<?= e($settings['font'] ?: $themeMeta['font']) ?>.woff2" as="font" type="font/woff2" crossorigin>
@@ -162,6 +173,21 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     <div class="oys-entrance-cta"><?= $music ? oys_ui_icon('volume') : oys_ui_icon('sparkle') ?><span><?= e($entrance['text']) ?></span></div>
   </div>
 </div>
+<?php endif; ?>
+<?php if ($config['share']): $shareLinks = oys_share_links($canonical, $shareTitle); ?>
+<button type="button" class="oys-share" aria-label="Share this page" title="Share"><?= oys_ui_icon('share') ?></button>
+<template id="oys-share-tpl">
+  <h2 id="oys-modal-title">Share this page</h2>
+  <div class="oys-share-qr"><span class="oys-share-wait"></span></div>
+  <p class="oys-share-url"><?= e(preg_replace('#^https?://#', '', $canonical)) ?></p>
+  <button type="button" class="oys-btn" data-share="copy"><?= oys_ui_icon('link') ?><span>Copy link</span></button>
+  <div class="oys-share-row">
+    <a class="oys-btn ghost" href="<?= e($shareLinks['whatsapp']) ?>" target="_blank" rel="noopener"><?= oys_brand_svg('whatsapp') ?><span>WhatsApp</span></a>
+    <a class="oys-btn ghost" href="<?= e($shareLinks['x']) ?>" target="_blank" rel="noopener"><?= oys_brand_svg('x') ?><span>X</span></a>
+    <button type="button" class="oys-btn ghost" data-share="discord"><?= oys_brand_svg('discord') ?><span>Discord</span></button>
+  </div>
+  <button type="button" class="oys-btn ghost" data-share="native" hidden><?= oys_ui_icon('share') ?><span>More options</span></button>
+</template>
 <?php endif; ?>
 <?php if ($music && $showEntrance): ?>
 <audio id="oys-audio" src="<?= e($music) ?>" preload="none"<?= $entrance['loop'] ? ' loop' : '' ?>></audio>

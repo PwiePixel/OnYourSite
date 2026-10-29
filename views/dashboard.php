@@ -28,6 +28,7 @@ $editorData = [
     'scheme' => oys_scheme(),
     'timezone' => oys_config('timezone', 'Europe/Berlin'),
     'uploadLimitMb' => oys_upload_limit_mb(),
+    'qrJs' => oys_asset('/static/vendor/qrcode/qrcode.js'),
     'slugDaysLeft' => $page && $page['slug_changed_at'] && !$has_premium_access ? max(0, 30 - (int) floor((time() - strtotime($page['slug_changed_at'])) / 86400)) : 0,
     'user' => [
         'name' => $user_data['full_name'] ?? '',
@@ -114,6 +115,9 @@ unset($_SESSION['success'], $_SESSION['error']);
                         </button>
                         <div id="bellMenu" class="dropdown hidden w-80 right-0"></div>
                     </div>
+                    <button type="button" id="shareBtn" data-action="share"<?= $page ? '' : ' style="display:none"' ?> class="h-9 px-2.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-bordercolor flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors" aria-label="Share your page" title="Share your page">
+                        <i class='bx bx-share-alt text-xl'></i><span class="hidden xl:inline text-sm">Share</span>
+                    </button>
                     <a id="viewPageLink" href="#" target="_blank" rel="noopener"<?= $page ? '' : ' style="display:none"' ?> class="text-sm text-gray-400 hover:text-brand-400 hidden sm:flex items-center gap-1.5 transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-bordercolor hover:border-brand-500/30 max-w-[220px]">
                         <span class="truncate" id="viewPageLabel"></span> <i class='bx bx-link-external shrink-0'></i>
                     </a>
@@ -221,6 +225,7 @@ unset($_SESSION['success'], $_SESSION['error']);
     <?php if ($flashSuccess || $flashError): ?>
     <script>window.OYS_FLASH = <?= json_encode(['success' => $flashSuccess, 'error' => $flashError], JSON_HEX_TAG | JSON_UNESCAPED_UNICODE) ?>;</script>
     <?php endif; ?>
+    <script src="<?= e(oys_asset('/static/js/share.js')) ?>"></script>
     <script src="<?= e(oys_asset('/static/js/editor.js')) ?>"></script>
 </body>
 </html>

@@ -622,6 +622,7 @@
         api('notifications-read', {}).then(function () { loadNotifications(true); });
         break;
       case 'open-messages': closeDropdowns(); switchTab('messages'); break;
+      case 'share': openShareModal(); break;
     }
   }
 
@@ -661,6 +662,8 @@
   // ================================================================
   function openModal(title, bodyHtml, footHtml, onMount) {
     var box = $('#modalBox');
+    shareOpen = null;
+    box.classList.remove('wide');
     box.innerHTML = '<div class="modal-head"><h3>' + esc(title) + '</h3><button type="button" class="icon-btn" data-close><i class="bx bx-x"></i></button></div>' +
       '<div class="modal-body">' + bodyHtml + '</div>' + (footHtml ? '<div class="modal-foot">' + footHtml + '</div>' : '');
     $('#modal').classList.remove('hidden');
@@ -668,7 +671,7 @@
     var first = $('input, textarea', box);
     if (first) setTimeout(function () { first.focus(); }, 40);
   }
-  function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; }
+  function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; $('#modalBox').classList.remove('wide'); shareOpen = null; }
   $('#modal').addEventListener('click', function (ev) {
     if (ev.target.id === 'modal' || ev.target.closest('[data-close]')) closeModal();
   });
@@ -1774,6 +1777,66 @@
   // ================================================================
   // Tab: Einstellungen
   // ================================================================
+  // ================================================================
+  // Teilen: QR-Code (PNG/SVG), Link kopieren, WhatsApp, X, Discord
+  // ================================================================
+  var X_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 2H22l-7.6 8.7L23 22h-6.8l-5.3-6.9L4.8 22H1.7l8.1-9.3L1 2h7l4.8 6.3zm-1.2 18h1.7L7.4 3.9H5.6z"/></svg>';
+  var shareOpen = null; // { url, title } solange das Teilen-Fenster offen ist
+  function openShareModal() {
+    if (!state.page || !window.OYSShare) return;
+    var S = window.OYSShare, url = state.page.url, title = state.page.title || state.page.slug;
+    var l = S.links(url, title);
+    var body =
+      '<div class="share-grid">' +
+        '<div><div class="share-qr" id="shareQr"><i class="bx bx-loader-alt bx-spin"></i></div>' +
+        '<div class="grid grid-cols-2 gap-2 mt-3"><button type="button" class="btn-secondary justify-center" data-share="png"><i class="bx bx-download"></i> PNG</button>' +
+        '<button type="button" class="btn-secondary justify-center" data-share="svg"><i class="bx bx-download"></i> SVG</button></div></div>' +
+        '<div class="min-w-0">' +
+          '<label class="lbl">Your link</label>' +
+          '<div class="flex gap-2"><input class="field" id="shareUrl" readonly value="' + esc(url) + '"><button type="button" class="btn-primary shrink-0" data-share="copy"><i class="bx bx-copy"></i> Copy</button></div>' +
+          '<label class="lbl mt-5">Share it</label>' +
+          '<div class="share-btns">' +
+            '<a class="share-btn" style="--c:#25D366" href="' + esc(l.whatsapp) + '" target="_blank" rel="noopener" data-share="whatsapp"><i class="bx bxl-whatsapp"></i> WhatsApp</a>' +
+            '<a class="share-btn" style="--c:#e7e9ea" href="' + esc(l.x) + '" target="_blank" rel="noopener" data-share="x">' + X_ICON + ' X</a>' +
+            '<button type="button" class="share-btn" style="--c:#5865F2" data-share="discord"><i class="bx bxl-discord-alt"></i> Discord</button>' +
+            (S.canNativeShare() ? '<button type="button" class="share-btn" style="--c:#a5b4fc" data-share="native"><i class="bx bx-share-alt"></i> More</button>' : '') +
+          '</div>' +
+          '<p class="hint mt-4">Print the QR code on posters and flyers, show it on stream or put it in your videos – it always opens your page.</p>' +
+        '</div>' +
+      '</div>' +
+      (state.page.og ? '<div class="share-preview"><label class="lbl">How your link looks when it’s shared <small>on Discord, WhatsApp, X …</small></label><img src="' + esc(state.page.og) + '" alt="Preview card of your page" loading="lazy">' +
+        (dirty ? '<p class="hint">Save your changes to update the preview.</p>' : '') + '</div>' : '');
+    openModal('Share your page', body, '', function (box) {
+      box.classList.add('wide');
+      shareOpen = { url: url, title: title };
+      S.load(E.qrJs).then(function () {
+        var qr = $('#shareQr', box);
+        if (qr) qr.innerHTML = S.svg(url);
+      }).catch(function () {
+        var qr = $('#shareQr', box);
+        if (qr) qr.innerHTML = '<p class="hint p-4 text-center">The QR code couldn’t be loaded – please reload the page.</p>';
+      });
+    });
+  }
+  // Ein Klick-Handler für alle Knöpfe im Teilen-Fenster (das Fenster wird jedes Mal neu gefüllt)
+  $('#modal').addEventListener('click', function (ev) {
+    var b = ev.target.closest('[data-share]');
+    if (!b || !shareOpen) return;
+    var S = window.OYSShare, url = shareOpen.url, title = shareOpen.title, kind = b.dataset.share;
+    if (kind === 'copy' || kind === 'discord') {
+      S.copy(url).then(function () {
+        toast(kind === 'discord' ? 'Link copied – paste it in Discord, it shows up as a preview card.' : 'Link copied.');
+      }).catch(function () { $('#shareUrl').select(); toast('Copying failed – the link is selected, press Ctrl+C.', 'err'); });
+    } else if (kind === 'native') {
+      S.nativeShare(url, title).catch(function () { /* abgebrochen */ });
+    } else if (kind === 'png' || kind === 'svg') {
+      S.load(E.qrJs).then(function () {
+        if (kind === 'svg') return S.download(new Blob([S.svg(url)], { type: 'image/svg+xml' }), S.fileName(url, 'svg'));
+        return S.png(url, 1200).then(function (blob) { S.download(blob, S.fileName(url, 'png')); });
+      }).catch(function () { toast('The QR code couldn’t be created.', 'err'); });
+    }
+  });
+
   function renderSettings() {
     var root = $('#settingsDynamic');
     var p = state.page, s = p.settings;
@@ -1802,6 +1865,10 @@
       '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="Default: ' + esc((p.title || p.slug) + ' | OnYourSite') + '"></div>' +
       '<div><label class="lbl">Description</label><textarea class="field" rows="2" data-bind="page.settings.seo.description" maxlength="300" placeholder="Default: your bio"></textarea></div>' +
       '<div><label class="lbl">Keywords</label><input class="field" data-bind="page.settings.seo.keywords" maxlength="255" placeholder="separated, by, commas"></div></div></section>' +
+
+      '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Sharing</h2><div class="panel space-y-5">' +
+      '<div class="flex flex-wrap items-center justify-between gap-3"><label class="switch"><input type="checkbox" data-bind="page.settings.share_button"><span class="track"></span><span class="sw-text">Share button on your page<small>Visitors can copy your link, scan the QR code or share it on WhatsApp, X and Discord (takes effect when you save)</small></span></label>' +
+      '<button type="button" class="btn-secondary" data-action="share"><i class="bx bx-qr"></i> QR code & links</button></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Notifications</h2><div class="panel space-y-5">' +
       '<label class="switch"><input type="checkbox" data-bind="page.settings.notify_email"><span class="track"></span><span class="sw-text">Email me about new messages<small>In addition to the heads-up via the bell (applies to this page, takes effect when you save)</small></span></label>' +
@@ -1946,6 +2013,7 @@
     $('#mobilePreviewBtn').classList.add('hidden');
     $('#navPreviewBtn').classList.add('hidden');
     $('#viewPageLink').classList.add('hidden');
+    $('#shareBtn').classList.add('hidden');
     $('#psLabel').textContent = 'No page yet';
   }
 })();

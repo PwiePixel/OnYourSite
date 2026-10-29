@@ -73,6 +73,56 @@
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !modal.hidden) closeModal(); });
   }
 
+  // ---------------------------------------------------------------
+  // Teilen: Ansicht kommt als Vorlage vom Server, QR-Code und Kopieren aus share.js (erst beim Klick geladen)
+  // ---------------------------------------------------------------
+  var shareBtn = $('.oys-share');
+  var shareTpl = $('#oys-share-tpl');
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  function shareLib() {
+    var s = cfg.share;
+    return (window.OYSShare ? Promise.resolve() : loadScript(s.js)).then(function () { return window.OYSShare.load(s.qr); });
+  }
+  if (shareBtn && shareTpl && cfg.share) {
+    shareBtn.addEventListener('click', function () {
+      openModal(shareTpl.innerHTML);
+      var native = $('[data-share="native"]', modalBody);
+      if (native && typeof navigator.share === 'function') native.hidden = false;
+      shareLib().then(function () {
+        var box = $('.oys-share-qr', modalBody);
+        if (box) box.innerHTML = window.OYSShare.svg(cfg.share.url);
+      }).catch(function () {
+        var box = $('.oys-share-qr', modalBody);
+        if (box) box.remove();
+      });
+    });
+    modal.addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-share]');
+      if (!b) return;
+      var s = cfg.share, kind = b.dataset.share;
+      if (kind === 'native') {
+        navigator.share({ title: s.title, url: s.url }).catch(function () { /* abgebrochen */ });
+        return;
+      }
+      var label = $('span', b) || b;
+      shareLib().then(function () { return window.OYSShare.copy(s.url); }).then(function () {
+        label.textContent = kind === 'discord' ? 'Copied – paste it in Discord' : 'Link copied';
+        b.classList.add('is-done');
+      }).catch(function () {
+        label.textContent = 'Copy failed – select the address above';
+      });
+    });
+  }
+
   var ICON_LOCK = '<svg class="oys-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   var ICON_OPEN = '<svg class="oys-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>';
 

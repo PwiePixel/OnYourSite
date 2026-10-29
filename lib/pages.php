@@ -25,6 +25,7 @@ function oys_default_settings(): array
         'custom_css' => '',
         'hide_branding' => false,
         'notify_email' => true,
+        'share_button' => true,
     ];
 }
 
@@ -79,6 +80,7 @@ function oys_settings_normalize($in, int $userId, bool $premium, array $old): ar
     // Branding ausblenden ist nur mit Premium möglich – sonst alten Wert behalten
     $s['hide_branding'] = $premium ? !empty($in['hide_branding']) : !empty($old['hide_branding']);
     $s['notify_email'] = !isset($in['notify_email']) || !empty($in['notify_email']);
+    $s['share_button'] = !isset($in['share_button']) || !empty($in['share_button']);
     return $s;
 }
 
@@ -262,6 +264,7 @@ function oys_page_for_editor(array $page): array
         'settings' => oys_page_settings($page),
         'urls' => oys_page_urls($page),
         'url' => oys_page_url($page),
+        'og' => oys_og_supported() ? oys_og_url($page) : '',
     ];
 }
 
