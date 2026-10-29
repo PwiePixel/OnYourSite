@@ -566,7 +566,7 @@ if (file_exists($smtp_file)) {
             discord: ['Discord', 'border-[#5865F2]/40 bg-[#5865F2]/10 text-[#8b93ff]'],
         };
         function switchAdminTab(tabName) {
-            if (!ADMIN_TABS[tabName]) return;
+            if (!Object.prototype.hasOwnProperty.call(ADMIN_TABS, tabName)) return;
             document.querySelectorAll('.admin-tab-content').forEach(tab => tab.classList.add('hidden'));
             document.querySelectorAll('.admin-nav-btn').forEach(btn => btn.className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all");
 

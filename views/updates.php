@@ -3,7 +3,7 @@
 /** @var PDO $pdo */
 /** @var ?array $user_data */
 $loggedIn = !empty($user_data);
-$perPage = 15;
+$perPage = OYS_UPDATES_PER_PAGE;
 $total = oys_updates_count($pdo, true);
 $lastPage = max(1, (int) ceil($total / $perPage));
 $pageNo = min($lastPage, max(1, (int) ($_GET['page'] ?? 1)));
@@ -18,6 +18,13 @@ foreach ($milestones as $m) {
 }
 $hasRoadmap = $columns['now'] || $columns['next'] || $columns['planned'];
 $shipped = array_slice($columns['done'], 0, 6);
+// Meilensteine, die hier als Karte stehen (nur auf die kann ein Update verlinken)
+$milestoneShown = [];
+foreach (array_merge($columns['now'], $columns['next'], $columns['planned'], $shipped) as $m) {
+    $milestoneShown[$m['id']] = true;
+}
+$onThisPage = array_flip(array_column($updates, 'id'));
+$updateLink = function (int $id) use ($onThisPage) { return isset($onThisPage[$id]) ? '#update-' . $id : '/updates/' . $id; };
 
 // Zu jedem fertigen Meilenstein das passende Update verlinken
 $updateForMilestone = [];
@@ -199,11 +206,11 @@ $description = 'Follow along as OnYourSite grows – what we’re building right
             <h2 class="text-xl sm:text-2xl font-bold text-white mb-5">Recently shipped</h2>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <?php foreach ($shipped as $m): $uid = $updateForMilestone[$m['id']] ?? null; ?>
-                <div class="flex gap-3 rounded-xl border border-bordercolor bg-card/50 p-4">
+                <div id="milestone-<?= (int) $m['id'] ?>" class="flex gap-3 rounded-xl border border-bordercolor bg-card/50 p-4 scroll-mt-24">
                     <span class="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><i class='bx bx-rocket text-xl'></i></span>
                     <div class="min-w-0">
                         <p class="font-medium text-white leading-snug"><?= e($m['title']) ?></p>
-                        <p class="text-xs text-gray-500 mt-1">Shipped <?= e($fmtDate($m['done_at'] ?: $m['updated_at'])) ?><?php if ($uid): ?> · <a href="/updates#update-<?= $uid ?>" class="text-brand-400 hover:text-white">Read the update</a><?php endif; ?></p>
+                        <p class="text-xs text-gray-500 mt-1">Shipped <?= e($fmtDate($m['done_at'] ?: $m['updated_at'])) ?><?php if ($uid): ?> · <a href="<?= e($updateLink($uid)) ?>" class="text-brand-400 hover:text-white">Read the update</a><?php endif; ?></p>
                     </div>
                 </div>
                 <?php endforeach; ?>
@@ -238,8 +245,10 @@ $description = 'Follow along as OnYourSite grows – what we’re building right
                         <div class="min-w-0 rounded-2xl border border-bordercolor bg-card/50 p-5 sm:p-6">
                             <div class="flex flex-wrap items-center gap-2 mb-3">
                                 <span class="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full" style="color:<?= e($cat['color']) ?>;background:<?= e($cat['color']) ?>1f"><?= e($cat['label']) ?></span>
-                                <?php if ($u['milestone_id'] && isset($milestoneTitles[$u['milestone_id']])): ?>
+                                <?php if ($u['milestone_id'] && isset($milestoneShown[$u['milestone_id']])): ?>
                                 <a href="#milestone-<?= (int) $u['milestone_id'] ?>" class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white border border-bordercolor rounded-full px-2.5 py-1.5"><i class='bx bx-flag'></i> <?= e($milestoneTitles[$u['milestone_id']]) ?></a>
+                                <?php elseif ($u['milestone_id'] && isset($milestoneTitles[$u['milestone_id']])): ?>
+                                <span class="inline-flex items-center gap-1 text-xs text-gray-400 border border-bordercolor rounded-full px-2.5 py-1.5"><i class='bx bx-flag'></i> <?= e($milestoneTitles[$u['milestone_id']]) ?></span>
                                 <?php endif; ?>
                             </div>
                             <h3 class="text-lg sm:text-xl font-bold text-white leading-snug"><a href="#update-<?= $u['id'] ?>" class="hover:text-brand-400 transition-colors"><?= e($u['title']) ?></a></h3>

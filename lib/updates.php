@@ -9,6 +9,9 @@ const OYS_UPDATE_CATEGORIES = [
     'news'     => ['label' => 'News',     'color' => '#ec4899'],
 ];
 
+// Einträge pro Seite auf /updates
+const OYS_UPDATES_PER_PAGE = 15;
+
 const OYS_MILESTONE_STATUSES = [
     'now'     => ['label' => 'Working on now', 'short' => 'In progress', 'color' => '#22c55e'],
     'next'    => ['label' => 'Up next',        'short' => 'Up next',     'color' => '#818cf8'],
@@ -31,6 +34,7 @@ function oys_update_from_row(array $row): array
         'milestone_id' => $row['milestone_id'] !== null ? (int) $row['milestone_id'] : null,
         'is_published' => (bool) $row['is_published'],
         'published_at' => $row['published_at'],
+        'discord_announce' => (bool) ($row['discord_announce'] ?? true),
         'discord_message_id' => (string) ($row['discord_message_id'] ?? ''),
         'discord_target' => (string) ($row['discord_target'] ?? ''),
         'created_at' => $row['created_at'],
@@ -76,15 +80,23 @@ function oys_update_save(PDO $pdo, array $in, ?array $existing): array
         $milestoneId = 0;
     }
     $publish = !empty($in['publish']);
+    // In Discord ankündigen: die Wahl aus dem Formular gilt auch für späteres Veröffentlichen
+    $announce = !empty($in['announce_field']) ? !empty($in['post_discord']) : (bool) ($existing['discord_announce'] ?? true);
 
-    // Datum: frei wählbar (für ältere Einträge), sonst heute bzw. das bisherige Datum
-    $date = (string) ($in['date'] ?? '');
+    // Datum nur übernehmen, wenn es im Formular geändert wurde. Sonst bleibt der bisherige Zeitpunkt –
+    // Entwürfe bekommen ihren erst beim Veröffentlichen.
+    $today = date('Y-m-d');
+    $date = trim((string) ($in['date'] ?? ''));
     $publishedAt = $existing['published_at'] ?? null;
-    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m) && checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+    if ($date !== '' && $date !== (string) ($in['date_default'] ?? '')) {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m) || !checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+            return [null, 'Please enter a valid date.'];
+        }
+        if ($date > $today) {
+            return [null, 'The date can’t be in the future.'];
+        }
         if (!$publishedAt || substr($publishedAt, 0, 10) !== $date) {
-            // Entwurf mit dem heutigen (vorausgefüllten) Datum: der Zeitpunkt kommt erst beim Veröffentlichen
-            $publishedAt = !$publish && $date === date('Y-m-d') ? null
-                : $date . ' ' . ($date === date('Y-m-d') ? date('H:i:s') : '12:00:00');
+            $publishedAt = $date . ' ' . ($date === $today ? date('H:i:s') : '12:00:00');
         }
     }
     if ($publish && !$publishedAt) {
@@ -92,13 +104,13 @@ function oys_update_save(PDO $pdo, array $in, ?array $existing): array
     }
 
     $now = date('Y-m-d H:i:s');
-    $params = [$title, $body, $version, $category, $milestoneId ?: null, $publish ? 1 : 0, $publishedAt, $now];
+    $params = [$title, $body, $version, $category, $milestoneId ?: null, $publish ? 1 : 0, $publishedAt, $announce ? 1 : 0, $now];
     if ($existing) {
-        $pdo->prepare('UPDATE updates SET title = ?, body = ?, version = ?, category = ?, milestone_id = ?, is_published = ?, published_at = ?, updated_at = ? WHERE id = ?')
+        $pdo->prepare('UPDATE updates SET title = ?, body = ?, version = ?, category = ?, milestone_id = ?, is_published = ?, published_at = ?, discord_announce = ?, updated_at = ? WHERE id = ?')
             ->execute(array_merge($params, [$existing['id']]));
         return [(int) $existing['id'], null];
     }
-    $pdo->prepare('INSERT INTO updates (title, body, version, category, milestone_id, is_published, published_at, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    $pdo->prepare('INSERT INTO updates (title, body, version, category, milestone_id, is_published, published_at, discord_announce, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute(array_merge($params, [$now]));
     return [(int) $pdo->lastInsertId(), null];
 }
@@ -113,6 +125,24 @@ function oys_update_set_published(PDO $pdo, array $update, bool $published): voi
 function oys_update_delete(PDO $pdo, int $id): void
 {
     $pdo->prepare('DELETE FROM updates WHERE id = ?')->execute([$id]);
+}
+
+// Dauerhafter Link zu einem Update – leitet auf die richtige Seite von /updates weiter
+function oys_update_url(int $id): string
+{
+    return oys_main_url('/updates/' . $id);
+}
+
+// Auf welcher Seite von /updates steht ein veröffentlichtes Update? null = nicht (mehr) öffentlich
+function oys_update_page_of(PDO $pdo, int $id): ?int
+{
+    $u = oys_update_get($pdo, $id);
+    if (!$u || !$u['is_published'] || !$u['published_at']) {
+        return null;
+    }
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM updates WHERE is_published = 1 AND (published_at > ? OR (published_at = ? AND id > ?))');
+    $stmt->execute([$u['published_at'], $u['published_at'], $id]);
+    return intdiv((int) $stmt->fetchColumn(), OYS_UPDATES_PER_PAGE) + 1;
 }
 
 // ---------------------------------------------------------------
@@ -182,13 +212,10 @@ function oys_milestones_attach_tasks(PDO $pdo, array $milestones): array
 function oys_milestone_progress(array $m): ?array
 {
     $total = count($m['tasks']);
-    $done = count(array_filter($m['tasks'], function ($t) { return $t['is_done']; }));
-    if ($m['status'] === 'done') {
-        return ['done' => $total, 'total' => $total, 'percent' => 100];
-    }
     if ($total === 0) {
         return null;
     }
+    $done = count(array_filter($m['tasks'], function ($t) { return $t['is_done']; }));
     return ['done' => $done, 'total' => $total, 'percent' => (int) floor($done * 100 / $total)];
 }
 
@@ -230,19 +257,25 @@ function oys_milestone_save(PDO $pdo, array $in, ?array $existing): array
 
 function oys_milestone_set_status(PDO $pdo, array $ms, string $status): void
 {
-    if (!isset(OYS_MILESTONE_STATUSES[$status])) {
+    if (!isset(OYS_MILESTONE_STATUSES[$status]) || $status === $ms['status']) {
         return;
     }
     $now = date('Y-m-d H:i:s');
     $started = $ms['started_at'] ?: ($status === 'now' || $status === 'done' ? $now : null);
     $done = $status === 'done' ? ($ms['done_at'] ?: $now) : null;
-    $pdo->prepare('UPDATE milestones SET status = ?, started_at = ?, done_at = ?, updated_at = ? WHERE id = ?')
-        ->execute([$status, $started, $done, $now, $ms['id']]);
+    // In der neuen Spalte hinten anstellen
+    $pos = $pdo->prepare('SELECT COALESCE(MAX(position), 0) + 1 FROM milestones WHERE status = ? AND id <> ?');
+    $pos->execute([$status, $ms['id']]);
+    $pdo->prepare('UPDATE milestones SET status = ?, position = ?, started_at = ?, done_at = ?, updated_at = ? WHERE id = ?')
+        ->execute([$status, (int) $pos->fetchColumn(), $started, $done, $now, $ms['id']]);
 }
 
 function oys_milestone_move(PDO $pdo, array $ms, string $direction): void
 {
-    // Innerhalb derselben Spalte mit dem Nachbarn tauschen
+    // Innerhalb derselben Spalte mit dem Nachbarn tauschen („Shipped“ ist nach Datum sortiert)
+    if ($ms['status'] === 'done') {
+        return;
+    }
     $list = array_values(array_filter(oys_milestones($pdo, false), function ($m) use ($ms) { return $m['status'] === $ms['status']; }));
     foreach ($list as $i => $m) {
         if ($m['id'] !== $ms['id']) {
@@ -402,9 +435,9 @@ function oys_md_inline(string $text): string
         return $stash('<code>' . e($m[1]) . '</code>');
     }, $text);
     // Adressen dürfen ausgeglichene Klammern enthalten, z. B. …/wiki/Foo_(bar)
-    $text = preg_replace_callback('/\[([^\]\n]{1,200})\]\(((?:[^()\s]|\([^()\s]*\)){1,500})\)/', function ($m) use ($stash) {
-        $url = oys_clean_url($m[2]);
-        return $url === '' ? $m[0] : $stash('<a href="' . e($url) . '" target="_blank" rel="noopener noreferrer">' . oys_md_emphasis(e($m[1])) . '</a>');
+    $text = preg_replace_callback('/\[([^\]\n]{1,200})\]\(((?:[^()\s\x01\x02]|\([^()\s\x01\x02]*\)){1,500})\)/', function ($m) use ($stash) {
+        $link = oys_md_link($m[2], oys_md_emphasis(e($m[1])));
+        return $link === '' ? $m[0] : $stash($link);
     }, $text);
     // Nackte Adressen: Satzzeichen und Markdown-Zeichen am Ende gehören nicht dazu
     $text = preg_replace_callback('#\bhttps?://(?:[^\s<>"()\x01\x02]|\([^\s<>"()\x01\x02]*\))+(?<![.,;:!?\]"\'*_~])#i', function ($m) use ($stash) {
@@ -418,6 +451,16 @@ function oys_md_inline(string $text): string
     return str_replace(["\x01", "\x02"], '', $text);
 }
 
+// Link aus [Text](Ziel): eigene Pfade (/…, #…) werden zu vollen Adressen, weil der Text auch im Feed steht
+function oys_md_link(string $url, string $labelHtml): string
+{
+    if (preg_match('#^/(?![/\\\\])#', $url) || ($url !== '' && $url[0] === '#')) {
+        return '<a href="' . e(oys_main_url($url[0] === '#' ? '/updates' . $url : $url)) . '">' . $labelHtml . '</a>';
+    }
+    $clean = oys_clean_url($url);
+    return $clean === '' ? '' : '<a href="' . e($clean) . '" target="_blank" rel="noopener noreferrer">' . $labelHtml . '</a>';
+}
+
 function oys_md_emphasis(string $escaped): string
 {
     $s = preg_replace('/\*\*(?=\S)(.+?)(?<=\S)\*\*/', '<strong>$1</strong>', $escaped);
@@ -429,7 +472,15 @@ function oys_md_emphasis(string $escaped): string
 // Kurzer Klartext (für Feeds, Vorschauen)
 function oys_md_plain(string $md, int $max = 200): string
 {
-    $text = preg_replace(['/```.*?```/s', '/\[([^\]\n]+)\]\((?:[^()\s]|\([^()\s]*\))+\)/', '/[*_~`#>]+/'], ['', '$1', ''], $md);
+    $text = preg_replace([
+        '/```.*?```/s',                                          // Codeblöcke
+        '/\[([^\]\n]+)\]\((?:[^()\s]|\([^()\s]*\))+\)/',         // [Text](Link) → Text
+        '/`([^`\n]+)`/',                                          // `Code` → Code
+        '/^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*•][ \t]+|\d+[.)][ \t]+)/mu', // Überschrift, Zitat, Liste am Zeilenanfang
+        '/(\*\*|~~)(?=\S)(.+?)(?<=\S)\1/',                       // **fett**, ~~durchgestrichen~~
+        '/(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?![\w*])/',           // *kursiv*
+        '/(?<![\w_])_(?=\S)(.+?)(?<=\S)_(?![\w_])/',             // _kursiv_
+    ], ['', '$1', '$1', '', '$2', '$1', '$1'], $md);
     $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
     return mb_strlen($text) > $max ? rtrim(mb_substr($text, 0, $max - 1)) . '…' : $text;
 }
@@ -557,7 +608,7 @@ function oys_discord_target(array $s): ?array
     if (!$hook) {
         return null;
     }
-    return ['key' => 'webhook:' . $hook[0], 'url' => oys_discord_base() . '/webhooks/' . $hook[0] . '/' . $hook[1], 'headers' => [], 'bot' => false];
+    return ['key' => 'webhook:' . $hook[0], 'url' => oys_discord_base() . '/v10/webhooks/' . $hook[0] . '/' . $hook[1], 'headers' => [], 'bot' => false];
 }
 
 function oys_discord_request(string $method, string $url, ?array $json = null, array $headers = []): array
@@ -597,7 +648,8 @@ function oys_discord_request(string $method, string $url, ?array $json = null, a
         $error = $resp === false ? 'connection failed' : '';
     }
     $data = is_string($resp) && $resp !== '' ? json_decode($resp, true) : null;
-    return ['status' => $status, 'data' => is_array($data) ? $data : null, 'error' => $error];
+    $data = is_array($data) ? $data : null;
+    return ['status' => $status, 'data' => $data, 'code' => isset($data['code']) ? (int) $data['code'] : null, 'error' => $error];
 }
 
 function oys_discord_error(array $res, bool $bot): string
@@ -608,10 +660,10 @@ function oys_discord_error(array $res, bool $bot): string
         return 'Couldn’t reach Discord' . ($res['error'] !== '' ? ' (' . $res['error'] . ')' : '') . '.';
     }
     if ($status === 401) {
-        return 'Discord rejected the bot token – please check it.';
+        return $bot ? 'Discord rejected the bot token – please check it.' : 'Discord rejected the webhook link – please copy it again from Discord.';
     }
     if ($status === 403) {
-        return 'The bot isn’t allowed to post in this channel. It needs “View Channel”, “Send Messages” and “Embed Links”.';
+        return $bot ? 'The bot isn’t allowed to post in this channel. It needs “View Channel”, “Send Messages” and “Embed Links”.' : 'Discord refused the webhook (403) – please check it in the channel settings.';
     }
     if ($status === 404) {
         return $bot ? 'Discord couldn’t find the channel or message.' : 'Discord couldn’t find this webhook – it may have been deleted.';
@@ -626,7 +678,7 @@ function oys_discord_error(array $res, bool $bot): string
 function oys_discord_update_payload(array $u, array $s): array
 {
     $cat = OYS_UPDATE_CATEGORIES[$u['category']] ?? OYS_UPDATE_CATEGORIES['news'];
-    $url = oys_main_url('/updates#update-' . $u['id']);
+    $url = oys_update_url($u['id']);
     $title = ($u['version'] !== '' ? $u['version'] . ' – ' : '') . $u['title'];
     $desc = trim($u['body']);
     if (mb_strlen($desc) > 3800) {
@@ -682,37 +734,51 @@ function oys_discord_send(array $s, array $payload): array
     return ['ok' => false, 'id' => '', 'target' => '', 'error' => oys_discord_error($res, $t['bot'])];
 }
 
-// Bestehende Nachricht ändern oder löschen – nur über dasselbe Ziel, über das sie gesendet wurde
+// Bestehende Nachricht ändern (Payload) oder löschen (null) – nur über dasselbe Ziel, über das sie gesendet wurde.
+// state: ok | missing (in Discord schon gelöscht) | unreachable (anderer Webhook/Bot, Webhook/Kanal gelöscht)
+//        | disconnected (Discord nicht verbunden) | failed (z. B. Zeitüberschreitung, Rate-Limit, fehlende Rechte)
 function oys_discord_change(array $s, string $target, string $messageId, ?array $payload): array
 {
     $t = oys_discord_target($s);
-    if (!$t || $t['key'] !== $target || !preg_match('/^\d{5,25}$/', $messageId)) {
-        return ['ok' => false, 'status' => 0, 'error' => 'gone'];
+    if (!$t) {
+        return ['state' => 'disconnected', 'error' => 'Discord isn’t connected', 'transient' => false];
+    }
+    if ($t['key'] !== $target) {
+        return ['state' => 'unreachable', 'error' => 'it was posted through a different webhook or bot', 'transient' => false];
+    }
+    if (!preg_match('/^\d{5,25}$/', $messageId)) {
+        return ['state' => 'missing', 'error' => null, 'transient' => false];
     }
     if ($payload !== null) {
-        unset($payload['username'], $payload['avatar_url']);
+        // Beim Bearbeiten nur die Nachricht selbst ändern – Ping und Absender bleiben wie beim ersten Senden
+        unset($payload['content'], $payload['allowed_mentions'], $payload['username'], $payload['avatar_url']);
     }
     // Webhook: /webhooks/{id}/{token}/messages/{msg} – Bot: /channels/{id}/messages/{msg}
     $res = oys_discord_request($payload === null ? 'DELETE' : 'PATCH', $t['url'] . ($t['bot'] ? '' : '/messages') . '/' . $messageId, $payload, $t['headers']);
-    $ok = $res['status'] >= 200 && $res['status'] < 300;
-    return ['ok' => $ok, 'status' => $res['status'], 'error' => $ok ? null : oys_discord_error($res, $t['bot'])];
+    if ($res['status'] >= 200 && $res['status'] < 300) {
+        return ['state' => 'ok', 'error' => null, 'transient' => false];
+    }
+    if ($res['status'] === 404 && $res['code'] === 10008) {
+        return ['state' => 'missing', 'error' => null, 'transient' => false];
+    }
+    if ($res['status'] === 404 && in_array($res['code'], [10003, 10015], true)) {
+        return ['state' => 'unreachable', 'error' => oys_discord_error($res, $t['bot']), 'transient' => false];
+    }
+    return ['state' => 'failed', 'error' => oys_discord_error($res, $t['bot']), 'transient' => $res['status'] === 0 || $res['status'] === 429 || $res['status'] >= 500];
 }
 
-// Update in Discord veröffentlichen bzw. die vorhandene Nachricht aktualisieren. Gibt eine Fehlermeldung oder null zurück.
-function oys_discord_publish_update(PDO $pdo, array $u, array $s): ?string
+// Update in Discord ankündigen (neue Nachricht, mit Ping). Hat es schon eine Nachricht, wird nur diese aktualisiert.
+// Gibt eine Fehlermeldung oder null zurück.
+function oys_discord_announce_update(PDO $pdo, array $u, array $s): ?string
 {
-    $payload = oys_discord_update_payload($u, $s);
     if ($u['discord_message_id'] !== '') {
-        $res = oys_discord_change($s, $u['discord_target'], $u['discord_message_id'], $payload);
-        if ($res['ok']) {
-            return null;
+        $res = oys_discord_sync_update($pdo, $u, $s);
+        if ($res['state'] !== 'missing' && $res['state'] !== 'unreachable') {
+            return $res['state'] === 'ok' ? null : rtrim((string) $res['error'], '.') . '.';
         }
-        if ($res['status'] !== 404 && $res['error'] !== 'gone') {
-            return $res['error'];
-        }
-        // In Discord gelöscht oder über ein anderes Ziel gesendet → neu senden
+        // In Discord gelöscht oder über ein anderes Ziel gesendet → neu ankündigen
     }
-    $sent = oys_discord_send($s, $payload);
+    $sent = oys_discord_send($s, oys_discord_update_payload($u, $s));
     if (!$sent['ok']) {
         return $sent['error'];
     }
@@ -720,15 +786,48 @@ function oys_discord_publish_update(PDO $pdo, array $u, array $s): ?string
     return null;
 }
 
-// Nachricht eines Updates aus Discord entfernen (z. B. beim Löschen oder Zurückziehen)
-function oys_discord_remove_update(PDO $pdo, array $u, array $s): ?string
+// Geändertes Update in seiner Discord-Nachricht nachziehen. Postet nie neu – das entscheidet der Admin („Post to Discord“).
+function oys_discord_sync_update(PDO $pdo, array $u, array $s): array
+{
+    $res = oys_discord_change($s, $u['discord_target'], $u['discord_message_id'], oys_discord_update_payload($u, $s));
+    if ($res['state'] === 'missing' || $res['state'] === 'unreachable') {
+        oys_discord_forget($pdo, $u['id']);
+    }
+    return $res;
+}
+
+// Nachricht eines Updates aus Discord entfernen (Zurückziehen, Löschen). Die gemerkte Nachricht wird nur vergessen,
+// wenn sie wirklich weg ist oder von hier nie mehr erreicht werden kann – sonst bleibt sie für einen neuen Versuch.
+function oys_discord_remove_update(PDO $pdo, array $u, array $s): array
 {
     if ($u['discord_message_id'] === '') {
-        return null;
+        return ['state' => 'ok', 'error' => null, 'transient' => false];
     }
     $res = oys_discord_change($s, $u['discord_target'], $u['discord_message_id'], null);
-    $pdo->prepare('UPDATE updates SET discord_message_id = NULL, discord_target = NULL WHERE id = ?')->execute([$u['id']]);
-    return $res['ok'] || $res['status'] === 404 || $res['error'] === 'gone' ? null : $res['error'];
+    if (in_array($res['state'], ['ok', 'missing', 'unreachable'], true)) {
+        oys_discord_forget($pdo, $u['id']);
+    }
+    return $res;
+}
+
+function oys_discord_forget(PDO $pdo, int $id): void
+{
+    $pdo->prepare('UPDATE updates SET discord_message_id = NULL, discord_target = NULL WHERE id = ?')->execute([$id]);
+}
+
+// Hinweis für die Meldung im Admin-Panel, wenn eine Nachricht nicht (sicher) entfernt wurde. '' = alles erledigt.
+function oys_discord_remove_note(array $res, bool $deleted = false): string
+{
+    if ($res['state'] === 'ok' || $res['state'] === 'missing') {
+        return '';
+    }
+    if ($res['state'] === 'disconnected') {
+        return 'Discord isn’t connected, so its post there was not removed' . ($deleted ? ' – please delete it in Discord yourself.' : '.');
+    }
+    if ($res['state'] === 'unreachable' || $deleted) {
+        return 'Its Discord post couldn’t be removed (' . rtrim((string) $res['error'], '.') . ') – please delete it in Discord yourself.';
+    }
+    return 'But Discord: ' . $res['error'];
 }
 
 // ---------------------------------------------------------------
@@ -750,17 +849,31 @@ function oys_admin_updates_handle(PDO $pdo, array $post): ?array
                 return ['tab' => 'updates', 'error' => $error, 'query' => $existing ? '?edit_update=' . $existing['id'] : ''];
             }
             $u = oys_update_get($pdo, $newId);
-            $note = '';
-            if ($u['is_published'] && $ready && ($u['discord_message_id'] !== '' || !empty($post['post_discord']))) {
-                $err = oys_discord_publish_update($pdo, $u, $discord);
-                $note = $err ? ' But Discord: ' . $err : ($u['discord_message_id'] !== '' ? ' The Discord post was updated too.' : ' It was posted to Discord.');
-            } elseif (!$u['is_published'] && $u['discord_message_id'] !== '') {
-                $err = oys_discord_remove_update($pdo, $u, $discord);
-                $note = $err ? ' But Discord: ' . $err : ' The Discord post was removed.';
+            $msg = $u['is_published'] ? 'Update published.' : 'Draft saved.';
+            if ($u['is_published'] && $u['discord_message_id'] !== '') {
+                // Schon in Discord: die Nachricht anpassen, aber nie neu posten
+                $res = oys_discord_sync_update($pdo, $u, $discord);
+                switch ($res['state']) {
+                    case 'ok':
+                        return ['tab' => 'updates', 'ok' => $msg . ' The Discord post was updated too.'];
+                    case 'missing':
+                        return ['tab' => 'updates', 'error' => $msg . ' Its Discord post had been deleted – use “Post to Discord” to announce it again.'];
+                    case 'unreachable':
+                        return ['tab' => 'updates', 'error' => $msg . ' Its Discord post can’t be edited from here (' . rtrim((string) $res['error'], '.') . ') – use “Post to Discord” to announce it again.'];
+                    case 'disconnected':
+                        return ['tab' => 'updates', 'ok' => $msg . ' Discord isn’t connected, so its post there wasn’t updated.'];
+                }
+                return ['tab' => 'updates', 'error' => $msg . ' But Discord: ' . $res['error']];
             }
-            $msg = ($u['is_published'] ? 'Update published.' : 'Draft saved.') . $note;
-            $kind = strpos($note, 'But Discord') !== false ? 'error' : 'ok';
-            return ['tab' => 'updates', $kind => $msg];
+            if ($u['is_published'] && $ready && !empty($post['post_discord'])) {
+                $err = oys_discord_announce_update($pdo, $u, $discord);
+                return $err ? ['tab' => 'updates', 'error' => $msg . ' But Discord: ' . $err] : ['tab' => 'updates', 'ok' => $msg . ' It was posted to Discord.'];
+            }
+            if (!$u['is_published'] && $u['discord_message_id'] !== '') {
+                $note = oys_discord_remove_note(oys_discord_remove_update($pdo, $u, $discord));
+                return $note === '' ? ['tab' => 'updates', 'ok' => $msg . ' The Discord post was removed.'] : ['tab' => 'updates', 'error' => $msg . ' ' . $note];
+            }
+            return ['tab' => 'updates', 'ok' => $msg];
 
         case 'update_publish':
             $u = oys_update_get($pdo, $id);
@@ -770,32 +883,53 @@ function oys_admin_updates_handle(PDO $pdo, array $post): ?array
             $publish = !empty($post['state']);
             oys_update_set_published($pdo, $u, $publish);
             $u = oys_update_get($pdo, $id);
-            if (!$publish && $u['discord_message_id'] !== '') {
-                $err = oys_discord_remove_update($pdo, $u, $discord);
-                return $err ? ['tab' => 'updates', 'error' => 'Moved back to drafts. But Discord: ' . $err] : ['tab' => 'updates', 'ok' => 'Moved back to drafts and removed from Discord.'];
+            if (!$publish) {
+                if ($u['discord_message_id'] === '') {
+                    return ['tab' => 'updates', 'ok' => 'Moved back to drafts.'];
+                }
+                $note = oys_discord_remove_note(oys_discord_remove_update($pdo, $u, $discord));
+                return $note === '' ? ['tab' => 'updates', 'ok' => 'Moved back to drafts and removed from Discord.'] : ['tab' => 'updates', 'error' => 'Moved back to drafts. ' . $note];
             }
-            if ($publish && $ready && $discord['auto_post'] && $u['discord_message_id'] === '') {
-                $err = oys_discord_publish_update($pdo, $u, $discord);
-                return $err ? ['tab' => 'updates', 'error' => 'Published. But Discord: ' . $err] : ['tab' => 'updates', 'ok' => 'Published and posted to Discord.'];
+            // Ankündigen nur, wenn es beim Schreiben so gewählt wurde; eine noch vorhandene Nachricht wird aktualisiert
+            if ($ready && ($u['discord_message_id'] !== '' || $u['discord_announce'])) {
+                $had = $u['discord_message_id'] !== '';
+                $err = oys_discord_announce_update($pdo, $u, $discord);
+                if ($err) {
+                    return ['tab' => 'updates', 'error' => 'Published. But Discord: ' . $err];
+                }
+                return ['tab' => 'updates', 'ok' => $had ? 'Published – its Discord post was updated.' : 'Published and posted to Discord.'];
             }
-            return ['tab' => 'updates', 'ok' => $publish ? 'Update published.' : 'Moved back to drafts.'];
+            return ['tab' => 'updates', 'ok' => 'Update published.'];
 
         case 'update_discord':
             $u = oys_update_get($pdo, $id);
             if (!$u || !$u['is_published']) {
                 return ['tab' => 'updates', 'error' => 'Only published updates can be posted to Discord.'];
             }
-            $err = oys_discord_publish_update($pdo, $u, $discord);
+            $err = oys_discord_announce_update($pdo, $u, $discord);
             return $err ? ['tab' => 'updates', 'error' => $err] : ['tab' => 'updates', 'ok' => 'Posted to Discord.'];
+
+        case 'update_discord_remove':
+            $u = oys_update_get($pdo, $id);
+            if (!$u || $u['discord_message_id'] === '') {
+                return ['tab' => 'updates', 'error' => 'This update isn’t on Discord.'];
+            }
+            $note = oys_discord_remove_note(oys_discord_remove_update($pdo, $u, $discord));
+            return $note === '' ? ['tab' => 'updates', 'ok' => 'Removed from Discord.'] : ['tab' => 'updates', 'error' => $note];
 
         case 'update_delete':
             $u = oys_update_get($pdo, $id);
-            if ($u) {
-                $err = oys_discord_remove_update($pdo, $u, $discord);
-                oys_update_delete($pdo, $id);
-                return $err ? ['tab' => 'updates', 'error' => 'Update deleted. But Discord: ' . $err] : ['tab' => 'updates', 'ok' => 'Update deleted.'];
+            if (!$u) {
+                return ['tab' => 'updates', 'error' => 'Update not found.'];
             }
-            return ['tab' => 'updates', 'error' => 'Update not found.'];
+            $res = oys_discord_remove_update($pdo, $u, $discord);
+            if ($res['state'] === 'failed' && $res['transient']) {
+                // Kurzer Aussetzer bei Discord: nichts löschen, damit ein neuer Versuch die Nachricht noch findet
+                return ['tab' => 'updates', 'error' => 'Nothing was deleted, because its Discord post couldn’t be removed: ' . $res['error']];
+            }
+            oys_update_delete($pdo, $id);
+            $note = oys_discord_remove_note($res, true);
+            return $note === '' ? ['tab' => 'updates', 'ok' => 'Update deleted.'] : ['tab' => 'updates', 'error' => 'Update deleted. ' . $note];
 
         case 'milestone_save':
             $existing = $id ? oys_milestone_get($pdo, $id) : null;

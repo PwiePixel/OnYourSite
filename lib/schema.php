@@ -228,6 +228,7 @@ function oys_create_update_tables(PDO $pdo): void
         milestone_id INT NULL,
         is_published TINYINT(1) NOT NULL DEFAULT 0,
         published_at DATETIME NULL,
+        discord_announce TINYINT(1) NOT NULL DEFAULT 1,
         discord_message_id VARCHAR(32) NULL,
         discord_target VARCHAR(64) NULL,
         created_at DATETIME NULL,
@@ -258,14 +259,18 @@ function oys_create_update_tables(PDO $pdo): void
         KEY idx_milestone (milestone_id, position)
     ) $opts");
 
-    // Bisheriger Verlauf als Entwürfe – im Admin prüfen und veröffentlichen
+    // Bisheriger Verlauf als Entwürfe – im Admin prüfen und veröffentlichen.
+    // Ältere Einträge werden beim Veröffentlichen nicht in Discord angekündigt (sonst mehrere Pings auf einmal).
     if ((int) $pdo->query('SELECT COUNT(*) FROM updates')->fetchColumn() === 0) {
-        $insert = $pdo->prepare('INSERT INTO updates (title, body, version, category, is_published, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)');
+        $insert = $pdo->prepare('INSERT INTO updates (title, body, version, category, is_published, published_at, discord_announce, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)');
         $now = date('Y-m-d H:i:s');
         foreach (oys_update_seeds() as [$date, $version, $category, $title, $body]) {
-            $insert->execute([$title, $body, $version, $category, $date, $now, $now]);
+            $insert->execute([$title, $body, $version, $category, $date, $date === null ? 1 : 0, $now, $now]);
         }
     }
+
+    // /updates und /roadmap gehören jetzt zur Hauptseite: Seiten mit diesem Namen bleiben über ihre Subdomain erreichbar
+    $pdo->exec("UPDATE pages SET address_mode = 'subdomain' WHERE slug IN ('updates', 'roadmap') AND address_mode = 'path'");
 }
 
 function oys_update_seeds(): array

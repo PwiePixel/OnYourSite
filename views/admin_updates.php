@@ -19,9 +19,12 @@ $uf = $editUpdate ?: [
     'title' => $prefillMs ? 'Shipped: ' . $prefillMs['title'] : '',
     'body' => $prefillMs ? $prefillMs['description'] : '',
     'version' => '', 'category' => 'new', 'milestone_id' => $prefillMs ? $prefillMs['id'] : null,
-    'is_published' => false, 'published_at' => null, 'discord_message_id' => '',
+    'is_published' => false, 'published_at' => null, 'discord_message_id' => '', 'discord_announce' => $discordSettings['auto_post'],
 ];
 $ufDate = $uf['published_at'] ? substr((string) $uf['published_at'], 0, 10) : date('Y-m-d');
+// Bereits veröffentlicht, aber nicht in Discord: nur auf ausdrücklichen Wunsch nachträglich posten
+$announceNow = $editUpdate && $uf['is_published'];
+$announceChecked = $announceNow ? false : (bool) $uf['discord_announce'];
 $mf = $editMilestone ?: ['id' => 0, 'title' => '', 'description' => '', 'status' => 'next', 'target' => '', 'is_public' => true];
 
 $byStatus = ['now' => [], 'next' => [], 'planned' => [], 'done' => []];
@@ -62,7 +65,8 @@ $maskedToken = $discordSettings['bot_token'] !== '' ? '••••••••'
                             </div>
                             <div>
                                 <label class="<?= $lbl ?>" for="uDate">Date</label>
-                                <input id="uDate" type="date" name="date" value="<?= e($ufDate) ?>" class="<?= $in ?>">
+                                <input id="uDate" type="date" name="date" value="<?= e($ufDate) ?>" max="<?= e(date('Y-m-d')) ?>" class="<?= $in ?>">
+                                <input type="hidden" name="date_default" value="<?= e($ufDate) ?>">
                             </div>
                         </div>
                         <div>
@@ -90,7 +94,8 @@ $maskedToken = $discordSettings['bot_token'] !== '' ? '••••••••'
                                 <?php elseif ($uf['discord_message_id'] !== ''): ?>
                                 <span class="text-emerald-400 flex items-center gap-1.5"><i class='bx bxl-discord-alt text-lg'></i> Already on Discord – changes are synced, drafts are removed there.</span>
                                 <?php else: ?>
-                                <label class="flex items-center gap-2 cursor-pointer text-gray-300"><input type="checkbox" name="post_discord" value="1" class="accent-[#5865F2]"<?= $discordSettings['auto_post'] ? ' checked' : '' ?>> <i class='bx bxl-discord-alt text-lg text-[#5865F2]'></i> Announce on Discord when published</label>
+                                <input type="hidden" name="announce_field" value="1">
+                                <label class="flex items-center gap-2 cursor-pointer text-gray-300"><input type="checkbox" name="post_discord" value="1" class="accent-[#5865F2]"<?= $announceChecked ? ' checked' : '' ?>> <i class='bx bxl-discord-alt text-lg text-[#5865F2]'></i> <?= $announceNow ? 'Post it to Discord now' : 'Announce on Discord when published' ?></label>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -123,12 +128,15 @@ $maskedToken = $discordSettings['bot_token'] !== '' ? '••••••••'
                             </div>
                             <div class="flex flex-wrap gap-2 shrink-0">
                                 <a href="/admin?edit_update=<?= $u['id'] ?>#updates" class="<?= $btn ?>"><i class='bx bx-edit-alt'></i> Edit</a>
-                                <?php if ($u['is_published']): ?><a href="/updates#update-<?= $u['id'] ?>" target="_blank" rel="noopener" class="<?= $btn ?>"><i class='bx bx-show'></i> View</a><?php endif; ?>
+                                <?php if ($u['is_published']): ?><a href="/updates/<?= $u['id'] ?>" target="_blank" rel="noopener" class="<?= $btn ?>"><i class='bx bx-show'></i> View</a><?php endif; ?>
                                 <form action="/admin" method="POST" class="m-0"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="update_publish"><input type="hidden" name="id" value="<?= $u['id'] ?>"><input type="hidden" name="state" value="<?= $u['is_published'] ? '' : '1' ?>">
                                     <button type="submit" class="<?= $btn ?>"><i class='bx <?= $u['is_published'] ? 'bx-hide' : 'bx-send' ?>'></i> <?= $u['is_published'] ? 'Unpublish' : 'Publish' ?></button></form>
                                 <?php if ($u['is_published'] && $discordReady && $u['discord_message_id'] === ''): ?>
                                 <form action="/admin" method="POST" class="m-0"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="update_discord"><input type="hidden" name="id" value="<?= $u['id'] ?>">
                                     <button type="submit" class="<?= $btn ?> text-[#8b93ff]"><i class='bx bxl-discord-alt'></i> Post to Discord</button></form>
+                                <?php elseif (!$u['is_published'] && $u['discord_message_id'] !== ''): ?>
+                                <form action="/admin" method="POST" class="m-0"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="update_discord_remove"><input type="hidden" name="id" value="<?= $u['id'] ?>">
+                                    <button type="submit" class="<?= $btn ?> text-[#8b93ff]"><i class='bx bxl-discord-alt'></i> Remove from Discord</button></form>
                                 <?php endif; ?>
                                 <form action="/admin" method="POST" class="m-0" onsubmit="return confirm('Delete this update<?= $u['discord_message_id'] !== '' ? ' and its Discord post' : '' ?>?');"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="update_delete"><input type="hidden" name="id" value="<?= $u['id'] ?>">
                                     <button type="submit" class="<?= $btn ?> hover:text-red-400" title="Delete"><i class='bx bx-trash'></i></button></form>
@@ -229,10 +237,12 @@ $maskedToken = $discordSettings['bot_token'] !== '' ? '••••••••'
                                         <select name="status" onchange="this.form.submit()" aria-label="Status" class="bg-inputbg border border-bordercolor rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none">
                                             <?php foreach (OYS_MILESTONE_STATUSES as $key => $s2): ?><option value="<?= e($key) ?>"<?= $key === $status ? ' selected' : '' ?>><?= e($s2['label']) ?></option><?php endforeach; ?>
                                         </select></form>
+                                    <?php if ($status !== 'done'): ?>
                                     <form action="/admin" method="POST" class="m-0"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="milestone_move"><input type="hidden" name="id" value="<?= $m['id'] ?>"><input type="hidden" name="dir" value="up">
                                         <button type="submit" class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white disabled:opacity-30" title="Move up"<?= $i === 0 ? ' disabled' : '' ?>><i class='bx bx-up-arrow-alt'></i></button></form>
                                     <form action="/admin" method="POST" class="m-0"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="milestone_move"><input type="hidden" name="id" value="<?= $m['id'] ?>"><input type="hidden" name="dir" value="down">
                                         <button type="submit" class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white disabled:opacity-30" title="Move down"<?= $i === count($byStatus[$status]) - 1 ? ' disabled' : '' ?>><i class='bx bx-down-arrow-alt'></i></button></form>
+                                    <?php endif; ?>
                                     <a href="/admin?edit_milestone=<?= $m['id'] ?>#roadmap" class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white" title="Edit"><i class='bx bx-edit-alt'></i></a>
                                     <a href="/admin?new_update_for=<?= $m['id'] ?>#updates" class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white" title="Write an update about it"><i class='bx bx-news'></i></a>
                                     <form action="/admin" method="POST" class="m-0 ml-auto" onsubmit="return confirm('Delete this milestone and its tasks?');"><?= oys_csrf_field() ?><input type="hidden" name="oys_action" value="milestone_delete"><input type="hidden" name="id" value="<?= $m['id'] ?>">

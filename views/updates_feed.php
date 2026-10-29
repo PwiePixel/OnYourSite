@@ -22,8 +22,8 @@ echo '<?xml version="1.0" encoding="utf-8"?>' . "\n";
 <?php foreach ($updates as $u): $cat = OYS_UPDATE_CATEGORIES[$u['category']]; ?>
   <entry>
     <title><?= $x(($u['version'] !== '' ? $u['version'] . ' – ' : '') . $u['title']) ?></title>
-    <id>tag:<?= $x($host) ?>,<?= gmdate('Y-m-d', strtotime((string) $u['published_at'])) ?>:update-<?= $u['id'] ?></id>
-    <link rel="alternate" type="text/html" href="<?= $x(oys_main_url('/updates#update-' . $u['id'])) ?>"/>
+    <id>tag:<?= $x($host) ?>,<?= gmdate('Y-m-d', strtotime((string) ($u['created_at'] ?: $u['published_at']))) ?>:update-<?= $u['id'] ?></id>
+    <link rel="alternate" type="text/html" href="<?= $x(oys_update_url($u['id'])) ?>"/>
     <published><?= $iso($u['published_at']) ?></published>
     <updated><?= $iso($u['updated_at'] ?: $u['published_at']) ?></updated>
     <category term="<?= $x($u['category']) ?>" label="<?= $x($cat['label']) ?>"/>

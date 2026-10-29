@@ -112,12 +112,17 @@ t('Markdown: bold link', oys_markdown('**https://a.de/x**'), '<p><strong><a href
 t('Markdown: brackets inside a bare link', strpos(oys_markdown('https://en.wikipedia.org/wiki/Foo_(bar)'), 'href="https://en.wikipedia.org/wiki/Foo_(bar)"') !== false, true);
 t('Markdown: link in brackets keeps the bracket outside', strpos(oys_markdown('(see https://a.de/x)'), 'href="https://a.de/x"') !== false, true);
 t('Markdown: brackets inside a [link](…)', strpos(oys_markdown('[wiki](https://en.wikipedia.org/wiki/Foo_(bar))'), 'href="https://en.wikipedia.org/wiki/Foo_(bar)"') !== false, true);
+t('Markdown: own paths become full links in the same tab', oys_markdown('[editor](/dashboard)'), '<p><a href="' . e(oys_main_url('/dashboard')) . '">editor</a></p>');
+t('Markdown: #anchors point to /updates', oys_markdown('[roadmap](#roadmap)'), '<p><a href="' . e(oys_main_url('/updates#roadmap')) . '">roadmap</a></p>');
+t('Markdown: code never ends up inside a link address', strpos(oys_markdown('[a](https://x.com/`b`)'), 'href="https://x.com/<code>'), false);
+t('Markdown: plain text keeps snake_case and #anchors', oys_md_plain('Use snake_case and /updates#roadmap, **bold** and _it_'), 'Use snake_case and /updates#roadmap, bold and it');
 t('Markdown: plain text for feeds', oys_md_plain("**Bold** [link](https://x.de)\n`code`"), 'Bold link code');
 // Roadmap: Fortschritt nur aus abgehakten Aufgaben
 $task = fn($done) => ['id' => 1, 'title' => 't', 'is_done' => $done, 'done_at' => null];
 t('Progress 1 of 3', oys_milestone_progress(['status' => 'now', 'tasks' => [$task(true), $task(false), $task(false)]]), ['done' => 1, 'total' => 3, 'percent' => 33]);
 t('Progress without tasks', oys_milestone_progress(['status' => 'next', 'tasks' => []]), null);
-t('Shipped = 100%', oys_milestone_progress(['status' => 'done', 'tasks' => [$task(false)]])['percent'], 100);
+t('Shipped milestone keeps its real task count', oys_milestone_progress(['status' => 'done', 'tasks' => [$task(true), $task(false)]]), ['done' => 1, 'total' => 2, 'percent' => 50]);
+t('Shipped milestone without tasks: no progress bar', oys_milestone_progress(['status' => 'done', 'tasks' => []]), null);
 // Discord: nur echte Webhook-Links von Discord
 $tok = str_repeat('aB3_-', 8);
 t('Webhook: discord.com', oys_discord_parse_webhook('https://discord.com/api/webhooks/123456789012345678/' . $tok), ['123456789012345678', $tok]);
@@ -137,5 +142,11 @@ $u = ['id' => 7, 'title' => 'Big one', 'version' => '3.0', 'category' => 'new', 
 $emb = oys_discord_update_payload($u, $ds)['embeds'][0];
 t('Discord: long text is shortened with a link', mb_strlen($emb['description']) <= 4096 && strpos($emb['description'], 'Read the full update') !== false, true);
 t('Discord: title with version', $emb['title'], '3.0 – Big one');
-t('Discord: message from another target is never touched', oys_discord_change($ds, 'bot:1', '123456', null)['error'], 'gone');
+t('Discord: message from another target is never touched', oys_discord_change($ds, 'bot:1', '123456', null)['state'], 'unreachable');
+t('Discord: nothing is sent while disconnected', oys_discord_change(oys_discord_defaults(), 'webhook:1', '123456', null)['state'], 'disconnected');
+t('Discord: webhook errors are not called bot errors', strpos(oys_discord_error(['status' => 401, 'data' => null, 'code' => null, 'error' => ''], false), 'webhook link') !== false, true);
+t('Discord: failed removal is reported, not hidden', oys_discord_remove_note(['state' => 'failed', 'error' => 'Discord is rate limiting us – please try again in a moment.', 'transient' => true]), 'But Discord: Discord is rate limiting us – please try again in a moment.');
+t('Discord: removal impossible → delete it yourself', oys_discord_remove_note(['state' => 'disconnected', 'error' => 'Discord isn’t connected', 'transient' => false], true), 'Discord isn’t connected, so its post there was not removed – please delete it in Discord yourself.');
+t('Discord: removed = no note', oys_discord_remove_note(['state' => 'missing', 'error' => null, 'transient' => false]), '');
+t('Discord: link in the post is the permanent update link', $emb['url'], oys_main_url('/updates/7'));
 echo $fails ? "\n$fails FAILED\n" : "\nAll tests passed\n";

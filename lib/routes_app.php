@@ -5,7 +5,7 @@
 /** @var string $method */
 
 // Session nur, wenn nötig: Startseite und Updates setzen für Besucher kein Cookie.
-$cookieless = in_array($path, ['/', '/updates', '/updates/feed.xml', '/roadmap'], true);
+$cookieless = in_array($path, ['/', '/updates', '/updates/feed.xml', '/roadmap'], true) || preg_match('#^/updates/\d+$#', $path);
 if (!$cookieless || isset($_COOKIE[session_name()])) {
     oys_start_session();
 }
@@ -77,6 +77,12 @@ if ($path === '/updates') {
 if ($path === '/updates/feed.xml') {
     require dirname(__DIR__) . '/views/updates_feed.php';
     exit;
+}
+// Dauerhafter Link zu einem Update (Discord, Feed): zur Seite weiterleiten, auf der es gerade steht
+if (preg_match('#^/updates/(\d+)$#', $path, $m)) {
+    $id = (int) $m[1];
+    $pageNo = oys_update_page_of($pdo, $id);
+    oys_redirect($pageNo === null ? '/updates' : '/updates' . ($pageNo > 1 ? '?page=' . $pageNo : '') . '#update-' . $id);
 }
 
 if ($path === '/logout') {
