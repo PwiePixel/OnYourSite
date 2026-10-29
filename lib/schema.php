@@ -2,8 +2,9 @@
 // Datenbank-Schema und automatische Migration.
 // Läuft beim ersten Aufruf nach dem Update einmalig durch. Alte Tabellen werden NICHT gelöscht.
 
-// 1: neue Profilseiten + Übernahme der alten Profile, 2: Updates, Roadmap, Discord
-const OYS_SCHEMA_VERSION = 2;
+// 1: neue Profilseiten + Übernahme der alten Profile, 2: Updates, Roadmap, Discord,
+// 3: Honigwaben und Code-Seiten
+const OYS_SCHEMA_VERSION = 3;
 
 function oys_schema_version(PDO $pdo): int
 {
@@ -36,6 +37,9 @@ function oys_ensure_schema(PDO $pdo): void
         }
         if ($version < 2) {
             oys_create_update_tables($pdo);
+        }
+        if ($version < 3) {
+            oys_create_code_tables($pdo);
         }
         $pdo->prepare("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)")
             ->execute([(string) OYS_SCHEMA_VERSION]);
@@ -271,6 +275,46 @@ function oys_create_update_tables(PDO $pdo): void
 
     // /updates und /roadmap gehören jetzt zur Hauptseite: Seiten mit diesem Namen bleiben über ihre Subdomain erreichbar
     $pdo->exec("UPDATE pages SET address_mode = 'subdomain' WHERE slug IN ('updates', 'roadmap') AND address_mode = 'path'");
+}
+
+// Honigwaben (Buchungen) und Code-Seiten (eigene Websites aus HTML/CSS/JS)
+function oys_create_code_tables(PDO $pdo): void
+{
+    $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+    $pdo->exec("CREATE TABLE IF NOT EXISTS honeycomb_ledger (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        amount INT NOT NULL,
+        reason VARCHAR(20) NOT NULL,
+        ref VARCHAR(80) NOT NULL DEFAULT '',
+        note VARCHAR(200) NOT NULL DEFAULT '',
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_entry (user_id, reason, ref),
+        KEY idx_user (user_id, id)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS code_sites (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        slug VARCHAR(63) NOT NULL,
+        title VARCHAR(120) NOT NULL DEFAULT '',
+        is_published TINYINT(1) NOT NULL DEFAULT 1,
+        is_blocked TINYINT(1) NOT NULL DEFAULT 0,
+        blocked_reason VARCHAR(200) NULL,
+        views INT UNSIGNED NOT NULL DEFAULT 0,
+        created_at DATETIME NULL,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uq_user (user_id),
+        UNIQUE KEY uq_slug (slug)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS code_files (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        site_id INT NOT NULL,
+        path VARCHAR(120) NOT NULL,
+        content MEDIUMTEXT NOT NULL,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uq_path (site_id, path)
+    ) $opts");
+    oys_add_column($pdo, 'users', 'code_terms_at', 'DATETIME NULL');
 }
 
 function oys_update_seeds(): array

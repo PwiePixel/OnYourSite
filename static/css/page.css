@@ -668,6 +668,9 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
   background: var(--surface); color: var(--surface-text); box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .5);
 }
 .oys-mute[hidden] { display: none; }
+/* Unsichtbarer YouTube-Player für die Eingangsmusik (YouTube verlangt mindestens 200 × 200 Pixel) */
+.oys-yt { position: fixed; right: 0; bottom: 0; width: 200px; height: 200px; opacity: 0; pointer-events: none; z-index: -1; overflow: hidden; }
+.oys-yt iframe { width: 200px; height: 200px; border: 0; }
 .oys-mute .oys-ico { width: 20px; height: 20px; }
 .oys-mute .off, .oys-mute.is-muted .on { display: none; }
 .oys-mute.is-muted .off { display: inline-block; }

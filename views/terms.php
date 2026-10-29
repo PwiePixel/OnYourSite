@@ -68,6 +68,11 @@
                     </p>
                 </section>
 
+                <a href="/terms/code-pages" class="flex items-start gap-4 bg-brand-500/5 border border-brand-500/20 hover:border-brand-500/50 p-4 rounded-xl transition-colors group">
+                    <span class="w-10 h-10 shrink-0 rounded-xl bg-brand-500/15 text-brand-400 flex items-center justify-center text-2xl"><i class='bx bx-code-alt'></i></span>
+                    <span><strong class="text-white block">Building your own website with a code page?</strong><span class="text-gray-400">Code pages have additional rules – most importantly, they must not be used to sell anything or to make money. Read the <span class="text-brand-400 group-hover:text-brand-300">Code Page Terms</span>.</span></span>
+                </a>
+
                 <hr class="border-bordercolor">
 
                 <section>
@@ -220,12 +225,14 @@
                 </a>
             </div>
             
-            <div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
+            <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 mb-6 text-sm text-gray-500 font-medium">
                 <a href="/imprint" class="hover:text-white transition-colors">Legal Notice</a>
                 <span>&bull;</span>
                 <a href="/privacy" class="hover:text-white transition-colors">Privacy Policy</a>
                 <span>&bull;</span>
                 <a href="/terms" class="hover:text-white transition-colors">Terms of Service</a>
+                <span>&bull;</span>
+                <a href="/terms/code-pages" class="hover:text-white transition-colors">Code Page Terms</a>
             </div>
 
             <p class="text-gray-600 text-sm">

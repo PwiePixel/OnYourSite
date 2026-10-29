@@ -2,6 +2,7 @@
 // Lädt Konfiguration, Datenbank und alle Bausteine. Muss auf oberster Ebene eingebunden werden
 // (blacklist.php legt globale Listen an).
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/storage.php';
 
 $oys_debug = (bool) oys_config('debug', false);
 ini_set('display_errors', $oys_debug ? '1' : '0');
@@ -28,5 +29,7 @@ require_once __DIR__ . '/uploads.php';
 require_once __DIR__ . '/report.php';
 require_once __DIR__ . '/updates.php';
 require_once __DIR__ . '/share.php';
+require_once __DIR__ . '/honeycombs.php';
+require_once __DIR__ . '/codesites.php';
 
 oys_ensure_schema($pdo);

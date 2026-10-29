@@ -324,6 +324,8 @@ $themes = oys_themes();
                 <a href="/privacy" class="inline-block py-2 hover:text-white transition-colors">Privacy</a>
                 <span>&bull;</span>
                 <a href="/terms" class="inline-block py-2 hover:text-white transition-colors">Terms</a>
+                <span>&bull;</span>
+                <a href="/terms/code-pages" class="inline-block py-2 hover:text-white transition-colors">Code page terms</a>
             </div>
 
             <p class="text-gray-500 text-sm">

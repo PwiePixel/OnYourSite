@@ -59,12 +59,14 @@ function oys_settings_normalize($in, int $userId, bool $premium, array $old): ar
     $s['bg_overlay'] = max(0, min(90, (int) ($in['bg_overlay'] ?? 45)));
 
     $en = is_array($in['entrance'] ?? null) ? $in['entrance'] : [];
+    // Musik per Link: MP3 oder YouTube (auch ohne https:// eingegeben)
+    $musicUrl = oys_clean_url((string) ($en['music_url'] ?? ''));
     $s['entrance'] = [
         'enabled' => !empty($en['enabled']),
         'text' => oys_clean_text($en['text'] ?? '', 60) ?: 'Tap to enter',
         'animation' => oys_pick($en['animation'] ?? 'zoom', ['fade', 'zoom', 'curtain', 'blur', 'flip'], 'zoom'),
         'music' => oys_valid_upload($en['music'] ?? '', $userId, ['mp3', 'm4a', 'ogg', 'wav']) ?? '',
-        'music_url' => preg_match('#^https://#i', (string) ($en['music_url'] ?? '')) ? oys_clean_url($en['music_url']) : '',
+        'music_url' => preg_match('#^https://#i', $musicUrl) ? $musicUrl : '',
         'volume' => max(0, min(100, (int) ($en['volume'] ?? 70))),
         'loop' => !isset($en['loop']) || !empty($en['loop']),
     ];
@@ -438,7 +440,7 @@ function oys_calendar_access(PDO $pdo, array $page, string $given): ?string
 // Alle Dateien, die eine Seite des Nutzers verwendet (Name => true)
 function oys_used_files(PDO $pdo, int $userId): array
 {
-    $used = [];
+    $used = oys_code_used_uploads($pdo, $userId);
     foreach (oys_user_pages($pdo, $userId) as $p) {
         foreach (oys_page_files($p, oys_load_blocks($pdo, (int) $p['id'])) as $f) {
             $used[$f] = true;
@@ -454,7 +456,7 @@ function oys_cleanup_files(PDO $pdo, int $userId, array $candidates): void
         return;
     }
     $used = oys_used_files($pdo, $userId);
-    $dir = dirname(__DIR__) . '/static/uploads/';
+    $dir = oys_uploads_dir() . '/';
     foreach ($candidates as $file) {
         if (!isset($used[$file]) && oys_valid_upload($file, $userId) && is_file($dir . $file)) {
             @unlink($dir . $file);

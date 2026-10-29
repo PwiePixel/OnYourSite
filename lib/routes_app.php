@@ -53,7 +53,7 @@ function oys_current_page(PDO $pdo, array $user, $requested = null): ?array
 // ---------------------------------------------------------------
 // Statische Seiten
 // ---------------------------------------------------------------
-$static = ['/challenge' => 'challenge', '/imprint' => 'imprint', '/privacy' => 'privacy', '/terms' => 'terms'];
+$static = ['/challenge' => 'challenge', '/imprint' => 'imprint', '/privacy' => 'privacy', '/terms' => 'terms', '/terms/code-pages' => 'terms-code-pages'];
 if (isset($static[$path])) {
     require dirname(__DIR__) . '/views/' . $static[$path] . '.php';
     exit;
@@ -240,6 +240,107 @@ if (strpos($path, '/dashboard/api/') === 0) {
         oys_json(['ok' => false, 'error' => 'The request doesn’t say which page it’s for. Please reload the editor.', 'reload' => true], 400);
     }
 
+    // Honigwaben und Code-Seite gehören zum Konto, nicht zu einer Profilseite
+    if ($action === 'honeycombs') {
+        oys_json(['ok' => true, 'honeycombs' => oys_hc_for_editor($pdo, $userId)]);
+    }
+    if (strpos($action, 'code') === 0) {
+        $site = oys_code_site($pdo, $userId);
+        $termsAccepted = !empty($user['code_terms_at']);
+        $state = function () use ($pdo, $userId) {
+            $site = oys_code_site($pdo, $userId);
+            $u = $pdo->prepare('SELECT code_terms_at FROM users WHERE id = ?');
+            $u->execute([$userId]);
+            return [
+                'unlocked' => oys_code_unlocked($pdo, $userId),
+                'terms' => (bool) $u->fetchColumn(),
+                'cost' => oys_hc_settings($pdo)['code_page'],
+                'balance' => oys_hc_balance($pdo, $userId),
+                'site' => $site ? oys_code_for_editor($pdo, $site) : null,
+            ];
+        };
+        if ($action === 'code') {
+            oys_json(['ok' => true] + $state());
+        }
+        if (!$isPost) {
+            oys_json(['ok' => false, 'error' => 'Not found.'], 404);
+        }
+        // Wer die Regeln noch nicht akzeptiert hat, muss es jetzt tun
+        if (in_array($action, ['code-unlock', 'code-create'], true) && !$termsAccepted) {
+            if (empty($input['terms'])) {
+                oys_json(['ok' => false, 'error' => 'Please read and accept the rules for code pages first.']);
+            }
+            $pdo->prepare('UPDATE users SET code_terms_at = ? WHERE id = ?')->execute([date('Y-m-d H:i:s'), $userId]);
+            $termsAccepted = true;
+        }
+        if ($action === 'code-unlock') {
+            if ($error = oys_hc_spend($pdo, $userId, oys_hc_settings($pdo)['code_page'], 'code_page')) {
+                oys_json(['ok' => false, 'error' => $error]);
+            }
+            oys_json(['ok' => true] + $state());
+        }
+        if (!oys_code_unlocked($pdo, $userId)) {
+            oys_json(['ok' => false, 'error' => 'Unlock code pages with honeycombs first.'], 403);
+        }
+        if ($action === 'code-create') {
+            [$created, $error] = oys_code_create($pdo, $userId, oys_normalize_slug($input['slug'] ?? ''), (string) ($input['title'] ?? ''));
+            oys_json($error ? ['ok' => false, 'error' => $error] : ['ok' => true] + $state());
+        }
+        if (!$site) {
+            oys_json(['ok' => false, 'error' => 'Create your code page first.'], 404);
+        }
+        if (!empty($site['is_blocked'])) {
+            oys_json(['ok' => false, 'error' => 'Your code page has been blocked by the team' . ($site['blocked_reason'] ? ': ' . $site['blocked_reason'] : '.')]);
+        }
+        if ($action === 'code-save') {
+            $files = is_array($input['files'] ?? null) ? $input['files'] : [];
+            $deleted = array_values(array_filter(is_array($input['deleted'] ?? null) ? $input['deleted'] : [], 'is_string'));
+            if (count($files) > OYS_CODE_MAX_FILES * 2 || count($deleted) > OYS_CODE_MAX_FILES * 2) {
+                oys_json(['ok' => false, 'error' => 'Too many files.'], 400);
+            }
+            if ($error = oys_code_save($pdo, $site, $files, $deleted)) {
+                oys_json(['ok' => false, 'error' => $error]);
+            }
+            $title = array_key_exists('title', $input) ? oys_clean_text($input['title'], 120) : $site['title'];
+            $online = array_key_exists('online', $input) ? !empty($input['online']) : (bool) $site['is_published'];
+            $pdo->prepare('UPDATE code_sites SET title = ?, is_published = ? WHERE id = ?')->execute([$title !== '' ? $title : $site['slug'], $online ? 1 : 0, $site['id']]);
+            oys_json(['ok' => true] + $state());
+        }
+        if ($action === 'code-address') {
+            $slug = oys_normalize_slug($input['slug'] ?? '');
+            if ($slug !== $site['slug']) {
+                if ($problem = oys_slug_problem($pdo, $slug, null, (int) $site['id'])) {
+                    oys_json(['ok' => false, 'error' => $problem]);
+                }
+                $pdo->prepare('UPDATE code_sites SET slug = ?, updated_at = ? WHERE id = ?')->execute([$slug, date('Y-m-d H:i:s'), $site['id']]);
+            }
+            oys_json(['ok' => true] + $state());
+        }
+        oys_json(['ok' => false, 'error' => 'Not found.'], 404);
+    }
+
+    // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
+    if ($action === 'upload' && $isPost) {
+        $kind = (string) ($_POST['kind'] ?? '');
+        if (empty($_FILES['file'])) {
+            oys_json(['ok' => false, 'error' => 'No file received (it may be too large for the server).']);
+        }
+        if (!oys_rate_limit($pdo, 'upload:' . $userId, 120, 3600)) {
+            oys_json(['ok' => false, 'error' => 'Too many uploads in a short time – please wait a moment.']);
+        }
+        // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
+        $quotaMb = $premium ? OYS_UPLOAD_QUOTA_PREMIUM_MB : OYS_UPLOAD_QUOTA_MB;
+        $usedBytes = array_sum(oys_sweep_uploads($pdo, $userId, oys_user_upload_files($userId)));
+        if ($usedBytes + (int) ($_FILES['file']['size'] ?? 0) > $quotaMb * 1048576) {
+            oys_json(['ok' => false, 'error' => 'Your storage (' . $quotaMb . ' MB) is full. Remove images, music or files you no longer need and save.']);
+        }
+        $res = oys_handle_upload($_FILES['file'], $kind, $userId);
+        if (isset($res['error'])) {
+            oys_json(['ok' => false, 'error' => $res['error']]);
+        }
+        oys_json(['ok' => true, 'file' => $res['file'], 'url' => oys_upload_url($res['file'])]);
+    }
+
     // Seite anlegen geht auch ohne bestehende Seite
     if ($action === 'page-create' && $isPost) {
         $count = count(oys_user_pages($pdo, $userId));
@@ -320,27 +421,6 @@ if (strpos($path, '/dashboard/api/') === 0) {
                 'idmap' => $result['idmap'],
                 'warnings' => $result['warnings'],
             ]);
-
-        case 'upload':
-            if (!$isPost) break;
-            $kind = (string) ($_POST['kind'] ?? '');
-            if (empty($_FILES['file'])) {
-                oys_json(['ok' => false, 'error' => 'No file received (it may be too large for the server).']);
-            }
-            if (!oys_rate_limit($pdo, 'upload:' . $userId, 120, 3600)) {
-                oys_json(['ok' => false, 'error' => 'Too many uploads in a short time – please wait a moment.']);
-            }
-            // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
-            $quotaMb = $premium ? OYS_UPLOAD_QUOTA_PREMIUM_MB : OYS_UPLOAD_QUOTA_MB;
-            $usedBytes = array_sum(oys_sweep_uploads($pdo, $userId, oys_user_upload_files($userId)));
-            if ($usedBytes + (int) ($_FILES['file']['size'] ?? 0) > $quotaMb * 1048576) {
-                oys_json(['ok' => false, 'error' => 'Your storage (' . $quotaMb . ' MB) is full. Remove images, music or files you no longer need and save.']);
-            }
-            $res = oys_handle_upload($_FILES['file'], $kind, $userId);
-            if (isset($res['error'])) {
-                oys_json(['ok' => false, 'error' => $res['error']]);
-            }
-            oys_json(['ok' => true, 'file' => $res['file'], 'url' => oys_upload_url($res['file'])]);
 
         case 'address':
             if (!$isPost) break;
@@ -526,6 +606,8 @@ if ($path === '/dashboard') {
     $user_data['discord_id'] = decryptData($user['discord_id'] ?? '');
     $is_impersonating = isset($_SESSION['original_admin_id']);
     $has_premium_access = $premium;
+    // Honigwaben fürs Vorbeischauen (nicht, wenn ein Admin als Nutzer eingeloggt ist)
+    $honeycombs = oys_hc_for_editor($pdo, $userId, $is_impersonating ? [] : oys_hc_earn($pdo, $userId));
     require dirname(__DIR__) . '/views/dashboard.php';
     exit;
 }
