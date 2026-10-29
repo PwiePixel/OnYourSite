@@ -491,7 +491,9 @@
       var d = doc();
       if (!d) return;
       var el = d.querySelector(selector);
-      if (el) el.textContent = text;
+      if (!el) return;
+      el.textContent = text;
+      if (el.hasAttribute('data-text')) el.setAttribute('data-text', text); // Retro-Leuchten
     }
     function patchAccent() {
       var d = doc();
@@ -683,7 +685,8 @@
   }
   function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; $('#modalBox').classList.remove('wide'); shareOpen = null; }
   $('#modal').addEventListener('click', function (ev) {
-    if (ev.target.id === 'modal' || ev.target.closest('[data-close]')) closeModal();
+    // Beim Zuschneiden endet ein Ziehen manchmal neben dem Fenster – das soll es nicht schließen
+    if ((ev.target.id === 'modal' && Date.now() - cropGuard > 400) || ev.target.closest('[data-close]')) closeModal();
   });
 
   function openNewPageModal() {
@@ -713,6 +716,288 @@
         };
         $('#npCreate', box).addEventListener('click', go);
         slug.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(); });
+      });
+  }
+
+  // ================================================================
+  // Profilbild zuschneiden: verschieben, zoomen, drehen, Hintergrund für Logos, Form
+  // ================================================================
+  var AVATAR_OUT = 640;  // so groß speichert der Server Profilbilder (oys_upload_kinds: avatar)
+  var cropGuard = 0;     // gerade gezogen: ein Klick daneben schließt das Fenster dann nicht
+
+  // Bild laden und für die Bearbeitung auf höchstens 2048 px bringen (SVG-Logos werden scharf gerastert)
+  function loadCropSource(source) {
+    return new Promise(function (resolve, reject) {
+      var isFile = typeof source !== 'string';
+      var isSvg = isFile && (source.type === 'image/svg+xml' || /\.svg$/i.test(source.name || ''));
+      var url = isFile ? URL.createObjectURL(source) : source;
+      var img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth || 1024, h = img.naturalHeight || 1024;
+        var k = isSvg ? 1600 / Math.max(w, h) : Math.min(1, 2048 / Math.max(w, h));
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(w * k));
+        c.height = Math.max(1, Math.round(h * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        if (isFile) URL.revokeObjectURL(url);
+        resolve({ canvas: c, alpha: cropHasAlpha(c) });
+      };
+      img.onerror = function () { if (isFile) URL.revokeObjectURL(url); reject(); };
+      img.src = url;
+    });
+  }
+  function cropHasAlpha(c) {
+    var t = document.createElement('canvas');
+    t.width = t.height = 48;
+    var x = t.getContext('2d');
+    x.drawImage(c, 0, 0, 48, 48);
+    try {
+      var d = x.getImageData(0, 0, 48, 48).data;
+      for (var i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+    } catch (e) { /* egal */ }
+    return false;
+  }
+  function roundRectPath(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // keep: das aktuelle Profilbild nachbearbeiten – es erscheint zuerst genau so wie jetzt
+  function openAvatarCropper(source, keep) {
+    var waiting = setTimeout(function () { toast('Opening the picture…', 'info'); }, 400);
+    loadCropSource(source).then(function (loaded) {
+      clearTimeout(waiting);
+      showAvatarCropper(loaded, keep);
+    }).catch(function () {
+      clearTimeout(waiting);
+      toast('This picture can’t be opened – please use a JPG, PNG, WebP or SVG file.', 'err');
+    });
+  }
+
+  function showAvatarCropper(loaded, keep) {
+    var src = loaded.canvas;
+    var accent = themeAccent(state.page.theme);
+    var shapes = { circle: 'Circle', rounded: 'Rounded', square: 'Square' };
+    // Alles in Anteilen der Fläche: x/y = Verschiebung der Bildmitte, z = Bildpunkte → Flächenbreite
+    var st = { rot: 0, x: 0, y: 0, z: 1, bg: '', shape: shapes[state.page.settings.avatar_shape] ? state.page.settings.avatar_shape : 'circle' };
+    var canvas, slider, raf = 0;
+
+    function dims() { return st.rot % 180 ? [src.height, src.width] : [src.width, src.height]; }
+    function fillZoom() { var d = dims(); return 1 / Math.min(d[0], d[1]); }
+    function fitZoom() {
+      var d = dims();
+      // ganz sichtbar innerhalb der Form (Kreis: die Bildecken liegen auf dem Rand)
+      return (st.shape === 'circle' ? 1 / Math.sqrt(d[0] * d[0] + d[1] * d[1]) : (st.shape === 'rounded' ? .92 : .96) / Math.max(d[0], d[1])) * .96;
+    }
+    function zMin() { return Math.min(fitZoom(), fillZoom()) * .5; }
+    function zMax() { return fillZoom() * 6; }
+    function zoomAt(f, px, py) {
+      var nz = Math.max(zMin(), Math.min(zMax(), st.z * f));
+      f = nz / st.z;
+      st.x = px + (st.x - px) * f;
+      st.y = py + (st.y - py) * f;
+      st.z = nz;
+    }
+    function view(kind) { st.x = 0; st.y = 0; st.z = kind === 'fit' ? fitZoom() : fillZoom(); }
+
+    function draw(ctx, size, guide) {
+      ctx.clearRect(0, 0, size, size);
+      if (st.bg) {
+        ctx.fillStyle = st.bg;
+        ctx.fillRect(0, 0, size, size);
+      } else if (guide) {
+        // Schachbrett = durchsichtig (dort scheint auf der Seite das Design durch)
+        var q = Math.max(6, Math.round(size / 28));
+        for (var gy = 0; gy < size; gy += q) for (var gx = 0; gx < size; gx += q) {
+          ctx.fillStyle = ((gx + gy) / q) % 2 ? '#26262b' : '#1a1a1e';
+          ctx.fillRect(gx, gy, q, q);
+        }
+      }
+      ctx.save();
+      ctx.translate(size / 2 + st.x * size, size / 2 + st.y * size);
+      ctx.rotate(st.rot * Math.PI / 180);
+      ctx.scale(st.z * size, st.z * size);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(src, -src.width / 2, -src.height / 2);
+      ctx.restore();
+      if (!guide) return;
+      // Was außerhalb der Form liegt, ist auf der Seite nicht zu sehen
+      var r = st.shape === 'circle' ? size / 2 : st.shape === 'rounded' ? size * .28 : size * 14 / 124;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, size, size);
+      roundRectPath(ctx, 0, 0, size, size, r);
+      ctx.fillStyle = 'rgba(0, 0, 0, .55)';
+      ctx.fill('evenodd');
+      ctx.beginPath();
+      roundRectPath(ctx, 1, 1, size - 2, size - 2, r);
+      ctx.strokeStyle = 'rgba(255, 255, 255, .85)';
+      ctx.lineWidth = Math.max(1.5, size / 220);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function paint() {
+      raf = 0;
+      if (!canvas || !document.body.contains(canvas)) { window.removeEventListener('resize', redraw); return; }
+      var size = Math.round(canvas.getBoundingClientRect().width * (window.devicePixelRatio || 1));
+      if (size < 2) return;
+      if (canvas.width !== size) { canvas.width = size; canvas.height = size; }
+      draw(canvas.getContext('2d'), size, true);
+      var lo = zMin(), hi = zMax();
+      slider.value = String(Math.round(1000 * Math.log(st.z / lo) / Math.log(hi / lo)));
+    }
+    function redraw() { if (!raf) raf = requestAnimationFrame(paint); }
+
+    function swatch(bg, cls, title, style) {
+      return '<button type="button" class="crop-swatch' + (cls ? ' ' + cls : '') + '" data-bg="' + esc(bg) + '" title="' + esc(title) + '" aria-label="' + esc(title) + '"' + (style ? ' style="' + style + '"' : '') + '></button>';
+    }
+    var body =
+      '<div id="cropRoot"><div class="crop-stage"><canvas id="cropCanvas" tabindex="0" aria-label="Profile picture: drag to move, + and − to zoom, arrow keys to move"></canvas></div>' +
+      '<div class="crop-zoom"><button type="button" class="icon-btn" data-crop="out" aria-label="Zoom out" title="Zoom out"><i class="bx bx-zoom-out"></i></button>' +
+        '<input type="range" id="cropZoom" min="0" max="1000" step="1" aria-label="Zoom">' +
+        '<button type="button" class="icon-btn" data-crop="in" aria-label="Zoom in" title="Zoom in"><i class="bx bx-zoom-in"></i></button></div>' +
+      '<div class="crop-tools">' +
+        '<button type="button" class="chip" data-crop="left" title="Rotate left"><i class="bx bx-rotate-left"></i> Rotate</button>' +
+        '<button type="button" class="chip" data-crop="right" title="Rotate right" aria-label="Rotate right"><i class="bx bx-rotate-right"></i></button>' +
+        '<button type="button" class="chip" data-crop="fit" title="Show the whole picture – good for logos"><i class="bx bx-collapse"></i> Show all</button>' +
+        '<button type="button" class="chip" data-crop="fill" title="Fill the whole shape"><i class="bx bx-expand"></i> Fill</button>' +
+      '</div>' +
+      '<label class="lbl mt-5">Background <small>– for logos with a transparent background</small></label>' +
+      '<div class="crop-swatches" id="cropBg">' +
+        swatch('', 'is-none', 'None – your design shows through') +
+        swatch('#ffffff', '', 'White', '--c:#ffffff') +
+        swatch('#000000', '', 'Black', '--c:#000000') +
+        swatch(accent, '', 'Theme color', '--c:' + esc(accent)) +
+        '<label class="crop-swatch is-custom" title="Pick a color"><input type="color" id="cropColor" value="#6366f1" aria-label="Pick a color"><i class="bx bx-palette"></i></label>' +
+      '</div>' +
+      '<label class="lbl mt-5">Shape</label>' +
+      '<div class="chips" id="cropShape">' + Object.keys(shapes).map(function (k) {
+        return '<button type="button" class="chip" data-shape="' + k + '">' + shapes[k] + '</button>';
+      }).join('') + '</div>' +
+      '<p class="hint mt-4"><span class="hover-only">Drag the picture to move it, scroll to zoom.</span><span class="touch-only">Drag the picture to move it, pinch to zoom.</span> Everything inside the outline is shown on your page.</p></div>';
+
+    openModal('Adjust your profile picture', body,
+      '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="cropSave"><i class="bx bx-check"></i> Save picture</button>',
+      function (box) {
+        canvas = $('#cropCanvas', box);
+        slider = $('#cropZoom', box);
+        // Neue Logos mit durchsichtigem Hintergrund ganz zeigen, Fotos füllen die Form
+        view(!keep && loaded.alpha ? 'fit' : 'fill');
+
+        function mark() {
+          $$('#cropBg .crop-swatch', box).forEach(function (b) { b.classList.toggle('on', b.dataset.bg !== undefined ? b.dataset.bg === st.bg : false); });
+          var custom = $('#cropBg .is-custom', box);
+          custom.classList.toggle('on', !!st.bg && !$$('#cropBg [data-bg]', box).some(function (b) { return b.dataset.bg === st.bg; }));
+          $$('#cropShape .chip', box).forEach(function (b) { b.classList.toggle('on', b.dataset.shape === st.shape); });
+        }
+        mark();
+
+        // Ziehen mit Maus/Finger, zwei Finger zoomen
+        var pts = {}, moved = false;
+        canvas.addEventListener('pointerdown', function (e) {
+          canvas.setPointerCapture(e.pointerId);
+          pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+          moved = false;
+        });
+        canvas.addEventListener('pointermove', function (e) {
+          var prev = pts[e.pointerId];
+          if (!prev) return;
+          var cur = { x: e.clientX, y: e.clientY }, rect = canvas.getBoundingClientRect(), S = rect.width || 1;
+          var ids = Object.keys(pts);
+          if (ids.length === 1) {
+            st.x += (cur.x - prev.x) / S;
+            st.y += (cur.y - prev.y) / S;
+          } else {
+            var other = pts[ids[0] === String(e.pointerId) ? ids[1] : ids[0]];
+            var d0 = Math.hypot(prev.x - other.x, prev.y - other.y), d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
+            st.x += (cur.x - prev.x) / 2 / S;
+            st.y += (cur.y - prev.y) / 2 / S;
+            if (d0 > 0) zoomAt(d1 / d0, ((cur.x + other.x) / 2 - rect.left) / S - .5, ((cur.y + other.y) / 2 - rect.top) / S - .5);
+          }
+          pts[e.pointerId] = cur;
+          moved = true;
+          cropGuard = Date.now();
+          redraw();
+        });
+        ['pointerup', 'pointercancel'].forEach(function (t) {
+          canvas.addEventListener(t, function (e) { delete pts[e.pointerId]; if (moved) cropGuard = Date.now(); });
+        });
+        canvas.addEventListener('wheel', function (e) {
+          e.preventDefault();
+          var rect = canvas.getBoundingClientRect();
+          zoomAt(Math.exp(-e.deltaY * .0015), (e.clientX - rect.left) / rect.width - .5, (e.clientY - rect.top) / rect.height - .5);
+          redraw();
+        }, { passive: false });
+        canvas.addEventListener('keydown', function (e) {
+          var step = e.shiftKey ? .05 : .01, keys = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+          if (keys[e.key]) { st.x += keys[e.key][0]; st.y += keys[e.key][1]; }
+          else if (e.key === '+' || e.key === '=') zoomAt(1.1, 0, 0);
+          else if (e.key === '-') zoomAt(1 / 1.1, 0, 0);
+          else return;
+          e.preventDefault();
+          redraw();
+        });
+        slider.addEventListener('input', function () {
+          var lo = zMin(), hi = zMax();
+          zoomAt(lo * Math.pow(hi / lo, Number(slider.value) / 1000) / st.z, 0, 0);
+          redraw();
+        });
+        $('#cropRoot', box).addEventListener('click', function (e) {
+          var b = e.target.closest('[data-crop], [data-bg], [data-shape]');
+          if (!b) return;
+          if (b.dataset.crop === 'in') zoomAt(1.15, 0, 0);
+          if (b.dataset.crop === 'out') zoomAt(1 / 1.15, 0, 0);
+          if (b.dataset.crop === 'left' || b.dataset.crop === 'right') {
+            // um die Mitte der Fläche drehen
+            var cw = b.dataset.crop === 'right', x = st.x;
+            st.rot = (st.rot + (cw ? 90 : 270)) % 360;
+            st.x = cw ? -st.y : st.y;
+            st.y = cw ? x : -x;
+          }
+          if (b.dataset.crop === 'fit' || b.dataset.crop === 'fill') view(b.dataset.crop);
+          if (b.dataset.bg !== undefined) st.bg = b.dataset.bg;
+          if (b.dataset.shape) st.shape = b.dataset.shape;
+          mark();
+          redraw();
+        });
+        $('#cropColor', box).addEventListener('input', function () { st.bg = this.value; mark(); redraw(); });
+        window.addEventListener('resize', redraw);
+        redraw();
+
+        $('#cropSave', box).addEventListener('click', function () {
+          var btn = this;
+          btn.disabled = true;
+          btn.innerHTML = '<i class="bx bx-loader-alt bx-spin"></i> Saving…';
+          var out = document.createElement('canvas');
+          out.width = out.height = AVATAR_OUT;
+          draw(out.getContext('2d'), AVATAR_OUT, false);
+          new Promise(function (resolve, reject) {
+            try { out.toBlob(function (b) { if (b) resolve(b); else reject(); }, 'image/webp', .92); } catch (e) { reject(e); }
+          }).then(function (blob) {
+            // Browser ohne WebP liefern PNG – das behält die Durchsichtigkeit
+            var ext = blob.type === 'image/webp' ? 'webp' : blob.type === 'image/jpeg' ? 'jpg' : 'png';
+            return uploadRaw('avatar', new File([blob], 'profile-picture.' + ext, { type: blob.type }));
+          }).then(function (res) {
+            if (!res || !res.ok) throw new Error((res && res.error) || '');
+            closeModal();
+            state.page.avatar = res.file;
+            state.page.settings.avatar_shape = st.shape;
+            renderInhalte();
+            updatePageInfo();
+            markDirty({ fast: true });
+          }).catch(function (err) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bx bx-check"></i> Save picture';
+            toast((err && err.message) || 'The picture couldn’t be saved – please try another file.', 'err');
+          });
+        });
       });
   }
 
@@ -807,7 +1092,8 @@
       '<div class="flex flex-col items-center gap-2"><button type="button" class="avatar-up" id="avatarUp" title="Upload profile picture">' +
       (p.avatar ? '<img src="' + esc(uploadUrl(p.avatar)) + '" alt="">' : '<i class="bx bx-camera text-2xl"></i>') +
       '<span class="ov"><i class="bx bx-upload"></i></span></button>' +
-      (p.avatar ? '<button type="button" class="text-xs text-gray-500 hover:text-red-400" id="avatarDel">Remove</button>' : '<span class="text-[11px] text-gray-500">Profile picture</span>') +
+      (p.avatar ? '<div class="flex items-center gap-3"><button type="button" class="text-xs text-gray-400 hover:text-white flex items-center gap-1" id="avatarEdit"><i class="bx bx-crop"></i> Adjust</button>' +
+        '<button type="button" class="text-xs text-gray-500 hover:text-red-400" id="avatarDel">Remove</button></div>' : '<span class="text-[11px] text-gray-500">Profile picture</span>') +
       '</div>' +
       '<div class="flex-1 w-full space-y-4">' +
       '<div class="field-row cols-2"><div><label class="lbl">Name</label><input class="field" data-bind="page.title" maxlength="120" placeholder="Your name"></div>' +
@@ -830,9 +1116,12 @@
     if (bio) updateCounter(bio);
     $('#avatarUp').addEventListener('click', function () {
       pickFile('image/*').then(function (files) {
-        if (!files[0]) return;
+        var file = files[0];
+        if (!file) return;
+        // Neue Bilder erst zuschneiden. Animierte GIFs bleiben, wie sie sind (sonst ginge die Animation verloren).
+        if (file.type !== 'image/gif') { openAvatarCropper(file); return; }
         toast('Uploading profile picture…', 'info');
-        upload('avatar', files[0]).then(function (res) {
+        upload('avatar', file).then(function (res) {
           if (!res.ok) { toast(res.error, 'err'); return; }
           state.page.avatar = res.file;
           renderInhalte();
@@ -841,6 +1130,8 @@
         });
       });
     });
+    var edit = $('#avatarEdit');
+    if (edit) edit.addEventListener('click', function () { openAvatarCropper(uploadUrl(state.page.avatar), true); });
     var del = $('#avatarDel');
     if (del) del.addEventListener('click', function () { state.page.avatar = ''; renderInhalte(); updatePageInfo(); markDirty({ fast: true }); });
     $('#quickUrl').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); quickAdd(); } });
@@ -1439,7 +1730,7 @@
     }).join('');
     return '<div class="' + cls + '"' + style + '><div class="oys-bg"><span class="oys-deco oys-deco-1"></span><span class="oys-deco oys-deco-2"></span><span class="oys-deco oys-deco-3"></span></div>' +
       '<div class="oys-main"><header class="oys-head"><div class="oys-avatar shape-' + esc(s.avatar_shape) + ' ring-' + esc(s.avatar_ring) + '"><div class="oys-avatar-inner">' + av + '</div></div>' +
-      '<h1 class="oys-name">' + esc(p.title || 'Your name') + '</h1>' + (p.subtitle ? '<p class="oys-sub">' + esc(p.subtitle) + '</p>' : '') +
+      '<h1 class="oys-name" data-text="' + esc(p.title || 'Your name') + '">' + esc(p.title || 'Your name') + '</h1>' + (p.subtitle ? '<p class="oys-sub">' + esc(p.subtitle) + '</p>' : '') +
       '<p class="oys-bio">' + esc((p.bio || 'Your bio goes here.').slice(0, 90)) + '</p></header>' +
       '<section class="oys-blocks"><div class="oys-links lay-' + (layout || 'buttons') + '">' + links + '</div></section></div></div>';
   }

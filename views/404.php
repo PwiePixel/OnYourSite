@@ -16,6 +16,9 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
+    <meta name="color-scheme" content="dark">
+    <meta name="darkreader-lock">
     <title><?= $isFree ? 'Address available' : 'Not found' ?> | OnYourSite</title>
     <link rel="icon" type="image/png" href="/static/images/favicon.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -70,8 +73,8 @@ $mainUrl = function_exists('oys_main_url') ? rtrim(oys_main_url('/'), '/') : 'ht
                 <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
                 This address is available
             </div>
-            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg break-all">
-                <span class="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-purple-500">
+            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 break-all">
+                <span class="bg-clip-text text-transparent [-webkit-text-fill-color:transparent] box-decoration-clone bg-gradient-to-r from-brand-400 to-purple-500">
                     <?= htmlspecialchars($requested) ?>.<?= htmlspecialchars($oysBase) ?>
                 </span>
             </h1>

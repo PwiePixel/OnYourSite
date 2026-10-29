@@ -7,6 +7,9 @@ $codePrice = oys_hc_settings($pdo)['code_page'];
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
+    <meta name="color-scheme" content="dark">
+    <meta name="darkreader-lock">
     <title>Code Page Terms | OnYourSite</title>
     <meta name="description" content="Additional rules for websites you build yourself with HTML, CSS and JavaScript on OnYourSite.">
 

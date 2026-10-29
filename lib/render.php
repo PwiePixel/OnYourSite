@@ -133,7 +133,7 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
         <?php if ($avatarUrl): ?><img src="<?= e($avatarUrl) ?>" alt="<?= e($title) ?>" width="112" height="112"><?php else: ?><span class="oys-initials"><?= e(oys_initials($title !== '' ? $title : (string) ($page['slug'] ?? ''))) ?></span><?php endif; ?>
       </div>
     </div>
-    <?php if ($title !== ''): ?><h1 class="oys-name"><?= e($title) ?></h1><?php endif; ?>
+    <?php if ($title !== ''): ?><h1 class="oys-name" data-text="<?= e($title) ?>"><?= e($title) ?></h1><?php endif; ?>
     <?php if (!empty($page['subtitle'])): ?><p class="oys-sub"><?= e($page['subtitle']) ?></p><?php endif; ?>
     <?php if (!empty($page['bio'])): ?><p class="oys-bio"><?= nl2br(e($page['bio'])) ?></p><?php endif; ?>
   </header>

@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
+    <meta name="color-scheme" content="dark">
+    <meta name="darkreader-lock">
     <title>Creator Challenge | OnYourSiteDE</title>
     
     <meta name="description" content="Mach mit bei der OnYourSite Creator Challenge! Erreiche mit uns 150 aktive Discord-Member und gewinne fettes Discord Nitro (Premium & Basic).">
@@ -86,9 +89,9 @@
                 Exklusives Community Event
             </div>
             
-            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg animate-fade-in" style="animation-delay: 100ms;">
+            <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 animate-fade-in" style="animation-delay: 100ms;">
                 Die große <br class="hidden md:block">
-                <span class="bg-clip-text text-transparent bg-gradient-to-r from-nitro-400 to-[#b061ff]">
+                <span class="bg-clip-text text-transparent [-webkit-text-fill-color:transparent] box-decoration-clone bg-gradient-to-r from-nitro-400 to-[#b061ff]">
                     Creator Challenge
                 </span>
             </h1>

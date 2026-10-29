@@ -577,7 +577,7 @@
   --overlay-rgb: 10, 10, 10;
   --pill-radius: 0px;
 }
-.t-luxe .oys-name { background: linear-gradient(90deg, #b8860b, #f5d77a 50%, #b8860b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.t-luxe .oys-name { background: linear-gradient(90deg, #b8860b, #f5d77a 50%, #b8860b); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
 .t-luxe .oys-avatar-inner { outline: 1px solid rgba(212, 175, 55, .5); outline-offset: 5px; }
 .t-luxe .oys-sub { color: #d4af37; letter-spacing: .3em; }
 .t-luxe .oys-heading { color: #d4af37; }
@@ -875,7 +875,10 @@
   --overlay-rgb: 26, 1, 54;
   --pill-radius: 6px;
 }
-.t-retro .oys-name { background: linear-gradient(180deg, #fff 0%, #a5f3fc 45%, #ff2e88 56%, #ffe66d 100%); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 10px rgba(255, 46, 136, .6)); }
+.t-retro .oys-head { isolation: isolate; }
+.t-retro .oys-name { position: relative; background: linear-gradient(180deg, #fff 0%, #a5f3fc 45%, #ff2e88 56%, #ffe66d 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+/* Leuchten als eigene Ebene hinter dem Verlauf – mit filter auf dem Verlaufstext zeigt Safari ihn nicht zuverlässig */
+.t-retro .oys-name::before { content: attr(data-text); position: absolute; inset: 0; z-index: -1; color: transparent; -webkit-text-fill-color: transparent; text-shadow: 0 0 10px rgba(255, 46, 136, .6); pointer-events: none; }
 .t-retro .oys-avatar-inner { box-shadow: 0 0 24px rgba(0, 240, 255, .6); }
 .t-retro .oys-deco-1 { display: block; width: 300px; height: 300px; left: 50%; top: 62%; margin: -170px 0 0 -150px; border-radius: 50%; background: linear-gradient(180deg, #ffe66d 0%, #ff9a3c 45%, #ff2e88 100%); -webkit-mask-image: linear-gradient(180deg, #000 0 48%, transparent 48% 52%, #000 52% 60%, transparent 60% 65%, #000 65% 72%, transparent 72% 79%, #000 79% 86%, transparent 86%); mask-image: linear-gradient(180deg, #000 0 48%, transparent 48% 52%, #000 52% 60%, transparent 60% 65%, #000 65% 72%, transparent 72% 79%, #000 79% 86%, transparent 86%); opacity: .95; }
 .t-retro .oys-deco-2 { display: block; left: -50%; right: -50%; top: 62%; height: 60%; background: linear-gradient(rgba(0, 240, 255, .75) 2px, transparent 2px) 0 0 / 100% 38px, linear-gradient(90deg, rgba(0, 240, 255, .75) 2px, transparent 2px) 0 0 / 56px 100%; transform: perspective(260px) rotateX(62deg); transform-origin: top; animation: oys-grid 2.4s linear infinite; -webkit-mask-image: linear-gradient(#000, transparent 85%); mask-image: linear-gradient(#000, transparent 85%); }
@@ -1063,7 +1066,7 @@
   --overlay-rgb: 246, 241, 255;
 }
 .t-holo .oys-avatar-inner { box-shadow: 0 0 0 2px rgba(124, 58, 237, .18), 0 14px 34px -12px rgba(124, 58, 237, .55); }
-.t-holo .oys-name { background: linear-gradient(90deg, #7c3aed, #db2777 50%, #0891b2); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.t-holo .oys-name { background: linear-gradient(90deg, #7c3aed, #db2777 50%, #0891b2); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
 /* schillernde Farbflecken und ein wandernder Glanz */
 .t-holo .oys-deco-1 { display: block; width: 320px; height: 320px; left: -110px; top: -60px; border-radius: 50%; background: conic-gradient(from 0deg, #a5f3fc, #c4b5fd, #f9a8d4, #fde68a, #a7f3d0, #a5f3fc); filter: blur(50px); opacity: .7; animation: oys-spin 24s linear infinite; }
 .t-holo .oys-deco-2 { display: block; width: 280px; height: 280px; right: -100px; bottom: 6%; border-radius: 50%; background: conic-gradient(from 90deg, #f9a8d4, #a5b4fc, #99f6e4, #fde68a, #f9a8d4); filter: blur(50px); opacity: .6; animation: oys-spin 30s linear infinite reverse; }
