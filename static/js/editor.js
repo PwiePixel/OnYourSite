@@ -53,7 +53,7 @@
   function uploadUrl(f) { return f ? '/static/uploads/' + encodeURIComponent(f) : ''; }
 
   function toast(msg, type) {
-    var icon = type === 'err' ? 'bx-error-circle' : type === 'info' ? 'bx-info-circle' : 'bx-check-circle';
+    var icon = type === 'err' ? 'bx-error-circle' : type === 'info' ? 'bx-info-circle' : type === 'hc' ? 'bx-hive' : 'bx-check-circle';
     var el = h('<div class="toast ' + (type || 'ok') + '"><i class="bx ' + icon + '"></i><span>' + esc(msg) + '</span></div>');
     $('#toasts').appendChild(el);
     setTimeout(function () { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 300); }, type === 'err' ? 5200 : 3000);
@@ -317,10 +317,16 @@
     if (activeTab === 'design') refreshMinisSoon();
   }
 
+  // Der Speichern-Knopf oben speichert die Seite – im Tab „Code page“ die Code-Seite
+  var pageSaveState = '';
   function setSaveState(s) {
+    pageSaveState = s;
+    if (activeTab !== 'code') paintSave(s);
+  }
+  function paintSave(s) {
     var btn = $('#saveBtn'), label = $('#saveLabel'), icon = $('#saveIcon');
     if (!btn) return;
-    btn.disabled = s === 'saving';
+    btn.disabled = s === 'saving' || (activeTab === 'code' ? !(code.st && code.st.site) : !state.page);
     icon.classList.toggle('hidden', s !== 'saved');
     label.textContent = s === 'saving' ? 'Saving…' : s === 'saved' ? 'Saved' : 'Save';
     btn.classList.toggle('ring-2', s === 'dirty');
@@ -347,6 +353,7 @@
   }
 
   function save() {
+    if (activeTab === 'code') { codeSave(); return; }
     if (!state.page || saving) return;
     var badPw = state.blocks.filter(function (b) {
       return b.protection === 'password' && ((!b.has_password && !b.password) || (b.password && b.password.trim().length < PW_MIN));
@@ -398,8 +405,9 @@
 
   $('#saveBtn').addEventListener('click', save);
 
+  var leaving = false; // nach „Trotzdem wechseln?“ nicht ein zweites Mal fragen
   window.addEventListener('beforeunload', function (ev) {
-    if (dirty) { ev.preventDefault(); ev.returnValue = ''; }
+    if (!leaving && (dirty || codeUnsaved())) { ev.preventDefault(); ev.returnValue = ''; }
   });
   document.addEventListener('keydown', function (ev) {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); save(); }
@@ -564,8 +572,8 @@
 
   function goToPage(id) {
     if (state.page && id === state.page.id) return;
-    if (dirty && !confirm('You have unsaved changes. Switch pages anyway?')) return;
-    dirty = false;
+    if ((dirty || codeUnsaved()) && !confirm('You have unsaved changes. Switch pages anyway?')) return;
+    leaving = true;
     location.href = '/dashboard?page=' + id + location.hash;
   }
 
@@ -623,6 +631,8 @@
         break;
       case 'open-messages': closeDropdowns(); switchTab('messages'); break;
       case 'share': openShareModal(); break;
+      case 'honeycombs': openHoneycombs(); break;
+      case 'open-code': closeModal(); switchTab('code'); break;
     }
   }
 
@@ -709,9 +719,10 @@
   // ================================================================
   // Tabs
   // ================================================================
-  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', settings: 'Settings' };
+  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', settings: 'Settings' };
   function switchTab(name) {
     if (!TAB_TITLES[name]) name = 'content';
+    var wasCode = activeTab === 'code';
     activeTab = name;
     $$('.tab-content').forEach(function (t) { t.classList.add('hidden'); });
     $('#tab-' + name).classList.remove('hidden');
@@ -719,6 +730,16 @@
     $('#pageTitle').textContent = TAB_TITLES[name];
     if (history.replaceState) history.replaceState(null, '', '#' + name);
     $('#editorScroll').scrollTop = 0;
+    document.body.classList.toggle('code-mode', name === 'code');
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code';
+    if (wasCode !== (name === 'code')) fitPhone();
+    paintSave(name === 'code' ? code.state : pageSaveState);
+    if (name === 'code') loadCode();
+    if (wasCode && name !== 'code' && state.page) {
+      updatePageInfo();
+      $('#pvLiveLabel').textContent = 'Live preview';
+      preview.refreshIfStale();
+    }
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
@@ -1145,7 +1166,7 @@
     if (icon && icon.indexOf('brand:') === 0) { var b = brand(icon.slice(6)); return '<span class="w-5 h-5 inline-block">' + brandSvg(icon.slice(6), 'w-5 h-5') + '</span> ' + esc(b ? b.name : ''); }
     if (icon && icon.indexOf('bx') === 0) return '<i class="' + esc(icon) + ' text-lg"></i> Custom icon';
     var br = detectBrand(url);
-    return br ? '<span class="w-5 h-5 inline-block">' + brandSvg(br, 'w-5 h-5') + '</span> Automatic (' + esc(brand(br).name) + ')' : '<i class="bx bx-magic-wand text-lg"></i> Automatic';
+    return br ? '<span class="w-5 h-5 inline-block">' + brandSvg(br, 'w-5 h-5') + '</span> Automatic (' + esc(brand(br).name) + ')' : '<i class="bx bxs-magic-wand text-lg"></i> Automatic';
   }
 
   function effectPane(b) {
@@ -1356,7 +1377,7 @@
   // ---------- Symbol-Auswahl ----------
   function openIconPicker(b) {
     var cur = b.data.icon || '';
-    var html = '<div class="chips mb-3"><button type="button" class="chip' + (!cur ? ' on' : '') + '" data-icon=""><i class="bx bx-magic-wand"></i> Automatic</button>' +
+    var html = '<div class="chips mb-3"><button type="button" class="chip' + (!cur ? ' on' : '') + '" data-icon=""><i class="bx bxs-magic-wand"></i> Automatic</button>' +
       '<button type="button" class="chip' + (cur === 'none' ? ' on' : '') + '" data-icon="none"><i class="bx bx-block"></i> No icon</button></div>' +
       '<div class="add-group">Brands</div><div class="icon-grid">' + E.brands.map(function (x) {
         return '<button type="button" class="brand' + (cur === 'brand:' + x.key ? ' on' : '') + '" style="--c:' + x.color + '" data-icon="brand:' + x.key + '" title="' + esc(x.name) + '">' + brandSvg(x.key) + '</button>';
@@ -1477,7 +1498,10 @@
         '<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">' + (s.entrance.music ? esc(s.entrance.music) : 'No music yet') + '</div>' +
         (s.entrance.music ? '<audio controls preload="none" src="' + esc(uploadUrl(s.entrance.music)) + '" class="mt-2 w-full" style="height:32px"></audio>' : '<div class="text-xs text-gray-500">Starts as soon as someone enters</div>') + '</div>' +
         '<button type="button" class="btn-secondary" id="musicUp"><i class="bx bx-upload"></i>' + (s.entrance.music ? 'Replace' : 'Upload') + '</button>' +
-        (s.entrance.music ? '<button type="button" class="icon-btn danger" id="musicDel"><i class="bx bx-trash"></i></button>' : '') + '</div></div>' +
+        (s.entrance.music ? '<button type="button" class="icon-btn danger" id="musicDel"><i class="bx bx-trash"></i></button>' : '') + '</div>' +
+        '<label class="lbl mt-4">…or paste a link <small>YouTube video, YouTube Music, playlist or an MP3 link</small></label>' +
+        '<div class="input-group"><span class="addon left" id="musicLinkIcon"><i class="bx bx-link"></i></span><input class="field" data-bind="page.settings.entrance.music_url" id="musicLink" placeholder="https://youtube.com/watch?v=…" autocomplete="off"></div>' +
+        '<p class="hint" id="musicLinkHint"></p></div>' +
         '<div class="field-row cols-2"><div><label class="lbl">Volume <small id="volVal">' + s.entrance.volume + '%</small></label><input type="range" class="range" min="5" max="100" step="5" data-bind="page.settings.entrance.volume"></div>' +
         '<div class="flex items-end"><label class="switch"><input type="checkbox" data-bind="page.settings.entrance.loop"><span class="track"></span><span class="sw-text">Play on loop</span></label></div></div>' +
         '<button type="button" class="btn-secondary" id="testEntrance"><i class="bx bx-play-circle"></i> Test the entrance in the preview</button>'
@@ -1537,6 +1561,19 @@
         });
       });
     });
+    // Hinweis zum Musik-Link: YouTube erkannt? Wird die hochgeladene Datei bevorzugt?
+    var musicLink = $('#musicLink');
+    function musicLinkHint() {
+      var v = (musicLink.value || '').trim(), hint = $('#musicLinkHint'), icon = $('#musicLinkIcon');
+      var isYt = detectEmbed(v) === 'youtube', isList = isYt && /[?&]list=/.test(v) && !/[?&]v=|youtu\.be\//.test(v);
+      icon.innerHTML = isYt ? '<i class="bx bxl-youtube" style="color:#ff0033"></i>' : '<i class="bx bx-link"></i>';
+      if (!v) hint.textContent = 'YouTube only loads after a visitor taps the entrance.';
+      else if (s.entrance.music) hint.textContent = 'Your uploaded music is used – remove it to play this link instead.';
+      else if (isYt) hint.textContent = isList ? 'YouTube playlist – plays in order after the tap.' : 'YouTube video – only the sound plays, the video stays hidden.';
+      else if (/\.(mp3|m4a|ogg|wav)(\?|$)/i.test(v)) hint.textContent = 'Music file – plays directly.';
+      else hint.textContent = 'Use a YouTube link or a direct link to an MP3 file.';
+    }
+    if (musicLink) { musicLink.addEventListener('input', musicLinkHint); musicLinkHint(); }
     var musicDel = $('#musicDel');
     if (musicDel) musicDel.addEventListener('click', function () { s.entrance.music = ''; renderDesign(); markDirty({ fast: true }); });
     var test = $('#testEntrance');
@@ -1775,6 +1812,532 @@
   }
 
   // ================================================================
+  // Honigwaben: Kontostand oben, Fenster mit „So verdienst du mehr“ und Verlauf
+  // ================================================================
+  var hc = E.honeycombs || { balance: 0, earned: [], history: [], rules: {} };
+  function setBalance(n, pop) {
+    hc.balance = n;
+    $('#hcBalance').textContent = fmtNum(n);
+    if (pop) { var b = $('#hcBtn'); b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
+  }
+
+  function hcBody() {
+    var r = hc.rules || {};
+    var rules = [
+      { icon: 'bx-calendar-check', title: 'Be active', text: 'Open your editor – once a day', amount: r.daily, done: hc.today, doneText: 'Collected today – come back tomorrow' },
+      { icon: 'bx-user-check', title: 'Complete your profile', text: 'A profile picture, a bio and at least 3 links', amount: r.profile, done: hc.profile, doneText: 'Done – thanks!' },
+      { icon: 'bx-trending-up', title: 'Get visitors', text: 'For every ' + fmtNum(r.views_step) + ' views of your pages – one reward a day (' + hc.viewRewards + ' of ' + hc.maxViewRewards + ' collected)', amount: r.views, done: hc.viewRewards >= hc.maxViewRewards, doneText: 'All ' + hc.maxViewRewards + ' rewards collected' },
+      { icon: 'bx-gift', title: 'Gifts from the team', text: 'For great pages, events and helping others', amount: null }
+    ].filter(function (x) { return x.amount === null || x.amount > 0; });
+    var html = '<div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(hc.balance) + '</b><small>honeycombs</small></div></div>' +
+      '<h4 class="hc-h">How to earn them</h4><div class="hc-rules">' + rules.map(function (x) {
+        return '<div class="hc-rule' + (x.done ? ' done' : '') + '"><span class="ri"><i class="bx ' + (x.done ? 'bx-check' : x.icon) + '"></i></span>' +
+          '<span class="min-w-0"><b>' + esc(x.title) + '</b><small>' + esc(x.done ? x.doneText : x.text) + '</small></span>' +
+          (x.amount ? '<span class="amt">+' + fmtNum(x.amount) + '</span>' : '') + '</div>';
+      }).join('') + '</div>' +
+      '<h4 class="hc-h">What you can unlock</h4>' +
+      '<div class="hc-rule"><span class="ri"><i class="bx bx-code-alt"></i></span><span class="min-w-0"><b>Your own code page</b><small>Host a website you build yourself with HTML, CSS and JavaScript</small></span>' +
+        '<button type="button" class="btn-secondary" data-action="open-code">' + (hc.codeUnlocked ? 'Open' : fmtNum(r.code_page) + ' <i class="bx bx-hive"></i>') + '</button></div>' +
+      '<h4 class="hc-h">History</h4>';
+    if (!hc.history || !hc.history.length) return html + '<p class="hint">Nothing yet – your first honeycombs are on their way.</p>';
+    return html + '<div>' + hc.history.map(function (x) {
+      var cls = x.amount > 0 ? 'plus' : x.amount < 0 ? 'minus' : 'zero';
+      return '<div class="hc-hist-row"><span class="min-w-0">' + esc(x.text) + '<small>' + esc(fmtDate(x.at, true)) + '</small></span>' +
+        '<span class="amt ' + cls + '">' + (x.amount > 0 ? '+' + fmtNum(x.amount) : x.amount < 0 ? '−' + fmtNum(-x.amount) : 'free') + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function openHoneycombs() {
+    closeDropdowns();
+    openModal('Your honeycombs', '<div id="hcModal">' + hcBody() + '</div>');
+    api('honeycombs').then(function (res) {
+      if (!res || !res.ok) return;
+      hc = res.honeycombs;
+      setBalance(hc.balance);
+      var box = $('#hcModal');
+      if (box) box.innerHTML = hcBody();
+    });
+  }
+
+  // ================================================================
+  // Tab: Code-Seite – eigene Website aus HTML, CSS und JavaScript
+  // ================================================================
+  var code = { st: null, files: {}, saved: {}, cur: 'index.html', docs: {}, cm: null, saving: false, loading: false, state: '', previewed: false };
+  var CODE_PATH = /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*(?:\/[a-z0-9_-]+(?:\.[a-z0-9_-]+)*){0,3}$/;
+  var CODE_ICONS = { html: 'bxl-html5', htm: 'bxl-html5', css: 'bxl-css3', js: 'bxl-javascript', mjs: 'bxl-javascript', json: 'bx-code-curly', svg: 'bx-shape-polygon', xml: 'bx-code', md: 'bx-file', txt: 'bx-file', webmanifest: 'bx-mobile-alt' };
+  var utf8 = window.TextEncoder ? new TextEncoder() : null;
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function utf8Len(s) { return utf8 ? utf8.encode(s).length : unescape(encodeURIComponent(s)).length; }
+  function fmtBytes(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? Math.round(b / 1024) + ' KB' : b + ' B'; }
+  function codeExt(p) { var m = /\.([a-z0-9]+)$/.exec(p); return m ? m[1] : ''; }
+  function codeMode(p) {
+    var x = codeExt(p);
+    if (x === 'html' || x === 'htm') return 'htmlmixed';
+    if (x === 'css') return 'css';
+    if (x === 'js' || x === 'mjs') return 'javascript';
+    if (x === 'json' || x === 'webmanifest') return { name: 'javascript', json: true };
+    if (x === 'svg' || x === 'xml') return 'xml';
+    return null;
+  }
+  // gleiche Regeln wie oys_code_valid_path() auf dem Server
+  function codeCheckPath(p) {
+    p = String(p || '').trim().toLowerCase().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!p || p.length > 120 || !CODE_PATH.test(p)) return { error: 'Use lowercase letters, numbers, - and _ – folders with “/”, e.g. about.html or css/theme.css.' };
+    var types = code.st.site.limits.types;
+    if (types.indexOf(codeExt(p)) === -1) return { error: 'Allowed file types: ' + types.join(', ') + '.' };
+    return { path: p };
+  }
+  function codeSort(a, b) {
+    if (a === 'index.html') return -1;
+    if (b === 'index.html') return 1;
+    var da = a.indexOf('/') !== -1, db = b.indexOf('/') !== -1;
+    return da !== db ? (da ? 1 : -1) : a < b ? -1 : a > b ? 1 : 0;
+  }
+  function codeUnsaved() {
+    if (!code.st || !code.st.site) return false;
+    var k;
+    for (k in code.files) if (has(code.files, k) && code.files[k] !== code.saved[k]) return true;
+    for (k in code.saved) if (has(code.saved, k) && !has(code.files, k)) return true;
+    return false;
+  }
+  function codeErr(box, msg) {
+    var el = $('#codeErr', box);
+    if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+  }
+
+  function loadCode() {
+    var root = $('#tab-code');
+    codeLayout();
+    if (code.st) {
+      if (!root.innerHTML) renderCode();
+      else if (code.cm) setTimeout(function () { code.cm.refresh(); }, 0); // war ausgeblendet
+      codePreview();
+      return;
+    }
+    if (code.loading) return;
+    code.loading = true;
+    root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading…</div>';
+    apiGet('code').then(function (res) {
+      code.loading = false;
+      if (!res || !res.ok) { root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your code page – please reload.</div>'; return; }
+      setCodeState(res);
+      renderCode();
+    });
+  }
+
+  // Antwort vom Server übernehmen. keepEdits: eigene, noch nicht gespeicherte Änderungen behalten
+  function setCodeState(res, keepEdits) {
+    code.st = res;
+    setBalance(res.balance);
+    hc.codeUnlocked = res.unlocked;
+    if (res.site) {
+      if (!keepEdits) { code.files = clone(res.site.files); code.docs = {}; }
+      code.saved = clone(res.site.files);
+      if (!has(code.files, code.cur)) code.cur = has(code.files, 'index.html') ? 'index.html' : Object.keys(code.files).sort(codeSort)[0];
+    }
+    codeLayout();
+  }
+
+  // Ohne Code-Seite gibt es nichts in der Handy-Vorschau zu zeigen
+  function codeLayout() {
+    var hide = !(code.st && code.st.site) || !state.page;
+    if (document.body.classList.contains('code-nosite') === hide) return;
+    document.body.classList.toggle('code-nosite', hide);
+    fitPhone(); // die Vorschau war evtl. ausgeblendet und muss neu vermessen werden
+  }
+
+  function renderCode() {
+    var st = code.st, root = $('#tab-code');
+    if (!st.unlocked) root.innerHTML = codeLockedHtml(st);
+    else if (!st.site) root.innerHTML = codeCreateHtml(st);
+    else renderCodeEditor();
+    paintSave(activeTab === 'code' ? code.state : pageSaveState);
+  }
+
+  function codeTermsHtml() {
+    return '<label class="code-terms"><input type="checkbox" id="codeTerms"><span>I’ve read the <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener">rules for code pages</a>. My page won’t sell anything or make money – it’s only there to inform or to promote something.</span></label>';
+  }
+
+  function codeLockedHtml(st) {
+    var enough = st.balance >= st.cost;
+    var pct = st.cost > 0 ? Math.min(100, Math.round(st.balance / st.cost * 100)) : 100;
+    return '<div class="panel code-hero">' +
+      '<div class="code-hero-ico"><i class="bx bx-code-alt"></i></div>' +
+      '<span class="bdg brand"><i class="bx bx-hive"></i> Unlock with honeycombs</span>' +
+      '<h2>Your own website on OnYourSite</h2>' +
+      '<p>Build your own page with HTML, CSS and JavaScript and host it at <b class="text-white">yourname.' + esc(E.baseHost) + '</b> – for everyone who wants more than a link page.</p>' +
+      '<ul class="code-feats">' +
+        '<li><i class="bx bx-check"></i> Code editor with syntax highlighting</li>' +
+        '<li><i class="bx bx-check"></i> Up to 30 files: HTML, CSS, JS, JSON, SVG …</li>' +
+        '<li><i class="bx bx-check"></i> Your own address – live as soon as you save</li>' +
+        '<li><i class="bx bx-check"></i> Use the images you upload</li>' +
+      '</ul>' +
+      '<div class="code-price">' +
+        '<div class="flex items-center justify-between text-sm mb-2"><span class="text-gray-400">Your honeycombs</span><b class="text-white">' + fmtNum(st.balance) + ' / ' + fmtNum(st.cost) + ' <i class="bx bx-hive text-brand-400"></i></b></div>' +
+        '<div class="hc-bar"><span style="width:' + pct + '%"></span></div>' +
+        '<button type="button" class="btn-primary w-full justify-center mt-4" data-code="unlock"' + (enough ? '' : ' disabled') + '><i class="bx bx-lock-open-alt"></i> ' +
+          (enough ? 'Unlock for ' + fmtNum(st.cost) + ' honeycombs' : fmtNum(st.cost - st.balance) + ' more honeycombs needed') + '</button>' +
+        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs"><i class="bx bx-hive"></i> How to earn honeycombs</button>' +
+      '</div>' +
+      '<p class="hint mt-6">Code pages are for personal, informational and promotional pages – no shops and no selling. <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener" class="text-brand-400 hover:text-white">Rules for code pages</a></p>' +
+    '</div>';
+  }
+
+  function openUnlockModal() {
+    var st = code.st;
+    openModal('Unlock your code page',
+      '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.cost) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
+      '<p class="text-sm text-gray-400 mb-4">You unlock it once and keep it for good. Afterwards you have ' + fmtNum(st.balance - st.cost) + ' honeycombs left.</p>' +
+      (st.terms ? '' : codeTermsHtml()) +
+      '<p class="text-sm text-red-400 mt-3 hidden" id="codeErr"></p>',
+      '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="codeUnlockGo"><i class="bx bx-lock-open-alt"></i> Unlock</button>',
+      function (box) {
+        $('#codeUnlockGo', box).addEventListener('click', function () {
+          var btn = this, terms = $('#codeTerms', box);
+          if (terms && !terms.checked) { codeErr(box, 'Please accept the rules for code pages first.'); return; }
+          btn.disabled = true;
+          api('code-unlock', { terms: true }).then(function (res) {
+            btn.disabled = false;
+            if (!res || !res.ok) { codeErr(box, (res && res.error) || 'That didn’t work.'); return; }
+            closeModal();
+            setCodeState(res);
+            setBalance(res.balance, true);
+            renderCode();
+            toast('Code page unlocked – ' + fmtNum(st.cost) + ' honeycombs spent.', 'hc');
+          });
+        });
+      });
+  }
+
+  function codeCreateHtml(st) {
+    var suggestion = state.page ? (state.page.slug + '-dev').slice(0, 30) : '';
+    return '<div class="panel max-w-xl mx-auto">' +
+      '<div class="flex items-center gap-3 mb-5"><span class="code-mini-ico"><i class="bx bx-code-alt"></i></span><div><h2 class="text-base font-semibold text-white">Create your code page</h2><p class="text-xs text-gray-500">Choose the address of your website – you can change it later.</p></div></div>' +
+      '<label class="lbl">Address</label>' +
+      '<div class="input-group"><input class="field" id="codeSlug" maxlength="30" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="yourname-dev" value="' + esc(suggestion) + '"><span class="addon right">.' + esc(E.baseHost) + '</span></div>' +
+      '<p class="hint">2–30 characters: a–z, 0–9 and hyphens. It can’t be the address of a link page.</p>' +
+      '<label class="lbl mt-4">Name</label><input class="field" id="codeTitle" maxlength="120" placeholder="e.g. My portfolio">' +
+      (st.terms ? '' : '<div class="mt-4">' + codeTermsHtml() + '</div>') +
+      '<p class="text-sm text-red-400 mt-3 hidden" id="codeErr"></p>' +
+      '<button type="button" class="btn-primary mt-5" data-code="create"><i class="bx bx-plus"></i> Create code page</button>' +
+    '</div>';
+  }
+
+  function createCodeSite(btn) {
+    var root = $('#tab-code'), terms = $('#codeTerms', root);
+    if (terms && !terms.checked) { codeErr(root, 'Please accept the rules for code pages first.'); return; }
+    btn.disabled = true;
+    api('code-create', { slug: $('#codeSlug').value, title: $('#codeTitle').value, terms: true }).then(function (res) {
+      btn.disabled = false;
+      if (!res || !res.ok) { codeErr(root, (res && res.error) || 'That didn’t work.'); return; }
+      setCodeState(res);
+      code.previewed = false;
+      renderCode();
+      toast('Your code page is live at ' + prettyUrl(res.site.url) + '.');
+    });
+  }
+
+  function renderCodeEditor() {
+    $('#tab-code').innerHTML =
+      '<div id="codeHead"></div>' +
+      '<div class="code-ide">' +
+        '<div class="code-files"><div class="code-files-head"><span>Files</span><button type="button" class="icon-btn sm" data-code="new" title="New file" aria-label="New file"><i class="bx bx-plus"></i></button></div>' +
+          '<div class="code-file-list custom-scrollbar" id="codeFileList"></div><div class="code-files-foot" id="codeUsage"></div></div>' +
+        '<div class="code-main"><div class="code-bar"><b id="codeCur"></b><span class="acts">' +
+          '<button type="button" class="icon-btn sm" data-code="image" title="Upload an image and insert its link" aria-label="Insert image"><i class="bx bx-image-add"></i></button>' +
+          '<button type="button" class="icon-btn sm" data-code="rename" title="Rename file" aria-label="Rename file"><i class="bx bx-rename"></i></button>' +
+          '<button type="button" class="icon-btn sm danger" data-code="delete" title="Delete file" aria-label="Delete file"><i class="bx bx-trash"></i></button>' +
+        '</span></div><div class="code-editor" id="codeEditor"></div></div>' +
+      '</div>' +
+      '<p class="hint"><span class="hover-only">Ctrl+S saves. </span>Visitors see your changes as soon as you save.</p>' +
+      '<div class="code-settings grid gap-4 md:grid-cols-2 mt-8">' +
+        '<div class="panel"><h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2"><i class="bx bx-purchase-tag-alt text-brand-400"></i> Name</h3>' +
+          '<input class="field" id="codeTitleEdit" maxlength="120"><button type="button" class="btn-secondary mt-3" data-code="title">Save name</button></div>' +
+        '<div class="panel"><h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2"><i class="bx bx-link text-brand-400"></i> Address</h3>' +
+          '<div class="input-group"><input class="field" id="codeSlugEdit" maxlength="30" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="addon right">.' + esc(E.baseHost) + '</span></div>' +
+          '<button type="button" class="btn-secondary mt-3" data-code="address">Change address</button></div>' +
+      '</div>' +
+      '<div class="panel mt-4 text-sm text-gray-400 code-info"><i class="bx bx-shield-quarter text-xl text-brand-400 shrink-0"></i><div><b class="text-white">Good to know</b><ul>' +
+        '<li>Code pages are made of HTML, CSS and JavaScript – there’s no PHP or other server code.</li>' +
+        '<li>For everyone’s safety your page runs in a sandbox: cookies and localStorage aren’t available, and a small “OnYourSite” badge is shown.</li>' +
+        '<li>Personal, informational and promotional pages only – no shops, no payments, no selling. <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener">Rules for code pages</a></li>' +
+      '</ul></div></div>';
+    var site = code.st.site;
+    $('#codeTitleEdit').value = site.title;
+    $('#codeSlugEdit').value = site.slug;
+    renderCodeHead();
+    mountCodeEditor();
+    renderCodeFiles();
+    codePreview();
+  }
+
+  function renderCodeHead() {
+    var site = code.st.site, head = $('#codeHead');
+    if (!head) return;
+    var badge = site.blocked ? '<span class="bdg red">Blocked</span>' : site.online ? '<span class="bdg green">Online</span>' : '<span class="bdg">Offline</span>';
+    head.innerHTML = '<div class="code-head">' +
+        '<div class="min-w-0"><h2 class="text-base font-semibold text-white flex items-center gap-2 flex-wrap"><span class="truncate">' + esc(site.title || site.slug) + '</span> ' + badge + '</h2>' +
+          '<a class="code-url" id="codeUrl" href="' + esc(site.url) + '/" target="_blank" rel="noopener">' + esc(prettyUrl(site.url)) + ' <i class="bx bx-link-external"></i></a></div>' +
+        '<div class="flex items-center gap-3 flex-wrap"><span class="text-xs text-gray-500">' + esc(plural(site.views, 'view', 'views')) + '</span>' +
+          '<label class="switch"><input type="checkbox" id="codeOnline"' + (site.online ? ' checked' : '') + (site.blocked ? ' disabled' : '') + '><span class="track"></span><span class="sw-text">Online</span></label>' +
+          '<button type="button" class="btn-secondary" data-code="preview"><i class="bx bx-show"></i> Preview</button></div>' +
+      '</div>' +
+      (site.blocked ? '<div class="code-blocked"><i class="bx bx-block"></i><div><b>Your code page has been blocked by the team.</b><p>' + esc(site.blocked_reason || 'It broke the rules for code pages.') + ' Visitors can’t see it right now. If you think this is a mistake, please contact us.</p></div></div>' : '');
+  }
+
+  function renderCodeFiles() {
+    var list = $('#codeFileList');
+    if (!list) return;
+    var paths = Object.keys(code.files).sort(codeSort), bytes = 0;
+    list.innerHTML = paths.map(function (p) {
+      bytes += utf8Len(code.files[p]);
+      return '<button type="button" class="code-file' + (p === code.cur ? ' on' : '') + '" data-file="' + esc(p) + '" title="' + esc(p) + '"><i class="bx ' + (CODE_ICONS[codeExt(p)] || 'bx-file') + '"></i><span>' + esc(p) + '</span>' +
+        (code.files[p] !== code.saved[p] ? '<i class="chg" title="Not saved yet"></i>' : '') + '</button>';
+    }).join('');
+    var lim = code.st.site.limits;
+    $('#codeUsage').innerHTML = esc(paths.length + ' / ' + lim.files + ' files') + '<br>' + esc(fmtBytes(bytes) + ' / ' + fmtBytes(lim.total));
+    $('#codeCur').textContent = code.cur;
+    $('[data-code="rename"]').disabled = $('[data-code="delete"]').disabled = code.cur === 'index.html' || code.st.site.blocked;
+  }
+  var renderCodeFilesSoon = debounce(renderCodeFiles, 300);
+
+  // Editor: sofort ein Textfeld, CodeMirror (Farben, Klammern, Zeilennummern) wird nachgeladen
+  var cmLoading = null;
+  function loadCodeMirror() {
+    if (window.CodeMirror) return Promise.resolve(window.CodeMirror);
+    if (!cmLoading) {
+      cmLoading = new Promise(function (resolve, reject) {
+        var css = document.createElement('link');
+        css.rel = 'stylesheet';
+        css.href = E.cm.css;
+        document.head.appendChild(css);
+        var js = document.createElement('script');
+        js.src = E.cm.js;
+        js.onload = function () { window.CodeMirror ? resolve(window.CodeMirror) : reject(); };
+        js.onerror = reject;
+        document.head.appendChild(js);
+      });
+      cmLoading.catch(function () { cmLoading = null; });
+    }
+    return cmLoading;
+  }
+  function codeDoc(p) {
+    if (!code.docs[p]) code.docs[p] = window.CodeMirror.Doc(code.files[p] || '', codeMode(p));
+    return code.docs[p];
+  }
+  function mountCodeEditor() {
+    var holder = $('#codeEditor'), readOnly = code.st.site.blocked;
+    code.cm = null;
+    holder.innerHTML = '<textarea class="code-area custom-scrollbar" id="codeArea" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Code"></textarea>';
+    var ta = $('#codeArea');
+    ta.value = code.files[code.cur] || '';
+    ta.readOnly = readOnly;
+    ta.addEventListener('input', function () { code.files[code.cur] = ta.value; codeChanged(); });
+    ta.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Tab' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) { ev.preventDefault(); codeInsertText(ta, '  '); }
+    });
+    loadCodeMirror().then(function (CM) {
+      if (!document.body.contains(ta)) return; // Tab inzwischen neu aufgebaut
+      code.docs = {};
+      var cm = CM(function (el) { holder.replaceChild(el, ta); }, {
+        value: codeDoc(code.cur), theme: 'oys', lineNumbers: true, tabSize: 2, indentUnit: 2, indentWithTabs: false,
+        autoCloseTags: true, autoCloseBrackets: true, matchBrackets: true, styleActiveLine: true, readOnly: readOnly,
+        extraKeys: {
+          Tab: function (c) { if (c.somethingSelected()) c.indentSelection('add'); else c.replaceSelection('  ', 'end'); },
+          'Shift-Tab': 'indentLess'
+        }
+      });
+      code.cm = cm;
+      cm.on('change', function () { code.files[code.cur] = cm.getValue(); codeChanged(); });
+    }).catch(function () { /* das Textfeld bleibt */ });
+  }
+  function codeInsertText(ta, text) {
+    ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end');
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function codeChanged() {
+    setCodeSaveState(codeUnsaved() ? 'dirty' : '');
+    renderCodeFilesSoon();
+  }
+
+  function openCodeFile(p) {
+    if (!has(code.files, p)) p = 'index.html';
+    code.cur = p;
+    if (code.cm) { code.cm.swapDoc(codeDoc(p)); code.cm.focus(); }
+    else if ($('#codeArea')) $('#codeArea').value = code.files[p];
+    renderCodeFiles();
+  }
+
+  function codeTemplate(p) {
+    if (!/\.html?$/.test(p)) return '';
+    var name = p.replace(/^.*\//, '').replace(/\.html?$/, '').replace(/[-_]+/g, ' ');
+    var title = name.charAt(0).toUpperCase() + name.slice(1);
+    return '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>' + title + '</title>\n  <link rel="stylesheet" href="/style.css">\n</head>\n<body>\n  <main class="card">\n    <h1>' + title + '</h1>\n    <p><a href="/">Back to the start page</a></p>\n  </main>\n</body>\n</html>\n';
+  }
+
+  function openCodeFileModal(rename) {
+    var lim = code.st.site.limits, old = code.cur;
+    if (!rename && Object.keys(code.files).length >= lim.files) { toast('A code page can have up to ' + lim.files + ' files.', 'err'); return; }
+    openModal(rename ? 'Rename file' : 'New file',
+      '<label class="lbl">File name</label><input class="field" id="cfName" maxlength="120" placeholder="about.html" autocomplete="off" autocapitalize="off" spellcheck="false" value="' + (rename ? esc(old) : '') + '">' +
+      '<p class="hint">Allowed: ' + esc(lim.types.join(', ')) + '. Use “/” for folders, e.g. css/theme.css. A page like about.html opens at /about, and a 404.html is shown for addresses that don’t exist.</p>' +
+      '<p class="text-sm text-red-400 mt-3 hidden" id="codeErr"></p>',
+      '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="cfGo"><i class="bx ' + (rename ? 'bx-check' : 'bx-plus') + '"></i> ' + (rename ? 'Rename' : 'Create file') + '</button>',
+      function (box) {
+        var input = $('#cfName', box);
+        var go = function () {
+          var r = codeCheckPath(input.value);
+          if (r.error) { codeErr(box, r.error); return; }
+          if (rename && r.path === old) { closeModal(); return; }
+          if (has(code.files, r.path)) { codeErr(box, 'There’s already a file called ' + r.path + '.'); return; }
+          if (rename) {
+            code.files[r.path] = code.files[old];
+            delete code.files[old];
+            delete code.docs[old];
+          } else {
+            code.files[r.path] = codeTemplate(r.path);
+          }
+          closeModal();
+          openCodeFile(r.path);
+          codeChanged();
+        };
+        $('#cfGo', box).addEventListener('click', go);
+        input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(); });
+      });
+  }
+
+  function deleteCodeFile() {
+    var p = code.cur;
+    if (p === 'index.html' || !confirm('Delete ' + p + '? It’s removed from your page when you save.')) return;
+    delete code.files[p];
+    delete code.docs[p];
+    openCodeFile('index.html');
+    codeChanged();
+  }
+
+  function insertCodeImage() {
+    pickFile('image/*').then(function (files) {
+      if (!files.length) return;
+      toast('Uploading image…', 'info');
+      upload('image', files[0]).then(function (res) {
+        if (!res || !res.ok) { toast((res && res.error) || 'Upload failed.', 'err'); return; }
+        var ext = codeExt(code.cur);
+        var snippet = ext === 'css' ? 'url("' + res.url + '")' : /^html?$/.test(ext) ? '<img src="' + res.url + '" alt="">' : res.url;
+        if (code.cm) { code.cm.replaceSelection(snippet); code.cm.focus(); }
+        else codeInsertText($('#codeArea'), snippet);
+        toast('Image uploaded – its link is now in ' + code.cur + '. Save to keep it.');
+      });
+    });
+  }
+
+  function setCodeSaveState(s) {
+    code.state = s;
+    if (activeTab === 'code') paintSave(s);
+  }
+
+  function codeSave() {
+    var st = code.st;
+    if (!st || !st.site || code.saving) return;
+    if (st.site.blocked) { toast('Your code page is blocked and can’t be changed right now.', 'err'); return; }
+    var files = {}, deleted = [];
+    Object.keys(code.files).forEach(function (p) { if (code.files[p] !== code.saved[p]) files[p] = code.files[p]; });
+    Object.keys(code.saved).forEach(function (p) { if (!has(code.files, p)) deleted.push(p); });
+    if (!Object.keys(files).length && !deleted.length) { toast('Nothing to save – your page is up to date.', 'info'); return; }
+    code.saving = true;
+    setCodeSaveState('saving');
+    api('code-save', { files: files, deleted: deleted }).then(function (res) {
+      code.saving = false;
+      if (!res || !res.ok) { setCodeSaveState('dirty'); toast((res && res.error) || 'Saving failed.', 'err'); return; }
+      setCodeState(res, true);
+      setCodeSaveState(codeUnsaved() ? 'dirty' : 'saved');
+      renderCodeFiles();
+      codePreview(true);
+      toast('Saved – your code page is up to date.');
+    });
+  }
+
+  // Name, Adresse und Online-Schalter (ohne die Dateien anzufassen)
+  function codeSettings(action, body, done) {
+    return api(action, body).then(function (res) {
+      if (!res || !res.ok) { toast((res && res.error) || 'That didn’t work.', 'err'); return false; }
+      setCodeState(res, true);
+      renderCodeHead();
+      if (done) done(res);
+      return true;
+    });
+  }
+
+  function onCodeClick(ev) {
+    var f = ev.target.closest('[data-file]');
+    if (f) { openCodeFile(f.dataset.file); return; }
+    var b = ev.target.closest('[data-code]');
+    if (!b || b.disabled) return;
+    switch (b.dataset.code) {
+      case 'unlock': openUnlockModal(); break;
+      case 'create': createCodeSite(b); break;
+      case 'new': openCodeFileModal(false); break;
+      case 'rename': openCodeFileModal(true); break;
+      case 'delete': deleteCodeFile(); break;
+      case 'image': insertCodeImage(); break;
+      case 'preview': openCodeBig(); break;
+      case 'title':
+        codeSettings('code-save', { files: {}, deleted: [], title: $('#codeTitleEdit').value }, function () {
+          $('#codeTitleEdit').value = code.st.site.title;
+          toast('Name saved.');
+        });
+        break;
+      case 'address':
+        var slug = $('#codeSlugEdit').value;
+        if (slug === code.st.site.slug) return;
+        if (!confirm('Move your code page to ' + slug + '.' + E.baseHost + '? The old address stops working right away.')) return;
+        codeSettings('code-address', { slug: slug }, function (res) {
+          $('#codeSlugEdit').value = res.site.slug;
+          codePreview(true);
+          toast('Your code page is now at ' + prettyUrl(res.site.url) + '.');
+        });
+        break;
+    }
+  }
+  $('#tab-code').addEventListener('click', onCodeClick);
+  $('#tab-code').addEventListener('input', function (ev) {
+    if (ev.target.id === 'codeSlug' || ev.target.id === 'codeSlugEdit') ev.target.value = ev.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  });
+  $('#tab-code').addEventListener('change', function (ev) {
+    if (ev.target.id !== 'codeOnline') return;
+    var on = ev.target.checked;
+    codeSettings('code-save', { files: {}, deleted: [], online: on }, function () {
+      toast(on ? 'Your code page is online.' : 'Your code page is offline – visitors see a notice, you still see it in the preview.');
+      codePreview(true);
+    }).then(function (ok) { if (!ok) ev.target.checked = !on; });
+  });
+
+  // Vorschau: im Handy-Rahmen rechts (gespeicherter Stand) und als große Ansicht
+  function codeUrl() { return code.st && code.st.site ? code.st.site.url + '/' : ''; }
+  // Die Vorschau-Adresse enthält einen Schlüssel: so sieht nur der Besitzer die Seite, auch wenn sie offline ist
+  function codePreviewSrc() { return code.st.site.preview + '&r=' + Date.now(); }
+  function codePreview(reload) {
+    var url = codeUrl(), frame = $('#pvCode');
+    frame.classList.toggle('on', !!url);
+    if (!url || activeTab !== 'code') return;
+    $('#pvOpen').href = url;
+    $('#pvLiveLabel').textContent = 'Saved version';
+    $('#bigPreviewUrl').textContent = prettyUrl(url);
+    if (reload || !code.previewed) {
+      code.previewed = true;
+      frame.src = codePreviewSrc();
+    }
+  }
+  function openCodeBig() {
+    var url = codeUrl(), big = $('#bigPreviewFrame');
+    if (!url) return;
+    big.removeAttribute('srcdoc');
+    big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+    big.src = codePreviewSrc();
+    $('#bigPreviewUrl').textContent = prettyUrl(url);
+    $('#bigPreview').classList.remove('hidden');
+  }
+
+  // ================================================================
   // Tab: Einstellungen
   // ================================================================
   // ================================================================
@@ -1963,9 +2526,11 @@
   // ================================================================
   // Vorschau-Steuerung
   // ================================================================
-  $('#pvReload').addEventListener('click', function () { preview.refresh(); });
+  $('#pvReload').addEventListener('click', function () { if (activeTab === 'code') codePreview(true); else preview.refresh(); });
   $('#pvEntrance').addEventListener('click', function () { preview.refresh({ entrance: true, top: true }); });
   $('#pvBig').addEventListener('click', function () {
+    if (activeTab === 'code') { openCodeBig(); return; }
+    $('#bigPreviewFrame').removeAttribute('sandbox');
     $('#bigPreview').classList.remove('hidden');
     $('#bigPreviewFrame').srcdoc = preview.html();
   });
@@ -1994,6 +2559,12 @@
     if (window.OYS_FLASH.success) toast(window.OYS_FLASH.success);
     if (window.OYS_FLASH.error) toast(window.OYS_FLASH.error, 'err');
   }
+  (hc.earned || []).forEach(function (x, i) {
+    setTimeout(function () {
+      toast('+' + fmtNum(x.amount) + ' honeycombs ' + x.text, 'hc');
+      if (i === 0) setBalance(hc.balance, true);
+    }, 700 + i * 700);
+  });
 
   if (state.page) {
     updatePageInfo();
@@ -2015,5 +2586,6 @@
     $('#viewPageLink').classList.add('hidden');
     $('#shareBtn').classList.add('hidden');
     $('#psLabel').textContent = 'No page yet';
+    if (location.hash === '#code') switchTab('code');
   }
 })();

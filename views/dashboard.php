@@ -29,6 +29,9 @@ $editorData = [
     'timezone' => oys_config('timezone', 'Europe/Berlin'),
     'uploadLimitMb' => oys_upload_limit_mb(),
     'qrJs' => oys_asset('/static/vendor/qrcode/qrcode.js'),
+    'honeycombs' => $honeycombs,
+    'cm' => ['js' => oys_asset('/static/vendor/codemirror/codemirror.js'), 'css' => oys_asset('/static/vendor/codemirror/codemirror.css')],
+    'codeTerms' => '/terms/code-pages',
     'slugDaysLeft' => $page && $page['slug_changed_at'] && !$has_premium_access ? max(0, 30 - (int) floor((time() - strtotime($page['slug_changed_at'])) / 86400)) : 0,
     'user' => [
         'name' => $user_data['full_name'] ?? '',
@@ -82,7 +85,8 @@ unset($_SESSION['success'], $_SESSION['error']);
                     <button type="button" data-tab="content" class="nav-btn"><i class='bx bx-layout text-xl'></i> <span class="hidden lg:block text-sm">Content</span></button>
                     <button type="button" data-tab="design" class="nav-btn"><i class='bx bx-palette text-xl'></i> <span class="hidden lg:block text-sm">Design</span></button>
                     <button type="button" data-tab="stats" class="nav-btn"><i class='bx bx-bar-chart-alt-2 text-xl'></i> <span class="hidden lg:block text-sm">Stats</span></button>
-                    <button type="button" data-tab="messages" class="nav-btn"><i class='bx bx-envelope text-xl'></i> <span class="hidden lg:block text-sm">Messages</span><span class="nav-badge" id="navMsgBadge" hidden>0</span></button>
+                    <button type="button" data-tab="messages" class="nav-btn"><i class='bx bx-envelope text-xl'></i> <span class="hidden lg:block text-sm"><span class="nav-full">Messages</span><span class="nav-short">Inbox</span></span><span class="nav-badge" id="navMsgBadge" hidden>0</span></button>
+                    <button type="button" data-tab="code" class="nav-btn"><i class='bx bx-code-alt text-xl'></i> <span class="hidden lg:block text-sm">Code<span class="nav-long"> page</span></span></button>
                     <button type="button" data-tab="settings" class="nav-btn"><i class='bx bx-cog text-xl'></i> <span class="hidden lg:block text-sm">Settings</span></button>
                     <button type="button" id="navPreviewBtn" class="nav-btn nav-preview"><i class='bx bx-mobile-alt text-xl'></i> <span class="hidden lg:block text-sm">Preview</span></button>
                 </nav>
@@ -109,6 +113,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                     <h1 class="text-base font-semibold text-white tracking-tight hidden md:block" id="pageTitle">Content</h1>
                 </div>
                 <div class="flex items-center gap-2 sm:gap-3">
+                    <button type="button" id="hcBtn" class="hc-pill" data-action="honeycombs" title="Your honeycombs" aria-label="Your honeycombs"><i class='bx bx-hive'></i><span id="hcBalance"><?= (int) $honeycombs['balance'] ?></span></button>
                     <div class="relative">
                         <button type="button" id="bellBtn" class="relative w-9 h-9 rounded-lg hover:bg-white/5 border border-transparent hover:border-bordercolor flex items-center justify-center text-gray-400 hover:text-white transition-colors" aria-label="Notifications">
                             <i class='bx bx-bell text-xl'></i><span id="bellBadge" class="bell-badge" hidden>0</span>
@@ -130,7 +135,7 @@ unset($_SESSION['success'], $_SESSION['error']);
             <div class="flex-1 flex overflow-hidden relative">
                 <main id="editorScroll" class="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar relative min-w-0">
                     <?php if (!$page): ?>
-                        <div class="max-w-lg mx-auto mt-10 bg-card border border-bordercolor rounded-2xl p-8 text-center">
+                        <div id="noPageBox" class="max-w-lg mx-auto mt-10 bg-card border border-bordercolor rounded-2xl p-8 text-center">
                             <div class="w-14 h-14 mx-auto rounded-2xl bg-brand-500/20 text-brand-400 flex items-center justify-center text-3xl mb-4"><i class='bx bx-rocket'></i></div>
                             <h2 class="text-xl font-bold text-white mb-2">Create your first page</h2>
                             <p class="text-gray-400 text-sm mb-6">Choose an address – you can still change it later.</p>
@@ -141,6 +146,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                     <div id="tab-design" class="tab-content hidden"></div>
                     <div id="tab-stats" class="tab-content hidden"></div>
                     <div id="tab-messages" class="tab-content hidden"></div>
+                    <div id="tab-code" class="tab-content hidden"></div>
                     <div id="tab-settings" class="tab-content hidden">
                         <div id="settingsDynamic"></div>
                         <section class="max-w-3xl mx-auto mt-8">
@@ -185,6 +191,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                                 <div class="phone-screen">
                                     <iframe class="pv-frame on" title="Preview" id="pvA"></iframe>
                                     <iframe class="pv-frame" title="Preview" id="pvB"></iframe>
+                                    <iframe class="pv-code" title="Preview of your code page" id="pvCode" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe>
                                     <div class="pv-loading" id="pvLoading"><i class='bx bx-loader-alt bx-spin'></i></div>
                                 </div>
                             </div>
@@ -192,7 +199,7 @@ unset($_SESSION['success'], $_SESSION['error']);
                         <div class="preview-dots" id="previewDots"></div>
                     </div>
                     <div class="preview-bar">
-                        <span class="pv-live"><span></span> Live preview</span>
+                        <span class="pv-live"><span></span> <span id="pvLiveLabel">Live preview</span></span>
                         <div class="flex items-center gap-1">
                             <button type="button" class="pv-btn" id="pvEntrance" title="Play entrance in preview" hidden><i class='bx bx-play-circle'></i></button>
                             <button type="button" class="pv-btn" id="pvReload" title="Reload"><i class='bx bx-refresh'></i></button>

@@ -18,10 +18,12 @@ Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in P
 | **Protected links** | Single links only with a password (at least 6 characters) or after an “18+” confirmation. The target never appears in the page source or the API. |
 | **Up to 3 pages** | One page for you, one for your project – each with its own address and stats, switchable in the editor. |
 | **Weekly report** | If you like, a short email every Monday with views, clicks and your best link. |
-| **Entrance with music** | Visitors tap to enter, the page opens with an animation and your music starts. |
+| **Entrance with music** | Visitors tap to enter, the page opens with an animation and your music starts – an uploaded song or simply a YouTube link (video or playlist, even with a start time). |
 | **Countdown & gallery** | Count down to your next release or show several images to swipe through. |
 | **Contact form** | Visitors message you directly – with a spam filter (invisible trap, timing check, content filter) and a heads-up via the bell. |
 | **QR code & sharing** | Every page has a QR code (download as PNG or SVG) and a share window with copy link, WhatsApp, X and Discord. Visitors get a share button on the page (can be switched off), and shared links show a preview card with picture, name and address in the colors of the page. |
+| **Honeycombs** | Points for using OnYourSite: for every active day, a complete profile and every 100 page views. The team can give them out in the admin panel. Honeycombs unlock extras – starting with the code page. |
+| **Code pages** | Your own website made with HTML, CSS and JavaScript at `yourname.on-your.site`, with a code editor, files, folders, your uploaded images and a preview. Unlocked with honeycombs; only for non-commercial, informational pages (Code Page Terms at `/terms/code-pages`). |
 | **Updates & roadmap** | A public page at `/updates` with the full changelog and a roadmap: what you’re working on now, what’s up next, what comes later and what has shipped. Progress bars come from real, ticked-off tasks – no made-up percentages. New updates can be announced in your Discord automatically. |
 
 Everything you already had stays: the built-in booking calendar (`/kalender`), file download (PDF/vcf), SEO settings, custom CSS, “Hide branding” (premium), Discord ID, and the admin panel with “Log in as user” and newsletter.
@@ -29,7 +31,7 @@ Everything you already had stays: the built-in booking calendar (`/kalender`), f
 ## Updating an existing installation (Plesk)
 
 1. **Back up** your database and files.
-2. Upload the new files or deploy them via Git. `static/uploads/` (your users’ images) and `email/smtp.json` aren’t in the repo and stay unchanged on the server.
+2. Upload the new files or deploy them via Git. The uploaded images and `email/smtp.json` aren’t in the repo and stay unchanged on the server – see [Uploads & backups](#uploads--backups) to keep the uploads completely out of the code folder.
 3. **Create `config.php`:** copy `config.example.php` and fill it in
    - `db`: the values from your old `db.php`
    - `aes_key`: **exactly** the old value from `security.php` (`AES_256_KEY`) – otherwise Discord IDs and booking requests can no longer be read
@@ -43,7 +45,32 @@ Uploads: photos are already resized in the browser, so they fit under small serv
 
 The built-in booking calendar (`/kalender`) is only reachable if the page has a visible booking block that points to it – if that block is protected, the calendar only opens after the password has been entered.
 
-Tests: `php tests/unit.php` (command line only) checks scheduling, embeds, addresses, the spam filter, URL validation, the update formatting and Discord links.
+Tests: `php tests/unit.php` (command line only) checks scheduling, embeds, addresses, the spam filter, URL validation, the update formatting, Discord links, file names of code pages and uploads, and the honeycomb texts. It only reads – nothing in the database is changed.
+
+## Uploads & backups
+
+Everything your users upload (profile pictures, backgrounds, gallery images, music, files) is stored in **one folder**. The admin panel shows which one under **Storage & backups**.
+
+- **Default:** `static/uploads/` inside the code folder. Git never touches it (it’s in `.gitignore`), but if you replace the whole folder – copying in a new version or restoring a code backup – the uploads go with it.
+- **Recommended:** move the uploads next to the code, so updates and code backups can never touch them. Add this line to `config.php` (Plesk: one level above `httpdocs`, the admin panel suggests the exact path):
+
+  ```php
+  'uploads_dir' => '/var/www/vhosts/on-your.site/oys-uploads',
+  ```
+
+  Then open **Admin → Storage & backups** and click **Move files** once. The addresses of all images stay the same (`/static/uploads/…`), so no page has to be changed and nobody has to upload anything again. A relative path (e.g. `'../oys-uploads'`) is resolved from the code folder.
+
+**What to back up:** the database, the upload folder, `config.php` (database password and the encryption key – without the key, encrypted data can’t be read) and the folder `email/` (mail server settings and newsletter templates). **Admin → Storage & backups → Download all uploads (ZIP)** gives you the upload folder as one file. To restore, put the four back the same way – the uploads go into the upload folder shown in the admin panel.
+
+## Honeycombs & code pages
+
+**Honeycombs** are points users collect by using OnYourSite: for every day they open the editor, once for a complete profile (profile picture, bio and at least 3 links) and for every 100 page views (one reward a day, up to 20 times – so faked views don’t pay off). Every booking is stored once in `honeycomb_ledger` – nothing can be earned twice, and nothing is earned while an admin is logged in as the user. In **Admin → Honeycombs & code pages** you can give honeycombs (or take them away) with a note the user sees, change what each reward is worth and what the code page costs (default: 100), and unlock the code page for someone for free.
+
+**Code pages** are websites users write themselves in HTML, CSS and JavaScript (plus JSON, SVG, XML, text, Markdown): up to 30 files, 256 KB per file and 2 MB per page, stored in the database. They are served at `name.on-your.site` (`on-your.site/name` redirects there) and share the address list with link pages. **No PHP or other server code is ever executed** – OnYourSite only delivers the files, and every response carries `Content-Security-Policy: sandbox …` without `allow-same-origin`: the page runs in its own anonymous origin and can’t read cookies, storage or anything else from OnYourSite. A small “OnYourSite” badge links to the rules and the report section. Before users can unlock or create a code page, they have to accept the Code Page Terms (`/terms/code-pages`, file `views/terms-code-pages.php`): non-commercial, informational and promotional pages only – no shops, payments, donations or ads. In the admin panel you can open every code page and block it with a reason (visitors then get a notice, the user sees why); deleting a user also deletes their code page, honeycombs and remaining uploads.
+
+Code pages only answer `GET` and `HEAD`, and names used by mail and network auto-configuration (`autoconfig`, `autodiscover`, `mta-sts`, `wpad` …) can’t be taken as addresses. While a code page is offline, visitors get a notice; its owner still sees the page in the editor preview, which carries a signed preview key. **Don’t set a server-wide `Content-Security-Policy` header** (e.g. in Plesk’s *Apache & nginx Settings*) – it would replace the sandbox header of the code pages.
+
+> Code pages are user content on subdomains of your main domain. If you ever want to separate them completely (like GitHub does with `github.io`), a second domain just for code pages would be the next step.
 
 ## Updates, roadmap & Discord
 
@@ -75,16 +102,20 @@ lib/
   themes.php           30 themes and 13 layouts (names, colors)
   blocks.php           Block types, validation, YouTube/Twitch/Spotify, scheduling
   updates.php          Updates, roadmap, Markdown and Discord (webhook or bot)
-  share.php            Preview card for shared links (/_/og/…png, cached in static/uploads/og/)
+  share.php            Preview card for shared links (/_/og/…png, cached in the upload folder under og/)
+  storage.php          Upload folder (config: uploads_dir), delivering uploads, ZIP backup
+  honeycombs.php       Honeycombs: earning, giving, spending
+  codesites.php        Code pages: files, limits, delivery in the sandbox
   pages.php, stats.php, spam.php, uploads.php, report.php, social.php, demo.php
 views/                 Home page, editor (dashboard.php), login, admin, calendar, updates …
 static/css/            page.css (structure & layouts), themes.css (30 themes), editor.css
 static/js/             page.js (profile page), editor.js (editor), share.js (QR code & sharing)
 static/vendor/qrcode/  QR code generator (qrcode-generator, MIT)
+static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 cron/weekly_report.php Weekly report
 ```
 
 ## Privacy
 
-Profile pages and `/updates` don’t set any cookies. Profile pages don’t load anything from third-party servers (fonts and icons are hosted locally; YouTube, Twitch and Spotify only load after a tap). Custom CSS can’t load external addresses either – `url(https://…)` and `@import` are removed. Stats only store counters per day, no IP addresses. To stop password guessing and spam (contact form, calendar, login), OnYourSite briefly counts attempts per sender – instead of the IP address it only uses a non-reversible key that changes daily and is deleted after one day at the latest. Messages from the contact form and booking requests are stored encrypted. Discord is only contacted by the server when you publish, edit or delete an update – no visitor data is ever sent there. Please update your privacy policy to cover the new features (contact form, booking calendar, embeds, stats).
+Profile pages and `/updates` don’t set any cookies. Profile pages don’t load anything from third-party servers (fonts and icons are hosted locally; YouTube, Twitch and Spotify only load after a tap – YouTube entrance music only after the visitor taps to enter – as a `youtube-nocookie.com` player in its own frame, without any YouTube script on the page itself). Code pages are written by their owners and may load things from elsewhere; they run in a sandbox without access to cookies or storage, and the code editor itself is hosted locally. Custom CSS can’t load external addresses either – `url(https://…)` and `@import` are removed. Stats only store counters per day, no IP addresses. To stop password guessing and spam (contact form, calendar, login), OnYourSite briefly counts attempts per sender – instead of the IP address it only uses a non-reversible key that changes daily and is deleted after one day at the latest. Messages from the contact form and booking requests are stored encrypted. Discord is only contacted by the server when you publish, edit or delete an update – no visitor data is ever sent there. Please update your privacy policy to cover the new features (contact form, booking calendar, embeds, stats).

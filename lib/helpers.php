@@ -253,7 +253,7 @@ function oys_normalize_slug($slug): string
 }
 
 // Gibt eine Fehlermeldung zurück oder null, wenn die Adresse frei und erlaubt ist.
-function oys_slug_problem(PDO $pdo, string $slug, ?int $exceptPageId = null): ?string
+function oys_slug_problem(PDO $pdo, string $slug, ?int $exceptPageId = null, ?int $exceptCodeSiteId = null): ?string
 {
     if ($slug === '') {
         return 'Please enter an address.';
@@ -272,6 +272,12 @@ function oys_slug_problem(PDO $pdo, string $slug, ?int $exceptPageId = null): ?s
     }
     $stmt = $pdo->prepare('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1');
     $stmt->execute([$slug, (int) $exceptPageId]);
+    if ($stmt->fetch()) {
+        return "Sorry, the address “{$slug}” is already taken.";
+    }
+    // Code-Seiten haben ihre Adresse im selben Namensraum (name.on-your.site)
+    $stmt = $pdo->prepare('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1');
+    $stmt->execute([$slug, (int) $exceptCodeSiteId]);
     if ($stmt->fetch()) {
         return "Sorry, the address “{$slug}” is already taken.";
     }

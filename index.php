@@ -1,5 +1,14 @@
 <?php
 // OnYourSite – zentrale Weiterleitung aller Anfragen
+
+// Hochgeladene Dateien, die nicht im Web-Ordner liegen (config.php: uploads_dir) – ohne Datenbank ausliefern
+if (strpos((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/static/uploads/') === 0) {
+    require_once __DIR__ . '/lib/config.php';
+    require_once __DIR__ . '/lib/storage.php';
+    oys_serve_upload(substr((string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), strlen('/static/uploads/')));
+    exit;
+}
+
 require __DIR__ . '/lib/bootstrap.php';
 
 $host = oys_request_host();
@@ -56,7 +65,7 @@ function oys_serve_page(PDO $pdo, array $page, string $sub): void
 
 // --- 2. Hauptdomain: App (Login, Editor …) und Profile im Pfad-Modus ---
 if (oys_is_main_host($host)) {
-    $appRoutes = ['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/updates', '/updates/feed.xml', '/roadmap'];
+    $appRoutes = ['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap'];
     if (in_array($path, $appRoutes, true) || strpos($path, '/dashboard/') === 0 || preg_match('#^/updates/\d+$#', $path)) {
         require __DIR__ . '/lib/routes_app.php';
         exit;
@@ -65,6 +74,10 @@ if (oys_is_main_host($host)) {
     // on-your.site/name  bzw.  on-your.site/name/kalender
     if (preg_match('#^/([a-z0-9-]{1,63})(?:/(kalender))?/?$#', strtolower($path), $m)) {
         $page = oys_load_page_by_slug($pdo, $m[1]);
+        // Code-Seiten gibt es nur unter name.on-your.site (eigener Ursprung)
+        if (!$page && empty($m[2]) && ($site = oys_code_site_by_slug($pdo, $m[1]))) {
+            oys_redirect(oys_code_url($site) . '/', 302);
+        }
         if ($page) {
             $sub = $m[2] ?? '';
             if ($page['address_mode'] !== 'path') {
@@ -96,6 +109,10 @@ if (str_ends_with($host, '.' . $baseHost)) {
             oys_redirect(oys_page_url($page, $sub) . $qs, 302);
         }
         oys_serve_page($pdo, $page, $sub);
+    }
+    if ($site = oys_code_site_by_slug($pdo, $slug)) {
+        oys_code_serve($pdo, $site, $path);
+        exit;
     }
 }
 

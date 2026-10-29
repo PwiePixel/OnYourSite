@@ -66,7 +66,9 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
     if (!empty($page['bg_image'])) $classes[] = 'has-bgimg';
 
     $entrance = $settings['entrance'];
-    $music = $entrance['music'] ? oys_upload_url($entrance['music']) : ($entrance['music_url'] ?: '');
+    // Musik: hochgeladene Datei, sonst Link (MP3 oder YouTube – YouTube lädt erst nach dem Tippen)
+    $musicYoutube = !$entrance['music'] ? oys_youtube_music($entrance['music_url']) : null;
+    $music = $entrance['music'] ? oys_upload_url($entrance['music']) : ($musicYoutube ? '' : ($entrance['music_url'] ?: ''));
     $showEntrance = $entrance['enabled'] && (($opts['entrance'] ?? ($isPreview ? 'skip' : 'auto')) !== 'skip');
     if ($showEntrance) $classes[] = 'has-entrance';
 
@@ -81,6 +83,7 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
         'sparks' => (bool) $settings['cursor_sparks'],
         'entrance' => $showEntrance ? $entrance['animation'] : '',
         'music' => $showEntrance ? $music : '',
+        'musicYoutube' => $showEntrance ? $musicYoutube : null,
         'dark' => (bool) $themeMeta['dark'],
         'volume' => $entrance['volume'] / 100,
         'loop' => (bool) $entrance['loop'],
@@ -191,6 +194,10 @@ function oys_render_page(array $page, array $blocks, array $opts = []): string
 <?php endif; ?>
 <?php if ($music && $showEntrance): ?>
 <audio id="oys-audio" src="<?= e($music) ?>" preload="none"<?= $entrance['loop'] ? ' loop' : '' ?>></audio>
+<?php elseif ($musicYoutube && $showEntrance): ?>
+<div class="oys-yt" aria-hidden="true"><div id="oys-yt"></div></div>
+<?php endif; ?>
+<?php if (($music || $musicYoutube) && $showEntrance): ?>
 <button type="button" class="oys-mute" hidden aria-label="Mute music"><?= oys_ui_icon('volume', 'oys-ico on') ?><?= oys_ui_icon('mute', 'oys-ico off') ?></button>
 <?php endif; ?>
 

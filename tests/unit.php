@@ -168,4 +168,37 @@ if (oys_og_supported()) {
     $size = getimagesizefromstring($png);
     t('Preview card: 1200×630 PNG', [$size[0], $size[1], $size['mime']], [1200, 630, 'image/png']);
 }
+// Eingangsmusik von YouTube
+t('Entrance music: YouTube video with start time', oys_youtube_music('https://youtu.be/dQw4w9WgXcQ?t=65'), ['kind' => 'video', 'id' => 'dQw4w9WgXcQ', 'start' => 65]);
+t('Entrance music: YouTube playlist', oys_youtube_music('https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG')['kind'] ?? null, 'playlist');
+t('Entrance music: Spotify is not YouTube', oys_youtube_music('https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT'), null);
+t('Entrance music: empty', oys_youtube_music(''), null);
+// Upload-Ordner: nur einfache Dateinamen ausliefern
+t('Uploads: normal file name', oys_upload_name_ok('avatar_5_1761700000_abcdef12.jpg'), true);
+t('Uploads: no folders', oys_upload_name_ok('og/7-abc.png'), false);
+t('Uploads: no ..', oys_upload_name_ok('..%2fconfig.php'), false);
+t('Uploads: no hidden files', oys_upload_name_ok('.htaccess'), false);
+// Code-Seiten: erlaubte Dateinamen
+t('Code page: index.html', oys_code_valid_path('index.html'), 'index.html');
+t('Code page: lowercase + folders', oys_code_valid_path('/CSS/Theme.css'), 'css/theme.css');
+t('Code page: three folders deep', oys_code_valid_path('a/b/c/page.html'), 'a/b/c/page.html');
+t('Code page: four folders are too deep', oys_code_valid_path('a/b/c/d/page.html'), null);
+t('Code page: no ..', oys_code_valid_path('../config.html'), null);
+t('Code page: no PHP', oys_code_valid_path('shell.php'), null);
+t('Code page: no .htaccess', oys_code_valid_path('.htaccess'), null);
+t('Code page: no file without extension', oys_code_valid_path('about'), null);
+t('Code page: no double dots in names', oys_code_valid_path('a..b.html'), null);
+t('Code page: no backslash tricks', oys_code_valid_path('..\\secret.html'), null);
+t('Code page: sandbox without same origin and top navigation', strpos(OYS_CODE_SANDBOX, 'allow-same-origin') === false && strpos(OYS_CODE_SANDBOX, 'allow-top-navigation') === false && strpos(OYS_CODE_SANDBOX, 'sandbox allow-scripts') === 0, true);
+$badged = oys_code_add_badge('<html><body><p>Hi</p></BODY></html>', ['slug' => 'mia-dev']);
+t('Code page: badge goes before </body>', (bool) preg_match('#<p>Hi</p><a href="[^"]+/terms/code-pages\#report"[^>]*>.*</a></BODY></html>$#s', $badged), true);
+t('Code page: badge without <body>', substr(oys_code_add_badge('<p>Hi</p>', ['slug' => 'x']), 0, 12), '<p>Hi</p><a ');
+$starter = oys_code_starter_files('<b>Mia</b> & Co');
+t('Code page: the title in the starter files is escaped', strpos($starter['index.html'], '&lt;b&gt;Mia&lt;/b&gt; &amp; Co') !== false && strpos($starter['index.html'], '<b>Mia</b>') === false, true);
+t('Code page: starter files are allowed', array_map('oys_code_valid_path', array_keys($starter)), ['index.html', 'style.css', 'script.js']);
+// Honigwaben: Texte im Verlauf
+t('Honeycombs: view reward text', oys_hc_describe(['reason' => 'views', 'ref' => '2026-10-29', 'note' => '1000', 'amount' => 10]), '1,000 page views reached');
+t('Honeycombs: gift without a note', oys_hc_describe(['reason' => 'admin', 'ref' => 'a1-x', 'note' => '', 'amount' => 50]), 'Gift from the team');
+t('Honeycombs: correction without a note', oys_hc_describe(['reason' => 'admin', 'ref' => 'a1-y', 'note' => '', 'amount' => -5]), 'Correction by the team');
+t('Honeycombs: unlocking the code page', oys_hc_describe(['reason' => 'unlock', 'ref' => 'code_page', 'note' => 'Unlocked by the team', 'amount' => 0]), 'Unlocked your code page');
 echo $fails ? "\n$fails FAILED\n" : "\nAll tests passed\n";

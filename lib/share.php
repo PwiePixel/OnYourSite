@@ -1,6 +1,6 @@
 <?php
 // Teilen: Vorschaubild (og:image) für geteilte Links – Discord, WhatsApp, X & Co. zeigen es als Karte.
-// Das Bild wird beim ersten Abruf erzeugt und in static/uploads/og/ zwischengespeichert.
+// Das Bild wird beim ersten Abruf erzeugt und im Upload-Ordner unter og/ zwischengespeichert.
 
 const OYS_OG_WIDTH = 1200;
 const OYS_OG_HEIGHT = 630;
@@ -54,7 +54,7 @@ function oys_og_serve(PDO $pdo, int $id, string $hash): void
         header('Cache-Control: public, max-age=300');
         oys_redirect('/_/og/' . $id . '-' . $current . '.png');
     }
-    $dir = dirname(__DIR__) . '/static/uploads/og';
+    $dir = oys_uploads_dir() . '/og';
     $file = $dir . '/' . $id . '-' . $current . '.png';
     if (!is_file($file)) {
         $png = oys_og_render($page);
@@ -218,11 +218,11 @@ function oys_og_avatar(array $page, int $size, array $accent, array $base, bool 
     return $out;
 }
 
-// Hochgeladenes Bild laden (nur aus static/uploads, nur echte Bilddateien)
+// Hochgeladenes Bild laden (nur aus dem Upload-Ordner, nur echte Bilddateien)
 function oys_og_load_image(string $file)
 {
     $name = basename($file);
-    $path = dirname(__DIR__) . '/static/uploads/' . $name;
+    $path = oys_upload_read_path($name);
     if ($name === '' || !is_file($path) || filesize($path) > 15 * 1024 * 1024) {
         return null;
     }

@@ -22,7 +22,7 @@ const OYS_UPLOAD_QUOTA_PREMIUM_MB = 1000;
 function oys_user_upload_files(int $userId): array
 {
     $files = [];
-    foreach (glob(dirname(__DIR__) . '/static/uploads/*_' . $userId . '_*') ?: [] as $path) {
+    foreach (glob(oys_uploads_dir() . '/*_' . $userId . '_*') ?: [] as $path) {
         $name = basename($path);
         if (oys_valid_upload($name, $userId) && is_file($path)) {
             $files[$name] = (int) filesize($path);
@@ -37,7 +37,7 @@ function oys_sweep_uploads(PDO $pdo, int $userId, array $files): array
 {
     $cutoff = time() - 2 * 86400;
     $used = null;
-    $dir = dirname(__DIR__) . '/static/uploads/';
+    $dir = oys_uploads_dir() . '/';
     foreach ($files as $name => $bytes) {
         if (!preg_match('/^[a-z]+_\d+_(\d{9,11})_[0-9a-f]{8}\.[a-z0-9]{2,5}$/', $name, $m) || (int) $m[1] > $cutoff) {
             continue;
@@ -113,7 +113,7 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
         return ['error' => 'The file’s content doesn’t match its .' . $ext . ' extension.'];
     }
 
-    $dir = dirname(__DIR__) . '/static/uploads/';
+    $dir = oys_uploads_dir() . '/';
     if (!is_dir($dir)) {
         @mkdir($dir, 0755, true);
     }
@@ -127,7 +127,7 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
     }
     $name = $base . '.' . $ext;
     if (!move_uploaded_file($upload['tmp_name'], $dir . $name)) {
-        return ['error' => 'The static/uploads/ folder isn’t writable (check that its permissions are 755).'];
+        return ['error' => 'The upload folder isn’t writable (check that its permissions are 755).'];
     }
     @chmod($dir . $name, 0644);
     return ['file' => $name];

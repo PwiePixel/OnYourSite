@@ -242,6 +242,16 @@ function oys_clean_icon($icon): string
 // Einbettungen: YouTube, Twitch, Spotify
 // ---------------------------------------------------------------
 
+// YouTube-Link als Eingangsmusik (Video, Shorts, YouTube Music oder Playlist)
+function oys_youtube_music(string $url): ?array
+{
+    $e = $url !== '' ? oys_parse_embed($url) : null;
+    if (!$e || $e['provider'] !== 'youtube') {
+        return null;
+    }
+    return ['kind' => $e['kind'], 'id' => $e['id'], 'start' => (int) ($e['start'] ?? 0)];
+}
+
 function oys_parse_embed(string $url): ?array
 {
     $parts = parse_url($url);

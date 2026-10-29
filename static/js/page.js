@@ -331,6 +331,67 @@
   var mute = $('.oys-mute');
   if (audio) audio.volume = Math.max(0, Math.min(1, cfg.volume == null ? .7 : cfg.volume));
 
+  // YouTube als Musik: erst nach dem Tippen laden – vorher gibt es keine Verbindung zu YouTube.
+  // Nur ein Player-iframe von youtube-nocookie.com, gesteuert über postMessage: kein YouTube-Skript auf der Seite selbst.
+  var yt = cfg.musicYoutube, ytFrame = null, ytState = -1, ytPlaying = false;
+  var YT_ORIGIN = 'https://www.youtube-nocookie.com';
+  function setMuted(muted) {
+    if (!mute) return;
+    mute.classList.toggle('is-muted', muted);
+    mute.setAttribute('aria-label', muted ? 'Play music' : 'Mute music');
+  }
+  function ytSend(msg) {
+    if (ytFrame && ytFrame.contentWindow) ytFrame.contentWindow.postMessage(JSON.stringify(msg), YT_ORIGIN);
+  }
+  function ytCommand(func, args) { ytSend({ event: 'command', func: func, args: args || [], id: 1, channel: 'widget' }); }
+  function startYouTube() {
+    var q = 'autoplay=1&controls=0&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&rel=0&enablejsapi=1&widgetid=1&origin=' + encodeURIComponent(location.origin);
+    if (yt.start) q += '&start=' + yt.start;
+    var src = yt.kind === 'playlist'
+      ? YT_ORIGIN + '/embed/videoseries?list=' + encodeURIComponent(yt.id) + (cfg.loop ? '&loop=1' : '') + '&' + q
+      : YT_ORIGIN + '/embed/' + encodeURIComponent(yt.id) + '?' + (cfg.loop ? 'loop=1&playlist=' + encodeURIComponent(yt.id) + '&' : '') + q;
+    var heard = false, ready = false, tries = 0;
+    window.addEventListener('message', function (ev) {
+      if (ev.origin !== YT_ORIGIN || !ytFrame || ev.source !== ytFrame.contentWindow) return;
+      var d = ev.data;
+      if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { return; } }
+      if (!d || typeof d !== 'object') return;
+      heard = true;
+      if (d.event === 'onReady' && !ready) {
+        ready = true;
+        ytCommand('setVolume', [Math.round(Math.max(0, Math.min(1, cfg.volume == null ? .7 : cfg.volume)) * 100)]);
+        ytCommand('unMute');
+        ytCommand('playVideo');
+        // Blockiert der Browser den Ton, zeigt der Knopf „Abspielen“
+        setTimeout(function () { if (ytState !== 1 && ytState !== 3) { ytPlaying = false; setMuted(true); } }, 2500);
+      }
+      var st = d.event === 'onStateChange' ? d.info : (d.info && typeof d.info.playerState === 'number' ? d.info.playerState : null);
+      if (typeof st !== 'number') return;
+      ytState = st;
+      ytPlaying = st === 1 || st === 3;
+      if (st === 1) setMuted(false);
+      if (st === 0 && cfg.loop && yt.kind === 'video') { ytCommand('seekTo', [yt.start || 0, true]); ytCommand('playVideo'); }
+    });
+    ytFrame = document.createElement('iframe');
+    ytFrame.src = src;
+    ytFrame.width = '200';
+    ytFrame.height = '200';
+    ytFrame.title = 'Music';
+    ytFrame.tabIndex = -1;
+    ytFrame.setAttribute('allow', 'autoplay; encrypted-media');
+    ytFrame.addEventListener('load', function () {
+      // Beim Player anmelden, damit er seinen Zustand meldet (so macht es auch YouTubes eigene IFrame-API)
+      (function listen() {
+        if (heard || tries++ > 40) return;
+        ytSend({ event: 'listening', id: 1, channel: 'widget' });
+        setTimeout(listen, 250);
+      })();
+    });
+    ytFrame.addEventListener('error', function () { setMuted(true); });
+    ytPlaying = true;
+    $('#oys-yt').appendChild(ytFrame);
+  }
+
   function enter() {
     if (!entrance || entrance.classList.contains('is-leaving')) return;
     entrance.classList.add('is-leaving');
@@ -339,6 +400,9 @@
       var p = audio.play();
       if (p && p.catch) p.catch(function () { if (mute) mute.classList.add('is-muted'); });
       if (mute) mute.hidden = false;
+    } else if (yt && $('#oys-yt')) {
+      startYouTube();
+      if (mute) mute.hidden = false;
     }
     setTimeout(function () { if (entrance.parentNode) entrance.parentNode.removeChild(entrance); body.classList.remove('has-entrance'); }, 1300);
   }
@@ -346,6 +410,21 @@
     entrance.addEventListener('click', enter);
     entrance.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); enter(); } });
     entrance.focus({ preventScroll: true });
+  }
+  if (mute && yt && !audio) {
+    mute.addEventListener('click', function () {
+      if (!ytFrame) { setMuted(false); return; }
+      if (ytPlaying) {
+        ytCommand('pauseVideo');
+        ytPlaying = false;
+        setMuted(true);
+      } else {
+        ytCommand('unMute');
+        ytCommand('playVideo');
+        ytPlaying = true;
+        setMuted(false);
+      }
+    });
   }
   if (mute && audio) {
     mute.addEventListener('click', function () {
