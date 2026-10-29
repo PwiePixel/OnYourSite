@@ -399,7 +399,7 @@ function oys_time_ago(?string $datetime): string
 
 function oys_initials(string $name): string
 {
-    $parts = preg_split('/\s+/u', trim($name)) ?: [];
+    $parts = array_values(array_filter(preg_split('/\s+/u', trim($name)) ?: [], function ($p) { return (bool) preg_match('/^[\p{L}\p{N}]/u', $p); }));
     $initials = '';
     foreach (array_slice($parts, 0, 2) as $p) {
         $initials .= mb_strtoupper(mb_substr($p, 0, 1));

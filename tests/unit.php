@@ -149,4 +149,23 @@ t('Discord: failed removal is reported, not hidden', oys_discord_remove_note(['s
 t('Discord: removal impossible → delete it yourself', oys_discord_remove_note(['state' => 'disconnected', 'error' => 'Discord isn’t connected', 'transient' => false], true), 'Discord isn’t connected, so its post there was not removed – please delete it in Discord yourself.');
 t('Discord: removed = no note', oys_discord_remove_note(['state' => 'missing', 'error' => null, 'transient' => false]), '');
 t('Discord: link in the post is the permanent update link', $emb['url'], oys_main_url('/updates/7'));
+// Teilen: Adressen, Vorschaubild, Initialen
+$sl = oys_share_links('https://mia.on-your.site', 'Mia & Co');
+t('Share: WhatsApp text is encoded', $sl['whatsapp'], 'https://wa.me/?text=Mia%20%26%20Co%20https%3A%2F%2Fmia.on-your.site');
+t('Share: X link with title', $sl['x'], 'https://x.com/intent/tweet?url=https%3A%2F%2Fmia.on-your.site&text=Mia%20%26%20Co');
+$pg = ['id' => 7, 'slug' => 'mia', 'address_mode' => 'subdomain', 'title' => 'Mia', 'subtitle' => '', 'bio' => '', 'avatar' => '', 'theme' => 'galaxy', 'settings' => '{}'];
+t('Preview card: same page, same address', oys_og_hash($pg) === oys_og_hash($pg), true);
+t('Preview card: a new name gives a new address', oys_og_hash($pg) !== oys_og_hash(['title' => 'Mia M.'] + $pg), true);
+t('Preview card: a new theme gives a new address', oys_og_hash($pg) !== oys_og_hash(['theme' => 'sakura'] + $pg), true);
+t('Preview card: address format', (bool) preg_match('#/_/og/7-[0-9a-f]{12}\.png$#', oys_og_url($pg)), true);
+t('Preview card: emoji are left out (the font has none)', oys_og_clean("Art 🎨 & Design  ✨"), 'Art & Design');
+t('Initials skip dashes and symbols', oys_initials('Pixel – Creator'), 'PC');
+t('Initials of a single word', oys_initials('mia'), 'M');
+if (oys_og_supported()) {
+    $lines = oys_og_wrap('A really long name that will never fit on one single line of the card', oys_og_font(true), 72, 600, 2);
+    t('Preview card: long names wrap onto two lines and end with …', count($lines) === 2 && mb_substr($lines[1], -1) === '…', true);
+    $png = oys_og_render($pg);
+    $size = getimagesizefromstring($png);
+    t('Preview card: 1200×630 PNG', [$size[0], $size[1], $size['mime']], [1200, 630, 'image/png']);
+}
 echo $fails ? "\n$fails FAILED\n" : "\nAll tests passed\n";
