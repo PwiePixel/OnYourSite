@@ -31,7 +31,7 @@ $suggested = oys_uploads_suggested_dir();
                         <p>Right now the uploads live inside the code folder. If you ever replace that folder (copying in a new version or restoring a code backup), the uploads go with it. Move them next to the code instead:</p>
                         <ol class="list-decimal pl-5 space-y-1">
                             <li>Add this line to <code>config.php</code>: <code class="text-white break-all">'uploads_dir' =&gt; '<?= e($suggested) ?>',</code></li>
-                            <li>Come back here and click <b>Move files</b> – all existing uploads are moved there once. Addresses of images don’t change.</li>
+                            <li>Come back here and click <b>Move files</b> – all existing uploads are moved there once. Addresses of images don’t change. (If this page still shows the old folder, PHP hasn’t noticed the change yet – wait a minute and reload.)</li>
                         </ol>
                     </div>
                     <?php elseif ($leftInCode > 0): ?>

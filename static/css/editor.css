@@ -404,7 +404,7 @@ input[type=range].range { width: 100%; accent-color: var(--e-brand); }
 }
 
 /* ---------- Honigwaben ---------- */
-.hc-pill { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px 0 8px; border-radius: 999px; background: rgba(99, 102, 241, .12); border: 1px solid rgba(99, 102, 241, .35); color: #c7d2fe; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; transition: background .15s, color .15s; flex: none; }
+.hc-pill { display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 12px 0 9px; border-radius: 999px; background: rgba(99, 102, 241, .12); border: 1px solid rgba(99, 102, 241, .35); color: #c7d2fe; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; transition: background .15s, color .15s; flex: none; }
 .hc-pill i { font-size: 17px; color: var(--e-brand-2); }
 .hc-pill:hover { background: rgba(99, 102, 241, .22); color: #fff; }
 .hc-pill.pop { animation: hc-pop .7s ease; }
@@ -526,7 +526,7 @@ body.code-mode.code-nosite #previewPane, body.code-mode.code-nosite #mobilePrevi
 @media (max-width: 639px) {
   .nav-long, .nav-full { display: none; }
   .nav-short { display: inline; }
-  .hc-pill { height: 30px; padding: 0 8px 0 6px; font-size: 12px; }
+  .hc-pill { padding: 0 10px 0 8px; font-size: 12px; }
   .hc-pill i { font-size: 15px; }
   .code-hero { padding: 30px 16px; }
   .code-hero h2 { font-size: 19px; }
