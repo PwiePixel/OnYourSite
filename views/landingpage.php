@@ -29,6 +29,9 @@ $themes = oys_themes();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
+    <meta name="color-scheme" content="dark">
+    <meta name="darkreader-lock">
 
     <title>OnYourSite | Your link-in-bio page with <?= $themeCount ?> themes</title>
     <meta name="description" content="Your own link-in-bio page at name.<?= e($base) ?>: <?= $themeCount ?> themes, 13 layouts, live preview, stats without cookies, scheduling, protected links, contact form and more – for free.">
@@ -137,9 +140,10 @@ $themes = oys_themes();
                     <span class="flex h-2 w-2 rounded-full bg-brand-500 animate-pulse"></span>
                     New: <?= $themeCount ?> themes, 13 layouts & live preview
                 </div>
-                <h1 class="text-5xl md:text-6xl xl:text-7xl font-extrabold text-white tracking-tight mb-6 drop-shadow-lg">
+                <!-- Kein filter (drop-shadow) um Verlaufstext: Safari/iOS zeichnet den Text sonst nicht -->
+                <h1 class="text-5xl md:text-6xl xl:text-7xl font-extrabold text-white tracking-tight mb-6">
                     Everything you do,<br class="hidden md:block">
-                    <span class="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-purple-500">on one page.</span>
+                    <span class="bg-clip-text text-transparent [-webkit-text-fill-color:transparent] box-decoration-clone bg-gradient-to-r from-brand-400 to-purple-500">on one page.</span>
                 </h1>
                 <p class="mt-4 max-w-xl mx-auto lg:mx-0 text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
                     Links, social icons, videos, music, countdown and contact form – in <?= $themeCount ?> themes, with live preview and stats without cookies. At your own address:

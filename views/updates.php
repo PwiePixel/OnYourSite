@@ -44,6 +44,9 @@ $description = 'Follow along as OnYourSite grows – what we’re building right
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
+    <meta name="color-scheme" content="dark">
+    <meta name="darkreader-lock">
     <title>Updates &amp; roadmap | OnYourSite</title>
     <meta name="description" content="<?= e($description) ?>">
     <meta property="og:type" content="website">
@@ -128,7 +131,7 @@ $description = 'Follow along as OnYourSite grows – what we’re building right
         <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[700px] max-w-full h-[420px] bg-brand-500/15 rounded-full blur-[110px] -z-10 pointer-events-none"></div>
         <div class="max-w-3xl mx-auto text-center">
             <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-bordercolor bg-white/5 text-xs font-medium text-gray-300"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Changelog &amp; roadmap</span>
-            <h1 class="mt-5 text-4xl sm:text-6xl font-extrabold text-white tracking-tight">What’s new at <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-purple-400">OnYourSite</span></h1>
+            <h1 class="mt-5 text-4xl sm:text-6xl font-extrabold text-white tracking-tight">What’s new at <span class="text-transparent bg-clip-text [-webkit-text-fill-color:transparent] box-decoration-clone bg-gradient-to-r from-brand-400 to-purple-400">OnYourSite</span></h1>
             <p class="mt-5 text-base sm:text-lg text-gray-400"><?= e($description) ?></p>
             <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
                 <a href="<?= e($invite) ?>" target="_blank" rel="noopener" class="inline-flex justify-center items-center gap-2 bg-[#5865F2] hover:bg-[#4752C4] text-white px-6 py-3 rounded-full font-medium transition-colors"><i class='bx bxl-discord-alt text-xl'></i> Get updates on Discord</a>
