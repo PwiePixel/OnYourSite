@@ -127,13 +127,25 @@ function oys_hc_earn(PDO $pdo, int $userId): array
     return $new;
 }
 
+// Sperre je Nutzer: gleichzeitige Buchungen (zwei Klicks, ein Admin) dürfen den Kontostand nicht unter 0 bringen.
+// Gibt zurück, was $fn zurückgibt – oder eine Fehlermeldung, wenn die Sperre nicht frei wird.
+function oys_hc_locked(PDO $pdo, int $userId, callable $fn)
+{
+    $lock = 'oys_hc_' . $userId;
+    if ((int) $pdo->query("SELECT GET_LOCK('$lock', 10)")->fetchColumn() !== 1) {
+        return 'Honeycombs are busy right now – please try again in a moment.';
+    }
+    try {
+        return $fn();
+    } finally {
+        $pdo->query("SELECT RELEASE_LOCK('$lock')");
+    }
+}
+
 // Mit Honigwaben bezahlen (je Bezug nur einmal). Gibt eine Fehlermeldung zurück oder null.
 function oys_hc_spend(PDO $pdo, int $userId, int $cost, string $ref): ?string
 {
-    // Sperre je Nutzer: zwei gleichzeitige Klicks dürfen nicht doppelt abbuchen
-    $lock = 'oys_hc_' . $userId;
-    $pdo->query("SELECT GET_LOCK('$lock', 10)");
-    try {
+    return oys_hc_locked($pdo, $userId, function () use ($pdo, $userId, $cost, $ref) {
         if (oys_hc_has($pdo, $userId, 'unlock', $ref)) {
             return null;
         }
@@ -143,9 +155,7 @@ function oys_hc_spend(PDO $pdo, int $userId, int $cost, string $ref): ?string
         }
         oys_hc_add($pdo, $userId, -$cost, 'unlock', $ref);
         return null;
-    } finally {
-        $pdo->query("SELECT RELEASE_LOCK('$lock')");
-    }
+    });
 }
 
 // Daten für den Editor: Kontostand, Verlauf und wie man mehr verdient
@@ -190,11 +200,19 @@ function oys_admin_hc_handle(PDO $pdo, array $post, int $adminId): ?array
             if ($amount === 0 || abs($amount) > 100000) {
                 return ['error' => 'Enter an amount between −100,000 and 100,000 (not 0).'];
             }
-            if ($amount < 0 && oys_hc_balance($pdo, $userId) + $amount < 0) {
-                return ['error' => 'That would take the balance below 0 (current: ' . oys_hc_balance($pdo, $userId) . ').'];
-            }
             $note = oys_clean_text($post['note'] ?? '', 150);
-            oys_hc_add($pdo, $userId, $amount, 'admin', 'a' . $adminId . '-' . bin2hex(random_bytes(6)), $note);
+            // Jedes Formular hat einen eigenen Schlüssel: doppelt abgeschickt wird nur einmal gebucht
+            $formRef = (string) ($post['grant_ref'] ?? '');
+            $ref = 'a' . $adminId . '-' . (preg_match('/^[0-9a-f]{16}$/', $formRef) ? $formRef : bin2hex(random_bytes(8)));
+            $booked = oys_hc_locked($pdo, $userId, function () use ($pdo, $userId, $amount, $ref, $note) {
+                if ($amount < 0 && oys_hc_balance($pdo, $userId) + $amount < 0) {
+                    return 'That would take the balance below 0 (current: ' . oys_hc_balance($pdo, $userId) . ').';
+                }
+                return oys_hc_add($pdo, $userId, $amount, 'admin', $ref, $note) ? true : 'This was already booked – the form was sent twice.';
+            });
+            if ($booked !== true) {
+                return ['error' => $booked];
+            }
             $name = ($user['full_name'] ?? '') !== '' ? $user['full_name'] : $user['email'];
             return ['ok' => ($amount > 0 ? '+' : '−') . abs($amount) . ' honeycombs for ' . $name . '. New balance: ' . oys_hc_balance($pdo, $userId) . '.'];
 

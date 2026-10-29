@@ -42,6 +42,7 @@ $ruleFields = [
                         <form action="/admin" method="POST" class="space-y-4" id="hcGrantForm">
                             <?= oys_csrf_field() ?>
                             <input type="hidden" name="hc_action" value="grant">
+                            <input type="hidden" name="grant_ref" value="<?= bin2hex(random_bytes(8)) ?>">
                             <div>
                                 <label class="<?= $lbl ?>" for="hcUser">User</label>
                                 <select id="hcUser" name="user_id" required class="<?= $in ?>">

@@ -331,46 +331,65 @@
   var mute = $('.oys-mute');
   if (audio) audio.volume = Math.max(0, Math.min(1, cfg.volume == null ? .7 : cfg.volume));
 
-  // YouTube als Musik: erst nach dem Tippen laden – vorher gibt es keine Verbindung zu YouTube
-  var yt = cfg.musicYoutube, ytPlayer = null;
+  // YouTube als Musik: erst nach dem Tippen laden – vorher gibt es keine Verbindung zu YouTube.
+  // Nur ein Player-iframe von youtube-nocookie.com, gesteuert über postMessage: kein YouTube-Skript auf der Seite selbst.
+  var yt = cfg.musicYoutube, ytFrame = null, ytState = -1, ytPlaying = false;
+  var YT_ORIGIN = 'https://www.youtube-nocookie.com';
   function setMuted(muted) {
     if (!mute) return;
     mute.classList.toggle('is-muted', muted);
     mute.setAttribute('aria-label', muted ? 'Play music' : 'Mute music');
   }
+  function ytSend(msg) {
+    if (ytFrame && ytFrame.contentWindow) ytFrame.contentWindow.postMessage(JSON.stringify(msg), YT_ORIGIN);
+  }
+  function ytCommand(func, args) { ytSend({ event: 'command', func: func, args: args || [], id: 1, channel: 'widget' }); }
   function startYouTube() {
-    var vars = { autoplay: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, playsinline: 1, rel: 0 };
-    if (yt.start) vars.start = yt.start;
-    if (yt.kind === 'playlist') { vars.listType = 'playlist'; vars.list = yt.id; }
-    else if (cfg.loop) { vars.loop = 1; vars.playlist = yt.id; }
-    function create() {
-      ytPlayer = new window.YT.Player('oys-yt', {
-        host: 'https://www.youtube-nocookie.com',
-        width: 200, height: 200,
-        videoId: yt.kind === 'video' ? yt.id : undefined,
-        playerVars: vars,
-        events: {
-          onReady: function (e) {
-            e.target.setVolume(Math.round(Math.max(0, Math.min(1, cfg.volume == null ? .7 : cfg.volume)) * 100));
-            e.target.unMute();
-            e.target.playVideo();
-            // Blockiert der Browser den Ton, zeigt der Knopf „Abspielen“
-            setTimeout(function () { if (ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() !== 1) setMuted(true); }, 2500);
-          },
-          onStateChange: function (e) {
-            if (e.data === 1) setMuted(false);
-            if (e.data === 0 && cfg.loop) { e.target.seekTo(yt.start || 0); e.target.playVideo(); }
-          }
-        }
-      });
-    }
-    if (window.YT && window.YT.Player) { create(); return; }
-    var before = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = function () { if (before) before(); create(); };
-    var s = document.createElement('script');
-    s.src = 'https://www.youtube.com/iframe_api';
-    s.onerror = function () { setMuted(true); };
-    document.head.appendChild(s);
+    var q = 'autoplay=1&controls=0&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&rel=0&enablejsapi=1&widgetid=1&origin=' + encodeURIComponent(location.origin);
+    if (yt.start) q += '&start=' + yt.start;
+    var src = yt.kind === 'playlist'
+      ? YT_ORIGIN + '/embed/videoseries?list=' + encodeURIComponent(yt.id) + (cfg.loop ? '&loop=1' : '') + '&' + q
+      : YT_ORIGIN + '/embed/' + encodeURIComponent(yt.id) + '?' + (cfg.loop ? 'loop=1&playlist=' + encodeURIComponent(yt.id) + '&' : '') + q;
+    var heard = false, ready = false, tries = 0;
+    window.addEventListener('message', function (ev) {
+      if (ev.origin !== YT_ORIGIN || !ytFrame || ev.source !== ytFrame.contentWindow) return;
+      var d = ev.data;
+      if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { return; } }
+      if (!d || typeof d !== 'object') return;
+      heard = true;
+      if (d.event === 'onReady' && !ready) {
+        ready = true;
+        ytCommand('setVolume', [Math.round(Math.max(0, Math.min(1, cfg.volume == null ? .7 : cfg.volume)) * 100)]);
+        ytCommand('unMute');
+        ytCommand('playVideo');
+        // Blockiert der Browser den Ton, zeigt der Knopf „Abspielen“
+        setTimeout(function () { if (ytState !== 1 && ytState !== 3) { ytPlaying = false; setMuted(true); } }, 2500);
+      }
+      var st = d.event === 'onStateChange' ? d.info : (d.info && typeof d.info.playerState === 'number' ? d.info.playerState : null);
+      if (typeof st !== 'number') return;
+      ytState = st;
+      ytPlaying = st === 1 || st === 3;
+      if (st === 1) setMuted(false);
+      if (st === 0 && cfg.loop && yt.kind === 'video') { ytCommand('seekTo', [yt.start || 0, true]); ytCommand('playVideo'); }
+    });
+    ytFrame = document.createElement('iframe');
+    ytFrame.src = src;
+    ytFrame.width = '200';
+    ytFrame.height = '200';
+    ytFrame.title = 'Music';
+    ytFrame.tabIndex = -1;
+    ytFrame.setAttribute('allow', 'autoplay; encrypted-media');
+    ytFrame.addEventListener('load', function () {
+      // Beim Player anmelden, damit er seinen Zustand meldet (so macht es auch YouTubes eigene IFrame-API)
+      (function listen() {
+        if (heard || tries++ > 40) return;
+        ytSend({ event: 'listening', id: 1, channel: 'widget' });
+        setTimeout(listen, 250);
+      })();
+    });
+    ytFrame.addEventListener('error', function () { setMuted(true); });
+    ytPlaying = true;
+    $('#oys-yt').appendChild(ytFrame);
   }
 
   function enter() {
@@ -394,13 +413,15 @@
   }
   if (mute && yt && !audio) {
     mute.addEventListener('click', function () {
-      if (!ytPlayer || !ytPlayer.getPlayerState) { setMuted(false); return; }
-      if (ytPlayer.getPlayerState() === 1 && !ytPlayer.isMuted()) {
-        ytPlayer.pauseVideo();
+      if (!ytFrame) { setMuted(false); return; }
+      if (ytPlaying) {
+        ytCommand('pauseVideo');
+        ytPlaying = false;
         setMuted(true);
       } else {
-        ytPlayer.unMute();
-        ytPlayer.playVideo();
+        ytCommand('unMute');
+        ytCommand('playVideo');
+        ytPlaying = true;
         setMuted(false);
       }
     });

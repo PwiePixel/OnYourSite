@@ -83,6 +83,7 @@ $forbidden_subdomains = array_values(array_unique(array_merge(
     ],
     [
         'abuse', 'nocontact', 'noreply', 'donotreply', 'mailer', 'postmaster', 'hostmaster', 'webmaster', 'administratoraccount',
+        'autoconfig', 'autodiscover', 'mta-sts', 'wpad', 'isatap', 'pop3', 'imaps', 'smtps', 'caldav', 'carddav', 'webdisk', 'plesk', 'whm', 'lists',
         'staticfiles', 'public', 'private', 'client', 'clients', 'partnerportal', 'adminconsole', 'control', 'manager',
         'server', 'servers', 'host', 'hosting', 'proxy', 'gateway', 'edge', 'origin'
     ]

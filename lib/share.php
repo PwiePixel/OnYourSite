@@ -222,7 +222,7 @@ function oys_og_avatar(array $page, int $size, array $accent, array $base, bool 
 function oys_og_load_image(string $file)
 {
     $name = basename($file);
-    $path = oys_upload_path($name);
+    $path = oys_upload_read_path($name);
     if ($name === '' || !is_file($path) || filesize($path) > 15 * 1024 * 1024) {
         return null;
     }

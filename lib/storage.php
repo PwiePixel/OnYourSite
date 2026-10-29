@@ -46,6 +46,16 @@ function oys_upload_path(string $name): string
     return oys_uploads_dir() . '/' . $name;
 }
 
+// Zum Lesen auf dem Server: nach dem Umstellen auf uploads_dir liegen manche Dateien evtl. noch in static/uploads
+function oys_upload_read_path(string $name): string
+{
+    $path = oys_upload_path($name);
+    if (!is_file($path) && oys_uploads_external() && is_file(oys_uploads_default_dir() . '/' . $name)) {
+        return oys_uploads_default_dir() . '/' . $name;
+    }
+    return $path;
+}
+
 // Dateiname aus einer Adresse: nur einfache Namen, keine Ordner, nichts Verstecktes
 function oys_upload_name_ok(string $name): bool
 {
@@ -58,14 +68,15 @@ function oys_serve_upload(string $raw): void
 {
     $name = rawurldecode($raw);
     $types = [
-        'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
-        'mp3' => 'audio/mpeg', 'm4a' => 'audio/mp4', 'ogg' => 'audio/ogg', 'wav' => 'audio/wav',
-        'pdf' => 'application/pdf', 'vcf' => 'text/vcard', 'zip' => 'application/zip',
+        'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp', 'avif' => 'image/avif', 'bmp' => 'image/bmp',
+        'mp3' => 'audio/mpeg', 'm4a' => 'audio/mp4', 'ogg' => 'audio/ogg', 'wav' => 'audio/wav', 'aac' => 'audio/aac', 'flac' => 'audio/flac',
+        'mp4' => 'video/mp4', 'webm' => 'video/webm', 'pdf' => 'application/pdf', 'vcf' => 'text/vcard', 'zip' => 'application/zip', 'txt' => 'text/plain; charset=utf-8',
     ];
+    // Wie static/uploads/.htaccess: nie als Skript, HTML oder SVG ausliefern; Unbekanntes nur zum Herunterladen
+    $denied = ['php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'pl', 'py', 'cgi', 'sh', 'html', 'htm', 'xhtml', 'shtml', 'svg', 'svgz', 'js', 'mjs', 'xml', 'xsl'];
     $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
     $path = oys_upload_path($name);
-    // Wie static/uploads/.htaccess: nichts ausführen, keine Skripte oder HTML ausliefern
-    if (!oys_upload_name_ok($name) || !isset($types[$ext]) || !is_file($path)) {
+    if (!oys_upload_name_ok($name) || $ext === '' || in_array($ext, $denied, true) || !is_file($path)) {
         http_response_code(404);
         header('Content-Type: text/plain; charset=utf-8');
         echo 'Not found';
@@ -74,7 +85,10 @@ function oys_serve_upload(string $raw): void
     $size = (int) filesize($path);
     $mtime = (int) filemtime($path);
     $etag = '"' . dechex($mtime) . '-' . dechex($size) . '"';
-    header('Content-Type: ' . $types[$ext]);
+    header('Content-Type: ' . ($types[$ext] ?? 'application/octet-stream'));
+    if (!isset($types[$ext])) {
+        header('Content-Disposition: attachment');
+    }
     header('X-Content-Type-Options: nosniff');
     header('Cache-Control: public, max-age=2592000');
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $mtime) . ' GMT');
@@ -153,20 +167,31 @@ function oys_storage_download_zip(): ?string
     if ($tmp === false || $zip->open($tmp, ZipArchive::OVERWRITE) !== true) {
         return 'The backup file couldn’t be created (temporary folder not writable).';
     }
+    // Die Zwischendatei verschwindet auch, wenn der Download abbricht
+    register_shutdown_function(function () use ($tmp) { @unlink($tmp); });
+    $retry = 'The backup couldn’t be finished – a file probably changed while it was being packed, or the temporary folder is full. Please try again.';
     foreach ($files as $name => $bytes) {
-        $zip->addFile(oys_upload_path($name), 'uploads/' . $name);
+        if (!$zip->addFile(oys_upload_path($name), 'uploads/' . $name)) {
+            $zip->unchangeAll();
+            $zip->close();
+            return $retry;
+        }
         // Bilder und Musik sind schon komprimiert – nur speichern geht schneller
         if (method_exists($zip, 'setCompressionName')) {
             $zip->setCompressionName('uploads/' . $name, ZipArchive::CM_STORE);
         }
     }
-    $zip->close();
+    // Die Dateien werden erst hier gelesen – fehlt eine inzwischen, schlägt close() fehl
+    $closed = @$zip->close();
+    clearstatcache(true, $tmp);
+    if ($closed !== true || !filesize($tmp)) {
+        return $retry;
+    }
     header('Content-Type: application/zip');
     header('Content-Disposition: attachment; filename="onyoursite-uploads-' . date('Y-m-d') . '.zip"');
     header('Content-Length: ' . filesize($tmp));
     header('Cache-Control: no-store');
     readfile($tmp);
-    @unlink($tmp);
     exit;
 }
 

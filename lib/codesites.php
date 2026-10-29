@@ -80,6 +80,7 @@ function oys_code_for_editor(PDO $pdo, array $site): array
         'blocked' => (bool) $site['is_blocked'],
         'blocked_reason' => (string) ($site['blocked_reason'] ?? ''),
         'url' => oys_code_url($site),
+        'preview' => oys_code_url($site) . '/?oys-preview=' . oys_code_preview_token($site),
         'views' => (int) $site['views'],
         'files' => $files,
         'limits' => ['files' => OYS_CODE_MAX_FILES, 'file' => OYS_CODE_MAX_FILE_BYTES, 'total' => OYS_CODE_MAX_TOTAL_BYTES, 'types' => array_keys(OYS_CODE_TYPES)],
@@ -121,6 +122,28 @@ function oys_code_starter_files(string $title): array
 // Gibt eine Fehlermeldung oder null zurück.
 function oys_code_save(PDO $pdo, array $site, array $files, array $deleted): ?string
 {
+    // Gleichzeitige Speichervorgänge (z. B. zwei Tabs) nacheinander prüfen – sonst ließen sich die Grenzen umgehen
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM code_sites WHERE id = ? FOR UPDATE')->execute([$site['id']]);
+        $error = oys_code_write($pdo, $site, $files, $deleted);
+        if ($error !== null) {
+            $pdo->rollBack();
+            return $error;
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+    return null;
+}
+
+// Prüft und schreibt die Änderungen (innerhalb der Transaktion von oys_code_save)
+function oys_code_write(PDO $pdo, array $site, array $files, array $deleted): ?string
+{
     $current = oys_code_files($pdo, (int) $site['id']);
     $next = $current;
     foreach ($deleted as $path) {
@@ -149,24 +172,17 @@ function oys_code_save(PDO $pdo, array $site, array $files, array $deleted): ?st
         return 'Your page needs an index.html – it’s the first file visitors see.';
     }
     $now = date('Y-m-d H:i:s');
-    $pdo->beginTransaction();
-    try {
-        $del = $pdo->prepare('DELETE FROM code_files WHERE site_id = ? AND path = ?');
-        foreach (array_diff_key($current, $next) as $path => $unused) {
-            $del->execute([$site['id'], $path]);
-        }
-        $up = $pdo->prepare('INSERT INTO code_files (site_id, path, content, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE content = VALUES(content), updated_at = VALUES(updated_at)');
-        foreach ($next as $path => $content) {
-            if (!array_key_exists($path, $current) || $current[$path] !== $content) {
-                $up->execute([$site['id'], $path, $content, $now]);
-            }
-        }
-        $pdo->prepare('UPDATE code_sites SET updated_at = ? WHERE id = ?')->execute([$now, $site['id']]);
-        $pdo->commit();
-    } catch (Throwable $e) {
-        $pdo->rollBack();
-        throw $e;
+    $del = $pdo->prepare('DELETE FROM code_files WHERE site_id = ? AND path = ?');
+    foreach (array_diff_key($current, $next) as $path => $unused) {
+        $del->execute([$site['id'], $path]);
     }
+    $up = $pdo->prepare('INSERT INTO code_files (site_id, path, content, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE content = VALUES(content), updated_at = VALUES(updated_at)');
+    foreach ($next as $path => $content) {
+        if (!array_key_exists($path, $current) || $current[$path] !== $content) {
+            $up->execute([$site['id'], $path, $content, $now]);
+        }
+    }
+    $pdo->prepare('UPDATE code_sites SET updated_at = ? WHERE id = ?')->execute([$now, $site['id']]);
     return null;
 }
 
@@ -189,13 +205,36 @@ function oys_code_used_uploads(PDO $pdo, int $userId): array
     }
     $used = [];
     foreach (oys_code_files($pdo, (int) $site['id']) as $content) {
-        if (preg_match_all('#/static/uploads/([A-Za-z0-9._-]+)#', $content, $m)) {
+        // Dateinamen dieser Version (name_ID_zeit_zufall.ext), egal wie sie eingebunden sind
+        if (preg_match_all('#[a-z]+_' . $userId . '_\d{9,11}_[0-9a-f]{8}\.[a-z0-9]{2,5}#', $content, $m)) {
+            foreach ($m[0] as $name) {
+                $used[$name] = true;
+            }
+        }
+        // ältere Dateinamen über ihre Adresse (auch ohne / am Anfang)
+        if (preg_match_all('#static/uploads/([A-Za-z0-9._%-]+)#', $content, $m)) {
             foreach ($m[1] as $name) {
                 $used[rawurldecode($name)] = true;
             }
         }
     }
     return $used;
+}
+
+// Vorschau des Besitzers im Editor: zeigt die Seite auch, wenn sie offline ist (12 Stunden gültig)
+function oys_code_preview_token(array $site, ?int $time = null): string
+{
+    $time = $time ?? time();
+    return $time . '-' . substr(oys_hmac('code-preview|' . $site['id'] . '|' . $site['slug'] . '|' . $time), 0, 24);
+}
+
+function oys_code_preview_valid(array $site, string $token): bool
+{
+    if (!preg_match('/^(\d{9,11})-[0-9a-f]{24}$/', $token, $m)) {
+        return false;
+    }
+    $age = time() - (int) $m[1];
+    return $age >= -60 && $age <= 43200 && hash_equals(oys_code_preview_token($site, (int) $m[1]), $token);
 }
 
 // Datei einer Code-Seite ausliefern (name.on-your.site/…)
@@ -205,17 +244,30 @@ function oys_code_serve(PDO $pdo, array $site, string $path): void
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Access-Control-Allow-Origin: *');
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    // Code-Seiten sind reine Dateien: nur ansehen (auch keine POST-Anfragen wie die der Mail-Autokonfiguration)
+    if ($method !== 'GET' && $method !== 'HEAD') {
+        header('Allow: GET, HEAD');
+        http_response_code(405);
+        echo oys_code_notice('Not allowed', 'Code pages can only be viewed.');
+        return;
+    }
     if (!empty($site['is_blocked'])) {
         http_response_code(451);
         echo oys_code_notice('This page has been blocked', 'It broke the rules for code pages on OnYourSite.');
         return;
     }
-    if (empty($site['is_published'])) {
+    $urlToken = is_string($_GET['oys-preview'] ?? null) ? $_GET['oys-preview'] : '';
+    $rel = strtolower(trim(rawurldecode($path), '/'));
+    // Offline sehen Besucher nur einen Hinweis. Der Besitzer sieht Seiten mit Vorschau-Schlüssel (Editor) –
+    // Dateien wie CSS, JS und Bilder werden dafür auch offline ausgeliefert, die Sandbox gibt keinen Referer mit.
+    $hidden = empty($site['is_published']) && !oys_code_preview_valid($site, $urlToken);
+    $askedExt = pathinfo($rel, PATHINFO_EXTENSION);
+    if ($hidden && ($askedExt === '' || $askedExt === 'html' || $askedExt === 'htm' || !isset(OYS_CODE_TYPES[$askedExt]))) {
         http_response_code(404);
         echo oys_code_notice('This page is offline', 'Its owner has switched it off for now.');
         return;
     }
-    $rel = strtolower(trim(rawurldecode($path), '/'));
     $candidates = $rel === '' ? ['index.html'] : [$rel, $rel . '.html', $rel . '/index.html'];
     $stmt = $pdo->prepare('SELECT path, content, updated_at FROM code_files WHERE site_id = ? AND path = ?');
     $file = null;
@@ -243,6 +295,16 @@ function oys_code_serve(PDO $pdo, array $site, string $path): void
     $ext = pathinfo($file['path'], PATHINFO_EXTENSION);
     $type = OYS_CODE_TYPES[$ext];
     $isHtml = $type === 'text/html';
+    if ($hidden && $isHtml) {
+        http_response_code(404);
+        echo oys_code_notice('This page is offline', 'Its owner has switched it off for now.');
+        return;
+    }
+    $qs = (string) ($_SERVER['QUERY_STRING'] ?? '');
+    // Ordner immer mit / am Ende, damit relative Links in ordner/index.html stimmen
+    if ($status === 200 && $file['path'] === $rel . '/index.html' && substr($path, -1) !== '/') {
+        oys_redirect('/' . $rel . '/' . ($qs !== '' ? '?' . $qs : ''), 302);
+    }
     $body = (string) $file['content'];
     if ($isHtml) {
         $body = oys_code_add_badge($body, $site);
@@ -257,8 +319,8 @@ function oys_code_serve(PDO $pdo, array $site, string $path): void
         http_response_code(304);
         return;
     }
-    // Aufrufe zählen – nicht die Vorschau im Editor (?oys-preview=…)
-    if ($isHtml && $status === 200 && !isset($_GET['oys-preview']) && !oys_is_bot($_SERVER['HTTP_USER_AGENT'] ?? '')) {
+    // Aufrufe zählen – nicht die Vorschau im Editor (?oys-preview=…) und keine HEAD-Anfragen
+    if ($method === 'GET' && $isHtml && $status === 200 && $urlToken === '' && !oys_is_bot($_SERVER['HTTP_USER_AGENT'] ?? '')) {
         $pdo->prepare('UPDATE code_sites SET views = views + 1 WHERE id = ?')->execute([$site['id']]);
     }
     echo $body;

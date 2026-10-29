@@ -405,8 +405,9 @@
 
   $('#saveBtn').addEventListener('click', save);
 
+  var leaving = false; // nach „Trotzdem wechseln?“ nicht ein zweites Mal fragen
   window.addEventListener('beforeunload', function (ev) {
-    if (dirty || codeUnsaved()) { ev.preventDefault(); ev.returnValue = ''; }
+    if (!leaving && (dirty || codeUnsaved())) { ev.preventDefault(); ev.returnValue = ''; }
   });
   document.addEventListener('keydown', function (ev) {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); save(); }
@@ -572,8 +573,7 @@
   function goToPage(id) {
     if (state.page && id === state.page.id) return;
     if ((dirty || codeUnsaved()) && !confirm('You have unsaved changes. Switch pages anyway?')) return;
-    dirty = false;
-    code.saved = code.files;
+    leaving = true;
     location.href = '/dashboard?page=' + id + location.hash;
   }
 
@@ -1862,7 +1862,7 @@
   // ================================================================
   // Tab: Code-Seite – eigene Website aus HTML, CSS und JavaScript
   // ================================================================
-  var code = { st: null, files: {}, saved: {}, cur: 'index.html', docs: {}, cm: null, saving: false, state: '', previewed: false };
+  var code = { st: null, files: {}, saved: {}, cur: 'index.html', docs: {}, cm: null, saving: false, loading: false, state: '', previewed: false };
   var CODE_PATH = /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*(?:\/[a-z0-9_-]+(?:\.[a-z0-9_-]+)*){0,3}$/;
   var CODE_ICONS = { html: 'bxl-html5', htm: 'bxl-html5', css: 'bxl-css3', js: 'bxl-javascript', mjs: 'bxl-javascript', json: 'bx-code-curly', svg: 'bx-shape-polygon', xml: 'bx-code', md: 'bx-file', txt: 'bx-file', webmanifest: 'bx-mobile-alt' };
   var utf8 = window.TextEncoder ? new TextEncoder() : null;
@@ -1914,8 +1914,11 @@
       codePreview();
       return;
     }
+    if (code.loading) return;
+    code.loading = true;
     root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading…</div>';
     apiGet('code').then(function (res) {
+      code.loading = false;
       if (!res || !res.ok) { root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your code page – please reload.</div>'; return; }
       setCodeState(res);
       renderCode();
@@ -2303,13 +2306,15 @@
     if (ev.target.id !== 'codeOnline') return;
     var on = ev.target.checked;
     codeSettings('code-save', { files: {}, deleted: [], online: on }, function () {
-      toast(on ? 'Your code page is online.' : 'Your code page is offline – visitors see a notice.');
+      toast(on ? 'Your code page is online.' : 'Your code page is offline – visitors see a notice, you still see it in the preview.');
       codePreview(true);
     }).then(function (ok) { if (!ok) ev.target.checked = !on; });
   });
 
   // Vorschau: im Handy-Rahmen rechts (gespeicherter Stand) und als große Ansicht
   function codeUrl() { return code.st && code.st.site ? code.st.site.url + '/' : ''; }
+  // Die Vorschau-Adresse enthält einen Schlüssel: so sieht nur der Besitzer die Seite, auch wenn sie offline ist
+  function codePreviewSrc() { return code.st.site.preview + '&r=' + Date.now(); }
   function codePreview(reload) {
     var url = codeUrl(), frame = $('#pvCode');
     frame.classList.toggle('on', !!url);
@@ -2319,7 +2324,7 @@
     $('#bigPreviewUrl').textContent = prettyUrl(url);
     if (reload || !code.previewed) {
       code.previewed = true;
-      frame.src = url + '?oys-preview=' + Date.now();
+      frame.src = codePreviewSrc();
     }
   }
   function openCodeBig() {
@@ -2327,7 +2332,7 @@
     if (!url) return;
     big.removeAttribute('srcdoc');
     big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
-    big.src = url + '?oys-preview=' + Date.now();
+    big.src = codePreviewSrc();
     $('#bigPreviewUrl').textContent = prettyUrl(url);
     $('#bigPreview').classList.remove('hidden');
   }
