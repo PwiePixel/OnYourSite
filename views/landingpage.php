@@ -112,6 +112,7 @@ $themes = oys_themes();
                     <a href="#designs" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Themes</a>
                     <a href="#how-it-works" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">How it works</a>
                     <a href="#faq" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">FAQ</a>
+                    <a href="/updates" class="text-sm font-medium text-gray-400 hover:text-white transition-colors">Updates</a>
                     <a href="https://discord.on-your.site" target="_blank" rel="noopener" class="text-sm font-medium text-[#5865F2] hover:text-[#4752C4] transition-colors flex items-center gap-1"><i class='bx bxl-discord-alt text-lg'></i> Community</a>
                     <div class="h-5 w-px bg-bordercolor"></div>
                     <?php if ($loggedIn): ?>
@@ -315,7 +316,9 @@ $themes = oys_themes();
                 </a>
             </div>
 
-            <div class="flex items-center gap-4 mb-6 text-sm text-gray-500 font-medium">
+            <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 mb-6 text-sm text-gray-500 font-medium">
+                <a href="/updates" class="inline-block py-2 hover:text-white transition-colors">Updates &amp; roadmap</a>
+                <span>&bull;</span>
                 <a href="/imprint" class="inline-block py-2 hover:text-white transition-colors">Legal notice</a>
                 <span>&bull;</span>
                 <a href="/privacy" class="inline-block py-2 hover:text-white transition-colors">Privacy</a>

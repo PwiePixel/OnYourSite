@@ -285,6 +285,7 @@ function oys_reserved_paths(): array
         'login', 'logout', 'register', 'dashboard', 'admin', 'challenge', 'imprint', 'privacy', 'terms',
         'api', 'static', 'track-click', 'kalender', 'cron', 'lib', 'email', 'install', 'phpmailer',
         'robots', 'sitemap', 'favicon', 'index', 'config', 'go', 'demo', 'impressum', 'datenschutz', 'agb',
+        'updates', 'roadmap', 'changelog', 'news', 'feed',
     ];
 }
 

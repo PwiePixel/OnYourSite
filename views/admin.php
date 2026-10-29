@@ -16,6 +16,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !oys_csrf_check($_POST['csrf'] ?? n
     exit;
 }
 
+// Updates, Roadmap und Discord (lib/updates.php)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['oys_action'])) {
+    $result = oys_admin_updates_handle($pdo, $_POST);
+    if ($result) {
+        $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok'];
+        header('Location: /admin' . ($result['query'] ?? '') . '#' . $result['tab']);
+        exit;
+    }
+}
+
 // Ordner für E-Mails und Config sicherstellen
 $email_dir = __DIR__ . '/../email/';
 if (!is_dir($email_dir)) {
@@ -238,6 +248,20 @@ if (file_exists($smtp_file)) {
                 <button type="button" onclick="switchAdminTab('mailserver')" id="nav-mailserver" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
                     <i class='bx bx-server text-xl'></i> <span class="hidden lg:block text-sm">Mail Server</span>
                 </button>
+
+                <div class="my-4 border-t border-bordercolor"></div>
+
+                <button type="button" onclick="switchAdminTab('updates')" id="nav-updates" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
+                    <i class='bx bx-news text-xl'></i> <span class="hidden lg:block text-sm">Updates</span>
+                </button>
+
+                <button type="button" onclick="switchAdminTab('roadmap')" id="nav-roadmap" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
+                    <i class='bx bx-map-alt text-xl'></i> <span class="hidden lg:block text-sm">Roadmap</span>
+                </button>
+
+                <button type="button" onclick="switchAdminTab('discord')" id="nav-discord" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
+                    <i class='bx bxl-discord-alt text-xl'></i> <span class="hidden lg:block text-sm">Discord</span>
+                </button>
             </nav>
         </div>
         <div class="px-3">
@@ -265,12 +289,12 @@ if (file_exists($smtp_file)) {
 
         <?php if(isset($_SESSION['admin_success'])): ?>
             <div class="absolute top-20 left-1/2 -translate-x-1/2 z-50 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-md text-sm font-medium animate-fade-in">
-                <i class='bx bx-check-circle text-lg'></i> <?php echo $_SESSION['admin_success']; unset($_SESSION['admin_success']); ?>
+                <i class='bx bx-check-circle text-lg'></i> <?= e($_SESSION['admin_success']) ?><?php unset($_SESSION['admin_success']); ?>
             </div>
         <?php endif; ?>
         <?php if(isset($_SESSION['admin_error'])): ?>
             <div class="absolute top-20 left-1/2 -translate-x-1/2 z-50 bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-md text-sm font-medium animate-fade-in">
-                <i class='bx bx-error-circle text-lg'></i> <?php echo $_SESSION['admin_error']; unset($_SESSION['admin_error']); ?>
+                <i class='bx bx-error-circle text-lg'></i> <?= e($_SESSION['admin_error']) ?><?php unset($_SESSION['admin_error']); ?>
             </div>
         <?php endif; ?>
 
@@ -505,6 +529,8 @@ if (file_exists($smtp_file)) {
                 </div>
             </div>
 
+            <?php require __DIR__ . '/admin_updates.php'; ?>
+
         </main>
     </div>
 
@@ -531,24 +557,45 @@ if (file_exists($smtp_file)) {
     </div>
 
     <script>
+        const ADMIN_TABS = {
+            users: ['User Management', 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'],
+            newsletter: ['Newsletter Campaigns', 'border-brand-500/30 bg-brand-500/10 text-brand-400'],
+            mailserver: ['Mail Server Setup', 'border-purple-500/30 bg-purple-500/10 text-purple-400'],
+            updates: ['Updates', 'border-sky-500/30 bg-sky-500/10 text-sky-400'],
+            roadmap: ['Roadmap', 'border-amber-500/30 bg-amber-500/10 text-amber-400'],
+            discord: ['Discord', 'border-[#5865F2]/40 bg-[#5865F2]/10 text-[#8b93ff]'],
+        };
         function switchAdminTab(tabName) {
+            if (!Object.prototype.hasOwnProperty.call(ADMIN_TABS, tabName)) return;
             document.querySelectorAll('.admin-tab-content').forEach(tab => tab.classList.add('hidden'));
             document.querySelectorAll('.admin-nav-btn').forEach(btn => btn.className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all");
-            
+
             document.getElementById('tab-' + tabName).classList.remove('hidden');
-            
-            let activeBtn = document.getElementById('nav-' + tabName);
-            if(tabName === 'users') {
-                activeBtn.className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-medium transition-all shadow-inner";
-                document.getElementById('admin-page-title').innerText = "User Management";
-            } else if (tabName === 'newsletter') {
-                activeBtn.className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-brand-500/30 bg-brand-500/10 text-brand-400 font-medium transition-all shadow-inner";
-                document.getElementById('admin-page-title').innerText = "Newsletter Campaigns";
-            } else if (tabName === 'mailserver') {
-                activeBtn.className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-purple-500/30 bg-purple-500/10 text-purple-400 font-medium transition-all shadow-inner";
-                document.getElementById('admin-page-title').innerText = "Mail Server Setup";
-            }
+            document.getElementById('nav-' + tabName).className = "admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border font-medium transition-all shadow-inner " + ADMIN_TABS[tabName][1];
+            document.getElementById('admin-page-title').innerText = ADMIN_TABS[tabName][0];
+            if (location.hash !== '#' + tabName) history.replaceState(null, '', '#' + tabName);
         }
+        window.addEventListener('hashchange', () => switchAdminTab(location.hash.slice(1)));
+
+        // Meldungen: Erfolg verschwindet nach ein paar Sekunden, ein Klick schließt jede Meldung
+        document.querySelectorAll('.animate-fade-in').forEach(el => {
+            el.style.cursor = 'pointer';
+            el.addEventListener('click', () => el.remove());
+            if (el.classList.contains('bg-emerald-500/10')) setTimeout(() => el.remove(), 5000);
+        });
+        switchAdminTab(location.hash.slice(1));
+
+        // Discord: nur die Felder der gewählten Verbindungsart zeigen
+        (function () {
+            const form = document.getElementById('discordForm');
+            if (!form) return;
+            const sync = () => {
+                const mode = form.querySelector('input[name=mode]:checked')?.value || 'webhook';
+                form.querySelectorAll('[data-mode]').forEach(el => el.classList.toggle('hidden', el.dataset.mode !== mode));
+            };
+            form.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', sync));
+            sync();
+        })();
 
         function toggleSingleEmail() {
             const select = document.getElementById('audienceSelect');
