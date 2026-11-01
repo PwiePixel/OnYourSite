@@ -3,7 +3,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
-import { closePool, exec, one, q, value, withNamedLock, LockBusyError, DbUnavailableError, tzOffset } from '../src/db.js';
+import { closePool, exec, one, q, value, withNamedLock, withConnection, transaction, outsidePinned, LockBusyError, DbUnavailableError, tzOffset } from '../src/db.js';
 
 const BASE = loadConfig();
 const withDb = (patch: Record<string, unknown>) => setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), ...patch } as ConfigData });
@@ -73,12 +73,57 @@ test('every query runs in the site time zone, also after the zone changes', asyn
 test('named locks: a busy lock fails or runs as asked', async () => {
   let inner: unknown = null;
   await withNamedLock('oys_test_lock', 1, async () => {
-    // Zweite Verbindung bekommt dieselbe Sperre nicht
-    await assert.rejects(withNamedLock('oys_test_lock', 0, async () => 'never', 'fail'), LockBusyError);
-    inner = await withNamedLock('oys_test_lock', 0, async () => 'ran anyway', 'run');
+    // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
+    await outsidePinned(() => assert.rejects(withNamedLock('oys_test_lock', 0, async () => 'never', 'fail'), LockBusyError));
+    inner = await outsidePinned(() => withNamedLock('oys_test_lock', 0, async () => 'ran anyway', 'run'));
   });
   assert.equal(inner, 'ran anyway');
   assert.equal(await withNamedLock('oys_test_lock', 1, async () => 'free again', 'fail'), 'free again');
+});
+
+test('queries inside a locked section reuse its connection – no deadlock when the pool is full', async () => {
+  setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), pool: 2 } as ConfigData });
+  await closePool();
+  try {
+    // 6 Abschnitte gleichzeitig bei nur 2 Verbindungen; jeder fragt innen über die Pool-Funktionen ab
+    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`oys_test_dl_${i}`, 5, async () => {
+      const own = await value('SELECT CONNECTION_ID()');
+      const again = await q('SELECT CONNECTION_ID() AS id');
+      assert.equal(again[0].id, own, 'inner query runs on the section\'s connection');
+      return own;
+    }));
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('deadlock')), 15000));
+    const ids = (await Promise.race([Promise.all(runs), timeout])) as unknown[];
+    assert.equal(ids.length, 6);
+  } finally {
+    setConfigForTests(BASE);
+    await closePool();
+  }
+});
+
+test('transactions cover nested helper queries and refuse to nest', async () => {
+  await withConnection(async (db) => {
+    await db.exec('CREATE TEMPORARY TABLE oys_tx (id INT PRIMARY KEY)');
+    await assert.rejects(transaction(async () => {
+      // Pool-Funktion innerhalb der Transaktion: dieselbe Verbindung, also mit zurückgerollt
+      await exec('INSERT INTO oys_tx VALUES (1)');
+      throw new Error('stop');
+    }), /stop/);
+    assert.equal(await value('SELECT COUNT(*) FROM oys_tx'), 0);
+    await transaction(async () => {
+      await assert.rejects(transaction(async () => undefined), /already an active transaction/);
+      await exec('INSERT INTO oys_tx VALUES (2)');
+    });
+    assert.equal(await value('SELECT COUNT(*) FROM oys_tx'), 1);
+  });
+});
+
+test('work that outlives its section gets a fresh connection', async () => {
+  let later: Promise<unknown> | null = null;
+  await withConnection(async () => {
+    later = new Promise((resolve) => setTimeout(() => resolve(value('SELECT 7')), 50));
+  });
+  assert.equal(await later, 7);
 });
 
 test("host 'localhost' uses the unix socket like PDO", async () => {

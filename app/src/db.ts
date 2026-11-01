@@ -4,9 +4,10 @@
 // - host 'localhost' heißt wie bei PDO: über den Unix-Socket
 // - jede Verbindung hat die Zeitzone der Seite (wie db.php mit date('P')); nach einer Zeitumstellung wird sie vor der
 //   nächsten Abfrage neu gesetzt, damit „heute“, Statistik und Zeitsteuerung in SQL und in Node übereinstimmen
+import { AsyncLocalStorage } from 'node:async_hooks';
 import mysql from 'mysql2/promise';
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
-import { configString } from './config.js';
+import { configInt, configString } from './config.js';
 
 export type Row = Record<string, unknown>;
 export type Param = string | number | bigint | boolean | null | Date | Buffer;
@@ -71,7 +72,7 @@ export function getPool(): Pool {
     database: configString('db.name', ''),
     // wie PDO mit charset=utf8mb4
     charset: 'UTF8MB4_GENERAL_CI',
-    connectionLimit: 10,
+    connectionLimit: configInt('db.pool', 10),
     enableKeepAlive: true,
     dateStrings: true,
     supportBigNumbers: true,
@@ -141,14 +142,36 @@ function facade(conn: PoolConnection): Db {
   };
 }
 
-// Eine Verbindung für mehrere Schritte (FOR UPDATE, Sperren, LAST_INSERT_ID …)
+// Feste Verbindung des laufenden Abschnitts (Sperre, Transaktion, mehrere Schritte). PHP hat je Anfrage genau eine
+// Verbindung: Alle Abfragen innerhalb eines solchen Abschnitts – auch tief in Hilfsfunktionen – laufen deshalb über
+// dieselbe. Sonst hielte der Abschnitt eine Verbindung fest und wartete auf eine zweite aus dem Pool; unter Last sind
+// dann alle Verbindungen belegt und nichts geht mehr (Verklemmung).
+interface Pinned {
+  db: Db;
+  conn: PoolConnection;
+  inTransaction: boolean;
+  released: boolean;
+}
+const pinned = new AsyncLocalStorage<Pinned>();
+
+// Eine Verbindung für mehrere Schritte (FOR UPDATE, Sperren, LAST_INSERT_ID …); verschachtelt: dieselbe Verbindung
 export async function withConnection<T>(fn: (db: Db, conn: PoolConnection) => Promise<T>): Promise<T> {
+  const current = pinned.getStore();
+  // Noch laufender Abschnitt: weiterverwenden. Ein schon beendeter (z. B. von nachlaufender Hintergrundarbeit) nie.
+  if (current && !current.released) return fn(current.db, current.conn);
   const conn = await acquire();
+  const store: Pinned = { db: facade(conn), conn, inTransaction: false, released: false };
   try {
-    return await fn(facade(conn), conn);
+    return await pinned.run(store, () => fn(store.db, conn));
   } finally {
+    store.released = true;
     conn.release();
   }
+}
+
+// Bewusst außerhalb des laufenden Abschnitts arbeiten (eigene Verbindung), z. B. um eine fremde Sperre zu prüfen
+export function outsidePinned<T>(fn: () => Promise<T>): Promise<T> {
+  return pinned.exit(fn);
 }
 
 // Einzelne Abfragen über den Pool
@@ -158,9 +181,13 @@ export const value = (sql: string, params: Param[] = []): Promise<unknown> => wi
 export const exec = (sql: string, params: Param[] = []): Promise<ExecResult> => withConnection((db) => db.exec(sql, params));
 
 // Transaktion: alles oder nichts. fn bekommt die Verbindung (wie bisher) und dieselben Abfragen als Db.
+// Verschachtelt wirft sie wie PDO ("There is already an active transaction") statt still zu committen.
 export async function transaction<T>(fn: (conn: PoolConnection, db: Db) => Promise<T>): Promise<T> {
   return withConnection(async (db, conn) => {
+    const store = pinned.getStore() as Pinned;
+    if (store.inTransaction) throw new Error('There is already an active transaction');
     await conn.beginTransaction();
+    store.inTransaction = true;
     try {
       const out = await fn(conn, db);
       await conn.commit();
@@ -168,6 +195,8 @@ export async function transaction<T>(fn: (conn: PoolConnection, db: Db) => Promi
     } catch (err) {
       await conn.rollback().catch(() => undefined);
       throw err;
+    } finally {
+      store.inTransaction = false;
     }
   });
 }
