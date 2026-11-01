@@ -39,18 +39,25 @@ export function phpFloatToString(f: number): string {
 }
 
 // (int) $v: Leerraum am Anfang, Vorzeichen, Ziffern; "1e3" → 1000, "12abc" → 12, Arrays → 0/1
+// Überlauf wie PHP (64 Bit): Kommazahlen modulo 2^64, Text bleibt bei ±2^63 stehen, unendlich wird 0.
+// Genau 2^63 gilt als PHP_INT_MAX (2^63-1 gibt es als JavaScript-Zahl nicht).
 export function intval(v: unknown): number {
   if (v === null || v === undefined || v === false) return 0;
   if (v === true) return 1;
-  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : 0;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return 0;
+    const t = Math.trunc(v);
+    return Math.abs(t) < 2 ** 63 || t === 2 ** 63 ? t : Number(BigInt.asIntN(64, BigInt(t)));
+  }
   if (Array.isArray(v)) return v.length ? 1 : 0;
-  if (typeof v === 'object') return 1;
+  // JSON-Objekte sind in PHP Arrays: leer → 0
+  if (typeof v === 'object') return Object.keys(v as object).length ? 1 : 0;
   const s = String(v).replace(/^[ \t\n\v\f\r]+/, '');
   const m = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/.exec(s);
   if (!m) return 0;
   const n = Number(m[0]);
-  if (!Number.isFinite(n)) return n > 0 ? Number.MAX_SAFE_INTEGER : Number.MIN_SAFE_INTEGER;
-  return Math.trunc(n);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-(2 ** 63), Math.min(2 ** 63, Math.trunc(n)));
 }
 
 export const ctypeDigit = (s: unknown): boolean => typeof s === 'string' && /^[0-9]+$/.test(s);
@@ -160,7 +167,8 @@ function decodeForm(s: string): string {
 
 // Einen Feldnamen mit PHP-Regeln einsetzen (auch für multipart-Felder)
 export function setPhpVar(target: PhpArray, name: string, value: PhpValue): void {
-  let key = name.replace(/^ +/, '');
+  // PHP liest den Namen nur bis zum ersten Nullbyte
+  let key = name.split('\0')[0].replace(/^ +/, '');
   if (key === '') return;
   const bracket = key.indexOf('[');
   let base = bracket >= 0 ? key.slice(0, bracket) : key;
@@ -179,22 +187,28 @@ export function setPhpVar(target: PhpArray, name: string, value: PhpValue): void
     while ((m = re.exec(rest)) !== null) subs.push(m[1]);
   }
   if (!subs.length) {
-    target[base] = value;
+    putVar(target, base, value);
     return;
   }
   let cur: PhpArray;
-  if (typeof target[base] !== 'object') target[base] = {};
+  if (!isOwnArray(target, base)) putVar(target, base, {});
   cur = target[base] as PhpArray;
   for (let i = 0; i < subs.length; i++) {
     let k = subs[i];
     if (k === '') k = String(nextIndex(cur));
     if (i === subs.length - 1) {
-      cur[k] = value;
+      putVar(cur, k, value);
     } else {
-      if (typeof cur[k] !== 'object') cur[k] = {};
+      if (!isOwnArray(cur, k)) putVar(cur, k, {});
       cur = cur[k] as PhpArray;
     }
   }
+}
+
+// Nur eigene Einträge lesen und schreiben: Namen wie "__proto__[x]" dürfen nie Object.prototype verändern
+const isOwnArray = (o: PhpArray, k: string): boolean => Object.hasOwn(o, k) && typeof o[k] === 'object';
+function putVar(o: PhpArray, k: string, v: PhpValue): void {
+  Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
 }
 
 function nextIndex(arr: PhpArray): number {
