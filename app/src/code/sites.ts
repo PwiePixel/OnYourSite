@@ -218,10 +218,24 @@ export async function codeUsedUploads(userId: number): Promise<Set<string>> {
 
 export function usedUploadsIn(contents: Iterable<string>, userId: number): Set<string> {
   const used = new Set<string>();
-  const own = new RegExp(`[a-z]+_${userId}_\\d{9,11}_[0-9a-f]{8}\\.[a-z0-9]{2,5}`, 'g');
+  // preg_match_all('#[a-z]+_ID_\d{9,11}_[0-9a-f]{8}\.[a-z0-9]{2,5}#') in linearer Zeit: Als ein Ausdruck braucht V8 für
+  // lange Buchstabenfolgen ohne Treffer quadratische Zeit (256 KB → über eine Minute, der Server stünde still).
+  // [a-z]+ kann nicht kürzer werden (danach muss „_“ kommen) – ein Treffer beginnt also an der ersten Stelle einer
+  // Buchstabenfolge (bzw. am Ende des vorigen Treffers) und hängt nur davon ab, was nach ihrem Ende steht.
+  const letters = /[a-z]+/g;
+  const rest = new RegExp(`_${userId}_\\d{9,11}_[0-9a-f]{8}\\.[a-z0-9]{2,5}`, 'y');
   for (const content of contents) {
     // Dateinamen dieser Version (name_ID_zeit_zufall.ext), egal wie sie eingebunden sind
-    for (const m of content.matchAll(own)) used.add(m[0]);
+    for (let pos = 0; ;) {
+      letters.lastIndex = pos;
+      const run = letters.exec(content);
+      if (!run) break;
+      rest.lastIndex = pos = run.index + run[0].length;
+      if (rest.test(content)) {
+        used.add(content.slice(run.index, rest.lastIndex));
+        pos = rest.lastIndex;
+      }
+    }
     // ältere Dateinamen über ihre Adresse (auch ohne / am Anfang)
     for (const m of content.matchAll(/static\/uploads\/([A-Za-z0-9._%-]+)/g)) used.add(rawurldecode(m[1]));
   }

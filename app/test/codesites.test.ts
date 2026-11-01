@@ -8,7 +8,7 @@ import { ROOT_DIR } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { time } from '../src/php.js';
 import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX, CODE_TYPES, codePreviewToken, codePreviewValid, codeStarterFiles, codeValidPath,
-  codeWrite } from '../src/code/sites.js';
+  codeWrite, usedUploadsIn } from '../src/code/sites.js';
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
@@ -220,4 +220,38 @@ test('save: text with a lone UTF-16 surrogate is rejected (only reachable in Nod
   } finally {
     await restoreDb();
   }
+});
+
+// oys_code_used_uploads() mit einer Datei je Aufruf: die echte PHP-Funktion auf einer SQLite-Datenbank im Speicher
+function phpUsedUploads(contents: string[], userId: number): string[][] {
+  return php(`$pdo = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    $pdo->exec('CREATE TABLE code_sites (id INTEGER PRIMARY KEY, user_id INT)'); $pdo->exec('CREATE TABLE code_files (site_id INT, path TEXT, content TEXT)');
+    $pdo->exec('INSERT INTO code_sites VALUES (1, ${userId})'); $ins = $pdo->prepare("INSERT INTO code_files VALUES (1, 'a.txt', ?)"); $out = [];
+    foreach ($in as $c) { $pdo->exec('DELETE FROM code_files'); $ins->execute([$c]); $out[] = array_map('strval', array_keys(oys_code_used_uploads($pdo, ${userId}))); }
+    return $out;`, contents) as string[][];
+}
+
+test('used uploads: random and hostile code files match PHP and stay fast', () => {
+  const names = ['img_5_1700000000_abcdef12.png', 'aimg_5_1700000000_abcdef12.pngabc_5_1700000000_abcdef12.css', 'x_5_123456789_abcdef01.pngab_5_123456789_abcdef01.png',
+    'A_5_1700000000_abcdef12.png', 'é_5_1700000000_abcdef12.png', 'ab__5_1700000000_abcdef12.png', 'a_55_1700000000_abcdef12.png', 'a_5_12345678_abcdef12.png',
+    'a_5_12345678901_abcdef12.webp', 'a_5_123456789012_abcdef12.png', 'a_5_1700000000_abcdef1.png', 'a_5_1700000000_ABCDEF12.png', 'a_5_1700000000_abcdef12.p',
+    'a_5_1700000000_abcdef12.jpeg12', 'bg_5_1700000000_abcdef12.webp" static/uploads/bg_5_1700000000_abcdef12.webp', 'static/uploads/a%20b.png static/uploads/%C3%A4.png',
+    'xstatic/uploads/a.b-c_d%25.mp3?x static/uploads/ static/uploadsx', 'a_5_1700000000_abcdef12.png_5_1700000000_abcdef12.png', ''];
+  const tokens = ['a', 'bc', 'xyz', 'Q', '_', '5', '55', '_5_', '_55_', '123456789', '1234567890', '12345678901', '123456789012', 'abcdef01', 'ABCDEF01', 'abcdef0',
+    'abcdef012', '.', '.png', '.webp', '.pngab', '.p', '.jpeg1', 'é', '🐝', ' ', '/', 'static/uploads/', 'static/uploads', '%20', '%C3%A4', '-', '\n'];
+  const random = fuzz(tokens, 3000, 14, 21);
+  // Lange Buchstabenfolgen ohne Treffer (in V8 als ein Ausdruck quadratisch) und viele kurze Folgen
+  const hostile = ['a'.repeat(262144), 'a'.repeat(200000) + '_5_1700000000_abcdef12.png', ('a'.repeat(5000) + '_5_1.').repeat(50),
+    'ab_'.repeat(87000), ('img_5_1700000000_abcdef12.png ' + 'z'.repeat(3000)).repeat(80), 'static/uploads/' + 'a'.repeat(262000)];
+  const all = [...names, ...random, ...hostile];
+  const theirs = phpUsedUploads(all, 5);
+  const started = Date.now();
+  const mine = all.map((c) => [...usedUploadsIn([c], 5)]);
+  const ms = Date.now() - started;
+  const mismatches = all.map((c, i) => ({ c: c.slice(0, 120), mine: mine[i], php: theirs[i] })).filter((d) => JSON.stringify(d.mine) !== JSON.stringify(d.php));
+  assert.deepEqual(mismatches, []);
+  assert.ok(theirs.filter((x) => x.length).length > 100, 'enough contents with names in the sample');
+  // Mehrere Dateien zusammen wie oys_code_used_uploads() (Reihenfolge der Namen wie die Schlüssel in PHP)
+  assert.deepEqual([...usedUploadsIn(names, 5)], [...new Set(theirs.slice(0, names.length).flat())]);
+  assert.ok(ms < 3000, `usedUploadsIn took ${ms} ms`);
 });
