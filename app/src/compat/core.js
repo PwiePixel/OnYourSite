@@ -2,6 +2,7 @@
 // Reines JavaScript, damit die Prüfungen 1:1 übernommen werden können; TypeScript liest es mit allowJs.
 // ---------- PHP primitives ----------
 import crypto from 'node:crypto'; import net from 'node:net';
+import { PCRE_CYRILLIC_HAN, PCRE_LETTER } from './pcre14.js';
 export const PCRE_WS = '\\t\\n\\v\\f\\r \\x85\\xA0\\u1680\\u180E\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000';
 export const phpTrim = (s) => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
 export const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
@@ -212,12 +213,15 @@ export function makeBlacklist({ subdomains, contains, regex }) {
     return false; };
 }
 // ---------- spam.php ✔ ----------
+const SPAM_LETTER = new RegExp('[' + PCRE_LETTER + ']', 'gu');
+const SPAM_FOREIGN = new RegExp('[' + PCRE_CYRILLIC_HAN + ']', 'gu');
 export function oysLooksLikeSpam(text) {
   const lower = text.toLowerCase();
   if ((text.match(/https?:\/\/|www\./gi) || []).length > 2) return true;
   if (/\[url=|<a[\t\n\v\f\r ]+href|\[link=/i.test(text)) return true;
   const words = ['viagra', 'cialis', 'casino', 'porn', 'xxx', 'crypto investment', 'bitcoin investment', 'forex', 'loan offer', 'seo services', 'backlinks', 'rank your website', 'guest post', 'buy followers', 'cheap followers', 'onlyfans leak', 'escort', 'betting tips', 'binary option', 'payday loan', 'weight loss pill', 'work from home and earn'];
   if (words.some((w) => lower.includes(w))) return true;
-  const letters = (text.match(/\p{L}/gu) || []).length, foreign = (text.match(/[\p{Script=Cyrillic}\p{Script=Han}]/gu) || []).length;
+  // Klassen wie PCRE2 10.42 (Unicode 14): \p{Cyrillic}/\p{Han} sind dort Schrift-Erweiterungen (CJK-Satzzeichen zählen mit)
+  const letters = (text.match(SPAM_LETTER) || []).length, foreign = (text.match(SPAM_FOREIGN) || []).length;
   return letters > 20 && foreign / Math.max(1, letters) > 0.6;
 }

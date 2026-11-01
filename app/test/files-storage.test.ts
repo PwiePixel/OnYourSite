@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import { ROOT_DIR, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, exec } from '../src/db.js';
@@ -21,6 +22,9 @@ import { PHP_PRELUDE, configWith, copyDatabase, runPhp, startPhpServer, type DbC
 import { rng } from './modelHarness.js';
 
 const BASE = loadConfig();
+// Feste Zeitstempel für alle Ordner eines Laufs (sonst unterscheiden sich die Namen, wenn die Sekunde wechselt)
+const NOW = time();
+const OLD = NOW - 3 * 86400;
 let tmp = '';
 let dbs: DbCopies;
 
@@ -40,9 +44,9 @@ after(async () => {
 // Ordner mit schwierigen Namen: Punkte, Unterordner, Links, kein UTF-8, Sortierung nach Bytes
 function makeUploads(dir: string): void {
   mkdirSync(dir, { recursive: true });
-  const old = time() - 3 * 86400;
+  const old = OLD;
   const files: Array<[string | Buffer, string]> = [
-    [`avatar_5_${old}_abcdef12.png`, 'a'], [`img_5_${old}_0123abcd.webp`, 'bb'], [`gal_5_${time()}_0123abcd.webp`, 'new'],
+    [`avatar_5_${old}_abcdef12.png`, 'a'], [`img_5_${old}_0123abcd.webp`, 'bb'], [`gal_5_${NOW}_0123abcd.webp`, 'new'],
     [`music_5_${old}_ffffffff.mp3`, 'm'.repeat(1000)], [`file_5_${old}_abcdef12.pdf`, 'pdf'], ['file_5_1773643714.pdf', 'legacy'],
     [`avatar_6_${old}_abcdef12.png`, 'tom'], [`avatar_15_${old}_abcdef12.png`, 'x'], [`img_05_${old}_abcdef12.png`, 'y'],
     [`img_5_${old}_ABCDEF12.png`, 'upper'], [`x_5_${old}_abcdef12.p`, 'shortext'], ['legacy name.png', 'l'], ['Zebra.png', 'z'], ['zebra.png', 'z2'],
@@ -77,7 +81,7 @@ test('storage listing and the files of an account match PHP', () => {
 test('sweeping unused uploads deletes the same files as PHP', async () => {
   const dirs = { php: join(tmp, 'sweep-php'), node: join(tmp, 'sweep-node') };
   for (const d of Object.values(dirs)) makeUploads(d);
-  const old = time() - 3 * 86400;
+  const old = OLD;
   // Mia benutzt eine alte Datei auf ihrer Seite – die bleibt
   const setup = `UPDATE pages SET avatar = 'avatar_5_${old}_abcdef12.png' WHERE id = 2`;
   await dbs.admin.query(`USE \`${dbs.names.php}\``);
@@ -270,7 +274,9 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
   const php = await startPhpServer(18103, config);
   setConfigForTests(config);
   const app = await buildServer();
-  await app.listen({ port: 13103, host: '127.0.0.1' });
+  // Freier Port für Node (laufen die Tests mehrerer Arbeitsordner gleichzeitig, wäre ein fester Port belegt)
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const nodePort = (app.server.address() as AddressInfo).port;
   const paths = ['notes.txt', 'empty.txt', 'legacy%20name.png', 'legacy name.png'.replace(' ', '%20'), '%C3%BCmlaut_5_1.png', 'raw%FF_5_x.png', 'v.vcf',
     'a.unknownext', 'UPPER.JPG', 'noext', 'evil.php', 'x.svg', 'x.HTML', 'x.Js', 'file.', 'sub_5_dir', 'link_5_x.png', 'broken_5_x.png',
     'a'.repeat(196) + '.jpg', 'a'.repeat(197) + '.jpg', 'x..y.jpg', 'per%25cent.jpg', 'per%cent.jpg', 'missing.jpg', '', '%2e%2e%2fconfig.php',
@@ -300,7 +306,7 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
       }
       for (const h of variants) {
         const p = await request(18103, method, path, h);
-        const n = await request(13103, method, path, h);
+        const n = await request(nodePort, method, path, h);
         const ph = headerList(p.headers);
         let nh = headerList(n.headers);
         if (!ph.some((x) => x.startsWith('content-length:'))) nh = nh.filter((x) => !x.startsWith('content-length:'));
@@ -324,7 +330,7 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
     for (const path of ['/static/%2e%2e/config.json', '/static/%2E%2E/config.json', '/static/css/%2e%2e/%2e%2e/config.json',
       '/static/uploads/%2E%2E%2F%2E%2E%2Fconfig.json', '/static/uploads/%2e%2e%2f%2e%2e%2fconfig.json', '/static/uploads/%2e%2e/%2e%2e/config.json',
       '/static/uploads/%2E%2E/%2E%2E/config.php', '/static/%2e%2e/lib/storage.php', '/static/uploads/%2e%2e/%2e%2e/.git/config']) {
-      const n = await request(13103, 'GET', path);
+      const n = await request(nodePort, 'GET', path);
       assert.deepEqual([n.status, n.body.toString('latin1')], [403, 'Forbidden'], path);
     }
   } finally {

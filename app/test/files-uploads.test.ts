@@ -99,6 +99,12 @@ async function cases(): Promise<Array<[string, Case]>> {
   const alpha = sharp({ create: { width: 700, height: 500, channels: 4, background: { r: 0, g: 0, b: 255, alpha: 0.3 } } });
   const out: Array<[string, Case]> = [];
   for (let o = 1; o <= 8; o++) out.push([`jpeg orientation ${o}`, { kind: 'image', name: `photo${o}.jpg`, data: await asym.clone().jpeg().withMetadata({ orientation: o }).toBuffer() }]);
+  // Ein Byte zu viel hinter dem Exif-Abschnitt: GD liest das Bild, exif_read_data() scheitert aber am Kopf → keine Drehung
+  const rotated = await asym.clone().jpeg().withMetadata({ orientation: 6 }).toBuffer();
+  let app1End = 2;
+  while (rotated[app1End + 1] !== 0xe1) app1End += 2 + rotated.readUInt16BE(app1End + 2);
+  app1End += 2 + rotated.readUInt16BE(app1End + 2);
+  out.push(['jpeg orientation 6 with a stray byte after the Exif segment', { kind: 'image', name: 'stray.jpg', data: Buffer.concat([rotated.subarray(0, app1End), Buffer.from([0]), rotated.subarray(app1End)]) }]);
   const png = await alpha.clone().png().toBuffer();
   const jpgBig = await sharp({ create: { width: 3000, height: 1700, channels: 3, background: '#336699' } }).jpeg().toBuffer();
   const tallPng = await sharp({ create: { width: 900, height: 2500, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 0.5 } } }).png().toBuffer();

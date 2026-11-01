@@ -497,6 +497,8 @@ const RULES: Rule[] = [
   { s: 190, test: (b) => (at(b, 0, '\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR') ? 'image/png' : null) },
   { s: 190, test: (b) => (at(b, 0, 'SQLite format 3\0') && b.length >= 18 ? 'application/vnd.sqlite3' : null) },
   { s: 180, test: (b) => (atCI(b, 0, 'BEGIN:VCALENDAR') ? 'text/calendar' : null) },
+  // MBWF/RF64 (WAV über 4 GiB, ffmpeg und Aufnahmegeräte schreiben es auch kleiner): riff, „0 string RF64\xff\xff\xff\xffWAVEds64“
+  { s: 180, test: (b) => (at(b, 0, 'RF64\xff\xff\xff\xffWAVEds64') ? 'audio/x-wav' : null) },
   { s: 170, test: (b) => (at(b, 0, '\xef\xbb\xbf%PDF-') ? 'application/pdf' : null) },
   { s: 150, test: (b) => (at(b, 0, '\n%PDF-') ? 'application/pdf' : null) },
   { s: 150, test: (b) => (at(b, 0, '\0\0\0\x0cjP  \r\n\x87\n') ? 'image/jp2' : at(b, 0, '\0\0\0\x0cJXL \r\n\x87\n') ? 'image/x-jxl' : null) },

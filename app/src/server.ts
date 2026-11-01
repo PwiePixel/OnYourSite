@@ -145,33 +145,49 @@ export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Pro
   await new Promise<void>((resolve) => {
     let bb: Busboy.Busboy;
     try {
-      // Busboy bekommt die Grenze, die PHP gefunden hat, in einer Form, die es sicher liest
+      // Busboy bekommt die Grenze, die PHP gefunden hat, in einer Form, die es sicher liest. preservePath: den Pfad im
+      // Dateinamen entfernt PHP selbst (unten) – busboy machte aus „.“ und „..“ einen leeren Namen
       const header = `multipart/form-data; boundary="${boundary.replace(/["\\]/g, '\\$&')}"`;
-      bb = Busboy({ headers: { 'content-type': header }, defParamCharset: 'utf8', limits: { fileSize: UPLOAD_MAX + 1 } });
+      bb = Busboy({ headers: { 'content-type': header }, defParamCharset: 'utf8', preservePath: true, limits: { fileSize: UPLOAD_MAX + 1 } });
     } catch {
       resolve();
       return;
     }
+    const files: Array<Promise<void>> = [];
     bb.on('field', (name, value) => setPhpVar(ctx.post, name, value));
     bb.on('file', (name, stream, info) => {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      let tooBig = false;
-      stream.on('data', (c: Buffer) => {
-        size += c.length;
-        if (size > UPLOAD_MAX) tooBig = true;
-        else chunks.push(c);
-      });
-      stream.on('end', () => {
-        const file: UploadedFile = info.filename === undefined || info.filename === ''
-          ? { name: '', type: '', size: 0, data: Buffer.alloc(0), error: 4 }
-          : { name: info.filename, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 };
+      files.push(new Promise<void>((done) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let tooBig = false;
         // Nur einfache Namen wie in den Formularen der Seite (avatar, file …)
-        ctx.files[name.replace(/\[\]$/, '')] = file;
-      });
+        const key = name.replace(/\[\]$/, '');
+        // php_ap_basename(): alles nach dem letzten / oder \
+        const raw = info.filename ?? '';
+        const fileName = raw.slice(Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\')) + 1);
+        stream.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size > UPLOAD_MAX) tooBig = true;
+          else chunks.push(c);
+        });
+        stream.on('end', () => {
+          ctx.files[key] = raw === ''
+            ? { name: '', type: '', size: 0, data: Buffer.alloc(0), error: 4 }
+            : { name: fileName, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 };
+          done();
+        });
+        // Das Formular endet mitten in der Datei: wie PHP UPLOAD_ERR_PARTIAL (3) ohne Inhalt. Ohne diesen Empfänger
+        // beendete der Fehler den ganzen Server.
+        stream.on('error', () => {
+          ctx.files[key] = { name: fileName, type: '', size: 0, data: Buffer.alloc(0), error: 3 } satisfies UploadedFile;
+          done();
+        });
+        stream.on('close', () => done());
+      }));
     });
-    bb.on('close', () => resolve());
-    bb.on('error', () => resolve());
+    const finish = () => void Promise.all(files).then(() => resolve());
+    bb.on('close', finish);
+    bb.on('error', finish);
     bb.end(body);
   });
 }

@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import yazl from 'yazl';
 import type { Ctx } from '../web/ctx.js';
-import { ROOT_DIR, configString } from '../config.js';
+import { ROOT_DIR, config } from '../config.js';
 import { randomHex } from '../crypto.js';
-import { date, gmdate, phpTrim, phpRtrim, strlen, strtolower } from '../php.js';
+import { date, gmdate, phpStr, phpTrim, phpRtrim, strlen, strtolower } from '../php.js';
 
 // oys_uploads_default_dir() – Tests können einen anderen Code-Ordner vorgeben
 let defaultDirForTests: string | null = null;
@@ -21,7 +21,8 @@ export function setUploadsDefaultDirForTests(dir: string | null): void {
 
 // oys_uploads_dir(): relative Angaben gelten ab dem Code-Ordner (z. B. "../oys-uploads")
 export function uploadsDir(): string {
-  const set = phpTrim(configString('uploads_dir', ''));
+  // (string) oys_config('uploads_dir', ''): true → "1", false → "", Arrays → "Array"
+  const set = phpTrim(phpStr(config<unknown>('uploads_dir', '')));
   if (set === '') return uploadsDefaultDir();
   const absolute = set[0] === '/' || /^[A-Za-z]:[\\/]/.test(set);
   return phpRtrim(absolute ? set : ROOT_DIR + '/' + set, '/\\');
@@ -128,7 +129,7 @@ export async function serveUpload(ctx: Ctx, raw: string): Promise<void> {
   }
   const size = st.size;
   const mtime = Math.floor(st.mtimeMs / 1000);
-  const etag = '"' + mtime.toString(16) + '-' + size.toString(16) + '"';
+  const etag = '"' + dechex(mtime) + '-' + dechex(size) + '"';
   const type = UPLOAD_TYPES[ext];
   ctx.header('Content-Type', type ?? 'application/octet-stream');
   if (type === undefined) ctx.header('Content-Disposition', 'attachment');
@@ -178,6 +179,9 @@ export async function serveUpload(ctx: Ctx, raw: string): Promise<void> {
   }
   ctx.body = createReadStream(path, { fd, start, end, highWaterMark: 65536 });
 }
+
+// dechex(): negative Zahlen (Änderungszeit vor 1970) als 64-Bit-Zweierkomplement
+const dechex = (n: number): string => (n < 0 ? BigInt.asUintN(64, BigInt(n)) : n).toString(16);
 
 // (int) "123…" für Ziffernfolgen: über 2^63 bleibt PHP bei PHP_INT_MAX stehen
 const toInt = (digits: string): number => Math.min(Number(digits), 2 ** 63);
@@ -300,7 +304,8 @@ export interface MoveResult {
   error: string | null;
 }
 
-// rename() wie PHP: über Dateisystemgrenzen kopieren, Besitzer und Rechte übernehmen, dann das Original löschen
+// rename() wie PHP: über Dateisystemgrenzen kopieren, Besitzer und Rechte übernehmen, dann das Original löschen –
+// ob das Löschen klappt, prüft PHP nicht mehr (die Datei gilt als verschoben)
 function phpRename(from: Buffer, to: Buffer): boolean {
   try {
     renameSync(from, to);
@@ -316,11 +321,15 @@ function phpRename(from: Buffer, to: Buffer): boolean {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EPERM') return false;
     }
-    unlinkSync(from);
-    return true;
   } catch {
     return false;
   }
+  try {
+    unlinkSync(from);
+  } catch {
+    // wie VCWD_UNLINK() ohne Prüfung
+  }
+  return true;
 }
 
 // oys_storage_move_to_data_dir(): Dateien aus static/uploads in den eingestellten Ordner verschieben (einmalig)
