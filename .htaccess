@@ -1,6 +1,9 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteCond %{HTTPS} off
+    # Immer https – auch hinter dem Cloudflare-Tunnel: dort kommt jede Anfrage per https an, und wie der Besucher
+    # gekommen ist, steht in X-Forwarded-Proto (setzt Cloudflare selbst)
+    RewriteCond %{HTTPS} off [OR]
+    RewriteCond %{HTTP:X-Forwarded-Proto} =http
     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
     # Interne Ordner und Zugangsdaten nie direkt ausliefern

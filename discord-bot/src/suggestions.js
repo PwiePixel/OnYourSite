@@ -117,6 +117,7 @@ function setupSuggestions(client, cfg, site, log) {
       reason: interaction.fields.getTextInputValue('reason') || '',
       by_name: interaction.member.displayName || interaction.user.username,
       by_id: interaction.user.id,
+      thread_id: interaction.channelId,
     });
     if (!res.ok) {
       await interaction.editReply({ embeds: [notice(`The website did not save this: ${res.error}`, COLORS.red)] });

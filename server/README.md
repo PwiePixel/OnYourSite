@@ -47,7 +47,7 @@ It installs git, gets the code into `/var/www/onyoursite` and goes on by itself.
 4. the **certificate** – the DNS provider is detected, Enter picks it; with Cloudflare it uses the same token,
 5. whether **SSH logins only with a key** are wanted (only asked if the server has an SSH key – say yes only if you log in with a key),
 6. **your admin account** (name, email, page address, password),
-7. whether to set up the **Discord bot** (token and IDs from the Discord Developer Portal; the shared secret is set up by itself).
+7. whether to set up the **Discord bot** – only the bot token and the Application ID from the Discord Developer Portal; the installer invites the bot (link), creates the Staff role and the channels on your Discord server, fills in all IDs and sets up the shared secret by itself (details: [discord-bot/README.md](../discord-bot/README.md)).
 
 Everything else happens by itself. Running it again is safe – Enter keeps every value. With the tunnel, the website is live as soon as the installer is done; without it, point the A records of `@`, `www` and `*` to the server (the installer shows the IP).
 
@@ -60,13 +60,14 @@ The server opens a connection to Cloudflare by itself (`cloudflared`); visitors 
 What the installer does through the Cloudflare API:
 
 - creates a tunnel for this server (`onyoursite-<server name>`) and its rules: `on-your.site`, `www.on-your.site` and `*.on-your.site` go to Apache on this server,
-- **deletes** the A, AAAA and CNAME records of `on-your.site`, `www` and `*` – e.g. the ones that still point to the old server – and creates CNAMEs to the tunnel (through Cloudflare),
-- **deletes** old tunnels of the website: tunnels whose name starts with `onyoursite` or that serve this domain,
-- leaves everything else alone: mail records (MX, TXT/SPF), other names like `mail.on-your.site` and other tunnels. If the mail of the domain would stop working (MX pointing to a name that becomes the tunnel), it warns first.
+- **deletes** the A, AAAA and CNAME records of `on-your.site`, `www` and `*` – e.g. the ones that still point to the old server – and creates CNAMEs to the tunnel (through Cloudflare), all in one step: either everything is switched or nothing,
+- **deletes** old tunnels of the website: tunnels whose rules only serve `on-your.site`, `www` and `*`, and unused leftovers of this server (`onyoursite-<server name>` without rules) – plus DNS records that still point to tunnels that are gone,
+- **removes** the service `cloudflared` on this server if it runs one of these old tunnels (e.g. from Cloudflare’s own instructions, `cloudflared service install`),
+- leaves everything else alone: mail records (MX, TXT/SPF), other names like `mail.on-your.site` and other tunnels. A tunnel that also serves other names (e.g. `nas.on-your.site`) or is managed on its own server stays – the installer names it, so you can clean it up by hand. If the mail of the domain would stop working (MX pointing to a name that becomes the tunnel), it warns first, and it points out records that reveal the address of this server.
 
-It shows this plan and changes nothing until you say yes. The DNS is only switched once the tunnel is connected. On the server, `cloudflared` runs as the service `onyoursite-tunnel` (its own user without rights, the tunnel token in `/etc/onyoursite/tunnel.env`, readable only by root), and Apache passes the real visitor IP from Cloudflare on to the website – the spam and login protection keep working.
+It shows this plan and changes nothing until you say yes. The DNS is only switched once the tunnel is connected and the website answers on this server – if not, the website keeps running as before and the next run picks up the same tunnel. Afterwards it checks from outside that a random subdomain really reaches this server through Cloudflare. In Cloudflare, *SSL/TLS* must not be set to *Off* (*Full (strict)* is right) – otherwise visitors end up in a redirect loop; the check points that out. A token that is missing a permission is forgotten, so the next run asks for a new one. On the server, `cloudflared` runs as the service `onyoursite-tunnel` (its own user without rights, the tunnel token in `/etc/onyoursite/tunnel.env`, readable only by root), and Apache passes the real visitor IP from Cloudflare on to the website – the spam and login protection keep working.
 
-Running the installer again (or `--tunnel`) keeps the tunnel and only repairs what is missing. To stop using the tunnel: delete it in Cloudflare (*Zero Trust → Networks → Tunnels*), point the DNS to the server again, delete `TUNNEL=yes` from `/etc/onyoursite/server.conf` and run the installer – it opens the web ports again.
+Running the installer again (or `--tunnel`) keeps the tunnel and only repairs what is missing; `--update` keeps `cloudflared` up to date and only restarts it when something changed. To stop using the tunnel: delete it in Cloudflare (*Zero Trust → Networks → Tunnels*), point the DNS to the server again, delete `TUNNEL=yes` from `/etc/onyoursite/server.conf`, run the installer and answer *n* to the tunnel question – it opens the web ports again. `sudo systemctl disable --now onyoursite-tunnel` stops `cloudflared`.
 
 ## Start from scratch
 
@@ -74,11 +75,11 @@ Running the installer again (or `--tunnel`) keeps the tunnel and only repairs wh
 sudo bash /var/www/onyoursite/server/install.sh --reset
 ```
 
-Deletes all OnYourSite data on this server – the database (accounts, pages, stats, messages, suggestions, tickets), all uploads and the keys in `config.php` – and sets everything up fresh, including a new admin account. You have to type the domain to confirm, and a backup is made first. The code, the certificate, the Cloudflare tunnel, the mail server settings and the bot settings stay.
+Deletes all OnYourSite data on this server – the database (accounts, pages, stats, messages, suggestions, tickets), all uploads and the keys in `config.php` – and sets everything up fresh, including a new admin account. You have to type the domain to confirm, and a backup is made first (`/var/backups/onyoursite/<date>-before-reset`); everyone who is logged in is signed out. The code, the certificate, the Cloudflare tunnel, the mail server settings and the bot settings stay.
 
 ## HTTPS certificate
 
-One certificate covers `on-your.site` and `*.on-your.site`, so every profile and code page – also every new one – has HTTPS right away. A timer checks it every day: about 30 days before it ends, it is renewed through the DNS API and Apache reloads it, without any downtime. If the renewal doesn’t work (most often because the API token was deleted or has expired) and the certificate has less than 14 days left, every admin gets an email through the mail server of the website. Then run `sudo bash /var/www/onyoursite/server/install.sh --https` and enter a new API token. With the tunnel, visitors see Cloudflare’s certificate; the one on the server is used between Cloudflare and Apache and by the Discord bot.
+One certificate covers `on-your.site` and `*.on-your.site`, so every profile and code page – also every new one – has HTTPS right away. A timer checks it every day: about 30 days before it ends, it is renewed through the DNS API and Apache reloads it, without any downtime. If the renewal doesn’t work (most often because the API token was deleted or has expired) and the certificate has less than 14 days left, every admin gets an email through the mail server of the website. Then run `sudo bash /var/www/onyoursite/server/install.sh --https` and enter a new API token. With the tunnel, visitors see Cloudflare’s certificate; the one on the server is used by the Discord bot (and `cloudflared` talks to Apache through it).
 
 ## Protection
 

@@ -187,7 +187,20 @@ function setupSupport(client, cfg, site, log) {
     await interaction.editReply({ embeds: [notice(res.changed ? 'The ticket is closed.' : 'This ticket was already closed.', COLORS.gray)], components: [] });
   }
 
-  return { handleInteraction, panelMessage, closeChannel, postReply };
+  // Panel im Support-Kanal sicherstellen: steht unter den letzten Nachrichten keins vom Bot, wird es gepostet
+  async function ensurePanel() {
+    if (!cfg.supportChannelId) return false;
+    const channel = await client.channels.fetch(cfg.supportChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return false;
+    const recent = await channel.messages.fetch({ limit: 50 });
+    const hasPanel = recent.some((m) => m.author.id === client.user.id
+      && m.components.some((row) => row.components.some((c) => c.customId === 'tkt:open')));
+    if (hasPanel) return false;
+    await channel.send(panelMessage());
+    return true;
+  }
+
+  return { handleInteraction, panelMessage, closeChannel, postReply, ensurePanel };
 }
 
 module.exports = { setupSupport, panelMessage };

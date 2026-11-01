@@ -13,6 +13,12 @@ const { registerCommands, setupCommands } = require('./src/commands');
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
+// Einrichtung für install.sh (Bot prüfen, Server finden, Rolle und Kanäle anlegen) – braucht nur das Token
+if (process.argv.some((a) => ['--discord-app', '--discord-guilds', '--discord-setup'].includes(a))) {
+  require('./src/setup').cli(process.argv).then((code) => process.exit(code));
+  return;
+}
+
 const { cfg, problems } = readConfig();
 if (problems.length) {
   problems.forEach((p) => console.error(`Config: ${p}`));
@@ -60,6 +66,10 @@ client.once(Events.ClientReady, async (ready) => {
   log(`Logged in as ${ready.user.tag}.`);
   if (!ready.guilds.cache.has(cfg.guildId)) log('The bot is not on the server from GUILD_ID yet – invite it first (README.md).');
   await registerCommands(cfg).then(() => log('Slash commands are registered.')).catch((err) => log(`Slash commands failed: ${err.message}`));
+  // Das Ticket-Panel im Support-Kanal: fehlt es, postet der Bot es selbst
+  await support.ensurePanel()
+    .then((posted) => { if (posted) log('Posted the support panel.'); })
+    .catch((err) => log(`Support panel: ${err.message}`));
   const ping = await site.get('/_/bot/ping');
   log(ping.ok ? `Website connected (${ping.site}).` : `Website not reachable: ${ping.error}`);
   // Änderungen von der Webseite in Discord umsetzen

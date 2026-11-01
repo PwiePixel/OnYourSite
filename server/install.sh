@@ -90,8 +90,16 @@ conf_get() {
 # Paketverwaltung: auf einem frisch gestarteten Server laufen oft noch cloud-init oder automatische Updates –
 # dann warten statt sofort mit „Could not get lock“ abzubrechen
 apt_update() {
-  local i
+  local i key=/usr/share/keyrings/cloudflare-main.gpg
   if command -v cloud-init >/dev/null 2>&1; then timeout 900 cloud-init status --wait >/dev/null 2>&1 || true; fi
+  # Cloudflare tauscht den Schlüssel seiner Paketquelle ab und zu aus – mit dem alten bräche jedes Update hier ab
+  if [ -f /etc/apt/sources.list.d/cloudflared.list ]; then
+    if curl -fsSL --max-time 30 https://pkg.cloudflare.com/cloudflare-main.gpg -o "$key.new" 2>/dev/null && [ -s "$key.new" ]; then
+      mv -f "$key.new" "$key"
+    else
+      rm -f "$key.new"
+    fi
+  fi
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if apt-get -o DPkg::Lock::Timeout=600 update -qq; then return 0; fi
     info "The package lists are busy (an automatic update is running?) – trying again in 10 seconds …"
@@ -206,7 +214,7 @@ step_settings() {
 
   IMPORT="" IMP_CONFIG="" IMP_SMTP="" IMP_DUMP="" IMP_UPLOADS=""
   local dir_def=""
-  if [ ! -f "$CONF" ] && [ -d /root/import ]; then dir_def=/root/import; fi
+  if [ -z "$OLD_DOMAIN" ] && [ -d /root/import ]; then dir_def=/root/import; fi
   echo
   info "Moving from another server? Put these files from the old server into one folder (e.g. /root/import):"
   info "  config.php, email/smtp.json, the database dump (.sql, .sql.gz or .zip) and the uploads ZIP"
@@ -767,7 +775,14 @@ step_https() {
   fi
   if [ -n "$force" ]; then args+=(--force); fi
   info "Asking Let’s Encrypt – this takes a few minutes while the DNS entry spreads …"
-  env "${creds[@]}" "$ACME" "${args[@]}" || rc=$?
+  # Zugangsdaten über die Umgebung (export), nicht als Argumente – die stünden in der Prozessliste
+  (
+    for c in "${creds[@]}"; do
+      # shellcheck disable=SC2163
+      export "$c"
+    done
+    "$ACME" "${args[@]}"
+  ) || rc=$?
   if { [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; } \
     || ! "$ACME" --install-cert -d "$DOMAIN" --ecc --home "$ACME_HOME" \
       --key-file "$SSL_DIR/privkey.pem" --fullchain-file "$SSL_DIR/fullchain.pem" --reloadcmd "systemctl reload apache2"; then
@@ -784,7 +799,8 @@ step_https() {
 # ---------------------------------------------------------------
 # Cloudflare-Tunnel: Besucher kommen über Cloudflare herein, der Server braucht keine offenen Web-Ports und seine
 # IP bleibt verborgen. Der Installer legt den Tunnel über die API an, stellt die DNS-Einträge von @, www und * auf
-# ihn um und räumt alte Tunnel und Einträge dieser Domain ab – Mail-Einträge (MX, TXT) und andere Namen bleiben.
+# ihn um und räumt alte Tunnel und Einträge dieser Website ab – Mail-Einträge (MX, TXT), andere Namen und Tunnel,
+# die auch etwas anderes bedienen, bleiben.
 
 # cf METHODE PFAD [JSON] – gibt .result aus; bei einem Fehler steht die Meldung von Cloudflare in $(cf_err).
 # (cf läuft meist in $( ) – eine dort gesetzte Variable käme nicht zurück, darum eine Datei.)
@@ -800,13 +816,42 @@ cf() {
   out=$(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$CF_TOKEN" \
     | curl -sS --max-time 30 -X "$1" "$CF_API$2" ${3:+--data "$3"} -K - 2>&1) \
     || { printf '%s' "Cloudflare can’t be reached: $out" > "$CF_ERRFILE"; return 1; }
-  if [ "$(jq -r '.success // false' <<< "$out" 2>/dev/null)" != true ]; then
+  # Manche Antworten (z. B. beim Löschen eines DNS-Eintrags) haben kein „success“ – dann zählt ein Ergebnis ohne Fehler
+  if ! jq -e '(.success == true) or ((.success == null) and (.result != null) and (((.errors // []) | length) == 0))' <<< "$out" >/dev/null 2>&1; then
     CF_ERR=$(jq -r '[.errors[]? | "\(.message) (\(.code))"] | join("; ")' <<< "$out" 2>/dev/null || true)
     printf '%s' "${CF_ERR:-$out}" > "$CF_ERRFILE"
     return 1
   fi
   : > "$CF_ERRFILE"
   jq -c '.result' <<< "$out"
+}
+
+# Fehler beim Ändern: fehlt dem gespeicherten Token ein Recht, wird es vergessen – beim nächsten Lauf fragt der Installer neu
+cf_fail() {
+  local e
+  e=$(cf_err)
+  if grep -qiE 'authenticat|permission|unauthori|forbidden|\(10000\)|\(9109\)' <<< "$e"; then
+    rm -f "$CF_ENV"
+    fail "$1: $e. The token is missing a permission (Account · Cloudflare Tunnel · Edit, Zone · DNS · Edit, Zone · Zone · Read) – create a new one and run: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+  fi
+  fail "$1: $e"
+}
+
+# in_list WERT EINTRAG… – steht WERT in der Liste?
+in_list() {
+  local x n=$1
+  shift
+  for x in "$@"; do
+    if [ "$x" = "$n" ]; then return 0; fi
+  done
+  return 1
+}
+
+# Einen Wert sofort in server.conf speichern (z. B. die Tunnel-ID, damit ein Abbruch nichts verliert)
+conf_set() {
+  install -d -m 700 "$CONF_DIR"
+  if [ ! -f "$CONF" ]; then (umask 077 && : > "$CONF"); fi
+  if grep -q "^$1=" "$CONF"; then sed -i "s|^$1=.*|$1=$2|" "$CONF"; else echo "$1=$2" >> "$CONF"; fi
 }
 
 # Gespeichertes Token laden und die Zone der Domain finden (ohne Rückfrage) – für das Zertifikat
@@ -834,6 +879,7 @@ cf_login() {
       if z=$(cf GET "/zones?name=$DOMAIN") && [ "$(jq 'length' <<< "$z")" -gt 0 ]; then
         ZONE_ID=$(jq -r '.[0].id' <<< "$z")
         ACC_ID=$(jq -r '.[0].account.id' <<< "$z")
+        ZONE_STATUS=$(jq -r '.[0].status // "active"' <<< "$z")
         if cf GET "/accounts/$ACC_ID/cfd_tunnel?is_deleted=false&per_page=1" >/dev/null; then break; fi
         info "  This token can’t manage tunnels ($(cf_err))."
       else
@@ -842,7 +888,7 @@ cf_login() {
     fi
     if [ "$shown" = 0 ]; then
       info "The installer needs an API token from Cloudflare: My Profile → API Tokens → Create Token →"
-      info "Create Custom Token, with these permissions:"
+      info "Create Custom Token, with these permissions (each set to Edit or Read as shown):"
       info "  Account · Cloudflare Tunnel · Edit"
       info "  Zone · DNS · Edit"
       info "  Zone · Zone · Read"
@@ -853,14 +899,20 @@ cf_login() {
     prompt CF_TOKEN "Cloudflare API token (Enter = cancel):" hidden
     CF_TOKEN=$(printf '%s' "$CF_TOKEN" | tr -d '[:space:]')
     [ -n "$CF_TOKEN" ] || return 1
+    # Der „Global API Key“ ist kein Token: er darf alles und braucht zusätzlich die E-Mail-Adresse
+    if [[ $CF_TOKEN == cfk_* ]] || [[ $CF_TOKEN =~ ^[0-9a-f]{37}$ ]]; then
+      info "  That is the Global API Key – please create an API token instead (Create Token, as above)."
+      CF_TOKEN=""
+    fi
   done
   install -d -m 700 "$CONF_DIR"
   (umask 077 && printf 'CF_API_TOKEN=%s\n' "$CF_TOKEN" > "$CF_ENV")
 }
 
-# Was auf dem Server zum Tunnel gehört: cloudflared, eigener Dienst, echte Besucher-IP, Anfragen an sich selbst lokal
+# Was auf dem Server zum Tunnel gehört: cloudflared, eigener Dienst, echte Besucher-IP, Anfragen an sich selbst lokal.
+# Der Dienst startet nur neu, wenn sich etwas geändert hat – sonst wären Besucher bei jedem Update kurz ausgesperrt.
 tunnel_local() {
-  local bin
+  local bin before after restart=${1:-0}
   if ! command -v cloudflared >/dev/null 2>&1; then
     info "Installing cloudflared (pkg.cloudflare.com) …"
     install -d -m 755 /usr/share/keyrings
@@ -869,9 +921,12 @@ tunnel_local() {
       > /etc/apt/sources.list.d/cloudflared.list
     apt_update
   fi
+  before=$(cloudflared --version 2>/dev/null || true)
   apt_install cloudflared
   bin=$(command -v cloudflared)
-  cat > "$TUNNEL_UNIT" <<EOF
+  after=$("$bin" --version 2>/dev/null || true)
+  if [ "$before" != "$after" ]; then restart=1; fi
+  if write_if_changed "$TUNNEL_UNIT" <<EOF
 # OnYourSite – written by server/install.sh
 [Unit]
 Description=OnYourSite Cloudflare tunnel
@@ -902,23 +957,82 @@ MemoryMax=256M
 [Install]
 WantedBy=multi-user.target
 EOF
+  then
+    restart=1
+  fi
   systemctl daemon-reload
   systemctl enable onyoursite-tunnel >/dev/null 2>&1
-  systemctl restart onyoursite-tunnel
+  if [ "$restart" = 1 ] || ! systemctl is-active --quiet onyoursite-tunnel; then
+    systemctl restart onyoursite-tunnel
+  fi
   # PHP soll die echte Besucher-IP sehen (Spam-Bremse, Anmeldeschutz) – vertraut wird nur cloudflared auf diesem Server
-  printf '%s\n' "# OnYourSite – written by server/install.sh: real visitor IP from the Cloudflare tunnel" \
-    "RemoteIPHeader CF-Connecting-IP" "RemoteIPInternalProxy 127.0.0.1 ::1" > /etc/apache2/conf-available/onyoursite-tunnel.conf
-  a2enmod -q remoteip >/dev/null
-  a2enconf -q onyoursite-tunnel >/dev/null
-  systemctl reload apache2
+  if printf '%s\n' "# OnYourSite – written by server/install.sh: real visitor IP from the Cloudflare tunnel" \
+      "RemoteIPHeader CF-Connecting-IP" "RemoteIPInternalProxy 127.0.0.1 ::1" \
+      | write_if_changed /etc/apache2/conf-available/onyoursite-tunnel.conf \
+      || [ ! -e /etc/apache2/conf-enabled/onyoursite-tunnel.conf ]; then
+    a2enmod -q remoteip >/dev/null
+    a2enconf -q onyoursite-tunnel >/dev/null
+    systemctl reload apache2
+  fi
   # Anfragen dieses Servers an die eigene Domain (z. B. vom Discord-Bot) gehen direkt an Apache, nicht über Cloudflare
   sed -i '/# onyoursite-tunnel$/d' /etc/hosts
   echo "127.0.0.1 $DOMAIN # onyoursite-tunnel" >> /etc/hosts
 }
 
+# Antwortet Apache auf diesem Server für die Domain? Dorthin schickt der Tunnel die Besucher.
+origin_ok() {
+  [ "$(curl -sk --noproxy '*' --max-time 20 --resolve "$DOMAIN:443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "https://$DOMAIN/robots.txt" 2>/dev/null || true)" = 200 ]
+}
+
+# Von außen prüfen: eine zufällige Subdomain (die /etc/hosts nicht kennt) geht über Cloudflare und den Tunnel zu Apache.
+# Kommt genau die Datei dieses Servers zurück, stimmt der ganze Weg – auch für die Profile unter *.$DOMAIN.
+tunnel_probe() {
+  local name code="" i tmp file=static/fonts/LICENSE-OFL.txt
+  name="check-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n').$DOMAIN"
+  tmp=$(mktemp)
+  info "Checking from outside (https://$name) …"
+  for i in $(seq 1 12); do
+    code=$(curl -s --max-time 15 -o "$tmp" -w '%{http_code}' "https://$name/$file" 2>/dev/null || true)
+    if [ "$code" = 200 ] && cmp -s "$tmp" "$CODE/$file"; then break; fi
+    sleep 5
+  done
+  if [ "$code" = 200 ] && cmp -s "$tmp" "$CODE/$file"; then
+    info "Visitors reach this server through Cloudflare and the tunnel – on $DOMAIN and every subdomain."
+  elif [[ $code =~ ^30[1278]$ ]]; then
+    warn "Cloudflare sends https visitors to http – in Cloudflare, set SSL/TLS → Overview to Full (strict)."
+  else
+    warn "Through Cloudflare, $name answered with ${code:-nothing} instead of this server."
+    warn "Log: journalctl -u onyoursite-tunnel – try again later: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+  fi
+  rm -f "$tmp"
+}
+
+# Welchen Tunnel betreibt ein Dienst „cloudflared“ auf diesem Server (z. B. aus Cloudflares Anleitung
+# „cloudflared service install“)? Leer, wenn es keinen gibt.
+other_connector() {
+  local unit=/etc/systemd/system/cloudflared.service tok="" id="" f
+  [ -f "$unit" ] || return 0
+  if [ -s /etc/cloudflared/token ]; then tok=$(tr -d '[:space:]' < /etc/cloudflared/token); fi
+  if [ -z "$tok" ]; then tok=$(grep -oE -- '--token[= ]+[A-Za-z0-9+/=_-]+' "$unit" | head -n 1 | sed -E 's/^--token[= ]+//' || true); fi
+  if [ -n "$tok" ]; then
+    # Das Token ist Base64 von {"a": Konto, "t": Tunnel, "s": Geheimnis}
+    tok=$(printf '%s' "$tok" | tr '_-' '/+')
+    while [ $(( ${#tok} % 4 )) -ne 0 ]; do tok="$tok="; done
+    id=$(printf '%s' "$tok" | base64 -d 2>/dev/null | jq -r '.t // empty' 2>/dev/null || true)
+  fi
+  if [ -z "$id" ]; then
+    for f in /etc/cloudflared/config.yml /etc/cloudflared/config.yaml; do
+      if [ -f "$f" ]; then id=$(sed -n 's/^tunnel:[[:space:]]*//p' "$f" | tr -d "\"' \r" | head -n 1); break; fi
+    done
+  fi
+  printf '%s' "$id"
+}
+
 step_tunnel() {
-  local force=${1:-} def guess tunnels t tid="" tname tok="" hosts dom_re recs r n mx m mx_warn="" st="" i
-  local del_ids=() del_names=() line changes=0
+  local force=${1:-} def guess tunnels t tid="" tname tok="" hosts mine allrecs repl dead posts m mx_warn="" st="" i r
+  local ours_prefix del_ids=() del_names=() keep_names=() idle_names=() line changes=0 restart=0 alive dels v4 v6 direct
+  local connector old_connector=0 problem=""
   bold "5/9  Cloudflare tunnel"
   if [ "$TUNNEL" = no ] && [ -z "$force" ]; then
     info "Not used – visitors reach this server directly. Later: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
@@ -946,48 +1060,76 @@ step_tunnel() {
     if [ "$TUNNEL" != yes ]; then TUNNEL=no; fi
     return 0
   fi
+  if [ "$ZONE_STATUS" != active ]; then
+    warn "$DOMAIN isn’t active at Cloudflare yet (status: $ZONE_STATUS) – switch its nameservers to Cloudflare first."
+    if [ "$TUNNEL" != yes ]; then TUNNEL=no; fi
+    return 0
+  fi
 
   # Unser Tunnel (gespeichert und noch vorhanden) wird weiterverwendet
-  tunnels=$(cf GET "/accounts/$ACC_ID/cfd_tunnel?is_deleted=false&per_page=100") || fail "Cloudflare: $(cf_err)"
-  if [ -n "$TUNNEL_ID" ] && [ -s "$TUNNEL_ENV" ] && jq -e --arg id "$TUNNEL_ID" 'any(.[]; .id == $id)' <<< "$tunnels" >/dev/null; then
+  tunnels=$(cf GET "/accounts/$ACC_ID/cfd_tunnel?is_deleted=false&per_page=1000") || cf_fail "Cloudflare"
+  if [ -n "$TUNNEL_ID" ] && jq -e --arg id "$TUNNEL_ID" 'any(.[]; .id == $id)' <<< "$tunnels" >/dev/null; then
     tid=$TUNNEL_ID
   fi
-  # Alte Tunnel dieser Website: Name „onyoursite…“ oder Regeln für diese Domain
-  dom_re="^(.*\.)?${DOMAIN//./\\.}\$"
+  # Alte Tunnel: nur solche, die ausschließlich diese Website bedienen – oder Reste dieses Servers ohne Regeln.
+  # Tunnel, die auch andere Namen bedienen (z. B. nas.$DOMAIN), bleiben – der Installer weist nur darauf hin.
+  mine=$(jq -nc --arg d "$DOMAIN" '[$d, "www." + $d, "*." + $d]')
+  ours_prefix="onyoursite-$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
   while IFS=$'\t' read -r t tname; do
     if [ -z "$t" ] || [ "$t" = "$tid" ]; then continue; fi
-    hosts=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$t/configurations" 2>/dev/null | jq -r '.config.ingress[]?.hostname // empty' 2>/dev/null || true)
-    if [[ $tname == onyoursite* ]] || grep -qE "$dom_re" <<< "$hosts"; then
-      del_ids+=("$t")
-      del_names+=("$tname")
+    hosts=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$t/configurations" 2>/dev/null | jq -c '[.config.ingress[]?.hostname // empty]' 2>/dev/null || echo '[]')
+    if jq -e --argjson m "$mine" 'length > 0 and all(.[]; . as $h | $m | index($h))' <<< "$hosts" >/dev/null; then
+      del_ids+=("$t"); del_names+=("$tname")
+    elif [ "$(jq 'length' <<< "$hosts")" = 0 ] && { [ "$tname" = "$ours_prefix" ] || [[ $tname == "$ours_prefix"-* ]]; }; then
+      del_ids+=("$t"); del_names+=("$tname")
+    elif jq -e --argjson m "$mine" 'any(.[]; . as $h | $m | index($h))' <<< "$hosts" >/dev/null; then
+      keep_names+=("$tname")
     fi
   done < <(jq -r '.[] | [.id, .name] | @tsv' <<< "$tunnels")
 
-  # DNS-Einträge von @, www und *, die dem Tunnel im Weg sind (A, AAAA, CNAME)
-  recs="[]"
-  for n in "$DOMAIN" "www.$DOMAIN" "*.$DOMAIN"; do
-    r=$(cf GET "/zones/$ZONE_ID/dns_records?name=${n/\*/%2A}&per_page=100") || fail "Cloudflare DNS: $(cf_err)"
-    recs=$(jq -c --argjson add "$r" '. + ($add | map(select(.type == "A" or .type == "AAAA" or .type == "CNAME")))' <<< "$recs")
-  done
-  # Mail: zeigt der MX-Eintrag auf einen Namen, der gleich auf Cloudflare zeigt, käme keine Mail mehr an
-  mx=$(cf GET "/zones/$ZONE_ID/dns_records?type=MX&per_page=100" | jq -r '.[].content' 2>/dev/null || true)
-  for m in $mx; do
+  # Alle DNS-Einträge der Zone auf einmal – dann sieht der Installer auch den Platzhalter * zuverlässig
+  allrecs=$(cf GET "/zones/$ZONE_ID/dns_records?per_page=5000") || cf_fail "Cloudflare DNS"
+  # Im Weg: A, AAAA und CNAME von @, www und * (außer sie zeigen schon auf diesen Tunnel)
+  repl=$(jq -c --argjson m "$mine" --arg c "${tid:-none}.cfargotunnel.com" \
+    '[.[] | select((.type == "A" or .type == "AAAA" or .type == "CNAME") and (.name as $n | $m | index($n)) and (.type != "CNAME" or .content != $c))]' <<< "$allrecs")
+  # Tot: CNAMEs auf Tunnel, die es nicht mehr gibt oder die gleich gelöscht werden
+  alive=$(jq -c --argjson del "$(printf '%s\n' "${del_ids[@]}" | jq -R . | jq -sc 'map(select(length > 0))')" '[.[] | .id] - $del' <<< "$tunnels")
+  if [ -n "$tid" ]; then alive=$(jq -c --arg id "$tid" '. + [$id] | unique' <<< "$alive"); fi
+  dead=$(jq -c --argjson m "$mine" --argjson alive "$alive" \
+    '[.[] | select(.type == "CNAME" and (.content | test("\\.cfargotunnel\\.com\\.?$")) and ((.name as $n | $m | index($n)) | not)
+       and ((.content | sub("\\.cfargotunnel\\.com\\.?$"; "")) as $u | $alive | index($u) | not))]' <<< "$allrecs")
+  # Tunnel, auf die die alten Einträge zeigen, deren Regeln der Installer aber nicht sieht (auf ihrem Server verwaltet):
+  # sie bekommen keine Besucher von $DOMAIN mehr, werden aber nicht gelöscht – sie könnten noch anderes bedienen
+  while IFS=$'\t' read -r t tname; do
+    if [ -n "$t" ] && [ "$t" != "$tid" ] && ! in_list "$t" "${del_ids[@]}" && ! in_list "$tname" "${keep_names[@]}" \
+      && jq -e --arg u "$t" 'any(.[]; .type == "CNAME" and (.content | sub("\\.cfargotunnel\\.com\\.?$"; "")) == $u)' <<< "$repl" >/dev/null; then
+      idle_names+=("$tname")
+    fi
+  done < <(jq -r '.[] | [.id, .name] | @tsv' <<< "$tunnels")
+  # Mail: zeigt ein MX-Eintrag auf einen Namen, der gleich auf Cloudflare zeigt, käme keine Mail mehr an
+  while IFS= read -r m; do
     m=${m%.}
+    if [ -z "$m" ]; then continue; fi
     if [ "$m" = "$DOMAIN" ] || [ "$m" = "www.$DOMAIN" ]; then
       mx_warn=$m
-    elif [[ $m == *".$DOMAIN" ]] && [ "$(cf GET "/zones/$ZONE_ID/dns_records?name=$m" | jq 'length' 2>/dev/null || echo 1)" = 0 ]; then
+    elif [[ $m == *".$DOMAIN" ]] && ! jq -e --arg n "$m" 'any(.[]; .name == $n and (.type == "A" or .type == "AAAA" or .type == "CNAME"))' <<< "$allrecs" >/dev/null; then
       mx_warn=$m
     fi
-  done
+  done < <(jq -r '.[] | select(.type == "MX") | .content' <<< "$allrecs")
+  # Einträge, die ohne Cloudflare direkt auf diesen Server zeigen, verraten seine Adresse (sie werden nicht angefasst)
+  v4=$(ip4)
+  v6=$(ip6)
+  direct=$(jq -r --argjson m "$mine" --arg a "${v4:-none}" --arg b "${v6:-none}" \
+    '[.[] | select((.type == "A" or .type == "AAAA") and (.content == $a or .content == $b) and (.proxied | not)
+       and ((.name as $n | $m | index($n)) | not)) | .name] | join(", ")' <<< "$allrecs")
 
   echo
   info "Plan for $DOMAIN:"
   if [ -z "$tid" ]; then info "  + a new tunnel for this server"; changes=1; fi
-  while IFS=$'\t' read -r line; do
-    info "  - delete DNS  $line"
-    changes=1
-  done < <(jq -r --arg c "${tid:-none}.cfargotunnel.com" '.[] | select(.type != "CNAME" or .content != $c) | "\(.type)  \(.name)  \(.content)"' <<< "$recs")
-  if [ "$(jq -r --arg c "${tid:-none}.cfargotunnel.com" '[.[] | select(.type == "CNAME" and .content == $c)] | length' <<< "$recs")" != 3 ]; then
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then info "  - delete DNS  $line"; changes=1; fi
+  done < <(jq -r '.[] | "\(.type)  \(.name)  \(.content)"' <<< "$repl$dead")
+  if [ "$(jq -r --arg c "${tid:-none}.cfargotunnel.com" --argjson m "$mine" '[.[] | select(.type == "CNAME" and .content == $c and (.name as $n | $m | index($n)))] | length' <<< "$allrecs")" != 3 ]; then
     info "  + DNS  $DOMAIN, www.$DOMAIN and *.$DOMAIN → the tunnel (through Cloudflare)"
     changes=1
   fi
@@ -995,10 +1137,29 @@ step_tunnel() {
     info "  - delete the old tunnel ${del_names[$i]} (${del_ids[$i]})"
     changes=1
   done
+  # Läuft auf diesem Server noch der Dienst eines alten Tunnels, der gleich gelöscht wird, kommt er mit weg
+  connector=$(other_connector)
+  if [ -n "$connector" ] && in_list "$connector" "${del_ids[@]}"; then
+    info "  - remove the service cloudflared on this server (it runs the old tunnel)"
+    old_connector=1
+    changes=1
+  fi
   if [ "$changes" = 0 ]; then
     info "  Everything is in place."
   else
-    info "  Mail records (MX, TXT) and all other names stay as they are."
+    info "  Mail records (MX, TXT), all other names and other tunnels stay as they are."
+  fi
+  if [ "${#keep_names[@]}" -gt 0 ]; then
+    warn "These tunnels also serve other names and stay: ${keep_names[*]} – remove $DOMAIN from their rules by hand if needed."
+  fi
+  if [ "${#idle_names[@]}" -gt 0 ]; then
+    warn "These tunnels won’t get visitors for $DOMAIN any more but stay (they may serve other things): ${idle_names[*]}"
+    warn "Delete them in Cloudflare (Zero Trust → Networks → Tunnels) if nothing else uses them."
+  fi
+  if [ -n "$direct" ]; then
+    warn "These records point straight to this server and reveal its address: $direct"
+  fi
+  if [ "$changes" = 1 ]; then
     if [ -n "$mx_warn" ]; then
       warn "Mail for $DOMAIN goes to $mx_warn – that name would then point to Cloudflare and mail would stop."
       warn "Give the mail server its own name with its own A record first (e.g. mail.$DOMAIN)."
@@ -1010,67 +1171,111 @@ step_tunnel() {
     esac
   fi
 
-  # 1. Tunnel anlegen – mit eigenem Namen, damit alte Tunnel bis zum Umschalten weiterlaufen
+  # 1. Tunnel anlegen – mit eigenem Namen, damit alte Tunnel bis zum Umschalten weiterlaufen. Die ID wird sofort
+  #    gespeichert: bricht danach etwas ab, nimmt der nächste Lauf diesen Tunnel wieder, statt ihn als alt zu löschen.
   if [ -z "$tid" ]; then
-    tname="onyoursite-$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
-    if jq -e --arg n "$tname" 'any(.[]; .name == $n)' <<< "$tunnels" >/dev/null; then tname="$tname-$(date +%Y%m%d%H%M%S)"; fi
+    tname=$ours_prefix
+    i=2
+    while jq -e --arg n "$tname" 'any(.[]; .name == $n)' <<< "$tunnels" >/dev/null; do
+      tname="$ours_prefix-$i"
+      i=$((i + 1))
+    done
     t=$(cf POST "/accounts/$ACC_ID/cfd_tunnel" "$(jq -nc --arg n "$tname" '{name: $n, config_src: "cloudflare"}')") \
-      || fail "The tunnel couldn’t be created: $(cf_err)"
+      || cf_fail "The tunnel couldn’t be created"
     tid=$(jq -r '.id' <<< "$t")
     tok=$(jq -r '.token // empty' <<< "$t")
+    TUNNEL_ID=$tid
+    conf_set TUNNEL_ID "$tid"
     info "Tunnel $tname created."
   fi
   if [ -z "$tok" ]; then
-    tok=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$tid/token" | jq -r '.') || fail "The tunnel token couldn’t be read: $(cf_err)"
+    tok=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$tid/token" | jq -r '.') || cf_fail "The tunnel token couldn’t be read"
   fi
   install -d -m 700 "$CONF_DIR"
-  (umask 077 && printf 'TUNNEL_TOKEN=%s\n' "$tok" > "$TUNNEL_ENV")
+  if printf 'TUNNEL_TOKEN=%s\n' "$tok" | write_if_changed "$TUNNEL_ENV" 600; then restart=1; fi
   TUNNEL_ID=$tid
 
   # 2. Regeln: alle drei Namen gehen an Apache auf diesem Server – mit der Domain als SNI, damit der richtige vhost antwortet
   cf PUT "/accounts/$ACC_ID/cfd_tunnel/$tid/configurations" "$(jq -nc --arg d "$DOMAIN" '{config: {ingress:
       (([$d, "www." + $d, "*." + $d] | map({hostname: ., service: "https://127.0.0.1:443",
         originRequest: {originServerName: $d, noTLSVerify: true}})) + [{service: "http_status:404"}])}}')" >/dev/null \
-    || fail "The tunnel rules couldn’t be saved: $(cf_err)"
+    || cf_fail "The tunnel rules couldn’t be saved"
 
   # 3. cloudflared starten und warten, bis Cloudflare den Tunnel als verbunden meldet
-  tunnel_local
+  tunnel_local "$restart"
   info "Waiting for the tunnel to connect …"
   for i in $(seq 1 30); do
     st=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$tid" | jq -r '.status' 2>/dev/null || true)
     if [ "$st" = healthy ]; then break; fi
     sleep 2
   done
-  if [ "$st" != healthy ]; then
-    warn "Cloudflare doesn’t report the tunnel as connected yet (status: ${st:-unknown}). Log: journalctl -u onyoursite-tunnel"
-    case "$(choose "Switch the DNS anyway? [y/N]" n)" in
-      [yY]*) ;;
-      *) TUNNEL=yes; info "The DNS stays as it is. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"; return 0 ;;
-    esac
+  # Was am DNS zu ändern ist: alte Einträge weg, CNAMEs auf den Tunnel
+  dels=$(jq -c -s 'add | map({id})' <<< "$repl$dead")
+  posts=$(jq -c --argjson m "$mine" --arg c "$tid.cfargotunnel.com" \
+    '[$m[] as $n | select(([.[] | select(.name == $n and .type == "CNAME" and .content == $c)] | length) == 0)
+      | {type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: "OnYourSite tunnel"}]' <<< "$allrecs")
+  # „degraded“: verbunden, nur noch nicht über alle vier Leitungen – reicht für Besucher
+  if [ "$st" != healthy ] && [ "$st" != degraded ]; then
+    problem="Cloudflare doesn’t report the tunnel as connected yet (status: ${st:-unknown}). Log: journalctl -u onyoursite-tunnel"
+  elif ! origin_ok; then
+    problem="The website doesn’t answer on this server (https://$DOMAIN on 127.0.0.1) – visitors would get an error. Log: /var/log/apache2/onyoursite-error.log"
+  fi
+  if [ -n "$problem" ]; then
+    warn "$problem"
+    # Zeigt das DNS schon auf den Tunnel, gibt es nichts mehr zu entscheiden – nur der Hinweis
+    if [ "$dels" != "[]" ] || [ "$posts" != "[]" ]; then
+      case "$(choose "Switch the DNS anyway? [y/N]" n)" in
+        [yY]*) ;;
+        *)
+          # Der Tunnel bleibt angelegt (der nächste Lauf nimmt ihn wieder), die Seite läuft wie bisher weiter
+          info "The DNS stays as it is and the web ports stay open. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+          if [ "$TUNNEL" != yes ]; then TUNNEL=no; fi
+          return 0 ;;
+      esac
+    fi
   fi
 
-  # 4. DNS umstellen: alte A/AAAA/CNAME weg, CNAMEs auf den Tunnel (über Cloudflare)
-  while IFS=$'\t' read -r r t n; do
-    cf DELETE "/zones/$ZONE_ID/dns_records/$r" >/dev/null || fail "DNS record $t $n couldn’t be deleted: $(cf_err)"
-  done < <(jq -r --arg c "$tid.cfargotunnel.com" '.[] | select(.type != "CNAME" or .content != $c) | [.id, .type, .name] | @tsv' <<< "$recs")
-  for n in "$DOMAIN" "www.$DOMAIN" "*.$DOMAIN"; do
-    if jq -e --arg n "$n" --arg c "$tid.cfargotunnel.com" 'any(.[]; .name == $n and .type == "CNAME" and .content == $c)' <<< "$recs" >/dev/null; then continue; fi
-    cf POST "/zones/$ZONE_ID/dns_records" "$(jq -nc --arg n "$n" --arg c "$tid.cfargotunnel.com" \
-      '{type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: "OnYourSite tunnel"}')" >/dev/null \
-      || fail "DNS record for $n couldn’t be created: $(cf_err)"
-  done
+  # 4. DNS umstellen – in einem Schritt (alles oder nichts)
+  if [ "$dels" != "[]" ] || [ "$posts" != "[]" ]; then
+    if ! cf POST "/zones/$ZONE_ID/dns_records/batch" "$(jq -nc --argjson d "$dels" --argjson p "$posts" '{deletes: $d, posts: $p}')" >/dev/null; then
+      # Ein Fehler in der Sammel-Änderung ändert nichts – nur wenn es sie gar nicht gibt, geht es einzeln weiter
+      if ! grep -qiE 'no route|\((7000|7003)\)' <<< "$(cf_err)"; then cf_fail "The DNS couldn’t be switched (nothing was changed)"; fi
+      # Einzeln: erst löschen, dann anlegen – ein CNAME darf nicht neben A/AAAA stehen
+      while IFS= read -r r; do
+        cf DELETE "/zones/$ZONE_ID/dns_records/$r" >/dev/null || cf_fail "A DNS record couldn’t be deleted"
+      done < <(jq -r '.[].id' <<< "$dels")
+      while IFS= read -r r; do
+        cf POST "/zones/$ZONE_ID/dns_records" "$r" >/dev/null || cf_fail "A DNS record couldn’t be created"
+      done < <(jq -c '.[]' <<< "$posts")
+    fi
+  fi
+  TUNNEL=yes
+  conf_set TUNNEL yes
 
-  # 5. Alte Tunnel dieser Website löschen (erst ihre Verbindungen trennen)
+  # 5. Alte Tunnel dieser Website löschen (erst ihre Verbindungen trennen; zur Not samt allem, was daran hängt).
+  #    Ein Dienst auf diesem Server, der einen davon betreibt, wird vorher entfernt (wie „cloudflared service uninstall“).
+  if [ "$old_connector" = 1 ]; then
+    systemctl disable --now cloudflared.service cloudflared-update.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/cloudflared.service /etc/systemd/system/cloudflared-update.service \
+      /etc/systemd/system/cloudflared-update.timer /etc/cloudflared/token
+    # Seine Einstellungen würde cloudflared sonst auch für den neuen Tunnel lesen
+    for i in /etc/cloudflared/config.yml /etc/cloudflared/config.yaml; do
+      if [ -f "$i" ]; then mv -f "$i" "$i.old"; fi
+    done
+    systemctl daemon-reload
+    info "Removed the old cloudflared service of this server."
+  fi
   for i in "${!del_ids[@]}"; do
     cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}/connections" >/dev/null || true
-    if cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}" >/dev/null; then
+    if cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}" >/dev/null \
+      || cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}?cascade=true" >/dev/null; then
       info "Deleted the old tunnel ${del_names[$i]}."
     else
-      warn "The old tunnel ${del_names[$i]} couldn’t be deleted: $(cf_err)"
+      warn "The old tunnel ${del_names[$i]} couldn’t be deleted ($(cf_err)) – it may still run somewhere; delete it in Cloudflare."
     fi
   done
-  TUNNEL=yes
   info "$DOMAIN, www.$DOMAIN and every subdomain now come through the tunnel – no web ports have to be open."
+  tunnel_probe
 }
 
 # ---------------------------------------------------------------
@@ -1158,7 +1363,7 @@ EOF
   if [ -x "$ACME" ]; then systemctl enable --now onyoursite-certs.timer >/dev/null 2>&1; fi
 }
 
-# Datei nur schreiben, wenn sich der Inhalt ändert (Inhalt kommt über stdin) – 0 = geändert
+# write_if_changed DATEI [RECHTE] – nur schreiben, wenn sich der Inhalt ändert (Inhalt über stdin); 0 = geändert
 write_if_changed() {
   local tmp
   tmp=$(mktemp)
@@ -1167,7 +1372,7 @@ write_if_changed() {
     rm -f "$tmp"
     return 1
   fi
-  install -m 644 "$tmp" "$1"
+  install -m "${2:-644}" "$tmp" "$1"
   rm -f "$tmp"
 }
 
@@ -1518,6 +1723,8 @@ fi
 SSH_KEYONLY=$(conf_get SSH_KEYONLY)
 TUNNEL=$(conf_get TUNNEL)
 TUNNEL_ID=$(conf_get TUNNEL_ID)
+# Eingerichtet ist der Server erst mit einer Domain in server.conf – ein abgebrochener erster Lauf kann dort schon
+# die Tunnel-ID gespeichert haben
 OLD_DOMAIN=$(conf_get DOMAIN)
 DB_EMPTY=0
 DB_IMPORTED=0
@@ -1541,7 +1748,7 @@ case $MODE in
     summary
     ;;
   update)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
     if [ -d "$CODE/.git" ] && [ -z "${OYS_PULLED:-}" ]; then
       bold "Getting the new version"
@@ -1582,7 +1789,7 @@ case $MODE in
     bold "Done."
     ;;
   https)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
     PHPV=$(conf_get PHP_VERSION)
     ensure_cert
@@ -1590,7 +1797,7 @@ case $MODE in
     write_timers
     ;;
   tunnel)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
     PHPV=$(conf_get PHP_VERSION)
     step_tunnel force
@@ -1601,20 +1808,25 @@ case $MODE in
     check_site
     ;;
   reset)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server – there is nothing to reset."
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server – there is nothing to reset."
     DOMAIN=$(conf_get DOMAIN)
+    if [ "$(conf_get CODE)" != "$CODE" ] || [ ! -f "$CODE/config.php" ]; then
+      fail "Run this from the installed code folder: ${SUDO_HINT}bash $(conf_get CODE)/server/install.sh --reset"
+    fi
     bold "Start from scratch"
     warn "This deletes all OnYourSite data on this server: the database (accounts, pages, stats, messages,"
     warn "suggestions, tickets), all uploads and the keys in config.php."
-    info "A backup is made first (kept $BACKUP_DAYS days in $BACKUPS). The code, the certificate, the Cloudflare"
-    info "tunnel, the mail server settings and the Discord bot settings stay."
+    info "A backup is made first: $BACKUPS/<date>-before-reset (kept $BACKUP_DAYS days)."
+    info "The code, the certificate, the Cloudflare tunnel, the mail server settings and the Discord bot settings stay."
     answer=""
     prompt answer "To confirm, type the domain ($DOMAIN):"
     [ "$answer" = "$DOMAIN" ] || fail "Not confirmed – nothing was deleted."
     info "Making a backup …"
-    bash "$CODE/server/backup.sh" || fail "The backup didn’t work – nothing was deleted."
+    bash "$CODE/server/backup.sh" before-reset || fail "The backup didn’t work – nothing was deleted."
     mariadb -e "DROP DATABASE IF EXISTS \`$DB_NAME\`"
     find "$UPLOADS" -mindepth 1 -delete
+    # Alte Anmeldungen ungültig machen – die Konten fangen wieder bei Nummer 1 an
+    find /var/lib/php/sessions -type f -name 'sess_*' -delete 2>/dev/null || true
     # Neue Schlüssel: der Installer legt sie gleich neu an. bot_secret bleibt – den hat der Bot auch.
     # shellcheck disable=SC2016
     php -r '$f = $argv[1]; $c = include $f; unset($c["aes_key"], $c["app_secret"], $c["cron_secret"]);

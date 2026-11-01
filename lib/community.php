@@ -225,6 +225,11 @@ function oys_bot_api(PDO $pdo, string $path, string $method): void
             }
             oys_json(['ok' => true, 'suggestion' => oys_suggestion_public(oys_suggestion_get($pdo, (int) $s['id']))]);
         }
+        // Der Knopf gehört zu genau einem Beitrag – nach einem Neuanfang können Nummern wieder vorkommen
+        $thread = oys_snowflake($in['thread_id'] ?? '');
+        if ($thread && $thread !== (string) $s['thread_id']) {
+            oys_json(['ok' => false, 'error' => 'This button belongs to an older post.'], 409);
+        }
         $status = (string) ($in['status'] ?? '');
         if (!in_array($status, ['accepted', 'declined'], true)) {
             oys_json(['ok' => false, 'error' => 'status must be accepted or declined.'], 400);

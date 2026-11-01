@@ -136,14 +136,44 @@ else
 fi
 
 # ---------------------------------------------------------------
-bold "2/4  Settings"
+bold "2/4  Installing the bot"
+if [ "$MODE" = service ]; then
+  # Eigener Benutzer ohne Anmeldung; der Code liegt außerhalb des Webordners und gehört root
+  if ! id -u "$NAME" >/dev/null 2>&1; then
+    useradd --system --no-create-home --home-dir /nonexistent --shell "$(command -v nologin || echo /bin/false)" "$NAME"
+  fi
+  install -d -m 755 "$APP_DIR"
+  rm -rf "$APP_DIR/src"
+  cp "$SRC/package.json" "$SRC/package-lock.json" "$SRC/index.js" "$APP_DIR/"
+  cp -r "$SRC/src" "$APP_DIR/src"
+  (cd "$APP_DIR" && PATH="$NODE_BIN:$PATH" npm ci --omit=dev --no-audit --no-fund --loglevel=error)
+  chown -R root:root "$APP_DIR"
+  chmod -R u=rwX,go=rX "$APP_DIR"
+  info "Installed in $APP_DIR"
+else
+  "${COMPOSE[@]}" build --pull
+fi
+
+# Werkzeuge des Bots (Discord prüfen, Server einrichten). Token und IDs gehen über die Umgebung, nie über die Befehlszeile.
+bot_tool() {
+  if [ "$MODE" = service ]; then
+    DISCORD_TOKEN=$TOKEN "$NODE" "$APP_DIR/index.js" "$@" </dev/null
+  else
+    DISCORD_TOKEN=$TOKEN "${COMPOSE[@]}" run --rm --no-deps -T -e DISCORD_TOKEN -e DISCORD_API_BASE -e TEAM_ROLE_ID \
+      -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e SUPPORT_CATEGORY_ID \
+      bot node index.js "$@" </dev/null
+  fi
+}
+
+# ---------------------------------------------------------------
+bold "3/4  Settings"
 NEW_SECRET=""
 # Bisheriger Wert aus der Einstellungsdatei (ohne sie auszuführen)
 current() {
   if [ -f "$ENV_FILE" ]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; fi
 }
 
-# ask KEY "Frage" Art [Vorgabe] – Art: id (Pflicht), opt (Discord-ID oder leer), token, secret, url, seconds
+# ask KEY "Frage" Art [Vorgabe] – Art: id (Discord-ID), token, secret, url
 ask() {
   local key=$1 label=$2 kind=$3 def=${4:-} cur value hint
   cur=$(current "$key")
@@ -159,12 +189,10 @@ ask() {
     value=${value:-$def}
     value=$(printf '%s' "$value" | tr -d '[:space:]')
     case $kind in
-      id)      [[ $value =~ ^[0-9]{15,22}$ ]] && break; info "  Please paste a Discord ID (digits only – right-click → Copy ID)." ;;
-      opt)     [[ -z $value || $value =~ ^[0-9]{15,22}$ ]] && break; info "  Please paste a Discord ID or leave it empty." ;;
-      token)   [[ $value =~ ^[A-Za-z0-9._-]{50,}$ ]] && break; info "  That doesn’t look like a bot token (Developer Portal → Bot → Reset Token)." ;;
-      secret)  [[ ${#value} -ge 32 && $value =~ ^[A-Za-z0-9._~+/=-]+$ ]] && break; info "  At least 32 characters, letters and digits." ;;
-      url)     [[ $value =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] && break; info "  The address of the website with https://, e.g. https://on-your.site" ;;
-      seconds) [[ $value =~ ^[0-9]+$ ]] && [ "$value" -ge 5 ] && [ "$value" -le 300 ] && break; info "  A number from 5 to 300." ;;
+      id)     [[ $value =~ ^[0-9]{15,22}$ ]] && break; info "  Please paste the Application ID (digits only)." ;;
+      token)  [[ $value =~ ^[A-Za-z0-9._-]{50,}$ ]] && break; info "  That doesn’t look like a bot token (Developer Portal → Bot → Reset Token)." ;;
+      secret) [[ ${#value} -ge 32 && $value =~ ^[A-Za-z0-9._~+/=-]+$ ]] && break; info "  At least 32 characters, letters and digits." ;;
+      url)    [[ $value =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] && break; info "  The address of the website with https://, e.g. https://on-your.site" ;;
     esac
   done
   printf -v "VAL_$key" '%s' "$value"
@@ -174,25 +202,85 @@ if [ "$UPDATE" = 1 ]; then
   [ -f "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   info "Keeping the settings in $ENV_FILE"
 else
-  info "From the Discord Developer Portal (discord.com/developers/applications) → your application:"
-  info "  Bot token: tab Bot → Reset Token.  Application ID: tab General Information."
-  info "  The Client Secret is NOT needed – don’t enter it anywhere."
-  info "Channel and role IDs: in Discord turn on Settings → Advanced → Developer Mode, then right-click → Copy ID."
-  info "Press Enter to keep a value in [brackets]; optional values can stay empty."
+  info "From the Discord Developer Portal (discord.com/developers/applications) you only need two things:"
+  info "  1. New Application → tab Bot → Reset Token. On the same tab turn on Server Members Intent and"
+  info "     Message Content Intent, and turn off Public Bot."
+  info "  2. Tab General Information → Application ID."
+  info "The installer sets up everything else on your Discord server by itself – the Staff role, the channels and"
+  info "their IDs. The Client Secret isn’t needed."
   echo
-  ask DISCORD_TOKEN       "Bot token" token
-  ask DISCORD_CLIENT_ID   "Application ID (the same as the Client ID)" id
-  ask GUILD_ID            "Server ID" id
-  ask TEAM_ROLE_ID        "Team role ID" id
-  ask WELCOME_CHANNEL_ID  "Welcome channel ID (empty = no welcome messages)" opt
-  ask WELCOME_ROLE_ID     "Role for new members (optional)" opt
-  ask RULES_CHANNEL_ID    "Rules channel (optional, shown in the welcome)" opt
-  ask SUPPORT_CHANNEL_ID  "Support channel (optional, shown in the welcome)" opt
-  ask SUGGESTION_FORUM_ID "Suggestion forum channel ID" opt
-  ask TAG_ACCEPTED_ID     "Forum tag for accepted suggestions (optional)" opt
-  ask TAG_DECLINED_ID     "Forum tag for declined suggestions (optional)" opt
-  ask SUPPORT_CATEGORY_ID "Category for ticket channels" opt
-  ask SITE_URL            "Website address" url "${OYS_SITE_URL:-https://on-your.site}"
+  errf=$(mktemp)
+  # 1. Token – Discord muss es annehmen
+  while true; do
+    ask DISCORD_TOKEN "Bot token" token
+    TOKEN=$VAL_DISCORD_TOKEN
+    if app=$(bot_tool --discord-app 2>"$errf"); then break; fi
+    info "  Discord doesn’t accept this token: $(tr '\n' ' ' < "$errf")"
+    info "  Copy it again (Bot → Reset Token) and paste it."
+    sed -i '/^DISCORD_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
+  done
+  app_id=$(sed -n 's/^APP_ID=//p' <<< "$app")
+  invite=$(sed -n 's/^INVITE=//p' <<< "$app")
+  info "Discord knows this bot: $(sed -n 's/^APP_NAME=//p' <<< "$app")"
+
+  # 2. Application ID – muss zum Token gehören
+  ask DISCORD_CLIENT_ID "Application ID" id "$app_id"
+  if [ "$VAL_DISCORD_CLIENT_ID" != "$app_id" ]; then
+    info "  This token belongs to the application $app_id – using that one."
+    VAL_DISCORD_CLIENT_ID=$app_id
+  fi
+
+  # 3. Discord-Server: der Bot muss eingeladen sein
+  while true; do
+    guilds=$(bot_tool --discord-guilds 2>"$errf") || fail "Discord can’t be reached: $(tr '\n' ' ' < "$errf")"
+    if [ -n "$guilds" ]; then break; fi
+    info "The bot isn’t on your Discord server yet. Open this link, choose your server and authorize:"
+    echo
+    echo "    $invite"
+    echo
+    read -rp "  Press Enter once the bot is on your server … " _ || fail "The input ended – please run install.sh in a terminal."
+  done
+  mapfile -t guild_lines <<< "$guilds"
+  guild_id=""
+  if [ "${#guild_lines[@]}" -eq 1 ]; then
+    guild_id=$(sed -n 's/^GUILD_\([0-9]*\)=.*/\1/p' <<< "${guild_lines[0]}")
+    info "Discord server: ${guild_lines[0]#*=}"
+  else
+    info "The bot is on several servers – which one is yours?"
+    def=1
+    for i in "${!guild_lines[@]}"; do
+      info "  $((i + 1))) ${guild_lines[$i]#*=}"
+      if [ "$(sed -n 's/^GUILD_\([0-9]*\)=.*/\1/p' <<< "${guild_lines[$i]}")" = "$(current GUILD_ID)" ]; then def=$((i + 1)); fi
+    done
+    while true; do
+      pick=$(choose "Choose 1–${#guild_lines[@]} [$def]:" "$def")
+      if [[ $pick =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "${#guild_lines[@]}" ]; then break; fi
+    done
+    guild_id=$(sed -n 's/^GUILD_\([0-9]*\)=.*/\1/p' <<< "${guild_lines[$((pick - 1))]}")
+  fi
+
+  # 4. Rolle und Kanäle anlegen (oder die vorhandenen wiederfinden) und alle IDs übernehmen
+  info "Setting up the Discord server …"
+  setup=$(TEAM_ROLE_ID=$(current TEAM_ROLE_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
+    RULES_CHANNEL_ID=$(current RULES_CHANNEL_ID) SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) \
+    SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
+    bot_tool --discord-setup "$guild_id" 2>"$errf") \
+    || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – is the bot invited with the link above?"
+  rm -f "$errf"
+  while IFS='=' read -r key value; do
+    case $key in
+      DONE) info "  $value" ;;
+      WARN) info "  Note: $value" ;;
+      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID)
+        printf -v "VAL_$key" '%s' "$value" ;;
+    esac
+  done <<< "$setup"
+  # Optional: Rolle für neue Mitglieder – bleibt, wie sie in der Datei steht (wird unten über ${!var} geschrieben)
+  # shellcheck disable=SC2034
+  VAL_WELCOME_ROLE_ID=$(current WELCOME_ROLE_ID)
+
+  # 5. Verbindung zur Webseite
+  ask SITE_URL "Website address" url "${OYS_SITE_URL:-https://on-your.site}"
   PRESET_SECRET=${OYS_BOT_SECRET:-}
   if [ -z "$(current BOT_SECRET)" ] && [ "${#PRESET_SECRET}" -ge 32 ]; then
     # Vom Server-Installer: steht schon in config.php
@@ -206,7 +294,8 @@ else
   else
     ask BOT_SECRET "Secret for the website connection" secret
   fi
-  ask POLL_SECONDS "Check the website for changes every … seconds" seconds 10
+  VAL_POLL_SECONDS=$(current POLL_SECONDS)
+  VAL_POLL_SECONDS=${VAL_POLL_SECONDS:-10}
 
   # Nur für root lesbar; erst komplett schreiben, dann ersetzen
   umask 077
@@ -234,22 +323,10 @@ else
 fi
 
 # ---------------------------------------------------------------
-bold "3/4  Installing and checking the connection to the website"
+bold "4/4  Checking and starting"
 if [ "$MODE" = service ]; then
-  # Eigener Benutzer ohne Anmeldung; der Code liegt außerhalb des Webordners und gehört root
-  if ! id -u "$NAME" >/dev/null 2>&1; then
-    useradd --system --no-create-home --home-dir /nonexistent --shell "$(command -v nologin || echo /bin/false)" "$NAME"
-  fi
-  install -d -m 755 "$APP_DIR"
-  rm -rf "$APP_DIR/src"
-  cp "$SRC/package.json" "$SRC/package-lock.json" "$SRC/index.js" "$APP_DIR/"
-  cp -r "$SRC/src" "$APP_DIR/src"
-  (cd "$APP_DIR" && PATH="$NODE_BIN:$PATH" npm ci --omit=dev --no-audit --no-fund --loglevel=error)
-  chown -R root:root "$APP_DIR"
-  chmod -R u=rwX,go=rX "$APP_DIR"
   CHECK=(env BOT_ENV_FILE="$ENV_FILE" "$NODE" "$APP_DIR/index.js" --check)
 else
-  "${COMPOSE[@]}" build --pull
   # -T und </dev/null: der Prüf-Container darf die Eingaben dieses Skripts nicht mitlesen
   CHECK=("${COMPOSE[@]}" run --rm --no-deps -T bot node index.js --check)
 fi
@@ -271,8 +348,6 @@ else
   fi
 fi
 
-# ---------------------------------------------------------------
-bold "4/4  Starting the bot"
 if [ "$MODE" = service ]; then
   cat > "$UNIT" <<UNIT_FILE
 # OnYourSite Discord bot – written by discord-bot/install.sh

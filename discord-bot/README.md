@@ -14,32 +14,29 @@ The bot calls the website at `/_/bot/…`. Every request is signed with a shared
 
 Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The endpoints and the admin panel are excluded from search engines (`robots.txt`, `noindex`), and there are no public pages with suggestions or tickets.
 
-## Set up (about 10 minutes)
+## Set up (about 5 minutes)
 
 1. **Create the bot:** <https://discord.com/developers/applications> → *New Application* → tab **Bot**:
-   - *Reset Token* → copy it into `DISCORD_TOKEN` (never share it).
+   - *Reset Token* → copy the **bot token** (never share it).
    - Turn on **Server Members Intent** and **Message Content Intent**.
    - Turn off *Public Bot* so only you can add it.
-2. **Invite it** (replace `CLIENT_ID` with the application ID from *General Information*, also used for `DISCORD_CLIENT_ID`):
+   - Tab *General Information*: copy the **Application ID**.
+2. **Run the installer** (on your own server: `server/install.sh` asks for the bot – see below). It only asks for the token and the Application ID; everything else happens by itself:
+   - if the bot isn’t on a Discord server yet, it shows the invite link and waits until you added it (with several servers it asks which one),
+   - it creates the role **Staff** (you as the server owner get it), a category **OnYourSite** with **#welcome**, **#rules** and **#support** (read-only for members), the forum **#suggestions** with the tags *Accepted* and *Declined* (only the team can set them) and a private category **Tickets** – what already exists (same name or the saved ID) is used again, nothing is created twice and nothing existing is changed,
+   - it saves all IDs, creates the shared secret with the website and starts the bot,
+   - the bot posts the ticket panel in **#support** by itself.
+3. Give your team members the **Staff** role – they can then accept or decline suggestions and see every ticket.
 
-   `https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&permissions=292326296592&scope=bot%20applications.commands`
+The invite link asks for: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, Manage Channels, Manage Roles, Manage Threads, Create Public Threads, Create Private Threads (the last two only so the info channels can be made read-only). `/support-panel` posts the panel again, `/bot-status` shows whether everything is connected (both need “Manage Server”). The Client Secret is not needed.
 
-   This asks for: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, Manage Channels, Manage Roles, Manage Threads. In *Server Settings → Roles*, drag the bot’s role **above** the welcome role.
-3. **Prepare the server:** a welcome channel, a **forum** channel for suggestions (optional tags “Accepted” and “Declined”), a category for tickets, a channel for the support panel and a team role.
-4. **Website:** add `'bot_secret' => '…',` to `config.php` (at least 32 characters; *Admin → Community* shows a fresh random one). On your own server, `server/install.sh` does this for you.
-5. **Bot:** Node.js 18 or newer.
-   ```bash
-   cd discord-bot
-   cp .env.example .env      # fill in the IDs, the token and BOT_SECRET
-   npm install
-   npm run check             # tests the connection to the website
-   npm start
-   ```
-6. In the support channel, run **`/support-panel`**. `/bot-status` shows whether everything is connected (both commands need “Manage Server”).
+Forum channels may need a community server: if Discord refuses the forum, the installer says so – turn on *Server Settings → Enable Community* and run the installer again. Everything else works without it.
+
+**Without the installer** (e.g. to develop on your computer): Node.js 18 or newer, then `cp .env.example .env`, fill in the token and the IDs by hand, add `'bot_secret' => '…',` to `config.php` (*Admin → Community* shows a fresh random one), and `npm install && npm run check && npm start`.
 
 ## Install on a server
 
-**On your own server together with the website** (recommended): `server/install.sh` of the website asks “Set up the Discord bot on this server too?” and does everything below – including the shared secret in `config.php`, so nothing has to be copied by hand. See [server/README.md](../server/README.md).
+**On your own server together with the website** (recommended): `server/install.sh` of the website asks “Set up the Discord bot on this server too?” and runs this installer for you – including the shared secret in `config.php`, so nothing has to be copied by hand. See [server/README.md](../server/README.md).
 
 **Anywhere else** – e.g. a small extra server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened:
 
@@ -57,7 +54,7 @@ The installer asks how the bot should run:
 1. **As a system service with Node.js** (recommended): installs Node.js 22 if it’s missing (from deb.nodesource.com, after asking), copies the bot to `/opt/onyoursite-bot` and runs it as its own user without a login, without write access and with a 256 MB limit. The settings are stored in `/etc/onyoursite-bot.env`, readable only by root.
 2. **In Docker**: installs Docker if it’s missing (official script from get.docker.com, after asking) and runs the bot as a container with a read-only file system, no extra rights and rotated logs. The settings are stored in `.env` next to the installer, readable only by root – they never go into the image.
 
-Both ask for the **bot token** (tab *Bot* → *Reset Token*), the **application ID** (tab *General Information* – the same number Discord calls *Client ID*), the channel and role IDs and the website address, then create the secret for `config.php` if there is none yet, check the connection to the website and start the bot. It restarts by itself after a crash or a reboot. **The Client Secret is not needed** – don’t enter it anywhere.
+Both ask only for the **bot token** and the **Application ID** (Enter takes the one that belongs to the token), set up the Discord server as described above, ask for the website address (Enter = `https://on-your.site`), create the secret for `config.php` if there is none yet, check the connection to the website and start the bot. It restarts by itself after a crash or a reboot. **The Client Secret is not needed** – don’t enter it anywhere.
 
 | | System service | Docker |
 |---|---|---|
@@ -80,6 +77,7 @@ src/suggestions.js  Suggestion forum, accept/decline
 src/support.js      Support panel, ticket channels, closing
 src/outbox.js       Picks up changes made on the website
 src/commands.js     /support-panel and /bot-status
+src/setup.js        Sets up the Discord server for the installer (Staff role, channels, forum, IDs)
 install.sh          Installer for a server (system service or Docker)
 Dockerfile, docker-compose.yml   Container setup used by the installer
 ```
