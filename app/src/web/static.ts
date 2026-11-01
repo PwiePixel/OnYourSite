@@ -18,6 +18,8 @@ const TYPES: Record<string, string> = {
   '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.eot': 'application/vnd.ms-fontobject',
   '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.webm': 'video/webm', '.ogg': 'audio/ogg', '.wav': 'audio/x-wav', '.pdf': 'application/pdf',
   '.zip': 'application/zip',
+  // Erlaubte Uploads (Musik, Kontaktkarte) wie /etc/mime.types unter Debian/Ubuntu
+  '.m4a': 'audio/mp4', '.vcf': 'text/vcard',
 };
 // Wie Apache: Texte mit Zeichensatz-Angabe nur, wenn AddDefaultCharset aktiv ist – das ist es auf Debian nicht
 const DENY = [/^(lib|cron|email|PHPMailer|tests|views|discord-bot|server|app|node_modules)(\/|$)/, /(^|\/)\.env$/, /^config(\.example)?\.(php|json)$/, /(^|\/)\.git(\/|$)/, /(^|\/)\./];

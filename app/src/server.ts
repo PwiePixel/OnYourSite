@@ -82,6 +82,11 @@ export async function buildServer() {
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
         else reply.header(name, value);
       }
+      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher)
+      if (ctx.status === 304) {
+        if (ctx.body instanceof Readable) ctx.body.destroy();
+        return reply.send();
+      }
       if (ctx.body instanceof Readable) {
         // Datenströme (große Dateien, ZIP): bei HEAD nicht lesen
         if (ctx.method === 'HEAD') {
