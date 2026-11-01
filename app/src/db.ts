@@ -1,15 +1,38 @@
-// Datenbank: dieselbe MariaDB wie bisher. Jede Verbindung bekommt die Zeitzone der Seite (wie db.php mit date('P')),
-// damit „heute“, Statistik und Zeitsteuerung in SQL und in Node übereinstimmen.
+// Datenbank: dieselbe MariaDB wie bisher, mit denselben Werten wie PDO in PHP 8.3:
+// - Datumswerte als Text ('2026-11-01 10:00:00'), ganze Zahlen (auch COUNT(*)) als Zahl, DECIMAL/SUM/AVG als Text
+// - affectedRows wie PDO rowCount(): nur wirklich geänderte Zeilen (ohne FOUND_ROWS)
+// - host 'localhost' heißt wie bei PDO: über den Unix-Socket
+// - jede Verbindung hat die Zeitzone der Seite (wie db.php mit date('P')); nach einer Zeitumstellung wird sie vor der
+//   nächsten Abfrage neu gesetzt, damit „heute“, Statistik und Zeitsteuerung in SQL und in Node übereinstimmen
 import mysql from 'mysql2/promise';
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { configString } from './config.js';
 
 export type Row = Record<string, unknown>;
-export type Param = string | number | boolean | null | Date | Buffer;
+export type Param = string | number | bigint | boolean | null | Date | Buffer;
+
+export interface ExecResult {
+  affectedRows: number;
+  insertId: number;
+  changedRows: number;
+}
+
+// Abfragen auf einer festen Verbindung (Transaktion, Sperre, mehrere Schritte nacheinander)
+export interface Db {
+  q<T extends Row = Row>(sql: string, params?: Param[]): Promise<T[]>;
+  one<T extends Row = Row>(sql: string, params?: Param[]): Promise<T | null>;
+  value(sql: string, params?: Param[]): Promise<unknown>;
+  exec(sql: string, params?: Param[]): Promise<ExecResult>;
+}
+
+// Datenbank nicht erreichbar (Verbindung, Zugangsdaten, Socket) – führt zur 503-Seite wie in PHP
+export class DbUnavailableError extends Error {}
+// GET_LOCK hat nicht geklappt (nur bei onBusy 'fail')
+export class LockBusyError extends Error {}
 
 let pool: Pool | null = null;
 
-// Abstand der Zeitzone zu UTC im Format +01:00 (wie date('P') in PHP) – zum jetzigen Zeitpunkt (Sommerzeit!)
+// Abstand der Zeitzone zu UTC im Format +01:00 (wie date('P') in PHP) – zum angegebenen Zeitpunkt (Sommerzeit!)
 export function tzOffset(timeZone: string, at: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -26,28 +49,38 @@ export function timeZone(): string {
   return configString('timezone', 'Europe/Berlin') || 'Europe/Berlin';
 }
 
+// Aktueller Abstand, höchstens eine Minute alt
+let tzCache = { minute: -1, zone: '', offset: '+00:00' };
+function currentOffset(): string {
+  const minute = Math.floor(Date.now() / 60000);
+  const zone = timeZone();
+  if (tzCache.minute !== minute || tzCache.zone !== zone) tzCache = { minute, zone, offset: tzOffset(zone) };
+  return tzCache.offset;
+}
+
 export function getPool(): Pool {
   if (pool) return pool;
+  const host = configString('db.host', 'localhost');
   pool = mysql.createPool({
-    host: configString('db.host', 'localhost'),
-    port: Number(configString('db.port', '3306')) || 3306,
+    // PDO: 'localhost' = Unix-Socket, alles andere TCP
+    ...(host === 'localhost'
+      ? { socketPath: configString('db.socket', '/run/mysqld/mysqld.sock') }
+      : { host, port: Number(configString('db.port', '3306')) || 3306 }),
     user: configString('db.user', ''),
     password: configString('db.pass', ''),
     database: configString('db.name', ''),
-    charset: 'utf8mb4_unicode_ci',
+    // wie PDO mit charset=utf8mb4
+    charset: 'UTF8MB4_GENERAL_CI',
     connectionLimit: 10,
-    // Datumswerte als Text wie bei PDO ('2026-11-01 10:00:00'), keine JS-Date-Objekte
+    enableKeepAlive: true,
     dateStrings: true,
-    // Wie PDO (PHP 8.1+): ganze Zahlen auch bei BIGINT/COUNT(*) als Zahl (über 2^53 als Text), DECIMAL/SUM/AVG als Text
     supportBigNumbers: true,
     bigNumberStrings: false,
     decimalNumbers: false,
+    // affectedRows = geänderte Zeilen wie PDO rowCount()
+    flags: ['-FOUND_ROWS'],
     namedPlaceholders: false,
     multipleStatements: false,
-  });
-  // Neue Verbindungen: Zeitzone wie PHP (date('P') beim Verbinden)
-  (pool as unknown as { pool: { on(event: string, cb: (c: { query(sql: string): void }) => void): void } }).pool.on('connection', (conn) => {
-    conn.query(`SET time_zone = '${tzOffset(timeZone())}'`);
   });
   return pool;
 }
@@ -60,43 +93,95 @@ export async function closePool(): Promise<void> {
   }
 }
 
-// SELECT … → Zeilen
-export async function q<T extends Row = Row>(sql: string, params: Param[] = []): Promise<T[]> {
-  const [rows] = await getPool().query<RowDataPacket[]>(sql, params);
-  return rows as unknown as T[];
-}
+const UNAVAILABLE = new Set(['ECONNREFUSED', 'ENOENT', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENOTFOUND', 'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'ER_DBACCESS_DENIED_ERROR', 'PROTOCOL_CONNECTION_LOST']);
 
-// Erste Zeile oder null
-export async function one<T extends Row = Row>(sql: string, params: Param[] = []): Promise<T | null> {
-  const rows = await q<T>(sql, params);
-  return rows[0] ?? null;
-}
-
-// Erster Wert der ersten Zeile (wie fetchColumn) oder null
-export async function value(sql: string, params: Param[] = []): Promise<unknown> {
-  const [rows] = await getPool().query<RowDataPacket[]>({ sql, rowsAsArray: true }, params);
-  const first = (rows as unknown as unknown[][])[0];
-  return first ? first[0] : null;
-}
-
-// INSERT/UPDATE/DELETE → betroffene Zeilen und neue ID
-export async function exec(sql: string, params: Param[] = []): Promise<{ affectedRows: number; insertId: number }> {
-  const [res] = await getPool().query<ResultSetHeader>(sql, params);
-  return { affectedRows: res.affectedRows, insertId: res.insertId };
-}
-
-// Transaktion: alles oder nichts
-export async function transaction<T>(fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
-  const conn = await getPool().getConnection();
+// Verbindung holen und die Zeitzone prüfen (nach einer Zeitumstellung neu setzen)
+async function acquire(): Promise<PoolConnection> {
+  let conn: PoolConnection;
   try {
-    await conn.beginTransaction();
-    const out = await fn(conn);
-    await conn.commit();
-    return out;
+    conn = await getPool().getConnection();
   } catch (err) {
-    await conn.rollback().catch(() => undefined);
+    const code = (err as { code?: string }).code ?? '';
+    if (UNAVAILABLE.has(code)) throw new DbUnavailableError(`database unavailable (${code})`);
     throw err;
+  }
+  const offset = currentOffset();
+  const tagged = conn as PoolConnection & { oysOffset?: string };
+  if (tagged.oysOffset !== offset) {
+    try {
+      await conn.query(`SET time_zone = '${offset}'`);
+      tagged.oysOffset = offset;
+    } catch (err) {
+      conn.release();
+      throw err;
+    }
+  }
+  return conn;
+}
+
+function facade(conn: PoolConnection): Db {
+  return {
+    async q<T extends Row = Row>(sql: string, params: Param[] = []): Promise<T[]> {
+      const [rows] = await conn.query<RowDataPacket[]>(sql, params);
+      return rows as unknown as T[];
+    },
+    async one<T extends Row = Row>(sql: string, params: Param[] = []): Promise<T | null> {
+      const [rows] = await conn.query<RowDataPacket[]>(sql, params);
+      return ((rows as unknown as T[])[0] ?? null) as T | null;
+    },
+    async value(sql: string, params: Param[] = []): Promise<unknown> {
+      const [rows] = await conn.query<RowDataPacket[]>({ sql, rowsAsArray: true }, params);
+      const first = (rows as unknown as unknown[][])[0];
+      return first ? first[0] : null;
+    },
+    async exec(sql: string, params: Param[] = []): Promise<ExecResult> {
+      const [res] = await conn.query<ResultSetHeader>(sql, params);
+      return { affectedRows: res.affectedRows, insertId: res.insertId, changedRows: (res as unknown as { changedRows?: number }).changedRows ?? 0 };
+    },
+  };
+}
+
+// Eine Verbindung für mehrere Schritte (FOR UPDATE, Sperren, LAST_INSERT_ID …)
+export async function withConnection<T>(fn: (db: Db, conn: PoolConnection) => Promise<T>): Promise<T> {
+  const conn = await acquire();
+  try {
+    return await fn(facade(conn), conn);
   } finally {
     conn.release();
   }
+}
+
+// Einzelne Abfragen über den Pool
+export const q = <T extends Row = Row>(sql: string, params: Param[] = []): Promise<T[]> => withConnection((db) => db.q<T>(sql, params));
+export const one = <T extends Row = Row>(sql: string, params: Param[] = []): Promise<T | null> => withConnection((db) => db.one<T>(sql, params));
+export const value = (sql: string, params: Param[] = []): Promise<unknown> => withConnection((db) => db.value(sql, params));
+export const exec = (sql: string, params: Param[] = []): Promise<ExecResult> => withConnection((db) => db.exec(sql, params));
+
+// Transaktion: alles oder nichts. fn bekommt die Verbindung (wie bisher) und dieselben Abfragen als Db.
+export async function transaction<T>(fn: (conn: PoolConnection, db: Db) => Promise<T>): Promise<T> {
+  return withConnection(async (db, conn) => {
+    await conn.beginTransaction();
+    try {
+      const out = await fn(conn, db);
+      await conn.commit();
+      return out;
+    } catch (err) {
+      await conn.rollback().catch(() => undefined);
+      throw err;
+    }
+  });
+}
+
+// GET_LOCK(name, timeout) … RELEASE_LOCK auf derselben Verbindung. onBusy 'run': weiter, auch wenn die Sperre nicht kam
+// (so macht es PHP bei der Migration); 'fail': LockBusyError, wenn GET_LOCK nicht 1 liefert.
+export async function withNamedLock<T>(name: string, timeoutSec: number, fn: (db: Db) => Promise<T>, onBusy: 'run' | 'fail' = 'fail'): Promise<T> {
+  return withConnection(async (db) => {
+    const got = await db.value('SELECT GET_LOCK(?, ?)', [name, timeoutSec]);
+    if (Number(got) !== 1 && onBusy === 'fail') throw new LockBusyError(`lock ${name} is busy`);
+    try {
+      return await fn(db);
+    } finally {
+      await db.q('SELECT RELEASE_LOCK(?)', [name]).catch(() => undefined);
+    }
+  });
 }

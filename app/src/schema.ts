@@ -2,7 +2,7 @@
 // Verbindung (GET_LOCK gilt je Verbindung). Alte Tabellen werden NICHT gelöscht. Die Versionsnummer steht wie bisher
 // in oys_meta.schema_version – PHP hat bis 4 gezählt, die Node-Version macht dort weiter.
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
-import { getPool } from './db.js';
+import { withConnection } from './db.js';
 import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower } from './php.js';
 import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
@@ -34,9 +34,25 @@ export async function schemaVersion(conn: PoolConnection): Promise<number> {
   }
 }
 
+// Einmal je Prozess: beim Start und – falls die Datenbank da nicht erreichbar war – mit der nächsten Anfrage
+// (wie PHP, das bei jeder Anfrage prüft). Gleichzeitige Aufrufe warten auf denselben Versuch.
+let schemaReady = false;
+let schemaTry: Promise<void> | null = null;
+export async function ensureSchemaOnce(): Promise<void> {
+  if (schemaReady) return;
+  schemaTry ??= ensureSchema()
+    .then(() => {
+      schemaReady = true;
+    })
+    .finally(() => {
+      schemaTry = null;
+    });
+  await schemaTry;
+}
+
 export async function ensureSchema(): Promise<void> {
-  const conn = await getPool().getConnection();
-  try {
+  // Eigene Verbindung mit der Zeitzone der Seite (TIMESTAMP-Werte der alten Profile werden übernommen)
+  await withConnection(async (_db, conn) => {
     if ((await schemaVersion(conn)) >= SCHEMA_VERSION) return;
     // Nur ein Prozess migriert gleichzeitig
     await conn.query("SELECT GET_LOCK('oys_migrate', 60)");
@@ -56,9 +72,7 @@ export async function ensureSchema(): Promise<void> {
     } finally {
       await conn.query("SELECT RELEASE_LOCK('oys_migrate')");
     }
-  } finally {
-    conn.release();
-  }
+  });
 }
 
 async function addColumn(conn: PoolConnection, table: string, column: string, definition: string): Promise<void> {

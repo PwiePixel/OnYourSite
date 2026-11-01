@@ -39,6 +39,10 @@ export function sha256Hex(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
+export function sha1Hex(data: string | Buffer): string {
+  return createHash('sha1').update(data).digest('hex');
+}
+
 export function md5Hex(data: string | Buffer): string {
   return createHash('md5').update(data).digest('hex');
 }
@@ -60,8 +64,9 @@ export async function passwordHash(password: string): Promise<string> {
   return hash.replace(/^\$2[ab]\$/, '$2y$');
 }
 
-export async function passwordVerify(password: string, hash: string): Promise<boolean> {
-  if (!/^\$2[aby]\$\d\d\$/.test(hash)) return false;
+// password_verify(): leere, fehlende oder fremde Hashes ergeben false
+export async function passwordVerify(password: string, hash: unknown): Promise<boolean> {
+  if (typeof hash !== 'string' || !/^\$2[aby]\$\d\d\$/.test(hash)) return false;
   try {
     return await bcrypt.compare(password, hash.replace(/^\$2y\$/, '$2b$'));
   } catch {

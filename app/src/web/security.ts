@@ -2,7 +2,7 @@
 import { exec, one } from '../db.js';
 import { hmac, randomHex, safeEqual } from '../crypto.js';
 import { gmdate, time } from '../php.js';
-import { e } from '../html.js';
+import { e, raw, type SafeHtml } from '../html.js';
 import { oysClientKey } from '../compat/core.js';
 import { loadConfig } from '../config.js';
 import { Session } from './session.js';
@@ -19,8 +19,9 @@ export async function csrfToken(ctx: Ctx): Promise<string> {
   return token;
 }
 
-export async function csrfField(ctx: Ctx): Promise<string> {
-  return `<input type="hidden" name="csrf" value="${e(await csrfToken(ctx))}">`;
+// oys_csrf_field(): fertiges HTML (in html`…` unverändert, mit + als Text)
+export async function csrfField(ctx: Ctx): Promise<SafeHtml> {
+  return raw(`<input type="hidden" name="csrf" value="${e(await csrfToken(ctx))}">`);
 }
 
 // oys_csrf_check(): nur ein Text, der genau dem Wert der Sitzung entspricht

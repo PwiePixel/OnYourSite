@@ -42,6 +42,11 @@ export function join(parts: Part[], separator = ''): SafeHtml {
   return new SafeHtml(parts.map(render).join(separator));
 }
 
+// htmlspecialchars($v, ENT_XML1 | ENT_QUOTES): für XML (Atom-Feed) – ' wird zu &apos;
+export function xmlEscape(value: unknown): string {
+  return phpStr(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c] as string);
+}
+
 // json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
 export function jsonUnescaped(value: unknown): string {
   return phpJson(value, { unescapedSlashes: true, unescapedUnicode: true });
@@ -56,10 +61,12 @@ export interface JsonFlags {
   hexAmp?: boolean;
   hexApos?: boolean;
   hexQuot?: boolean;
+  // JSON_PRETTY_PRINT: vier Leerzeichen, ": " – wie PHP
+  prettyPrint?: boolean;
 }
 
 export function phpJson(value: unknown, flags: JsonFlags = {}): string {
-  let s = JSON.stringify(value, (_k, v) => (v === undefined ? null : v));
+  let s = JSON.stringify(value, (_k, v) => (v === undefined ? null : v), flags.prettyPrint ? 4 : undefined);
   if (s === undefined) s = 'null';
   if (!flags.unescapedSlashes) s = s.replace(/\//g, '\\/');
   if (!flags.unescapedUnicode) {

@@ -9,6 +9,7 @@ import { notFound } from './public/notFound.js';
 import { pathProfile, publicRoutes, subdomain, trackClick } from './public/routes.js';
 import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
+import { ensureSchemaOnce } from './schema.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -49,6 +50,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   }
   // Vorhandene Dateien (bisher Apache)
   if (await serveStatic(ctx)) ctx.halt();
+  // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt)
+  await ensureSchemaOnce();
   // Frühere PHP-Einstiege unter derselben Adresse
   if (ctx.path === '/api.php') return api(ctx);
   if (ctx.path === '/admin_impersonate.php') return adminImpersonate(ctx);

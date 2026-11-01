@@ -1,6 +1,7 @@
 // Eine Anfrage mit allem, was PHP-Code über $_GET, $_POST, $_FILES, $_COOKIE und $_SERVER gesehen hat, und die
 // Antwort mit den Regeln von header(): gleicher Name ersetzt, Standard-Typ text/html; charset=UTF-8.
 import type { IncomingHttpHeaders } from 'node:http';
+import type { Readable } from 'node:stream';
 import { parseStr, type PhpArray, field, strtolower } from '../php.js';
 import { phpParseUrl } from '../compat/core.js';
 import type { Session } from './session.js';
@@ -23,6 +24,8 @@ export interface UploadedFile {
 export class Ctx {
   readonly method: string;
   readonly rawUrl: string;
+  // REQUEST_URI bis zum ersten ?, nicht dekodiert
+  readonly rawPath: string;
   // Pfad wie parse_url(REQUEST_URI, PHP_URL_PATH) ?: '/' – nie dekodiert
   readonly path: string;
   readonly queryString: string;
@@ -36,14 +39,18 @@ export class Ctx {
   rawBody: Buffer = Buffer.alloc(0);
   readonly cookies: Record<string, string>;
   session: Session | null = null;
+  // Zwischenspeicher für diese Anfrage (z. B. der angemeldete Nutzer)
+  readonly locals: Record<string, unknown> = {};
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];
-  body: string | Buffer = '';
+  // Antwort: Text, Bytes oder ein Datenstrom (große Dateien, ZIP)
+  body: string | Buffer | Readable = '';
 
   constructor(opts: { method: string; url: string; headers: IncomingHttpHeaders; peer: string }) {
     this.method = opts.method.toUpperCase();
     this.rawUrl = opts.url || '/';
+    this.rawPath = this.rawUrl.split('?')[0];
     this.headers = opts.headers;
     const parsed = phpParseUrl(this.rawUrl) as false | { path?: string; query?: string };
     this.path = parsed === false || !parsed.path ? '/' : parsed.path;
@@ -87,7 +94,16 @@ export class Ctx {
   // echo …
   write(chunk: string | { toString(): string }): void {
     const s = typeof chunk === 'string' ? chunk : chunk.toString();
-    this.body = typeof this.body === 'string' ? this.body + s : Buffer.concat([this.body, Buffer.from(s, 'utf8')]);
+    if (typeof this.body === 'string') this.body += s;
+    else if (Buffer.isBuffer(this.body)) this.body = Buffer.concat([this.body, Buffer.from(s, 'utf8')]);
+    else throw new Error('write() after a stream body');
+  }
+
+  // echo …; exit – mit optionalem Status
+  send(body: string | { toString(): string } | Buffer | Readable, status?: number): never {
+    if (status !== undefined) this.status = status;
+    this.body = typeof body === 'string' || Buffer.isBuffer(body) || isReadable(body) ? body : body.toString();
+    this.halt();
   }
 
   // exit
@@ -130,6 +146,22 @@ export class Ctx {
   userAgent(): string {
     return String(this.headers['user-agent'] ?? '');
   }
+}
+
+function isReadable(v: unknown): v is Readable {
+  return !!v && typeof v === 'object' && typeof (v as Readable).pipe === 'function' && typeof (v as Readable).on === 'function';
+}
+
+// Für Tests: eine Anfrage ohne Server
+export function makeTestCtx(o: { method?: string; url: string; host?: string; headers?: Record<string, string>; post?: PhpArray;
+  files?: Record<string, UploadedFile>; cookies?: Record<string, string>; ip?: string; rawBody?: Buffer }): Ctx {
+  const headers: IncomingHttpHeaders = { host: o.host ?? 'oys.test:8080', ...(o.headers ?? {}) };
+  if (o.cookies) headers.cookie = Object.entries(o.cookies).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('; ');
+  const ctx = new Ctx({ method: o.method ?? 'GET', url: o.url, headers, peer: o.ip ?? '127.0.0.1' });
+  if (o.post) ctx.post = o.post;
+  if (o.files) ctx.files = o.files;
+  if (o.rawBody) ctx.rawBody = o.rawBody;
+  return ctx;
 }
 
 function defaultJson(v: unknown): string {

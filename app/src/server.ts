@@ -2,12 +2,15 @@
 // in index.php. Formulare und Uploads werden wie von PHP gelesen ($_POST/$_FILES-Regeln).
 import Fastify from 'fastify';
 import Busboy from 'busboy';
+import { Readable } from 'node:stream';
 import { Ctx, isHalt, type UploadedFile } from './web/ctx.js';
+import { DbUnavailableError } from './db.js';
+import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
 import { setPhpVar, parseStr } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
-import { ensureSchema } from './schema.js';
+import { ensureSchemaOnce } from './schema.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
 const POST_MAX = 20 * 1024 * 1024;
@@ -18,8 +21,12 @@ export async function buildServer() {
   loadConfig();
   // Zeitzone der Seite für alles, was Date benutzt
   process.env.TZ = timeZone();
-  // Tabellen anlegen bzw. auf den neuesten Stand bringen (einmal beim Start statt bei jeder Anfrage)
-  await ensureSchema();
+  // Tabellen anlegen bzw. auf den neuesten Stand bringen (einmal beim Start statt bei jeder Anfrage).
+  // Ist die Datenbank gerade nicht erreichbar, startet der Server trotzdem und versucht es mit der nächsten Anfrage.
+  await ensureSchemaOnce().catch((err) => {
+    if (!(err instanceof DbUnavailableError)) throw err;
+    console.error(`[${new Date().toISOString()}] ${err.message} – will retry with the next request`);
+  });
 
   const app = Fastify({ logger: false, bodyLimit: BODY_LIMIT, trustProxy: false, routerOptions: { ignoreTrailingSlash: false, ignoreDuplicateSlashes: false } });
   app.removeAllContentTypeParsers();
@@ -38,7 +45,14 @@ export async function buildServer() {
       try {
         await dispatch(ctx);
       } catch (err) {
-        if (!isHalt(err)) {
+        if (err instanceof DbUnavailableError) {
+          // Wie db.php: Hinweisseite mit 503 statt eines leeren Fehlers
+          console.error(`[${new Date().toISOString()}] ${err.message}`);
+          ctx.status = 503;
+          ctx.removeHeader('Content-Type');
+          ctx.header('Content-Type', 'text/html; charset=utf-8');
+          ctx.body = setupErrorPage(DB_FAILED_TITLE, DB_FAILED_TEXT);
+        } else if (!isHalt(err)) {
           // Wie PHP ohne Fehleranzeige: 500 mit leerem Inhalt
           console.error(`[${new Date().toISOString()}] ${ctx.method} ${ctx.rawUrl}:`, err);
           ctx.status = 500;
@@ -51,6 +65,14 @@ export async function buildServer() {
       for (const [name, value] of ctx.headersOut()) {
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
         else reply.header(name, value);
+      }
+      if (ctx.body instanceof Readable) {
+        // Datenströme (große Dateien, ZIP): bei HEAD nicht lesen
+        if (ctx.method === 'HEAD') {
+          ctx.body.destroy();
+          return reply.send('');
+        }
+        return reply.send(ctx.body);
       }
       return reply.send(ctx.method === 'HEAD' ? '' : ctx.body);
     },
