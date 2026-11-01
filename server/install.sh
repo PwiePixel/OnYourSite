@@ -899,6 +899,11 @@ cf_login() {
     prompt CF_TOKEN "Cloudflare API token (Enter = cancel):" hidden
     CF_TOKEN=$(printf '%s' "$CF_TOKEN" | tr -d '[:space:]')
     [ -n "$CF_TOKEN" ] || return 1
+    # Der „Global API Key“ ist kein Token: er darf alles und braucht zusätzlich die E-Mail-Adresse
+    if [[ $CF_TOKEN == cfk_* ]] || [[ $CF_TOKEN =~ ^[0-9a-f]{37}$ ]]; then
+      info "  That is the Global API Key – please create an API token instead (Create Token, as above)."
+      CF_TOKEN=""
+    fi
   done
   install -d -m 700 "$CONF_DIR"
   (umask 077 && printf 'CF_API_TOKEN=%s\n' "$CF_TOKEN" > "$CF_ENV")
@@ -974,9 +979,60 @@ EOF
   echo "127.0.0.1 $DOMAIN # onyoursite-tunnel" >> /etc/hosts
 }
 
+# Antwortet Apache auf diesem Server für die Domain? Dorthin schickt der Tunnel die Besucher.
+origin_ok() {
+  [ "$(curl -sk --noproxy '*' --max-time 20 --resolve "$DOMAIN:443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "https://$DOMAIN/robots.txt" 2>/dev/null || true)" = 200 ]
+}
+
+# Von außen prüfen: eine zufällige Subdomain (die /etc/hosts nicht kennt) geht über Cloudflare und den Tunnel zu Apache.
+# Kommt genau die Datei dieses Servers zurück, stimmt der ganze Weg – auch für die Profile unter *.$DOMAIN.
+tunnel_probe() {
+  local name code="" i tmp file=static/fonts/LICENSE-OFL.txt
+  name="check-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n').$DOMAIN"
+  tmp=$(mktemp)
+  info "Checking from outside (https://$name) …"
+  for i in $(seq 1 12); do
+    code=$(curl -s --max-time 15 -o "$tmp" -w '%{http_code}' "https://$name/$file" 2>/dev/null || true)
+    if [ "$code" = 200 ] && cmp -s "$tmp" "$CODE/$file"; then break; fi
+    sleep 5
+  done
+  if [ "$code" = 200 ] && cmp -s "$tmp" "$CODE/$file"; then
+    info "Visitors reach this server through Cloudflare and the tunnel – on $DOMAIN and every subdomain."
+  elif [[ $code =~ ^30[1278]$ ]]; then
+    warn "Cloudflare sends https visitors to http – in Cloudflare, set SSL/TLS → Overview to Full (strict)."
+  else
+    warn "Through Cloudflare, $name answered with ${code:-nothing} instead of this server."
+    warn "Log: journalctl -u onyoursite-tunnel – try again later: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+  fi
+  rm -f "$tmp"
+}
+
+# Welchen Tunnel betreibt ein Dienst „cloudflared“ auf diesem Server (z. B. aus Cloudflares Anleitung
+# „cloudflared service install“)? Leer, wenn es keinen gibt.
+other_connector() {
+  local unit=/etc/systemd/system/cloudflared.service tok="" id="" f
+  [ -f "$unit" ] || return 0
+  if [ -s /etc/cloudflared/token ]; then tok=$(tr -d '[:space:]' < /etc/cloudflared/token); fi
+  if [ -z "$tok" ]; then tok=$(grep -oE -- '--token[= ]+[A-Za-z0-9+/=_-]+' "$unit" | head -n 1 | sed -E 's/^--token[= ]+//' || true); fi
+  if [ -n "$tok" ]; then
+    # Das Token ist Base64 von {"a": Konto, "t": Tunnel, "s": Geheimnis}
+    tok=$(printf '%s' "$tok" | tr '_-' '/+')
+    while [ $(( ${#tok} % 4 )) -ne 0 ]; do tok="$tok="; done
+    id=$(printf '%s' "$tok" | base64 -d 2>/dev/null | jq -r '.t // empty' 2>/dev/null || true)
+  fi
+  if [ -z "$id" ]; then
+    for f in /etc/cloudflared/config.yml /etc/cloudflared/config.yaml; do
+      if [ -f "$f" ]; then id=$(sed -n 's/^tunnel:[[:space:]]*//p' "$f" | tr -d "\"' \r" | head -n 1); break; fi
+    done
+  fi
+  printf '%s' "$id"
+}
+
 step_tunnel() {
   local force=${1:-} def guess tunnels t tid="" tname tok="" hosts mine allrecs repl dead posts m mx_warn="" st="" i r
   local ours_prefix del_ids=() del_names=() keep_names=() idle_names=() line changes=0 restart=0 alive dels v4 v6 direct
+  local connector old_connector=0 problem=""
   bold "5/9  Cloudflare tunnel"
   if [ "$TUNNEL" = no ] && [ -z "$force" ]; then
     info "Not used – visitors reach this server directly. Later: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
@@ -1081,6 +1137,13 @@ step_tunnel() {
     info "  - delete the old tunnel ${del_names[$i]} (${del_ids[$i]})"
     changes=1
   done
+  # Läuft auf diesem Server noch der Dienst eines alten Tunnels, der gleich gelöscht wird, kommt er mit weg
+  connector=$(other_connector)
+  if [ -n "$connector" ] && in_list "$connector" "${del_ids[@]}"; then
+    info "  - remove the service cloudflared on this server (it runs the old tunnel)"
+    old_connector=1
+    changes=1
+  fi
   if [ "$changes" = 0 ]; then
     info "  Everything is in place."
   else
@@ -1146,23 +1209,33 @@ step_tunnel() {
     if [ "$st" = healthy ]; then break; fi
     sleep 2
   done
-  if [ "$st" != healthy ]; then
-    warn "Cloudflare doesn’t report the tunnel as connected yet (status: ${st:-unknown}). Log: journalctl -u onyoursite-tunnel"
-    case "$(choose "Switch the DNS anyway? [y/N]" n)" in
-      [yY]*) ;;
-      *)
-        # Der Tunnel bleibt angelegt (der nächste Lauf nimmt ihn wieder), die Seite läuft wie bisher weiter
-        info "The DNS stays as it is and the web ports stay open. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
-        if [ "$TUNNEL" != yes ]; then TUNNEL=no; fi
-        return 0 ;;
-    esac
-  fi
-
-  # 4. DNS umstellen – in einem Schritt (alles oder nichts): alte Einträge weg, CNAMEs auf den Tunnel
+  # Was am DNS zu ändern ist: alte Einträge weg, CNAMEs auf den Tunnel
   dels=$(jq -c -s 'add | map({id})' <<< "$repl$dead")
   posts=$(jq -c --argjson m "$mine" --arg c "$tid.cfargotunnel.com" \
     '[$m[] as $n | select(([.[] | select(.name == $n and .type == "CNAME" and .content == $c)] | length) == 0)
       | {type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: "OnYourSite tunnel"}]' <<< "$allrecs")
+  # „degraded“: verbunden, nur noch nicht über alle vier Leitungen – reicht für Besucher
+  if [ "$st" != healthy ] && [ "$st" != degraded ]; then
+    problem="Cloudflare doesn’t report the tunnel as connected yet (status: ${st:-unknown}). Log: journalctl -u onyoursite-tunnel"
+  elif ! origin_ok; then
+    problem="The website doesn’t answer on this server (https://$DOMAIN on 127.0.0.1) – visitors would get an error. Log: /var/log/apache2/onyoursite-error.log"
+  fi
+  if [ -n "$problem" ]; then
+    warn "$problem"
+    # Zeigt das DNS schon auf den Tunnel, gibt es nichts mehr zu entscheiden – nur der Hinweis
+    if [ "$dels" != "[]" ] || [ "$posts" != "[]" ]; then
+      case "$(choose "Switch the DNS anyway? [y/N]" n)" in
+        [yY]*) ;;
+        *)
+          # Der Tunnel bleibt angelegt (der nächste Lauf nimmt ihn wieder), die Seite läuft wie bisher weiter
+          info "The DNS stays as it is and the web ports stay open. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+          if [ "$TUNNEL" != yes ]; then TUNNEL=no; fi
+          return 0 ;;
+      esac
+    fi
+  fi
+
+  # 4. DNS umstellen – in einem Schritt (alles oder nichts)
   if [ "$dels" != "[]" ] || [ "$posts" != "[]" ]; then
     if ! cf POST "/zones/$ZONE_ID/dns_records/batch" "$(jq -nc --argjson d "$dels" --argjson p "$posts" '{deletes: $d, posts: $p}')" >/dev/null; then
       # Ein Fehler in der Sammel-Änderung ändert nichts – nur wenn es sie gar nicht gibt, geht es einzeln weiter
@@ -1179,7 +1252,19 @@ step_tunnel() {
   TUNNEL=yes
   conf_set TUNNEL yes
 
-  # 5. Alte Tunnel dieser Website löschen (erst ihre Verbindungen trennen; zur Not samt allem, was daran hängt)
+  # 5. Alte Tunnel dieser Website löschen (erst ihre Verbindungen trennen; zur Not samt allem, was daran hängt).
+  #    Ein Dienst auf diesem Server, der einen davon betreibt, wird vorher entfernt (wie „cloudflared service uninstall“).
+  if [ "$old_connector" = 1 ]; then
+    systemctl disable --now cloudflared.service cloudflared-update.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/cloudflared.service /etc/systemd/system/cloudflared-update.service \
+      /etc/systemd/system/cloudflared-update.timer /etc/cloudflared/token
+    # Seine Einstellungen würde cloudflared sonst auch für den neuen Tunnel lesen
+    for i in /etc/cloudflared/config.yml /etc/cloudflared/config.yaml; do
+      if [ -f "$i" ]; then mv -f "$i" "$i.old"; fi
+    done
+    systemctl daemon-reload
+    info "Removed the old cloudflared service of this server."
+  fi
   for i in "${!del_ids[@]}"; do
     cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}/connections" >/dev/null || true
     if cf DELETE "/accounts/$ACC_ID/cfd_tunnel/${del_ids[$i]}" >/dev/null \
@@ -1190,6 +1275,7 @@ step_tunnel() {
     fi
   done
   info "$DOMAIN, www.$DOMAIN and every subdomain now come through the tunnel – no web ports have to be open."
+  tunnel_probe
 }
 
 # ---------------------------------------------------------------
