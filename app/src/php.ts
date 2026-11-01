@@ -98,6 +98,21 @@ export const ucfirst = (s: string): string => (s === '' ? s : strtoupper(s[0]) +
 // rawurlencode (RFC 3986) und urlencode (Leerzeichen als +)
 export const rawurlencode = (s: string): string =>
   encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+// rawurldecode(): %XX → Byte, „+“ bleibt. Ungültige Folgen bleiben stehen; Bytes werden als UTF-8 gelesen.
+export function rawurldecode(s: string): string {
+  if (!s.includes('%')) return s;
+  const bytes: number[] = [];
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === '%' && /^[0-9a-fA-F]{2}$/.test(s.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(s.slice(i + 1, i + 3), 16));
+      i += 3;
+    } else {
+      for (const b of Buffer.from(s[i], 'utf8')) bytes.push(b);
+      i++;
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
 export const urlencode = (s: string): string => rawurlencode(s).replace(/%20/g, '+').replace(/~/g, '%7E');
 
 export const nl2br = (s: string): string => s.replace(/\r\n|\n\r|\n|\r/g, (m) => '<br />' + m);
