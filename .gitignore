@@ -9,6 +9,8 @@
 
 # Discord-Bot: Zugangsdaten und Pakete
 /discord-bot/.env
+/discord-bot/.env.*
+!/discord-bot/.env.example
 /discord-bot/node_modules/
 
 # Lokales / Editor

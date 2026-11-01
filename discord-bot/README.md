@@ -37,11 +37,39 @@ Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The end
    ```
 6. In the support channel, run **`/support-panel`**. `/bot-status` shows whether everything is connected (both commands need “Manage Server”).
 
-## Where to run it
+## Install on a server (Docker)
 
-The bot has to run all the time. For testing, your own computer is fine. Later: a small VPS, a Raspberry Pi, or Plesk’s Node.js extension (if your plan allows long-running apps).
+The easiest way: a small Linux server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened.
 
-**Keep `.env` out of the website folder.** If the repository is deployed into `httpdocs`, the `.htaccess` blocks `/discord-bot/` and every `.env` file anyway – but it’s best to run the bot from a folder outside the web root, or to set the values as environment variables in your hosting panel instead of a `.env` file.
+```bash
+# 1. Get the code onto the server – clone the repository (private: use a deploy key or token)
+#    or upload just the folder discord-bot/ via SFTP
+git clone https://github.com/PwiePixel/OnYourSite.git
+cd OnYourSite/discord-bot
+
+# 2. Run the installer
+sudo ./install.sh
+```
+
+The installer
+1. installs Docker if it’s missing (official script from get.docker.com, after asking),
+2. asks for the token, the IDs and the website address – and creates the secret for `config.php` if you don’t have one yet,
+3. saves everything in `.env` (readable only by root; it never goes into the Docker image),
+4. builds the image, checks the connection to the website and starts the bot.
+
+The bot runs as a container that restarts by itself after a crash or a reboot. It runs as a normal user, with a read-only file system, no extra rights and a 256 MB memory limit, and its logs are rotated.
+
+| | |
+|---|---|
+| Logs | `docker compose logs -f bot` |
+| Restart | `docker compose restart bot` |
+| Stop | `docker compose down` |
+| Change settings | `sudo ./install.sh` (Enter keeps the current values) |
+| Update | `git pull && sudo ./install.sh --update` |
+
+Without Docker it also runs directly with Node.js 18 or newer (`npm install` and `npm start`, see above) – then keep it running with a service manager such as systemd or pm2.
+
+**Keep `.env` out of the website folder.** If the repository is deployed into `httpdocs`, the `.htaccess` blocks `/discord-bot/` and every `.env` file anyway – but run the bot from a folder outside the web root, or on its own server.
 
 ## Files
 
@@ -54,4 +82,6 @@ src/suggestions.js  Suggestion forum, accept/decline
 src/support.js      Support panel, ticket channels, closing
 src/outbox.js       Picks up changes made on the website
 src/commands.js     /support-panel and /bot-status
+install.sh          Installer for a server (Docker)
+Dockerfile, docker-compose.yml   Container setup used by the installer
 ```
