@@ -828,11 +828,13 @@ cf() {
 
 # Fehler beim Ändern: fehlt dem gespeicherten Token ein Recht, wird es vergessen – beim nächsten Lauf fragt der Installer neu
 cf_fail() {
-  local e
+  local e again="${SUDO_HINT}bash $CODE/server/install.sh"
   e=$(cf_err)
+  # --tunnel geht erst nach der ersten fertigen Einrichtung – beim ersten Mal den Installer einfach neu starten
+  if [ -n "$OLD_DOMAIN" ]; then again="$again --tunnel"; fi
   if grep -qiE 'authenticat|permission|unauthori|forbidden|\(10000\)|\(9109\)' <<< "$e"; then
     rm -f "$CF_ENV"
-    fail "$1: $e. The token is missing a permission (Account · Cloudflare Tunnel · Edit, Zone · DNS · Edit, Zone · Zone · Read) – create a new one and run: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+    fail "$1: $e. The token is missing a permission (Account · Cloudflare Tunnel · Edit, Zone · DNS · Edit, Zone · Zone · Read) – create a new one and run: $again"
   fi
   fail "$1: $e"
 }
@@ -1816,7 +1818,7 @@ case $MODE in
     bold "Start from scratch"
     warn "This deletes all OnYourSite data on this server: the database (accounts, pages, stats, messages,"
     warn "suggestions, tickets), all uploads and the keys in config.php."
-    info "A backup is made first: $BACKUPS/<date>-before-reset (kept $BACKUP_DAYS days)."
+    info "A backup is made first: $BACKUPS/<date>-<time>-before-reset (kept $BACKUP_DAYS days)."
     info "The code, the certificate, the Cloudflare tunnel, the mail server settings and the Discord bot settings stay."
     answer=""
     prompt answer "To confirm, type the domain ($DOMAIN):"

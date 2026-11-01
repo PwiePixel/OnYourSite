@@ -413,4 +413,4 @@ else
   info "Change settings: ${SUDO_HINT}bash install.sh"
   info "After an update: git pull && ${SUDO_HINT}bash install.sh --update"
 fi
-info "In Discord, run /support-panel in your support channel and /bot-status to see the connection."
+info "The bot posts the support panel in your support channel by itself. In Discord, /bot-status shows the connection."

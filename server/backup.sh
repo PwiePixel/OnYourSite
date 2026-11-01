@@ -17,10 +17,11 @@ KEEP=$(get BACKUP_DAYS)
 KEEP=${KEEP:-14}
 [ -f "$CODE/config.php" ] || { echo "Backup: no config.php in '$CODE'." >&2; exit 1; }
 
-# Optional ein Zusatz im Ordnernamen, z. B. „before-reset“ – sonst überschriebe die nächtliche Sicherung denselben Tag
+# Optional ein Zusatz im Ordnernamen, z. B. „before-reset“ – dann mit Uhrzeit: so überschreibt weder die nächtliche
+# Sicherung noch ein zweiter Neuanfang am selben Tag diese Sicherung
 label=${1:-}
 [[ $label =~ ^[a-z0-9-]*$ ]] || { echo "Backup: invalid name '$label'." >&2; exit 1; }
-dir=$DEST/$(date +%F)${label:+-$label}
+if [ -n "$label" ]; then dir=$DEST/$(date +%F-%H%M%S)-$label; else dir=$DEST/$(date +%F); fi
 mkdir -p "$dir"
 chmod 700 "$DEST"
 
