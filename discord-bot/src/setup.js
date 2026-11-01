@@ -10,10 +10,13 @@
 // Das Token kommt aus DISCORD_TOKEN, gespeicherte IDs (zum Wiederverwenden) aus den gleichnamigen Variablen.
 const { REST, Routes, ChannelType, PermissionFlagsBits: P } = require('discord.js');
 
-// Rechte im Einladungslink: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History,
-// Manage Channels, Manage Roles, Manage Threads, Create Public/Private Threads (damit Kanäle schreibgeschützt werden können)
-const INVITE_PERMISSIONS = String(P.ViewChannel | P.SendMessages | P.SendMessagesInThreads | P.EmbedLinks
-  | P.ReadMessageHistory | P.ManageChannels | P.ManageRoles | P.ManageThreads | P.CreatePublicThreads | P.CreatePrivateThreads);
+// Rechte im Einladungslink: View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files,
+// Read Message History, Manage Messages, Manage Channels, Manage Roles, Manage Threads, Create Public/Private Threads.
+// Discord lässt den Bot in Kanal-Rechten nur vergeben, was er selbst hat: Create … Threads braucht er, um Kanäle
+// schreibgeschützt zu machen, Attach Files und Manage Messages für die Ticket-Kanäle (Dateien, Moderation durch Staff).
+const INVITE_PERMISSIONS = String(P.ViewChannel | P.SendMessages | P.SendMessagesInThreads | P.EmbedLinks | P.AttachFiles
+  | P.ReadMessageHistory | P.ManageMessages | P.ManageChannels | P.ManageRoles | P.ManageThreads | P.CreatePublicThreads
+  | P.CreatePrivateThreads);
 const BRAND = 0x6366f1;
 const REASON = 'OnYourSite bot setup';
 
@@ -42,10 +45,27 @@ async function setupGuild(rest, guildId, current) {
   const done = [];
   const warnings = [];
   const me = await rest.get(Routes.user());
+  const app = await application(rest);
   const guild = await rest.get(Routes.guild(guildId));
   const roles = await rest.get(Routes.guildRoles(guildId));
   const channels = await rest.get(Routes.guildChannels(guildId));
+  const member = await rest.get(Routes.guildMember(guildId, me.id));
   const everyone = guild.id;
+
+  // Hat der Bot alle Rechte aus dem Einladungslink? (z. B. mit einem älteren Link eingeladen) Sonst scheitern Tickets –
+  // denselben Link noch einmal öffnen: Discord ergänzt dann die Rechte der Bot-Rolle.
+  let have = 0n;
+  for (const r of roles) {
+    if (r.id === everyone || (member.roles || []).includes(r.id)) have |= BigInt(r.permissions || '0');
+  }
+  if (!(have & P.Administrator)) {
+    const need = BigInt(INVITE_PERMISSIONS);
+    const missing = Object.entries(P).filter(([, bit]) => (need & bit) && !(have & bit)).map(([name]) => name);
+    if (missing.length) {
+      warnings.push(`The bot is missing permissions on this server (${missing.join(', ')}). Open this link, choose the server `
+        + `and authorize again – Discord adds them: ${app.invite}`);
+    }
+  }
 
   // Rolle „Staff“: darf Vorschläge annehmen/ablehnen und sieht alle Tickets
   let staff = roles.find((r) => r.id === current.TEAM_ROLE_ID)
@@ -65,12 +85,21 @@ async function setupGuild(rest, guildId, current) {
     warnings.push(`The Staff role couldn’t be given to the server owner (${err.message}) – give it by hand.`);
   }
 
-  // Kanal finden (gespeicherte ID, sonst gleicher Name und Typ) oder anlegen
+  // Kanal finden (gespeicherte ID, sonst gleicher Name und Typ) oder anlegen. Einem vorhandenen Kanal gibt der Bot
+  // seine eigenen Rechte dazu – z. B. einer schon vorhandenen Kategorie „Tickets“, die alle anderen nicht sehen.
   async function ensure(storedId, spec, label) {
     let ch = channels.find((c) => c.id === storedId && c.type === spec.type)
       || channels.find((c) => c.type === spec.type && (c.name || '').toLowerCase() === spec.name.toLowerCase());
     if (ch) {
       done.push(`${label} ${spec.type === ChannelType.GuildCategory ? '' : '#'}${ch.name} is already there`);
+      const want = (spec.permission_overwrites || []).find((o) => o.id === me.id);
+      const has = (ch.permission_overwrites || []).find((o) => o.id === me.id);
+      if (want && !(has && (BigInt(has.allow || '0') & BigInt(want.allow)) === BigInt(want.allow))) {
+        await rest.put(Routes.channelPermission(ch.id, me.id), {
+          body: { type: 1, allow: want.allow, deny: '0' }, reason: REASON,
+        });
+        done.push(`Gave the bot access to ${spec.type === ChannelType.GuildCategory ? '' : '#'}${ch.name}`);
+      }
       return ch;
     }
     ch = await rest.post(Routes.guildChannels(guildId), { body: spec, reason: REASON });
@@ -85,7 +114,10 @@ async function setupGuild(rest, guildId, current) {
     { id: everyone, type: 0, deny: bits(P.SendMessages, P.SendMessagesInThreads, P.CreatePublicThreads, P.CreatePrivateThreads) },
     botWrites,
   ];
-  const info = await ensure(null, { name: 'OnYourSite', type: ChannelType.GuildCategory }, 'Category');
+  // Die Kategorie wiederfinden: über die gespeicherten Kanäle (auch wenn sie umbenannt wurde), sonst über den Namen
+  const parentOf = (id) => (channels.find((c) => c.id === id) || {}).parent_id || null;
+  const info = await ensure(parentOf(current.WELCOME_CHANNEL_ID) || parentOf(current.SUPPORT_CHANNEL_ID),
+    { name: 'OnYourSite', type: ChannelType.GuildCategory }, 'Category');
   const textChannel = (name, topic) => ({ name, type: ChannelType.GuildText, parent_id: info.id, topic, permission_overwrites: readOnly });
 
   const welcome = await ensure(current.WELCOME_CHANNEL_ID, textChannel('welcome', 'New members are welcomed here.'), 'Channel');
@@ -112,8 +144,11 @@ async function setupGuild(rest, guildId, current) {
         { id: me.id, type: 1, allow: bits(P.ViewChannel, P.SendMessages, P.SendMessagesInThreads, P.EmbedLinks, P.ReadMessageHistory, P.ManageThreads) },
       ],
     }, 'Forum');
+    // Tags: gespeicherte IDs zuerst (auch wenn sie umbenannt wurden), sonst gleicher Name; fehlende werden ergänzt
     let available = forum.available_tags || [];
-    const missing = ['Accepted', 'Declined'].filter((n) => !available.some((t) => t.name.toLowerCase() === n.toLowerCase()));
+    const find = (id, name) => available.find((t) => t.id === id) || available.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    const missing = [['Accepted', current.TAG_ACCEPTED_ID], ['Declined', current.TAG_DECLINED_ID]]
+      .filter(([name, id]) => !find(id, name)).map(([name]) => name);
     if (missing.length) {
       const updated = await rest.patch(Routes.channel(forum.id), {
         body: { available_tags: [...available, ...missing.map((name) => ({ name, moderated: true }))] }, reason: REASON,
@@ -121,8 +156,8 @@ async function setupGuild(rest, guildId, current) {
       available = updated.available_tags || [];
       done.push(`Added the forum tags ${missing.join(' and ')}`);
     }
-    tags.accepted = (available.find((t) => t.name.toLowerCase() === 'accepted') || {}).id || '';
-    tags.declined = (available.find((t) => t.name.toLowerCase() === 'declined') || {}).id || '';
+    tags.accepted = (find(current.TAG_ACCEPTED_ID, 'Accepted') || {}).id || '';
+    tags.declined = (find(current.TAG_DECLINED_ID, 'Declined') || {}).id || '';
   } catch (err) {
     warnings.push(`Discord didn’t create the suggestion forum (${err.message}). Forum channels may need a community server: `
       + 'Server Settings → Enable Community, then run the installer again. Everything else works without it.');
@@ -181,7 +216,8 @@ async function cli(argv) {
         return 1;
       }
       const current = {};
-      for (const key of ['TEAM_ROLE_ID', 'WELCOME_CHANNEL_ID', 'RULES_CHANNEL_ID', 'SUPPORT_CHANNEL_ID', 'SUGGESTION_FORUM_ID', 'SUPPORT_CATEGORY_ID']) {
+      for (const key of ['TEAM_ROLE_ID', 'WELCOME_CHANNEL_ID', 'RULES_CHANNEL_ID', 'SUPPORT_CHANNEL_ID', 'SUGGESTION_FORUM_ID',
+        'TAG_ACCEPTED_ID', 'TAG_DECLINED_ID', 'SUPPORT_CATEGORY_ID']) {
         current[key] = String(process.env[key] || '');
       }
       const result = await setupGuild(rest, guildId, current);
