@@ -7,7 +7,7 @@ import { Ctx, isHalt, type UploadedFile } from './web/ctx.js';
 import { DbUnavailableError } from './db.js';
 import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
-import { setPhpVar, parseStr } from './php.js';
+import { setPhpVar, parseStr, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
@@ -39,10 +39,19 @@ export async function buildServer() {
       return '/';
     },
   });
-  // Ein leerer Content-Type-Header würde sonst mit 415 abgelehnt – PHP liest den Inhalt trotzdem
+  // Den Content-Type wertet erst readBody() aus (wie PHP). Fastify soll ihn nicht prüfen: ein leerer oder ungewöhnlicher
+  // Wert ("application/x-www-form-urlencoded, text/plain") ergäbe sonst 415, PHP liest den Inhalt trotzdem.
+  // Bis nach dem Einlesen liegt der Header beiseite, danach steht er wieder unverändert in den Headern.
   app.addHook('onRequest', async (req) => {
-    const ct = req.headers['content-type'];
-    if (typeof ct === 'string' && ct.trim() === '') delete req.headers['content-type'];
+    const ct = req.raw.headers['content-type'];
+    if (ct !== undefined) {
+      (req.raw as typeof req.raw & { oysContentType?: string }).oysContentType = ct;
+      delete req.raw.headers['content-type'];
+    }
+  });
+  app.addHook('preHandler', async (req) => {
+    const ct = (req.raw as typeof req.raw & { oysContentType?: string }).oysContentType;
+    if (ct !== undefined) req.raw.headers['content-type'] = ct;
   });
   app.removeAllContentTypeParsers();
   app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: BODY_LIMIT }, (_req, body, done) => done(null, body));
@@ -101,18 +110,44 @@ export async function buildServer() {
   return app;
 }
 
-// $_POST/$_FILES: nur bei urlencoded und multipart
-async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
-  const type = contentType.split(';')[0].trim().toLowerCase();
+// $_POST/$_FILES: nur bei urlencoded und multipart. Den Typ liest PHP (SAPI) klein geschrieben bis zum ersten ';', ','
+// oder Leerzeichen – ohne trim (ein Tabulator gehört zum Typ).
+export function phpPostType(contentType: string): string {
+  const cut = contentType.search(/[;, ]/);
+  return strtolower(cut >= 0 ? contentType.slice(0, cut) : contentType);
+}
+
+// Grenze wie rfc1867.c: das erste "boundary" im ganzen Wert (sonst ohne Rücksicht auf Groß-/Kleinschreibung), ab dem
+// nächsten '=' der Wert in Anführungszeichen oder bis zum ersten ',' oder ';'. null = PHP liest nichts.
+export function phpBoundary(contentType: string): string | null {
+  let at = contentType.indexOf('boundary');
+  if (at < 0) at = strtolower(contentType).indexOf('boundary');
+  const eq = at < 0 ? -1 : contentType.indexOf('=', at);
+  if (eq < 0) return null;
+  const rest = contentType.slice(eq + 1);
+  if (rest.startsWith('"')) {
+    const end = rest.indexOf('"', 1);
+    return end < 0 ? null : rest.slice(1, end) || null;
+  }
+  const end = rest.search(/[,;]/);
+  return (end >= 0 ? rest.slice(0, end) : rest) || null;
+}
+
+export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
+  const type = phpPostType(contentType);
   if (type === 'application/x-www-form-urlencoded') {
     ctx.post = parseStr(body.toString('utf8'), true);
     return;
   }
   if (type !== 'multipart/form-data') return;
+  const boundary = phpBoundary(contentType);
+  if (boundary === null) return;
   await new Promise<void>((resolve) => {
     let bb: Busboy.Busboy;
     try {
-      bb = Busboy({ headers: { 'content-type': contentType }, defParamCharset: 'utf8', limits: { fileSize: UPLOAD_MAX + 1 } });
+      // Busboy bekommt die Grenze, die PHP gefunden hat, in einer Form, die es sicher liest
+      const header = `multipart/form-data; boundary="${boundary.replace(/["\\]/g, '\\$&')}"`;
+      bb = Busboy({ headers: { 'content-type': header }, defParamCharset: 'utf8', limits: { fileSize: UPLOAD_MAX + 1 } });
     } catch {
       resolve();
       return;

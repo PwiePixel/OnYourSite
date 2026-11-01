@@ -124,3 +124,21 @@ test('password hashes work both ways, including NUL bytes and the 72-byte limit'
   // Genug Treffer, sonst prüft der Test nichts
   assert.ok(expected.filter(Boolean).length > pw.length * 2);
 });
+
+// password_verify() kennt jedes crypt()-Format, Node nur bcrypt ($2a$, $2b$, $2y$). Kein Weg in PHP schreibt andere
+// (überall password_hash(PASSWORD_DEFAULT)); vor dem Umstieg in der echten Datenbank prüfen:
+// SELECT LEFT(password, 4), COUNT(*) FROM users GROUP BY 1
+const NOT_IN_NODE = ['$1$', '$5$', '$6$', 'DES', '_', '$2x$', '$argon2id$'];
+
+test('hash formats beyond bcrypt: PHP accepts them, Node does not (known difference)', async () => {
+  const made = php(`$pw = 'test1234'; $b = fn ($p) => str_replace('$2y$', $p, password_hash($pw, PASSWORD_BCRYPT, ['cost' => 4]));
+    return ['$1$' => crypt($pw, '$1$saltsalt$'), '$5$' => crypt($pw, '$5$rounds=5000$saltsaltsaltsalt$'), '$6$' => crypt($pw, '$6$saltsaltsaltsalt$'),
+      'DES' => crypt($pw, 'ab'), '_' => crypt($pw, '_J9..salt'), '$2x$' => $b('$2x$'), '$2a$' => $b('$2a$'), '$2b$' => $b('$2b$'), '$2y$' => $b('$2y$')]
+      + (defined('PASSWORD_ARGON2ID') ? ['$argon2id$' => password_hash($pw, PASSWORD_ARGON2ID)] : []);`, null) as Record<string, string>;
+  const phpOk = php(`return array_map(fn ($h) => password_verify('test1234', $h), $in);`, made) as Record<string, boolean>;
+  assert.ok(Object.keys(made).length >= 9);
+  for (const [format, hash] of Object.entries(made)) {
+    assert.equal(phpOk[format], true, `PHP accepts ${format}`);
+    assert.equal(await passwordVerify('test1234', hash), !NOT_IN_NODE.includes(format), `Node with ${format}`);
+  }
+});

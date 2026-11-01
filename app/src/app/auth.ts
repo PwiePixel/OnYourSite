@@ -9,6 +9,7 @@ import { intval, phpEmpty, phpTrim, strlen, strtolower, type PhpArray } from '..
 import { e } from '../html.js';
 import { createPage } from '../content/pages.js';
 import { DEFAULT_THEME } from '../content/themes.js';
+import { sendCustomEmail } from '../mail.js';
 import { flash } from './context.js';
 import { loginView } from './views/login.js';
 import { registerView } from './views/register.js';
@@ -147,27 +148,16 @@ function isDbError(err: unknown): boolean {
   return typeof x.sqlState === 'string' || x.fatal === true;
 }
 
-// sendCustomEmail() aus mail.ts (Paket Mail). Fehlt das Modul, wird – wie ohne SMTP-Einstellungen – nichts gesendet;
-// das Ergebnis wird wie in PHP nicht ausgewertet.
+// sendCustomEmail() aus mail.ts; das Ergebnis wird wie in PHP nicht ausgewertet. Fest eingebunden: fehlt das Modul,
+// meldet das schon die Typprüfung, statt dass die Begrüßungs-Mail still ausbleibt.
 type SendMail = (to: unknown, template: string, vars: Record<string, unknown>) => Promise<boolean>;
-let mailer: SendMail | null | undefined;
+let mailer: SendMail | null = sendCustomEmail;
 
 // Für Tests: eigene Versandfunktion (null = nichts senden, undefined = wieder mail.ts verwenden)
 export function setAuthMailerForTests(fn: SendMail | null | undefined): void {
-  mailer = fn;
+  mailer = fn === undefined ? sendCustomEmail : fn;
 }
 
 async function sendMail(to: string, template: string, vars: Record<string, unknown>): Promise<void> {
-  if (mailer === undefined) {
-    // Über eine Variable, damit die Typprüfung nicht schon jetzt nach mail.ts sucht
-    const spec = '../mail.js';
-    try {
-      const mod = (await import(spec)) as { sendCustomEmail?: SendMail };
-      mailer = typeof mod.sendCustomEmail === 'function' ? mod.sendCustomEmail : null;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw err;
-      mailer = null;
-    }
-  }
   if (mailer) await mailer(to, template, vars);
 }

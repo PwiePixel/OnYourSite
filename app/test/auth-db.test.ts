@@ -26,6 +26,8 @@ before(async () => {
     await admin.query(`CREATE TABLE \`${DB}\`.\`${t}\` LIKE \`${SOURCE}\`.\`${t}\``);
     await admin.query(`INSERT INTO \`${DB}\`.\`${t}\` SELECT * FROM \`${SOURCE}\`.\`${t}\``);
   }
+  // Zähler der Begrenzungen aus früheren Läufen (z. B. 50 Registrierungen je Stunde) dürfen hier nichts sperren
+  await admin.query(`DELETE FROM \`${DB}\`.rate_limits`);
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
 });
