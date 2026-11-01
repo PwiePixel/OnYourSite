@@ -41,6 +41,8 @@ export class Ctx {
   session: Session | null = null;
   // Zwischenspeicher für diese Anfrage (z. B. der angemeldete Nutzer)
   readonly locals: Record<string, unknown> = {};
+  // Von web/static.ts wie von Apache ausgeliefert: dann gelten die PHP-Regeln für Header nicht
+  apacheStatic = false;
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];
@@ -87,7 +89,14 @@ export class Ctx {
 
   headersOut(): Array<[string, string]> {
     const out = [...this.resHeaders];
-    if (!out.some(([n]) => n.toLowerCase() === 'content-type')) out.push(['Content-Type', 'text/html; charset=UTF-8']);
+    const i = out.findIndex(([n]) => n.toLowerCase() === 'content-type');
+    if (i === -1) {
+      out.push(['Content-Type', 'text/html; charset=UTF-8']);
+    } else if (!this.apacheStatic) {
+      // PHP (SAPI, default_charset): text/… ohne "charset=" bekommt ";charset=UTF-8" – ohne Leerzeichen, Groß-/Kleinschreibung zählt
+      const v = out[i][1];
+      if (v.startsWith('text/') && !v.includes('charset=')) out[i] = [out[i][0], v + ';charset=UTF-8'];
+    }
     return out;
   }
 
