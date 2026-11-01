@@ -151,6 +151,8 @@ if [ "$MODE" = service ]; then
   chmod -R u=rwX,go=rX "$APP_DIR"
   info "Installed in $APP_DIR"
 else
+  # docker-compose.yml liest die Einstellungen aus .env – die Datei muss es schon geben (leer, bis sie unten entsteht)
+  if [ ! -f "$ENV_FILE" ]; then (umask 077 && : > "$ENV_FILE"); fi
   "${COMPOSE[@]}" build --pull
 fi
 
@@ -160,8 +162,8 @@ bot_tool() {
     DISCORD_TOKEN=$TOKEN "$NODE" "$APP_DIR/index.js" "$@" </dev/null
   else
     DISCORD_TOKEN=$TOKEN "${COMPOSE[@]}" run --rm --no-deps -T -e DISCORD_TOKEN -e DISCORD_API_BASE -e TEAM_ROLE_ID \
-      -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e SUPPORT_CATEGORY_ID \
-      bot node index.js "$@" </dev/null
+      -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e TAG_ACCEPTED_ID \
+      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID bot node index.js "$@" </dev/null
   fi
 }
 
@@ -173,11 +175,11 @@ current() {
   if [ -f "$ENV_FILE" ]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; fi
 }
 
-# ask KEY "Frage" Art [Vorgabe] – Art: id (Discord-ID), token, secret, url
+# ask KEY "Frage" Art [Vorgabe] [neu] – Art: id (Discord-ID), token, secret, url; „neu“: der bisherige Wert gilt nicht
 ask() {
-  local key=$1 label=$2 kind=$3 def=${4:-} cur value hint
+  local key=$1 label=$2 kind=$3 def=${4:-} fresh=${5:-} cur value hint
   cur=$(current "$key")
-  [ -n "$cur" ] && def=$cur
+  if [ -n "$cur" ] && [ -z "$fresh" ]; then def=$cur; fi
   while true; do
     if [ "$kind" = token ] || [ "$kind" = secret ]; then
       hint=""; [ -n "$def" ] && hint=" (Enter = keep the current one)"
@@ -210,14 +212,19 @@ else
   info "their IDs. The Client Secret isn’t needed."
   echo
   errf=$(mktemp)
-  # 1. Token – Discord muss es annehmen
+  # 1. Token – Discord muss es annehmen. Lehnt Discord es ab (401), wird ein neues abgefragt; jeder andere Fehler
+  #    (Discord nicht erreichbar …) bricht ab. Die Einstellungsdatei des laufenden Bots bleibt dabei unangetastet.
+  fresh=""
   while true; do
-    ask DISCORD_TOKEN "Bot token" token
+    ask DISCORD_TOKEN "Bot token" token "" "$fresh"
     TOKEN=$VAL_DISCORD_TOKEN
     if app=$(bot_tool --discord-app 2>"$errf"); then break; fi
+    if ! grep -q 'HTTP 401' "$errf"; then
+      fail "Checking the token with Discord didn’t work: $(tr '\n' ' ' < "$errf") – nothing was changed, try again later."
+    fi
     info "  Discord doesn’t accept this token: $(tr '\n' ' ' < "$errf")"
     info "  Copy it again (Bot → Reset Token) and paste it."
-    sed -i '/^DISCORD_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
+    fresh=1
   done
   app_id=$(sed -n 's/^APP_ID=//p' <<< "$app")
   invite=$(sed -n 's/^INVITE=//p' <<< "$app")
@@ -263,9 +270,10 @@ else
   info "Setting up the Discord server …"
   setup=$(TEAM_ROLE_ID=$(current TEAM_ROLE_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
     RULES_CHANNEL_ID=$(current RULES_CHANNEL_ID) SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) \
-    SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
+    SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) TAG_ACCEPTED_ID=$(current TAG_ACCEPTED_ID) \
+    TAG_DECLINED_ID=$(current TAG_DECLINED_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
     bot_tool --discord-setup "$guild_id" 2>"$errf") \
-    || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – is the bot invited with the link above?"
+    || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – if the bot is missing permissions, open this link, choose the server and authorize again: $invite"
   rm -f "$errf"
   while IFS='=' read -r key value; do
     case $key in
@@ -413,4 +421,4 @@ else
   info "Change settings: ${SUDO_HINT}bash install.sh"
   info "After an update: git pull && ${SUDO_HINT}bash install.sh --update"
 fi
-info "In Discord, run /support-panel in your support channel and /bot-status to see the connection."
+info "The bot posts the support panel in your support channel by itself. In Discord, /bot-status shows the connection."
