@@ -73,7 +73,9 @@ function oys_og_serve(PDO $pdo, int $id, string $hash): void
     }
     header('Content-Type: image/png');
     header('Content-Length: ' . strlen($png));
-    header('Cache-Control: public, max-age=31536000, immutable');
+    // Browser: ein Jahr (die Adresse ändert sich mit dem Inhalt). Zwischenspeicher wie Cloudflare: eine Stunde –
+    // ist die Seite gelöscht oder das Bild entfernt, verschwindet die Karte dort bald
+    header('Cache-Control: public, max-age=31536000, s-maxage=3600, immutable');
     echo $png;
     exit;
 }

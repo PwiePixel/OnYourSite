@@ -355,10 +355,16 @@ function oys_rate_hit(PDO $pdo, string $key, int $windowSeconds): void
 }
 
 // Kurzlebige Kennung des Absenders für Rate-Limits: nicht umkehrbar, wechselt täglich –
-// die IP-Adresse selbst wird nie gespeichert.
+// die IP-Adresse selbst wird nie gespeichert. IPv6 zählt je /64: so viele Adressen hat schon ein einzelner
+// Anschluss oder Server, sonst könnte einer die Limits mit jeder Anfrage einer neuen Adresse umgehen.
 function oys_client_key(): string
 {
-    return substr(oys_hmac('client|' . gmdate('Y-m-d') . '|' . ($_SERVER['REMOTE_ADDR'] ?? '')), 0, 16);
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    $bin = @inet_pton($ip);
+    if ($bin !== false && strlen($bin) === 16 && strncmp($bin, str_repeat("\0", 10) . "\xff\xff", 12) !== 0) {
+        $ip = bin2hex(substr($bin, 0, 8)) . '/64';
+    }
+    return substr(oys_hmac('client|' . gmdate('Y-m-d') . '|' . $ip), 0, 16);
 }
 
 // Fehlversuche zählen, damit niemand Passwörter durchprobieren kann – je Absender und insgesamt.

@@ -244,6 +244,8 @@ function oys_code_serve(PDO $pdo, array $site, string $path): void
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Access-Control-Allow-Origin: *');
+    // Für jede Antwort, auch Hinweise wie „Page not found“ – sonst hielte Cloudflare sie ein paar Minuten fest
+    header('Cache-Control: no-cache, no-transform');
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     // Code-Seiten sind reine Dateien: nur ansehen (auch keine POST-Anfragen wie die der Mail-Autokonfiguration)
     if ($method !== 'GET' && $method !== 'HEAD') {

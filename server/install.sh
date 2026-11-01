@@ -830,8 +830,9 @@ cf() {
 cf_fail() {
   local e again="${SUDO_HINT}bash $CODE/server/install.sh"
   e=$(cf_err)
-  # --tunnel geht erst nach der ersten fertigen Einrichtung – beim ersten Mal den Installer einfach neu starten
-  if [ -n "$OLD_DOMAIN" ]; then again="$again --tunnel"; fi
+  # --tunnel geht erst nach der ersten fertigen Einrichtung und nimmt die Domain aus server.conf – beim ersten Mal
+  # oder nach einem Domainwechsel den Installer einfach neu starten
+  if [ -n "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" = "$DOMAIN" ]; then again="$again --tunnel"; fi
   if grep -qiE 'authenticat|permission|unauthori|forbidden|\(10000\)|\(9109\)' <<< "$e"; then
     rm -f "$CF_ENV"
     fail "$1: $e. The token is missing a permission (Account · Cloudflare Tunnel · Edit, Zone · DNS · Edit, Zone · Zone · Read) – create a new one and run: $again"
@@ -996,10 +997,14 @@ tunnel_probe() {
   local name code="" i tmp hdr file ok=0 direct=0
   file="static/oys-check-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n').txt"
   name="check-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n').$DOMAIN"
-  od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$CODE/$file"
-  chmod 644 "$CODE/$file"
+  # Reste abgebrochener Läufe weg; die neue Prüfdatei verschwindet auch bei Strg+C oder einer getrennten Verbindung
+  rm -f "$CODE"/static/oys-check-*.txt
   tmp=$(mktemp)
   hdr=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f ${CF_ERRFILE:+'$CF_ERRFILE'} '$tmp' '$hdr' '$CODE/$file'" EXIT
+  od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$CODE/$file"
+  chmod 644 "$CODE/$file"
   info "Checking from outside (https://$name) …"
   for i in $(seq 1 12); do
     code=$(curl -s --max-time 15 -D "$hdr" -o "$tmp" -w '%{http_code}' "https://$name/$file" 2>/dev/null || true)
@@ -1014,6 +1019,12 @@ tunnel_probe() {
     sleep 5
   done
   rm -f "$tmp" "$hdr" "$CODE/$file"
+  if [ -n "$CF_ERRFILE" ]; then
+    # shellcheck disable=SC2064
+    trap "rm -f '$CF_ERRFILE'" EXIT
+  else
+    trap - EXIT
+  fi
   if [ "$ok" = 1 ]; then
     info "Visitors reach this server through Cloudflare and the tunnel – on $DOMAIN and every subdomain."
   elif [ "$direct" = 1 ]; then
@@ -1306,7 +1317,9 @@ step_tunnel() {
     fi
   done
   info "$DOMAIN, www.$DOMAIN and every subdomain now come through the tunnel – no web ports have to be open."
-  tunnel_probe
+  # Von außen geprüft wird erst, wenn die Firewall die Web-Ports geschlossen hat: dann kann nur noch der Tunnel antworten,
+  # nicht mehr ein alter Weg von Cloudflare direkt zu diesem Server
+  PROBE_TUNNEL=1
 }
 
 # ---------------------------------------------------------------
@@ -1762,6 +1775,13 @@ DB_IMPORTED=0
 BACKUP_DAYS=$(conf_get BACKUP_DAYS)
 BACKUP_DAYS=${BACKUP_DAYS:-14}
 IMPORT="" IMP_CONFIG="" IMP_SMTP="" IMP_DUMP="" IMP_UPLOADS=""
+PROBE_TUNNEL=""
+
+# Alles außer der Einrichtung nur aus dem eingerichteten Code-Ordner – sonst landen Pfade eines anderen Ordners
+# (z. B. eines zweiten git clone) in server.conf und in den Timern
+if [ "$MODE" != install ] && [ -n "$(conf_get CODE)" ] && [ "$(conf_get CODE)" != "$CODE" ]; then
+  fail "Run this from the installed code folder: ${SUDO_HINT}bash $(conf_get CODE)/server/install.sh ${ARGS[*]}"
+fi
 
 case $MODE in
   install)
@@ -1773,6 +1793,7 @@ case $MODE in
     step_tunnel
     step_https
     step_services
+    if [ "$PROBE_TUNNEL" = 1 ]; then tunnel_probe; fi
     save_conf
     step_admin
     step_bot
@@ -1834,6 +1855,7 @@ case $MODE in
     step_tunnel force
     bold "7/9  Protection"
     step_protect
+    if [ "$PROBE_TUNNEL" = 1 ]; then tunnel_probe; fi
     save_conf
     bold "Checking the website"
     check_site
