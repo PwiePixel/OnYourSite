@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # OnYourSite auf einem eigenen Server (ohne Plesk) – richtet alles auf einem frischen Ubuntu- oder Debian-Server ein.
 #
-#   sudo bash install.sh                   Einrichten: holt sich alles selbst – Pakete, den Code von GitHub (auch als
-#                                          einzelne Datei, z. B. nach /root kopiert), Datenbank, Zertifikat, Firewall.
+#   curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash
+#                                          Einrichten mit einem Befehl: holt sich alles selbst – Pakete, den Code von
+#                                          GitHub, Datenbank, Zertifikat, Firewall. Geht auch als Datei: sudo bash install.sh
 #                                          Erneut aufgerufen: Einstellungen ändern (Enter behält die Werte).
+#                                          --branch NAME holt einen anderen Branch (z. B. zum Testen vor dem Merge).
 #   sudo bash server/install.sh --update   Neue Version holen (git pull) und neu laden – Daten und Einstellungen bleiben
 #   sudo bash server/install.sh --https    Nur das Zertifikat einrichten (nach „Later“ oder bei einem neuen DNS-Anbieter)
 #
@@ -11,6 +13,10 @@
 # Subdomains (über die DNS-API des Domain-Anbieters), Wochenbericht, nächtliche Sicherung und Zertifikats-Erneuerung als
 # systemd-Timer, Firewall, fail2ban und weitere Absicherung, das erste Admin-Konto – und auf Wunsch der Umzug der Daten
 # vom alten Server. Anleitung: server/README.md
+
+# Alles steht in einem Block: bash liest so das ganze Skript, bevor es startet. Das braucht „curl … | sudo bash“
+# (danach kommen die Antworten von der Tastatur), und ein git pull ändert so nichts am laufenden Skript.
+{
 set -euo pipefail
 umask 022
 
@@ -1054,21 +1060,33 @@ get_code() {
 }
 
 # ---------------------------------------------------------------
-if [ "$(id -u)" -ne 0 ]; then
+ARGS=("$@")
+if [ ! -f "${BASH_SOURCE[0]:-}" ]; then
+  # Per Pipe gestartet (curl … | sudo bash): die Antworten kommen von der Tastatur, den Code holt get_code
+  [ "$(id -u)" -eq 0 ] || fail "Please start it with sudo: curl -fsSL https://raw.githubusercontent.com/$REPO/main/server/install.sh | sudo bash"
+  if (: < /dev/tty) 2>/dev/null; then exec < /dev/tty; fi
+  CODE=""
+elif [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || fail "Please run this as root."
   exec sudo bash "$0" "$@"
 fi
 
 MODE=install
-case "${1:-}" in
-  "") ;;
-  --update) MODE=update ;;
-  --https) MODE=https ;;
-  *) fail "Unknown option: $1 (use --update, --https or nothing)" ;;
-esac
+while [ $# -gt 0 ]; do
+  case $1 in
+    --update) MODE=update ;;
+    --https) MODE=https ;;
+    --branch)
+      [[ ${2:-} =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || fail "--branch needs the name of a branch."
+      BRANCH=$2
+      shift ;;
+    *) fail "Unknown option: $1 (use --update, --https, --branch NAME or nothing)" ;;
+  esac
+  shift
+done
 if [ ! -f "$CODE/index.php" ] || [ ! -f "$CODE/lib/bootstrap.php" ]; then
-  [ "$MODE" = install ] || fail "Run this inside the code folder: sudo bash $TARGET/server/install.sh $1"
-  get_code "$@"
+  [ "$MODE" = install ] || fail "Run this inside the code folder: sudo bash $TARGET/server/install.sh ${ARGS[*]}"
+  get_code "${ARGS[@]}"
 fi
 
 SSH_KEYONLY=$(conf_get SSH_KEYONLY)
@@ -1078,7 +1096,7 @@ IMPORT="" IMP_CONFIG="" IMP_SMTP="" IMP_DUMP="" IMP_UPLOADS=""
 
 case $MODE in
   install)
-    check_location "$@"
+    check_location "${ARGS[@]}"
     step_packages
     step_settings
     step_database
@@ -1121,3 +1139,5 @@ case $MODE in
     write_timers
     ;;
 esac
+exit 0
+}

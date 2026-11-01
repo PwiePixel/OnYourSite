@@ -1,8 +1,12 @@
 # Your own server (without Plesk)
 
-One file sets up everything OnYourSite needs on a fresh Linux server – it fetches what it needs by itself:
+One command sets up everything OnYourSite needs on a fresh Linux server – it fetches what it needs by itself:
 
-- **the code** from GitHub (for the private repository it shows a read-only deploy key to add once)
+```bash
+curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash
+```
+
+- **the code** from GitHub
 - **Apache with PHP-FPM** (the same `.htaccess` as on Plesk) and **MariaDB** – the database, its own database user, a random password, `config.php` with new keys and the upload folder are created automatically
 - **HTTPS for the domain and every subdomain** (`*.on-your.site` – also the ones added later) with a free Let’s Encrypt certificate that **renews itself**; if a renewal ever fails, all admins get an email two weeks before it runs out
 - **protection**: a firewall (only SSH, HTTP and HTTPS), fail2ban against password guessing on SSH, automatic security updates, a database that only answers the server itself, PHP that can’t start other programs, hardened network settings – and, if you like, SSH logins only with a key
@@ -45,15 +49,15 @@ scp config.php smtp.json DATABASE-DUMP.zip onyoursite-uploads-DATE.zip root@NEW-
 
 ### 3. Run the installer
 
-On GitHub, open `server/install.sh` and download it (*Download raw file*). Copy it to the new server and start it:
+Log in to the new server (`ssh root@NEW-SERVER`) and start the installer with one command:
 
 ```bash
-scp install.sh root@NEW-SERVER:
-ssh root@NEW-SERVER
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash
 ```
 
-The installer installs git and – because the repository is private – shows a **deploy key**: add it on GitHub under *Settings → Deploy keys → Add deploy key* (leave *Allow write access* off) and press Enter. It then gets the code into `/var/www/onyoursite` and goes on by itself. It asks for:
+(As root, `sudo` can be left out. Rather keep the file? `curl -fsSLo install.sh https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh && sudo bash install.sh` does the same.)
+
+The installer installs git, gets the code into `/var/www/onyoursite` and goes on by itself. It asks for:
 
 1. the **domain** (Enter = `on-your.site`),
 2. the **folder with the files from the old server** (found automatically in `/root/import`),
@@ -66,7 +70,7 @@ Everything else happens by itself. Running it again is safe – Enter keeps ever
 
 From the import it takes the database (a dump from Plesk, phpMyAdmin or mysqldump: `.sql`, `.sql.gz` or `.zip`), the uploads, the mail settings and everything from `config.php` except the database access – above all `aes_key`: without it, encrypted data (Discord IDs, messages, booking requests, tickets) can’t be read. The database gets its own user with a new password, and on the first request the website brings the tables up to date by itself.
 
-> Already have the code on the server (e.g. `git clone` into `/var/www/onyoursite`)? Then start `bash /var/www/onyoursite/server/install.sh` – it’s the same installer.
+> Already have the code on the server (e.g. `git clone` into `/var/www/onyoursite`)? Then start `sudo bash /var/www/onyoursite/server/install.sh` – it’s the same installer. To try a branch before it’s merged: `… | sudo bash -s -- --branch NAME`. If the repository is ever private, the installer shows a read-only deploy key to add once on GitHub.
 
 ### 4. Test before switching
 
@@ -140,7 +144,7 @@ sudo rsync -a --delete /var/backups/onyoursite/2026-11-01/uploads/ /var/lib/onyo
 
 | | |
 |---|---|
-| Code (git checkout) | `/var/www/onyoursite` – updates come with `--update` (read-only deploy key in `/root/.ssh/onyoursite_deploy`) |
+| Code (git checkout) | `/var/www/onyoursite` – updates come with `--update` (git pull) |
 | `config.php` | `/var/www/onyoursite/config.php` |
 | Uploads | `/var/lib/onyoursite/uploads` (outside the code, so updates never touch them) |
 | Server settings | `/etc/onyoursite/server.conf` |

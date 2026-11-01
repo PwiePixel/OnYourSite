@@ -31,7 +31,7 @@ Everything you already had stays: the built-in booking calendar (`/kalender`), f
 
 ## Your own server (without Plesk)
 
-One file sets up a fresh Ubuntu or Debian server with everything OnYourSite needs – it fetches it all by itself: the code from GitHub, Apache with PHP-FPM (the same `.htaccess`), MariaDB with its own database, user and password, `config.php`, a Let’s Encrypt certificate for the domain and every subdomain that renews itself, a firewall, fail2ban and automatic security updates, the weekly report, a nightly backup, your admin account and – if you like – the Discord bot. It also moves your data from the old server: database, uploads, `config.php` (with the key for encrypted data) and the mail settings. Updates later: `sudo bash server/install.sh --update`. Step by step: [server/README.md](server/README.md).
+One command – `curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash` – sets up a fresh Ubuntu or Debian server with everything OnYourSite needs. It fetches it all by itself: the code from GitHub, Apache with PHP-FPM (the same `.htaccess`), MariaDB with its own database, user and password, `config.php`, a Let’s Encrypt certificate for the domain and every subdomain that renews itself, a firewall, fail2ban and automatic security updates, the weekly report, a nightly backup, your admin account and – if you like – the Discord bot. It also moves your data from the old server: database, uploads, `config.php` (with the key for encrypted data) and the mail settings. Updates later: `sudo bash server/install.sh --update`. Step by step: [server/README.md](server/README.md).
 
 ## Updating an existing installation (Plesk)
 

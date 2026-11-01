@@ -44,9 +44,8 @@ Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The end
 **Anywhere else** – e.g. a small extra server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened:
 
 ```bash
-# 1. Get the code onto the server – clone the repository (private: use a deploy key, see server/README.md)
-#    or upload just the folder discord-bot/ via SFTP
-git clone git@github.com:PwiePixel/OnYourSite.git
+# 1. Get the code onto the server – clone the repository or upload just the folder discord-bot/ via SFTP
+git clone https://github.com/PwiePixel/OnYourSite.git
 cd OnYourSite/discord-bot
 
 # 2. Run the installer
