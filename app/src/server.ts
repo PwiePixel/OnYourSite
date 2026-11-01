@@ -100,7 +100,7 @@ export async function buildServer() {
 async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
   const type = contentType.split(';')[0].trim().toLowerCase();
   if (type === 'application/x-www-form-urlencoded') {
-    ctx.post = parseStr(body.toString('utf8'));
+    ctx.post = parseStr(body.toString('utf8'), true);
     return;
   }
   if (type !== 'multipart/form-data') return;
