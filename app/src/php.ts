@@ -56,6 +56,7 @@ export function intval(v: unknown): number {
   const m = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/.exec(s);
   if (!m) return 0;
   const n = Number(m[0]);
+  // "1e400" ist für PHP unendlich – (int) macht daraus 0; sonst Grenzen wie 64 Bit
   if (!Number.isFinite(n)) return 0;
   return Math.max(-(2 ** 63), Math.min(2 ** 63, Math.trunc(n)));
 }
