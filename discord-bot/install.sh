@@ -61,7 +61,7 @@ done
 if [ -z "$MODE" ]; then
   if [ -f "$UNIT" ]; then
     MODE=service
-  elif [ -f "$SRC/.env" ] && [ -f "$SRC/docker-compose.yml" ]; then
+  elif [ -s "$SRC/.env" ] && [ -f "$SRC/docker-compose.yml" ]; then
     MODE=docker
   elif [ "$UPDATE" = 1 ]; then
     fail "The bot isn’t installed yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
@@ -201,7 +201,8 @@ ask() {
 }
 
 if [ "$UPDATE" = 1 ]; then
-  [ -f "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
+  # Leer = nur der Platzhalter eines abgebrochenen Docker-Laufs, keine Einstellungen
+  [ -s "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   info "Keeping the settings in $ENV_FILE"
 else
   info "From the Discord Developer Portal (discord.com/developers/applications) you only need two things:"

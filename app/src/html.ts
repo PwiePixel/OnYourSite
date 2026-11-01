@@ -1,0 +1,86 @@
+// HTML sicher zusammensetzen: html`…${wert}…` maskiert jeden eingesetzten Wert wie e() in PHP
+// (htmlspecialchars mit ENT_QUOTES). Fertiges HTML (andere Vorlagen, raw()) wird unverändert eingesetzt.
+import { phpStr } from './php.js';
+
+export class SafeHtml {
+  constructor(public readonly value: string) {}
+  toString(): string {
+    return this.value;
+  }
+}
+
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+
+// e(): wie htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') – bereits fertiges HTML (SafeHtml)
+// wird wie ein Text behandelt und also auch maskiert, genau wie e() in PHP
+export function e(value: unknown): string {
+  const s = value instanceof SafeHtml ? value.value : phpStr(value);
+  return s.replace(/[&<>"']/g, (c) => ESC[c]);
+}
+
+export function raw(value: string): SafeHtml {
+  return new SafeHtml(value);
+}
+
+type Part = SafeHtml | string | number | boolean | null | undefined | Part[];
+
+function render(part: Part): string {
+  if (part === null || part === undefined || part === false) return '';
+  if (part instanceof SafeHtml) return part.value;
+  if (Array.isArray(part)) return part.map(render).join('');
+  return e(part);
+}
+
+export function html(strings: TemplateStringsArray, ...values: Part[]): SafeHtml {
+  let out = strings[0];
+  for (let i = 0; i < values.length; i++) out += render(values[i]) + strings[i + 1];
+  return new SafeHtml(out);
+}
+
+// Liste von Teilen ohne Trenner (z. B. aus .map())
+export function join(parts: Part[], separator = ''): SafeHtml {
+  return new SafeHtml(parts.map(render).join(separator));
+}
+
+// htmlspecialchars($v, ENT_XML1 | ENT_QUOTES): für XML (Atom-Feed) – ' wird zu &apos;
+export function xmlEscape(value: unknown): string {
+  return phpStr(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c] as string);
+}
+
+// json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+export function jsonUnescaped(value: unknown): string {
+  return phpJson(value, { unescapedSlashes: true, unescapedUnicode: true });
+}
+
+// json_encode() mit den PHP-Optionen: ohne JSON_UNESCAPED_SLASHES wird / zu \/, ohne JSON_UNESCAPED_UNICODE
+// werden alle Zeichen über 0x7F zu \uXXXX; JSON_HEX_TAG/AMP/APOS/QUOT für Daten in HTML
+export interface JsonFlags {
+  unescapedSlashes?: boolean;
+  unescapedUnicode?: boolean;
+  hexTag?: boolean;
+  hexAmp?: boolean;
+  hexApos?: boolean;
+  hexQuot?: boolean;
+  // JSON_PRETTY_PRINT: vier Leerzeichen, ": " – wie PHP
+  prettyPrint?: boolean;
+}
+
+export function phpJson(value: unknown, flags: JsonFlags = {}): string {
+  let s = JSON.stringify(value, (_k, v) => (v === undefined ? null : v), flags.prettyPrint ? 4 : undefined);
+  if (s === undefined) s = 'null';
+  if (!flags.unescapedSlashes) s = s.replace(/\//g, '\\/');
+  if (!flags.unescapedUnicode) {
+    // Alles über ASCII als \uXXXX (Ersatzpaare einzeln, klein geschrieben); DEL (0x7F) bleibt wie in PHP
+    s = s.replace(/[\u0080-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  } else {
+    // PHP maskiert U+2028/U+2029 auch mit JSON_UNESCAPED_UNICODE (außer mit JSON_UNESCAPED_LINE_TERMINATORS)
+    s = s.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  }
+  if (flags.hexTag) s = s.replace(/</g, '\\u003C').replace(/>/g, '\\u003E');
+  if (flags.hexAmp) s = s.replace(/&/g, '\\u0026');
+  if (flags.hexApos) s = s.replace(/'/g, '\\u0027');
+  // Nur maskierte Anführungszeichen (\") ersetzen – ein \\ am Ende eines Textes gehört nicht dazu
+  if (flags.hexQuot) s = s.replace(/\\(.)/g, (m, c: string) => (c === '"' ? '\\u0022' : m));
+  // PHP schreibt Steuerzeichen wie JSON.stringify (\n, \t, \u0000 …) – nur \u007f wird oben behandelt
+  return s;
+}

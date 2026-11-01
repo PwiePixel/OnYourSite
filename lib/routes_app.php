@@ -116,8 +116,9 @@ if ($path === '/register') {
             oys_flash('error', 'Your password must be at least 8 characters long.');
         } elseif ($problem = oys_slug_problem($pdo, $slug)) {
             oys_flash('error', $problem);
-        } elseif (!oys_rate_limit($pdo, 'register:' . oys_client_key(), 5, 3600)) {
-            // Massen-Anmeldungen bremsen (jedes Konto bekommt Speicherplatz)
+        } elseif (!oys_rate_limit($pdo, 'register:' . oys_client_key(), 5, 3600) || !oys_rate_limit($pdo, 'register', 50, 3600)) {
+            // Massen-Anmeldungen bremsen (jedes Konto bekommt Speicherplatz und eine Begrüßungs-Mail) – je Absender
+            // und insgesamt, falls jemand viele Adressen hat
             oys_flash('error', 'A lot of accounts were just created from here. Please try again later.');
         } else {
             $check = $pdo->prepare('SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1');

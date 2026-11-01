@@ -18,3 +18,8 @@
 Thumbs.db
 .idea/
 .vscode/
+
+# Node-Version der Seite: Pakete, Build, Einstellungen
+/app/node_modules/
+/app/dist/
+/config.json

@@ -88,23 +88,41 @@ async function setupGuild(rest, guildId, current) {
   // Kanal finden (gespeicherte ID, sonst gleicher Name und Typ) oder anlegen. Einem vorhandenen Kanal gibt der Bot
   // seine eigenen Rechte dazu – z. B. einer schon vorhandenen Kategorie „Tickets“, die alle anderen nicht sehen.
   async function ensure(storedId, spec, label) {
+    const kind = spec.type === ChannelType.GuildCategory ? '' : '#';
+    // Gleich benannte Kanäle: zuerst einer, in dem der Bot schon eigene Rechte hat
+    const named = channels.filter((c) => c.type === spec.type && (c.name || '').toLowerCase() === spec.name.toLowerCase());
     let ch = channels.find((c) => c.id === storedId && c.type === spec.type)
-      || channels.find((c) => c.type === spec.type && (c.name || '').toLowerCase() === spec.name.toLowerCase());
+      || named.find((c) => (c.permission_overwrites || []).some((o) => o.id === me.id)) || named[0];
     if (ch) {
-      done.push(`${label} ${spec.type === ChannelType.GuildCategory ? '' : '#'}${ch.name} is already there`);
       const want = (spec.permission_overwrites || []).find((o) => o.id === me.id);
       const has = (ch.permission_overwrites || []).find((o) => o.id === me.id);
       if (want && !(has && (BigInt(has.allow || '0') & BigInt(want.allow)) === BigInt(want.allow))) {
-        await rest.put(Routes.channelPermission(ch.id, me.id), {
-          body: { type: 1, allow: want.allow, deny: '0' }, reason: REASON,
-        });
-        done.push(`Gave the bot access to ${spec.type === ChannelType.GuildCategory ? '' : '#'}${ch.name}`);
+        // Nur ergänzen: was der Bot dort schon darf, bleibt; nur ein Verbot der gewünschten Rechte fällt weg
+        const allow = String(BigInt((has && has.allow) || '0') | BigInt(want.allow));
+        const deny = String(BigInt((has && has.deny) || '0') & ~BigInt(want.allow));
+        try {
+          await rest.put(Routes.channelPermission(ch.id, me.id), { body: { type: 1, allow, deny }, reason: REASON });
+          done.push(`${label} ${kind}${ch.name} is already there`);
+          done.push(`Gave the bot access to ${kind}${ch.name}`);
+          return ch;
+        } catch (err) {
+          if (ch.id === storedId) {
+            done.push(`${label} ${kind}${ch.name} is already there`);
+            warnings.push(`The bot couldn’t give itself access to ${kind}${ch.name} (${err.message}). In Discord, give the bot `
+              + 'View Channel, Send Messages and Manage Channels there, then run the installer again.');
+            return ch;
+          }
+          // Nur über den Namen gefunden und für den Bot nicht nutzbar (z. B. die Kategorie eines anderen Bots): neu anlegen
+          ch = null;
+        }
+      } else {
+        done.push(`${label} ${kind}${ch.name} is already there`);
+        return ch;
       }
-      return ch;
     }
     ch = await rest.post(Routes.guildChannels(guildId), { body: spec, reason: REASON });
     channels.push(ch);
-    done.push(`Created ${label.toLowerCase()} ${spec.type === ChannelType.GuildCategory ? '' : '#'}${ch.name}`);
+    done.push(`Created ${label.toLowerCase()} ${kind}${ch.name}`);
     return ch;
   }
 
