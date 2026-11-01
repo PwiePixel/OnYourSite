@@ -5,13 +5,15 @@ import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { crc32, deflateSync } from 'node:zlib';
 import http from 'node:http';
 import net from 'node:net';
 import sharp from 'sharp';
 import { ROOT_DIR } from '../src/config.js';
 import { closePool, one } from '../src/db.js';
 import { makeTestCtx, isHalt } from '../src/web/ctx.js';
-import { ogClean, ogContrast, ogFit, ogFont, ogHash, ogMix, ogRender, ogRgb, ogServe, ogWidth, ogWrap } from '../src/content/share.js';
+import { ogClean, ogContrast, ogFit, ogFont, ogHash, ogLoadImage, ogMix, ogRender, ogRgb, ogServe, ogWidth, ogWrap } from '../src/content/share.js';
 import { themes } from '../src/content/themes.js';
 import { uploadsDir } from '../src/content/storage.js';
 import { jsonDecode } from '../src/content/util.js';
@@ -201,6 +203,272 @@ test('OG cards have the same size, format and picture as the GD version', async 
   assert.deepEqual(problems, []);
 });
 
+// ---------------------------------------------------------------- GIF-Profilbilder wie imagecreatefromgif()
+
+// GIFs werden beim Hochladen nicht umgewandelt (Animation bleibt) – GD liest davon nur das erste Einzelbild, in
+// dessen eigener Größe. Varianten aus einem GD-GIF: Versatz und größere Fläche, Einzelbild außerhalb, andere Version,
+// fremde Bytes und Erweiterungen vor dem Bild, eigene/fehlende Farbtabellen, durchsichtige Farbe, abgeschnittene Köpfe
+const PHP_GIFS = `
+  function gif_gd(int $w, int $h, bool $interlace): string {
+    $im = imagecreate($w, $h);
+    $bg = imagecolorallocate($im, 10, 200, 30);
+    for ($i = 0; $i < 60; $i++) { $c = imagecolorallocate($im, ($i * 6) % 256, 255 - ($i * 4) % 256, ($i * 37) % 256); imagefilledrectangle($im, $i, ($i * 7) % $h, $i + 20, ($i * 7) % $h + 5, $c); }
+    if ($interlace) { imagecolortransparent($im, $bg); imageinterlace($im, true); }
+    ob_start(); imagegif($im); return ob_get_clean();
+  }
+  function gif_read(string $name): ?array {
+    $img = oys_og_load_image($name);
+    if (!$img) return null;
+    $t = imagecolortransparent($img);
+    $s = '';
+    for ($y = 0; $y < imagesy($img); $y++) for ($x = 0; $x < imagesx($img); $x++) {
+      $c = imagecolorat($img, $x, $y);
+      if ($c === $t) { $s .= 'T,'; continue; }
+      $k = imagecolorsforindex($img, $c);
+      $s .= $k['red'] . ' ' . $k['green'] . ' ' . $k['blue'] . ',';
+    }
+    return [imagesx($img), imagesy($img), sha1($s)];
+  }`;
+
+function gifPixels(img: { width: number; height: number; px: Int32Array } | null): unknown {
+  if (!img) return null;
+  let s = '';
+  for (const c of img.px) s += ((c >> 24) & 0x7f) === 127 ? 'T,' : `${(c >> 16) & 255} ${(c >> 8) & 255} ${c & 255},`;
+  return [img.width, img.height, createHash('sha1').update(s).digest('hex')];
+}
+
+test('GIF avatars load like imagecreatefromgif: first frame in its own size, same failures and transparency', async () => {
+  const base = (JSON.parse(runPhp(`${PHP_GIFS} echo json_encode([base64_encode(gif_gd(100, 80, false)), base64_encode(gif_gd(64, 48, true))]);`, '[]')) as string[])
+    .map((x) => Buffer.from(x, 'base64'));
+  const files = new Map<string, Buffer>();
+  const at = (b: Buffer): number => 13 + (b[10] & 0x80 ? 3 * (2 << (b[10] & 7)) : 0);
+  for (const [n, g] of base.entries()) {
+    // Ende der globalen Farbtabelle und Beginn der Bildbeschreibung
+    const plainEnd = at(g);
+    const d = g.indexOf(0x2c, plainEnd);
+    const cat = (...parts: Array<Buffer | string | number[]>): Buffer => Buffer.concat(parts.map((x) => (Buffer.isBuffer(x) ? x : typeof x === 'string' ? Buffer.from(x, 'latin1') : Buffer.from(x))));
+    const set16 = (b: Buffer, pos: number, v: number): Buffer => {
+      const c = Buffer.from(b);
+      c.writeUInt16LE(v, pos);
+      return c;
+    };
+    const w = g.readUInt16LE(6);
+    const h = g.readUInt16LE(8);
+    files.set(`${n}plain`, g);
+    files.set(`${n}offset`, set16(set16(set16(set16(g, 6, w + 200), 8, h + 120), d + 1, 50), d + 3, 40));
+    files.set(`${n}wide`, set16(g, 6, w + 200));
+    files.set(`${n}outside`, set16(set16(g, d + 1, 10), d + 3, 10));
+    files.set(`${n}v88a`, cat(g.subarray(0, 3), '88a', g.subarray(6)));
+    files.set(`${n}v89a`, cat(g.subarray(0, 3), '89a', g.subarray(6)));
+    files.set(`${n}junk`, cat(g.subarray(0, d), 'xyz', g.subarray(d)));
+    files.set(`${n}comment`, cat(g.subarray(0, d), [0x21, 0xfe, 3, 0x61, 0x62, 0x63, 0], g.subarray(d)));
+    files.set(`${n}gce`, cat(g.subarray(0, d), [0x21, 0xf9, 4, 1, 0, 0, 5, 0], g.subarray(d)));
+    files.set(`${n}gce2`, cat(g.subarray(0, d), [0x21, 0xf9, 4, 1, 0, 0, 2, 0, 0x21, 0xf9, 4, 0, 0, 0, 7, 0], g.subarray(d)));
+    files.set(`${n}gceshort`, cat(g.subarray(0, d), [0x21, 0xf9, 2, 1, 0, 0], g.subarray(d)));
+    files.set(`${n}gceempty`, cat(g.subarray(0, d), [0x21, 0xf9, 0], g.subarray(d)));
+    files.set(`${n}gcebare`, cat(g.subarray(0, d), [0x21, 0xf9], g.subarray(d)));
+    files.set(`${n}term`, cat(g.subarray(0, d), ';', g.subarray(d)));
+    files.set(`${n}width0`, set16(g, d + 5, 0));
+    files.set(`${n}lzw13`, (() => { const c = Buffer.from(g); c[d + 10] = 13; return c; })());
+    files.set(`${n}noglobal`, cat([...g.subarray(0, 10)], [g[10] & 0x7f], g.subarray(11, 13), g.subarray(plainEnd)));
+    const local = Buffer.from(g);
+    local[d + 9] |= 0x87;
+    files.set(`${n}local`, cat(local.subarray(0, d + 10), Buffer.alloc(768, 0x7b), local.subarray(d + 10)));
+    files.set(`${n}localshort`, cat(local.subarray(0, d + 10), Buffer.alloc(300, 0x7b)));
+    for (const cut of [5, 12, plainEnd - 1, d + 9, d + 10]) files.set(`${n}cut${cut}`, g.subarray(0, cut));
+    // Zufällige Köpfe: Version, Flächen- und Bildgröße, Versatz, Flags, Erweiterungen und fremde Bytes vor dem Bild
+    // (nicht die LZW-Daten – kaputte Bilddaten liest GD auf seine eigene Weise)
+    const r = rng(40 + n);
+    for (let i = 0; i < 80; i++) {
+      let c = Buffer.from(g);
+      const k = r.next(7);
+      if (k === 0) c.write(r.pick(['87a', '89a', '88a', '90a', '89b']), 3, 'latin1');
+      else if (k === 1) c = set16(set16(c, 6, r.pick([0, 1, w - 1, w, w + 1, w + 99, 65535])), 8, r.pick([0, 1, h - 1, h, h + 1, h + 50, 65535]));
+      else if (k === 2) c = set16(set16(set16(set16(c, d + 1, r.pick([0, 1, 2, 30])), d + 3, r.pick([0, 1, 2, 30])), 6, w + r.pick([0, 1, 30, 200])), 8, h + r.pick([0, 1, 30, 100]));
+      else if (k === 3) c = cat(c.subarray(0, d), Array.from({ length: 1 + r.next(5) }, () => r.pick([0x00, 0x01, 0x21, 0x3b, 0x2b, 0xff, 0x2c])), c.subarray(d));
+      else if (k === 4) c = cat(c.subarray(0, d), [0x21, r.pick([0xf9, 0xfe, 0xff, 0x01]), ...r.pick([[4, r.next(2), 0, 0, r.next(256), 0], [0], [1, 1, 0], [3, 1, 2, 3, 0], [2, 1, 9, 0, 0], [0, 4, 1, 0, 0, 3, 0]])], c.subarray(d));
+      else if (k === 5) c[10] = r.next(256);
+      else c[d + 9] = r.pick([0x00, 0x40, 0x80, 0x87, 0xc7, 0x81, 0x20]);
+      files.set(`${n}fuzz${i}`, c);
+    }
+  }
+  // Animiert (sharp): verschiedene Einzelbilder mit durchsichtigen Pixeln
+  const fw = 60;
+  const fh = 40;
+  const frames = Buffer.alloc(fw * fh * 4 * 3);
+  for (let f = 0; f < 3; f++) {
+    for (let y = 0; y < fh; y++) {
+      for (let x = 0; x < fw; x++) {
+        const i = ((f * fh + y) * fw + x) * 4;
+        frames.set([(x * 4 + f * 80) & 255, (y * 6) & 255, f * 100, (x + y + f * 10) % 17 === 0 ? 0 : 255], i);
+      }
+    }
+  }
+  files.set('animated', await sharp(frames, { raw: { width: fw, height: fh * 3, channels: 4, pageHeight: fh } }).gif({ loop: 0 }).toBuffer());
+
+  // Beide lesen dieselben Dateien aus dem Upload-Ordner (oys_og_load_image ↔ ogLoadImage, mit Größenprüfung)
+  const names = [...files.keys()].map((k) => `avatar_5_1700000000_gif${k}.gif`);
+  const bad: string[] = [];
+  let expected: unknown[] = [];
+  try {
+    for (const [i, k] of [...files.keys()].entries()) writeFileSync(UPLOADS + '/' + names[i], files.get(k)!);
+    expected = JSON.parse(runPhp(`${PHP_GIFS} $out = []; foreach ($in as $n) $out[] = gif_read($n); echo json_encode($out);`, JSON.stringify(names))) as unknown[];
+    for (const [i, name] of names.entries()) {
+      const got = gifPixels(await ogLoadImage(name));
+      if (JSON.stringify(got) !== JSON.stringify(expected[i])) bad.push(`${name}: php ${JSON.stringify(expected[i])} node ${JSON.stringify(got)}`);
+    }
+  } finally {
+    for (const name of names) rmSync(UPLOADS + '/' + name, { force: true });
+  }
+  assert.deepEqual(bad, []);
+  assert.ok(expected.filter(Boolean).length >= 60 && expected.filter((x) => x === null).length >= 40, 'both outcomes are covered');
+
+  // Auf der Karte: das Profilbild aus einem versetzten Einzelbild ist dasselbe wie mit GD
+  const offset = `avatar_5_1700000000_gifcard.gif`;
+  writeFileSync(UPLOADS + '/' + offset, files.get('0offset')!);
+  try {
+    const page = { id: 40, slug: 'gif', address_mode: 'subdomain', title: 'Gif', subtitle: '', bio: '', avatar: offset, theme: 'galaxy', settings: '{}' };
+    const php = Buffer.from(JSON.parse(runPhp(`echo json_encode(base64_encode(oys_og_render($in)));`, jsonText(page))) as string, 'base64');
+    const a = await pixels(php);
+    const b = await pixels(await ogRender(jsonDecode(jsonText(page)) as object));
+    let diff = 0;
+    for (let y = 165; y < 465; y++) {
+      for (let x = 96; x < 396; x++) {
+        const k = (y * 1200 + x) * a.channels;
+        if (a.data[k] !== b.data[k] || a.data[k + 1] !== b.data[k + 1] || a.data[k + 2] !== b.data[k + 2]) diff++;
+      }
+    }
+    assert.equal(diff, 0, 'avatar pixels');
+  } finally {
+    rmSync(UPLOADS + '/' + offset, { force: true });
+  }
+});
+
+// ---------------------------------------------------------------- PNG, JPEG und WebP wie GD
+
+// Profilbild-Pixel nach dem Laden: r g b a (7 Bit), durchsichtig (127) ohne Farbe – auch Palettenbilder von GD
+const PHP_PIXELS = `
+  function og_pixels(string $name): ?array {
+    $img = oys_og_load_image($name);
+    if (!$img) return null;
+    $t = imagecolortransparent($img);
+    $s = '';
+    for ($y = 0; $y < imagesy($img); $y++) for ($x = 0; $x < imagesx($img); $x++) {
+      $c = imagecolorat($img, $x, $y);
+      if (imageistruecolor($img)) { $a = ($c >> 24) & 127; $s .= $a === 127 ? 'T,' : (($c >> 16) & 255) . ' ' . (($c >> 8) & 255) . ' ' . ($c & 255) . ' ' . $a . ','; continue; }
+      $k = imagecolorsforindex($img, $c);
+      $s .= $c === $t || $k['alpha'] === 127 ? 'T,' : $k['red'] . ' ' . $k['green'] . ' ' . $k['blue'] . ' ' . $k['alpha'] . ',';
+    }
+    return [imagesx($img), imagesy($img), sha1($s)];
+  }`;
+
+function rgbaPixels(img: { width: number; height: number; px: Int32Array } | null): unknown {
+  if (!img) return null;
+  let s = '';
+  for (const c of img.px) {
+    const a = (c >> 24) & 0x7f;
+    s += a === 127 ? 'T,' : `${(c >> 16) & 255} ${(c >> 8) & 255} ${c & 255} ${a},`;
+  }
+  return [img.width, img.height, createHash('sha1').update(s).digest('hex')];
+}
+
+// PNG von Hand (jede Farbart und Bittiefe, ohne Filter)
+function handPng(w: number, h: number, colorType: number, depth: number, pixel: (x: number, y: number) => number[], extra: Buffer[] = []): Buffer {
+  const ch = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[colorType];
+  const rows: Buffer[] = [];
+  for (let y = 0; y < h; y++) {
+    const values: number[] = [];
+    for (let x = 0; x < w; x++) values.push(...pixel(x, y).slice(0, ch));
+    const line = Buffer.alloc(Math.ceil((w * ch * depth) / 8));
+    values.forEach((v, i) => {
+      if (depth === 16) line.writeUInt16BE(v, i * 2);
+      else if (depth === 8) line[i] = v;
+      else line[(i * depth) >> 3] |= v << (8 - depth - ((i * depth) & 7));
+    });
+    rows.push(Buffer.concat([Buffer.from([0]), line]));
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = depth;
+  ihdr[9] = colorType;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), ...extra, pngChunk('IDAT', deflateSync(Buffer.concat(rows))), pngChunk('IEND', Buffer.alloc(0))]);
+}
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'latin1');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+// JPEG ohne Adobe-Kennung (APP14 entfernt)
+function withoutApp14(b: Buffer): Buffer {
+  const parts = [b.subarray(0, 2)];
+  let p = 2;
+  while (p < b.length && b[p] === 0xff) {
+    if (b[p + 1] === 0xda) break;
+    const length = b.readUInt16BE(p + 2);
+    if (b[p + 1] !== 0xee) parts.push(b.subarray(p, p + 2 + length));
+    p += 2 + length;
+  }
+  parts.push(b.subarray(p));
+  return Buffer.concat(parts);
+}
+
+test('photo avatars of every PNG, JPEG and WebP kind load like oys_og_load_image (tRNS, 16 bit, palettes, CMYK)', async () => {
+  const w = 40;
+  const h = 30;
+  const plte = pngChunk('PLTE', Buffer.from(Array.from({ length: 16 * 3 }, (_v, i) => (i * 53) % 256)));
+  const files: Record<string, Buffer> = {
+    'rgb16.png': handPng(w, h, 2, 16, (x, y) => [x * 1600 + 37, y * 2100 + 255, (x * y * 97) % 65536]),
+    'rgba16.png': handPng(w, h, 6, 16, (x, y) => [x * 1600 + 200, y * 2100 + 128, (x * y * 97) % 65536, (x * 1700) % 65536]),
+    'grey8.png': handPng(w, h, 0, 8, (x, y) => [(x * 6 + y) % 256]),
+    'grey16.png': handPng(w, h, 0, 16, (x, y) => [(x * 1600 + y * 7) % 65536]),
+    'grey4.png': handPng(w, h, 0, 4, (x, y) => [(x + y) % 16]),
+    'grey1.png': handPng(w, h, 0, 1, (x, y) => [(x + y) % 2]),
+    'greyalpha.png': handPng(w, h, 4, 8, (x, y) => [(x * 6) % 256, (y * 9) % 256]),
+    'palette4.png': handPng(w, h, 3, 4, (x, y) => [(x + 2 * y) % 16], [plte]),
+    'palette-trns.png': handPng(w, h, 3, 8, (x, y) => [(x * 3 + y) % 16], [plte, pngChunk('tRNS', Buffer.from([255, 200, 100, 50, 1, 2, 254, 0, 128, 0]))]),
+    'grey-trns.png': handPng(w, h, 0, 8, (x) => [(x * 6) % 256], [pngChunk('tRNS', Buffer.from([0, 12]))]),
+    'grey16-trns.png': handPng(w, h, 0, 16, (x) => [(x * 1600 + 37) % 65536], [pngChunk('tRNS', Buffer.from([0x06, 0x65]))]),
+    // RGB mit tRNS: GD merkt sich die Farbe nur, die Pixel bleiben deckend
+    'rgb-trns.png': handPng(w, h, 2, 8, (x) => [(x * 6) % 256, 0, 0], [pngChunk('tRNS', Buffer.from([0, 12, 0, 0, 0, 0]))]),
+    'rgb16-trns.png': handPng(w, h, 2, 16, (x) => [x * 1600 + 37, 0, 0], [pngChunk('tRNS', Buffer.from([0x06, 0x65, 0, 0, 0, 0]))]),
+    'gamma.png': handPng(w, h, 2, 8, (x, y) => [(x * 6) % 256, (y * 8) % 256, 100], [pngChunk('gAMA', Buffer.from([0, 0, 0x5b, 0x8f]))]),
+  };
+  const rgb = Buffer.alloc(w * h * 3);
+  for (let i = 0; i < w * h; i++) rgb.set([(i * 7) % 256, (i * 13) % 256, (i * 3) % 256], i * 3);
+  const raw = { raw: { width: w, height: h, channels: 3 as const } };
+  files['420.jpg'] = await sharp(rgb, raw).jpeg({ quality: 80 }).toBuffer();
+  files['444.jpg'] = await sharp(rgb, raw).jpeg({ quality: 90, chromaSubsampling: '4:4:4' }).toBuffer();
+  files['progressive.jpg'] = await sharp(rgb, raw).jpeg({ quality: 85, progressive: true }).toBuffer();
+  files['grey.jpg'] = await sharp(rgb, raw).greyscale().jpeg({ quality: 85 }).toBuffer();
+  // CMYK: mit Adobe-Kennung (invertiert gespeichert) und ohne
+  files['cmyk-adobe.jpg'] = await sharp(rgb, raw).toColourspace('cmyk').jpeg({ quality: 90 }).toBuffer();
+  files['cmyk-plain.jpg'] = withoutApp14(files['cmyk-adobe.jpg']);
+  files['interlaced.png'] = await sharp(rgb, raw).png({ progressive: true }).toBuffer();
+  files['lossless.webp'] = await sharp(rgb, raw).webp({ lossless: true }).toBuffer();
+  files['lossy.webp'] = await sharp(rgb, raw).webp({ quality: 70 }).toBuffer();
+  assert.ok(files['cmyk-adobe.jpg'].includes('Adobe') && !files['cmyk-plain.jpg'].includes('Adobe'));
+
+  const names = Object.keys(files).map((k) => `avatar_5_1700000000_kind-${k}`);
+  const bad: string[] = [];
+  try {
+    for (const [i, k] of Object.keys(files).entries()) writeFileSync(UPLOADS + '/' + names[i], files[k]);
+    const expected = JSON.parse(runPhp(`${PHP_PIXELS} $out = []; foreach ($in as $n) $out[] = og_pixels($n); echo json_encode($out);`, JSON.stringify(names))) as unknown[];
+    for (const [i, name] of names.entries()) {
+      const got = rgbaPixels(await ogLoadImage(name));
+      if (JSON.stringify(got) !== JSON.stringify(expected[i])) bad.push(`${name}: php ${JSON.stringify(expected[i])} node ${JSON.stringify(got)}`);
+    }
+    assert.ok(expected.every(Boolean), 'GD reads every file');
+  } finally {
+    for (const name of names) rmSync(UPLOADS + '/' + name, { force: true });
+  }
+  assert.deepEqual(bad, []);
+});
+
 // ---------------------------------------------------------------- /_/og/{id}-{hash}.png gegen PHP als Server
 
 let server: ChildProcess | null = null;
@@ -326,7 +594,42 @@ test('/_/og/ serves, caches and cleans up like oys_og_serve (status, headers, fi
     const headPhp = await phpGet(`/_/og/1-${hash}.png`, 'HEAD');
     const headNode = await nodeGet(1, hash, 'HEAD');
     assert.deepEqual(headNode, headPhp);
+
+    // Ordner og/ lässt sich nicht anlegen (eine Datei gleichen Namens): das Bild kommt trotzdem, gespeichert wird nichts
+    rmSync(OG_DIR(), { recursive: true, force: true });
+    writeFileSync(OG_DIR(), 'not a folder');
+    const blockedPhp = await phpGet(`/_/og/1-${hash}.png`);
+    const blockedNode = await nodeGet(1, hash);
+    assert.equal(readFileSync(OG_DIR(), 'utf8'), 'not a folder');
+    assert.deepEqual(blockedNode.status, blockedPhp.status);
+    assert.equal(blockedNode.headers['cache-control'], blockedPhp.headers['cache-control']);
+    assert.equal(blockedNode.headers['content-type'], blockedPhp.headers['content-type']);
+    assert.equal(Number(blockedNode.headers['content-length']), blockedNode.body.length);
+    assert.deepEqual(pngHeader(blockedNode.body), pngHeader(blockedPhp.body));
   } finally {
     rmSync(OG_DIR(), { recursive: true, force: true });
+  }
+});
+
+// Grenzen von oys_og_load_image: höchstens 15 MiB, nur der Dateiname zählt (Ordner davor werden ignoriert)
+test('avatar files up to exactly 15 MiB load, larger ones and odd names do not – like oys_og_load_image', async () => {
+  const png = await sharp({ create: { width: 20, height: 10, channels: 3, background: '#3366cc' } }).png().toBuffer();
+  const limit = 15 * 1024 * 1024;
+  const files: Record<string, Buffer> = {
+    'avatar_5_1700000000_limit.png': Buffer.concat([png, Buffer.alloc(limit - png.length)]),
+    'avatar_5_1700000000_over.png': Buffer.concat([png, Buffer.alloc(limit - png.length + 1)]),
+    'avatar_5_1700000000_small.png': png,
+  };
+  const names = ['avatar_5_1700000000_limit.png', 'avatar_5_1700000000_over.png', 'avatar_5_1700000000_small.png', '../x/avatar_5_1700000000_small.png',
+    'avatar_5_1700000000_small.png/', '', '/', '.', '..', 'avatar_5_1700000000_missing.png'];
+  try {
+    for (const [k, v] of Object.entries(files)) writeFileSync(UPLOADS + '/' + k, v);
+    const expected = JSON.parse(runPhp(`${PHP_PIXELS} $out = []; foreach ($in as $n) $out[] = og_pixels($n); echo json_encode($out);`, JSON.stringify(names))) as unknown[];
+    const got: unknown[] = [];
+    for (const n of names) got.push(rgbaPixels(await ogLoadImage(n)));
+    assert.deepEqual(got, expected);
+    assert.deepEqual(expected.map(Boolean), [true, false, true, true, true, false, false, false, false, false]);
+  } finally {
+    for (const k of Object.keys(files)) rmSync(UPLOADS + '/' + k, { force: true });
   }
 });

@@ -312,9 +312,79 @@ function imageInfo(b: Buffer): { type: 'jpeg' | 'png' | 'gif' | 'webp'; width: n
   return null;
 }
 
+// imagecreatefromgif() (gd_gif_in.c) liest nur das erste Einzelbild – in dessen eigener Größe, ohne den Versatz auf
+// der Fläche. Es scheitert bei einer anderen Version als 87a/89a, einem leeren oder über die Fläche hinausragenden
+// Einzelbild, einer Code-Größe über 12 und abgeschnittenen Köpfen; Erweiterungen und fremde Bytes vor dem Bild
+// überspringt es. Farben: die eigene Tabelle, sonst die globale, ohne beide Schwarz mit Weiß an Stelle 1 – fehlende
+// Einträge sind schwarz; durchsichtig ist die Farbe aus dem letzten Steuerblock mit gesetztem Bit. Gibt das erste
+// Einzelbild als eigenes, schlichtes GIF zurück (mit voller Farbtabelle – so liest sharp genau das), sonst null.
+function gifFirstFrame(b: Buffer): Buffer | null {
+  const version = b.toString('latin1', 3, 6);
+  if (b.length < 13 || (version !== '87a' && version !== '89a')) return null;
+  const screenW = b.readUInt16LE(6);
+  const screenH = b.readUInt16LE(8);
+  const gct = b[10] & 0x80 ? b.subarray(13, 13 + 3 * (2 << (b[10] & 0x07))) : null;
+  let p = 13 + (gct ? 3 * (2 << (b[10] & 0x07)) : 0);
+  let transparent = -1;
+  for (;;) {
+    if (p >= b.length) return null;
+    const c = b[p++];
+    // Ende vor dem ersten Bild
+    if (c === 0x3b) return null;
+    if (c === 0x21) {
+      // Erweiterung: Art, dann Datenblöcke (Länge, Daten) bis zu einem leeren Block. Steuerblock (0xF9): sein erster
+      // Datenblock zählt nie als Ende (auch leer nicht); darin Bit 0 des ersten Bytes = durchsichtige Farbe, ihr Index
+      // im vierten Byte (fehlende Bytes zählen als 0)
+      const label = b[p++];
+      for (let first = label === 0xf9; p < b.length; first = false) {
+        const n = b[p++];
+        if (first && n > 0 && b[p] & 1) transparent = n >= 4 ? b[p + 3] ?? 0 : 0;
+        if (n === 0 && !first) break;
+        p += n;
+      }
+      continue;
+    }
+    if (c !== 0x2c) continue;
+    if (p + 9 > b.length) return null;
+    const width = b.readUInt16LE(p + 4);
+    const height = b.readUInt16LE(p + 6);
+    const flags = b[p + 8];
+    if (b.readUInt16LE(p) + width > screenW || b.readUInt16LE(p + 2) + height > screenH || width === 0 || height === 0) return null;
+    p += 9;
+    // Eigene Farbtabelle, dann die Code-Größe des LZW-Verfahrens
+    const lct = flags & 0x80 ? b.subarray(p, p + 3 * (2 << (flags & 0x07))) : null;
+    if (lct) p += lct.length;
+    if (p >= b.length || b[p] > 12) return null;
+    // Bilddaten: Code-Größe und Datenblöcke bis zum leeren Block (oder bis zum Dateiende)
+    let end = p + 1;
+    while (end < b.length) {
+      const n = b[end++];
+      if (n === 0) break;
+      end += n;
+    }
+    const head = Buffer.alloc(13);
+    head.write('GIF89a', 0, 'latin1');
+    head.writeUInt16LE(width, 6);
+    head.writeUInt16LE(height, 8);
+    head[10] = 0x87;
+    const colors = Buffer.alloc(3 * 256);
+    if (lct) lct.copy(colors);
+    else if (gct) gct.copy(colors);
+    else colors.fill(0xff, 3, 6);
+    const gce = transparent >= 0 ? Buffer.from([0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, transparent, 0x00]) : Buffer.alloc(0);
+    const desc = Buffer.alloc(10);
+    desc[0] = 0x2c;
+    desc.writeUInt16LE(width, 5);
+    desc.writeUInt16LE(height, 7);
+    // Nur den Zeilensprung übernehmen (die Farben stehen jetzt in der globalen Tabelle)
+    desc[9] = flags & 0x40;
+    return Buffer.concat([head, colors, gce, desc, b.subarray(p, Math.min(end, b.length)), Buffer.from([0x3b])]);
+  }
+}
+
 // oys_og_load_image(): hochgeladenes Bild laden (nur aus dem Upload-Ordner, nur echte Bilddateien bis 15 MiB/40 MPx).
 // Pixel wie GD: Alpha 7 Bit (127 - a/2), ICC-Profile werden nicht angewendet, fehlerhafte Daten so weit wie lesbar;
-// animiertes WebP kann GD nicht lesen → null (dann Initialen)
+// animiertes WebP kann GD nicht lesen → null (dann Initialen); bei GIF nur das erste Einzelbild wie GD
 export async function ogLoadImage(file: string): Promise<GdImage | null> {
   const name = basename(file);
   const path = uploadReadPath(name);
@@ -327,25 +397,62 @@ export async function ogLoadImage(file: string): Promise<GdImage | null> {
   }
   const info = imageInfo(data);
   if (!info || info.width * info.height > 40000000 || info.animated) return null;
+  const frame = info.type === 'gif' ? gifFirstFrame(data) : null;
+  if (info.type === 'gif' && !frame) return null;
   try {
     // sharp erst hier laden (nur wenn ein Vorschaubild mit Foto gezeichnet wird)
     const { default: sharp } = await import('sharp');
-    const { data: px, info: out } = await sharp(data, { limitInputPixels: false, ignoreIcc: true, failOn: 'none' })
+    const options = { limitInputPixels: false, ignoreIcc: true, failOn: 'none' } as const;
+    if (info.type === 'jpeg' && (await sharp(data, options).metadata()).space === 'cmyk') return await cmykJpeg(sharp(data, options), jpegAdobe(data));
+    const { data: px, info: out } = await sharp(frame ?? data, options)
       .toColourspace('srgb')
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
     if (out.channels !== 4) return null;
     const img = new GdImage(out.width, out.height);
-    const jpeg = info.type === 'jpeg';
+    // Deckend: JPEG und RGB-PNG – auch mit tRNS-Farbe (GD merkt sie sich nur, die Pixel bleiben deckend)
+    const opaque = info.type === 'jpeg' || (info.type === 'png' && data[25] === 2);
     for (let i = 0; i < out.width * out.height; i++) {
-      const a = jpeg ? 0 : 127 - (px[i * 4 + 3] >> 1);
+      const a = opaque ? 0 : 127 - (px[i * 4 + 3] >> 1);
       img.px[i] = trueColorAlpha(px[i * 4], px[i * 4 + 1], px[i * 4 + 2], a);
     }
     return img;
   } catch {
     return null;
   }
+}
+
+// Hat ein JPEG die Adobe-Kennung (APP14 mit „Adobe“, mindestens 12 Bytes)? Dann ist CMYK für GD invertiert gespeichert.
+function jpegAdobe(b: Buffer): boolean {
+  let p = 2;
+  while (p + 4 <= b.length && b[p] === 0xff) {
+    const marker = b[p + 1];
+    if (marker === 0xff) {
+      p++;
+      continue;
+    }
+    if (marker === 0xda || marker === 0xd9) break;
+    const length = b.readUInt16BE(p + 2);
+    if (marker === 0xee && length - 2 >= 12 && b.toString('latin1', p + 4, p + 9) === 'Adobe') return true;
+    p += 2 + length;
+  }
+  return false;
+}
+
+// CMYK-JPEG (auch YCCK) wie gd_jpeg.c: R = (255 - C) · (255 - K) / 255 usw. (ganzzahlig), die Werte mit Adobe-Kennung
+// invertiert gelesen. sharp liefert CMYK immer invertiert – ohne Adobe-Kennung also zurückdrehen.
+async function cmykJpeg(input: import('sharp').Sharp, adobe: boolean): Promise<GdImage | null> {
+  const { data: px, info: out } = await input.pipelineColourspace('cmyk').toColourspace('cmyk').raw().toBuffer({ resolveWithObject: true });
+  if (out.channels !== 4) return null;
+  const flip = adobe ? 0 : 255;
+  const img = new GdImage(out.width, out.height);
+  for (let i = 0; i < out.width * out.height; i++) {
+    const k = 255 - Math.abs(flip - px[i * 4 + 3]);
+    const ch = (j: number): number => Math.trunc(((255 - Math.abs(flip - px[i * 4 + j])) * k) / 255);
+    img.px[i] = trueColorAlpha(ch(0), ch(1), ch(2), 0);
+  }
+  return img;
 }
 
 // oys_og_clean(): Emoji und Steuerzeichen raus (die Schrift kennt sie nicht), Leerraum zusammenfassen

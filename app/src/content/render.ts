@@ -12,7 +12,7 @@ import { pageSettings } from './pages.js';
 import { OG_HEIGHT, OG_WIDTH, ogSupported, ogUrl, shareLinks } from './share.js';
 import { brands, brandSvg, iconHtml, iconUsesBoxicons, socialUrl, uiIcon } from './social.js';
 import { DEFAULT_THEME, layoutKey, themeKey, themes } from './themes.js';
-import { idx, nullableStrArg, phpNumber, phpRound, strArg } from './phpValues.js';
+import { idx, JsonEncodeError, nullableStrArg, PhpFloat, phpFloatStr, phpNumber, phpRound, strArg, withPhpFloats } from './phpValues.js';
 import { basename, entries, isArr, own, parseLocalDateTime, values } from './util.js';
 
 type Rec = Record<string, unknown>;
@@ -148,13 +148,16 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
 
   const style: string[] = [];
   if (phpTruthy(settings.accent)) style.push('--accent:' + phpStr(settings.accent));
-  if (phpTruthy(page.bg_image)) style.push('--bg-overlay:' + phpStr(phpRound(div100(settings.bg_overlay), 2)));
+  if (phpTruthy(page.bg_image)) style.push('--bg-overlay:' + phpFloatStr(phpRound(div100(settings.bg_overlay), 2)));
 
   // hosts: array_values(array_unique(array_filter([...]))) – leere Werte und "0" fallen weg, Vergleich als Text
   const hosts: string[] = [];
   for (const h of [opts.host ?? '', baseHost()]) {
     if (phpTruthy(h) && !hosts.includes(phpStr(h))) hosts.push(phpStr(h));
   }
+  // $x / 100 ist in PHP nur dann int, wenn eine ganze Zahl aufgeht – ab 1e17 (also $x ab 1e19, über PHP_INT_MAX)
+  // ist es immer eine Kommazahl
+  const volume = div100(idx(entrance, 'volume'));
   const config = {
     page: page.id !== undefined && page.id !== null ? intval(page.id) : 0,
     mode,
@@ -164,7 +167,7 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
     music: showEntrance ? music : '',
     musicYoutube: showEntrance ? musicYoutube : null,
     dark: themeMeta.dark,
-    volume: div100(idx(entrance, 'volume')),
+    volume: Number.isInteger(volume) && Math.abs(volume) >= 1e17 ? new PhpFloat(volume) : volume,
     loop: phpTruthy(idx(entrance, 'loop')),
     hosts,
     share: phpTruthy(settings.share_button) && canonical !== '' && mode !== 'demo'
@@ -398,7 +401,12 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   o += "\n<div class=\"oys-modal\" id=\"oys-modal\" hidden>\n  <div class=\"oys-modal-box\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"oys-modal-title\">\n    <button type=\"button\" class=\"oys-modal-close\" aria-label=\"Close\">";
   o += uiIcon('close');
   o += "</button>\n    <div class=\"oys-modal-body\"></div>\n  </div>\n</div>\n\n<script id=\"oys-config\" type=\"application/json\">";
-  o += phpJson(config, { hexTag: true, hexAmp: true, hexApos: true, hexQuot: true, unescapedSlashes: true });
+  // Kommazahlen wie json_encode(); an INF/NAN (z. B. "volume": 1e999) scheitert es und gibt nichts aus
+  try {
+    o += phpJson(withPhpFloats(config), { hexTag: true, hexAmp: true, hexApos: true, hexQuot: true, unescapedSlashes: true });
+  } catch (err) {
+    if (!(err instanceof JsonEncodeError)) throw err;
+  }
   o += "</script>\n<script src=\"";
   o += e(asset('/static/js/page.js'));
   o += "\" defer></script>\n</body>\n</html>\n";

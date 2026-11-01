@@ -14,7 +14,7 @@ import { loadBlocks, loadPage } from '../src/content/pages.js';
 import { layouts, themes, fontChoices } from '../src/content/themes.js';
 import { brands } from '../src/content/social.js';
 import { jsonDecode } from '../src/content/util.js';
-import { phpNumber, phpRound } from '../src/content/phpValues.js';
+import { phpJsonFloat, phpNumber, phpRound } from '../src/content/phpValues.js';
 import { jsonText, rng, O, Raw } from './modelHarness.js';
 import { firstDiff, normalizeTokens, runPhpList } from './renderHarness.js';
 
@@ -481,4 +481,89 @@ test('round() and number casts used by the page match PHP', () => {
       return 'THROW';
     }
   }), php);
+});
+
+// Gespeicherte Einstellungen mit Kommazahlen (alte oder von Hand geänderte Daten): round() und (string) behalten -0,
+// json_encode() schreibt Exponenten wie PHP (1.0e-5, 1.0e+21) und scheitert an INF – dann bleibt die Konfiguration leer
+test('floats in stored settings are written like PHP: -0, json_encode exponents and INF', () => {
+  const base = { id: 7, slug: 'mia', title: 'Mia', subtitle: '', bio: '', avatar: '', bg_image: 'bg.webp', theme: 'galaxy', layout: 'cards', address_mode: 'subdomain' };
+  const list: unknown[] = [];
+  const add = (settings: string): void => {
+    list.push({ page: { ...base, settings }, blocks: [], opts: { now: 1793530800, mode: 'public', entrance: 'show' } });
+  };
+  for (const v of ['-0.4', '-0.0', '-0', '0.0', '-0.3', '-1', '45.0', '1e2', '-1e-9', '0.004', '0.005', '-0.005', '1e-7', '1e300', '"-0"', '"-0.0"', '" -0 "',
+    '"-0abc"', '"-0.3"', '"-.3"', '"-0e5"', '"+0"', '1e16', '12345678901234600', '-1e16', '9.99e15', '1e21']) {
+    add('{"bg_overlay":' + v + '}');
+  }
+  for (const v of ['100.0', '70', '70.0', '1e999', '-1e999', '-0.0', '0.0', '"1e999"', '1e-5', '0.1', '7', '1e300', '-1e300', '"-0"', '"-0.0"', '1e19', '0.001',
+    '12345678901234567890', '-0', '"7"', '" 33 "']) {
+    add('{"entrance":{"enabled":true,"volume":' + v + '}}');
+  }
+  for (const v of ['1.0', '-0.0', '1e-5', '0.1', '1e21', '1.5e300', '12345678901234567890', '[1.0,-0.0,1e-7]', '{"a":-0.0,"5":1e-5}', '1e999', '[1e999]',
+    '{"x":[0.5,{"y":-1e-300}]}', '0.0001', '0.00001', '123456.789e3', '-9.999999999999999e-5', '1e16', '99999999999999999999.5']) {
+    add('{"particles":' + v + '}');
+  }
+  const text = jsonText(list);
+  const php = runPhpList(PHP_RENDER_EACH, text);
+  const decoded = jsonDecode(text) as Array<{ page: Record<string, unknown>; blocks: object[]; opts: RenderOptions }>;
+  const node = decoded.map((c) => {
+    try {
+      return renderPage(c.page, c.blocks, c.opts);
+    } catch {
+      return 'THROW';
+    }
+  });
+  assert.deepEqual(compare(list, decoded, php, node), []);
+  assert.ok(php.some((x) => x.includes('--bg-overlay:-0"')), 'round() keeps -0');
+  assert.ok(php.some((x) => x.includes('"volume":-0,')) && php.some((x) => x.includes('"particles":1.0e-5')), 'json_encode floats');
+  assert.ok(php.some((x) => x.includes('<script id="oys-config" type="application/json"></script>')), 'json_encode fails on INF');
+});
+
+test('json_encode() of a float matches phpJsonFloat for random and boundary values', () => {
+  const r = rng(17);
+  const values: number[] = [0, -0, 1, -1, 0.1, 0.5, 1.5, 1e-4, 9.999e-5, 1e-5, 1.5e-7, 5e-324, -5e-324, 2.2250738585072014e-308, 1.7976931348623157e308, 1e15, 1e16, 1e17,
+    9.999999999999999e16, 1.0000000000000002e17, 2 ** 53, 2 ** 63, 2 ** 64, 123456789.123, 0.30000000000000004, 1 / 3, -2 / 3, 1e21, 1e22, 1e-300];
+  const buf = Buffer.alloc(8);
+  for (let i = 0; i < 3000; i++) {
+    // Zufällige Bitmuster (alle Größenordnungen) und Zahlen mit wenigen Stellen
+    buf.writeUInt32LE(r.next(2 ** 32), 0);
+    buf.writeUInt32LE(r.next(2 ** 32), 4);
+    const bits = buf.readDoubleLE(0);
+    if (Number.isFinite(bits)) values.push(bits);
+    values.push((r.next(2000001) - 1000000) * 10 ** (r.next(50) - 25));
+  }
+  // Exakter Wert für PHP: kürzeste Darstellung (rundet beim Einlesen genau zurück), -0 als -0.0
+  const php = runPhpList('foreach ($in as $v) { $out[] = json_encode((float) $v); }', '[' + values.map((v) => (Object.is(v, -0) ? '-0.0' : JSON.stringify(v))).join(',') + ']');
+  const bad = values.map((v, i) => (phpJsonFloat(v) === php[i] ? '' : `${v}: php ${php[i]} node ${phpJsonFloat(v)}`)).filter(Boolean);
+  assert.deepEqual(bad.slice(0, 5), []);
+});
+
+// Countdown-Ziele in jeder Form, die oys_block_normalize speichern kann (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}, auch mit "\n"
+// dahinter): übergelaufene Monate, Tage und Stunden, Jahr 0, Zeiten vor 1893 (Ortszeit), Lücke und doppelte Stunde
+// der Zeitumstellung – Datum im data-target, verbleibende Zeit und leere Blöcke wie PHP
+test('countdown targets in every stored form give the same date and remaining time as PHP', () => {
+  const r = rng(2024);
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  const range = (a: number, b: number): string[] => Array.from({ length: b - a + 1 }, (_x, i) => p2(a + i));
+  const years = ['0000', '0001', '0099', '0999', '1582', '1847', '1892', '1893', '1916', '1945', '1947', '1970', '1980', '2000', '2026', '2027', '2038', '2100', '9999'];
+  const targets: string[] = [];
+  for (let i = 0; i < 1500; i++) {
+    targets.push(`${r.pick(years)}-${r.pick([...range(0, 13), '19', '99'])}-${r.pick([...range(0, 32), '39', '99'])}T${r.pick([...range(0, 25), '29', '99'])}:${r.pick([...range(0, 61), '99'])}` + (r.chance(0.1) ? '\n' : ''));
+  }
+  for (const day of ['2026-03-29', '2026-10-25', '1980-04-06', '1945-05-24', '1947-06-29', '2038-03-28']) {
+    for (const h of ['01', '02', '03']) for (const m of ['00', '30', '59']) targets.push(`${day}T${h}:${m}`);
+  }
+  const page = { id: 7, slug: 'mia', title: 'Mia', subtitle: '', bio: '', avatar: '', bg_image: '', theme: 'galaxy', layout: 'cards', address_mode: 'subdomain', settings: '{"share_button":false}' };
+  const list = targets.map((t, i) => ({
+    page,
+    blocks: [{ id: 5, type: 'countdown', is_visible: 1, data: { title: 'T', target: t, done_text: '', url: '', url_label: '' }, schedule: null, protection: 'none', effect: 'none' }],
+    opts: { now: NOWS[i % NOWS.length], mode: 'public' },
+  }));
+  const text = jsonText(list);
+  const php = runPhpList(PHP_RENDER_EACH, text);
+  const decoded = jsonDecode(text) as Array<{ page: Record<string, unknown>; blocks: object[]; opts: RenderOptions }>;
+  const node = decoded.map((c) => renderPage(c.page, c.blocks, c.opts));
+  assert.deepEqual(compare(list, decoded, php, node), []);
+  const shown = php.filter((x) => x.includes('oys-countdown')).length;
+  assert.ok(shown > 300 && shown < targets.length - 300, 'readable and unreadable targets');
 });
