@@ -69,7 +69,9 @@ after(async () => {
   await closePool();
 });
 
-const KNOWN_REFS = ['a3-1111111111111111', 'a3-2222222222222222', 'a3-3333333333333333', 'a3-0123456789abcdef'];
+// Feste Formular-Schlüssel der Tests werden genau verglichen – nur zufällige werden vereinheitlicht
+const KNOWN_REFS = ['a3-1111111111111111', 'a3-2222222222222222', 'a3-3333333333333333', 'a3-0123456789abcdef',
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => 'a3-aaaaaaaaaaaaaaa' + i), 'a7-aaaaaaaaaaaaaaa9', ...[1, 2, 3].map((i) => 'a3-bbbbbbbbbbbbbbb' + i)];
 
 // Beide Seiten laufen lassen; Ergebnisse und Tabellen vergleichen
 async function same(ops: Op[], label: string): Promise<unknown[]> {
