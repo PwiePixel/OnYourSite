@@ -284,8 +284,9 @@ const dtfCache = new Map<string, Intl.DateTimeFormat>();
 function dtf(tz: string): Intl.DateTimeFormat {
   let f = dtfCache.get(tz);
   if (!f) {
+    // era: Jahre vor Christus (z. B. der Zeitstempel 0000-00-00 → Nov 30, -0001) richtig zählen
     f = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+      timeZone: tz, hourCycle: 'h23', era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short',
     });
     dtfCache.set(tz, f);
@@ -294,11 +295,18 @@ function dtf(tz: string): Intl.DateTimeFormat {
 }
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Date.UTC() ohne die Sonderregel für die Jahre 0–99 (sonst 1900–1999); 400 Jahre sind genau 146097 Tage
+function utcMs(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): number {
+  return y >= 0 && y <= 99 ? Date.UTC(y + 400, mo, d, h, mi, s) - 12622780800000 : Date.UTC(y, mo, d, h, mi, s);
+}
+
 export function wallTime(unix: number, tz = timeZone()): WallTime {
   const p: Record<string, string> = {};
   for (const x of dtf(tz).formatToParts(new Date(unix * 1000))) p[x.type] = x.value;
+  // Astronomische Jahreszahl wie PHP: 1 v. Chr. = 0, 2 v. Chr. = -1
+  const year = p.era === 'BC' ? 1 - Number(p.year) : Number(p.year);
   return {
-    year: Number(p.year), month: Number(p.month), day: Number(p.day),
+    year, month: Number(p.month), day: Number(p.day),
     hour: Number(p.hour), minute: Number(p.minute), second: Number(p.second), weekday: WEEKDAYS.indexOf(p.weekday),
   };
 }
@@ -306,12 +314,12 @@ export function wallTime(unix: number, tz = timeZone()): WallTime {
 // Abstand zu UTC in Sekunden zu diesem Zeitpunkt
 export function offsetAt(unix: number, tz = timeZone()): number {
   const w = wallTime(unix, tz);
-  return (Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second) - Math.floor(unix) * 1000) / 1000;
+  return (utcMs(w.year, w.month - 1, w.day, w.hour, w.minute, w.second) - Math.floor(unix) * 1000) / 1000;
 }
 
 // Ortszeit → Unix-Sekunden (wie mktime/strtotime in der Zeitzone; Überläufe wie in PHP erlaubt)
 export function wallToUnix(y: number, mo: number, d: number, h = 0, mi = 0, s = 0, tz = timeZone()): number {
-  const naive = Date.UTC(y, mo - 1, d, h, mi, s) / 1000;
+  const naive = utcMs(y, mo - 1, d, h, mi, s) / 1000;
   const o1 = offsetAt(naive, tz);
   const o2 = offsetAt(naive - o1, tz);
   return naive - (o1 === o2 ? o1 : o2);
@@ -352,7 +360,8 @@ export function date(format: string, unix: number = time(), tz = timeZone()): st
       case 't': out += String(daysInMonth(w.year, w.month)); break;
       case 'L': out += isLeap(w.year) ? '1' : '0'; break;
       case 'o': out += String(isoWeek(w.year, w.month, w.day).year); break;
-      case 'Y': out += String(w.year); break;
+      // %s%04lld wie in PHP: mindestens vier Stellen, vor Christus mit "-" (0001, -0001)
+      case 'Y': out += (w.year < 0 ? '-' : '') + pad(Math.abs(w.year), 4); break;
       case 'y': out += pad(w.year % 100); break;
       case 'a': out += w.hour < 12 ? 'am' : 'pm'; break;
       case 'A': out += w.hour < 12 ? 'AM' : 'PM'; break;
@@ -391,13 +400,13 @@ function ordinalSuffix(d: number): string {
   return ['th', 'st', 'nd', 'rd'][d % 10] || 'th';
 }
 const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
-const dayOfYear = (y: number, m: number, d: number) => (Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 86400000;
+const daysInMonth = (y: number, m: number) => new Date(utcMs(y, m, 0)).getUTCDate();
+const dayOfYear = (y: number, m: number, d: number) => (utcMs(y, m - 1, d) - utcMs(y, 0, 1)) / 86400000;
 function isoWeek(y: number, m: number, d: number): { year: number; week: number } {
-  const date0 = new Date(Date.UTC(y, m - 1, d));
+  const date0 = new Date(utcMs(y, m - 1, d));
   const day = date0.getUTCDay() || 7;
   date0.setUTCDate(date0.getUTCDate() + 4 - day);
-  const yearStart = Date.UTC(date0.getUTCFullYear(), 0, 1);
+  const yearStart = utcMs(date0.getUTCFullYear(), 0, 1);
   return { year: date0.getUTCFullYear(), week: Math.ceil(((date0.getTime() - yearStart) / 86400000 + 1) / 7) };
 }
 
@@ -441,6 +450,6 @@ export function strtotime(input: string, now: number = time(), tz = timeZone()):
     s = s.slice(m[0].length);
   }
   if (s !== '') return false;
-  if (utcOffset !== null) return Date.UTC(y, mo - 1, d, h, mi, sec) / 1000 - utcOffset;
+  if (utcOffset !== null) return utcMs(y, mo - 1, d, h, mi, sec) / 1000 - utcOffset;
   return wallToUnix(y, mo, d, h, mi, sec, tz);
 }

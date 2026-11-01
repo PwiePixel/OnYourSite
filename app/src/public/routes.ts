@@ -1,29 +1,302 @@
-// Öffentliche Endpunkte und Profilseiten (lib/routes_public.php und Teile von index.php)
+// Öffentliche Endpunkte unter /_/… (lib/routes_public.php) und die Profilseiten aus index.php: alte Klick-Zählung,
+// Profil im Pfad-Modus (on-your.site/name) und auf der Subdomain (name.on-your.site). Setzt KEINE Cookies.
 import type { Ctx } from '../web/ctx.js';
-import { notPorted } from '../web/notPorted.js';
+import { one, type Row } from '../db.js';
+import { config } from '../config.js';
+import { passwordVerify, safeEqual } from '../crypto.js';
+import { e } from '../html.js';
+import { cleanUrl, isBot, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
+import { ctypeDigit, intval, phpStr, phpTruthy, strtolower } from '../php.js';
+import { attemptFailed, attemptsAllowed } from '../web/security.js';
 import { botApi } from '../community/api.js';
-import { loadPageBySlug } from '../content/pages.js';
-import { codeSiteBySlug } from '../code/sites.js';
+import { blockIsClickable, bookingIsInternal, calendarKey, scheduleActive } from '../content/blocks.js';
+import { demoPage } from '../content/demo.js';
+import { contactCheck, storeMessage } from '../content/messages.js';
+import { blockFromRow, calendarAccess, loadBlocks, loadPage, loadPageBySlug, type Block } from '../content/pages.js';
+import { renderPage, renderSimple } from '../content/render.js';
+import { ogServe } from '../content/share.js';
+import { brands, uiIcon } from '../content/social.js';
+import { recordClick, recordView, requestFromOwnSite } from '../content/stats.js';
+import { layouts } from '../content/themes.js';
+import { isArr, jsonDecode, own } from '../content/util.js';
 import { codeServe } from '../code/serve.js';
+import { codeSiteBySlug, codeUrl } from '../code/sites.js';
+import { runWeeklyReports } from '../app/report.js';
+import { notFound } from './notFound.js';
+import { kalender } from './views/kalender.js';
 
-// /_/… auf jeder Adresse (Klicks, Freischalten, Kontakt, Termine, Vorschaubilder, Bot-Schnittstelle …)
+// Block mit dem Ergebnis der Zeitsteuerung (active)
+export type PublicBlock = Block & { active: boolean };
+
+// oys_public_block(): Block samt Seite laden (nur sichtbare Blöcke; active = gerade laut Zeitsteuerung sichtbar)
+export async function publicBlock(id: unknown): Promise<{ block: PublicBlock; page: Row } | null> {
+  if (!ctypeDigit(phpStr(id))) return null;
+  const row = await one('SELECT * FROM page_blocks WHERE id = ?', [intval(id)]);
+  if (!row || intval(row.is_visible) === 0) return null;
+  const page = await loadPage(intval(row.page_id));
+  if (!page) return null;
+  const block = blockFromRow(row);
+  return { block: { ...block, active: scheduleActive(block.schedule, Date.now() / 1000) }, page };
+}
+
+// oys_block_target(): Ziel-Adresse eines klickbaren Blocks
+export function blockTarget(block: Block, page: Row): string {
+  const d = block.data;
+  switch (block.type) {
+    case 'booking':
+      if (bookingIsInternal(d, page as unknown as PageLike)) {
+        // Geschützter Termin-Block: Kalender nur mit Schlüssel (sonst ließe sich der Schutz über /kalender umgehen)
+        return pageUrl(page as unknown as PageLike, 'kalender') + (block.protection !== 'none' ? '?k=' + calendarKey(page, block) : '');
+      }
+      return cleanUrl(phpStr(own(d, 'url') ?? ''), true);
+    case 'file': {
+      const src = own(d, 'src');
+      if (!phpTruthy(src)) return '';
+      // oys_upload_url(?string): ein Array ist in PHP ein TypeError (500)
+      if (isArr(src)) throw new TypeError('oys_upload_url(): Argument #1 ($file) must be of type ?string, array given');
+      return mainUrl(uploadUrl(phpStr(src)));
+    }
+    default: {
+      const url = cleanUrl(phpStr(own(d, 'url') ?? ''), true);
+      if (url !== '' && url[0] === '/') return pageUrl(page as unknown as PageLike) + url;
+      return url;
+    }
+  }
+}
+
+// oys_wants_json(): stripos() vergleicht nur ASCII ohne Groß-/Kleinschreibung
+export function wantsJson(ctx: Ctx): boolean {
+  return strtolower(headerText(ctx.headers.accept)).includes('application/json');
+}
+
+// oys_render_gate(): Zwischenseite für geschützte Links ohne JavaScript
+export function renderGate(page: Row, block: Block, kind: 'age' | 'password', error: string | null = null): string {
+  const t = own(block.data, 'title') ?? '';
+  const title = phpTruthy(t) ? t : 'Link';
+  const back = '<a class="oys-back" href="' + e(pageUrl(page as unknown as PageLike)) + '">' + uiIcon('left') + ' Back to '
+    + e(phpTruthy(page.title) ? page.title : page.slug) + '</a>';
+  let body: string;
+  if (kind === 'age') {
+    body = '<div class="oys-card">' + back
+      + '<div class="oys-modal-icon" style="margin:0 0 12px">18+</div><h1>Adults only</h1>'
+      + '<p>“' + e(title) + '” is for adults only. Are you at least 18 years old?</p>'
+      + '<form method="post" action="/_/go/' + intval(block.id) + '"><input type="hidden" name="age" value="yes">'
+      + '<button class="oys-contact-send" type="submit"><span>Yes, I’m 18 or older</span></button></form></div>';
+  } else {
+    body = '<form class="oys-card oys-contact" method="post" action="/_/go/' + intval(block.id) + '">' + back
+      + '<h1>Protected link</h1><p>“' + e(title) + '” is password protected.</p>'
+      + (phpTruthy(error) ? '<div class="oys-alert err">' + e(error) + '</div>' : '')
+      + '<label class="oys-field"><span>Password</span><input type="password" name="pw" required autofocus></label>'
+      + '<button class="oys-contact-send" type="submit">' + uiIcon('lock') + '<span>Unlock</span></button></form>';
+  }
+  return renderSimple(page, 'Protected link', body);
+}
+
+// Kopfzeile als Text (Node fasst doppelte zusammen, Arrays nur bei Set-Cookie)
+function headerText(v: string | string[] | undefined): string {
+  return Array.isArray(v) ? v.join(', ') : (v ?? '');
+}
+
+// php://input: bei POST mit multipart/form-data liest PHP den Inhalt selbst ein und lässt php://input leer
+// (Typ klein geschrieben bis zum ersten ';', ',' oder Leerzeichen – wie in community/api.ts)
+function phpInput(ctx: Ctx): Buffer {
+  if (ctx.method !== 'POST') return ctx.rawBody;
+  const type = headerText(ctx.headers['content-type']);
+  const cut = type.search(/[;, ]/);
+  if (strtolower(cut >= 0 ? type.slice(0, cut) : type) === 'multipart/form-data') return Buffer.alloc(0);
+  return ctx.rawBody;
+}
+
+// --- /_/… auf jeder Adresse (index.php → lib/routes_public.php). X-Robots-Tag setzt schon der Router. ---
 export async function publicRoutes(ctx: Ctx): Promise<void> {
-  // Schnittstelle für den Discord-Bot (signiert, siehe community/api.ts)
-  if (ctx.path.startsWith('/_/bot/')) return botApi(ctx);
-  notPorted(ctx, '/_/');
+  const path = ctx.path;
+  const method = ctx.method;
+  let m: RegExpExecArray | null;
+
+  // --- Aufruf zählen ---
+  if (path === '/_/v' && method === 'POST') {
+    if (!isBot(ctx.userAgent()) && requestFromOwnSite(ctx)) {
+      const pageId = intval(own(ctx.post, 'p') ?? 0);
+      if (pageId > 0 && (await loadPage(pageId))) await recordView(pageId);
+    }
+    ctx.status = 204;
+    ctx.halt();
+  }
+
+  // --- Klick zählen ---
+  if (path === '/_/c' && method === 'POST') {
+    if (!isBot(ctx.userAgent()) && requestFromOwnSite(ctx)) {
+      const found = await publicBlock(own(ctx.post, 'b') ?? '');
+      if (found && found.block.protection === 'none') {
+        let item = '';
+        if (found.block.type === 'socials') {
+          item = ctx.p('s');
+          if (!Object.hasOwn(brands(), item)) item = '';
+        }
+        await recordClick(intval(found.page.id), found.block.id, item);
+      }
+    }
+    ctx.status = 204;
+    ctx.halt();
+  }
+
+  // --- Passwort prüfen (per JavaScript) ---
+  if (path === '/_/unlock' && method === 'POST') {
+    const found = await publicBlock(own(ctx.post, 'b') ?? '');
+    if (!found || !found.block.active || found.block.protection !== 'password') {
+      ctx.json({ ok: false, error: 'This link isn’t available right now.' }, 404);
+    }
+    const block = found.block;
+    if (!(await attemptsAllowed(ctx, 'pw:' + block.id, 10, 200, 900))) {
+      ctx.json({ ok: false, error: 'Too many attempts. Please wait a few minutes.' }, 429);
+    }
+    const pw = ctx.p('pw');
+    if (pw === '' || !(await passwordVerify(pw, phpStr(block.password_hash)))) {
+      await attemptFailed(ctx, 'pw:' + block.id, 900);
+      ctx.json({ ok: false, error: 'Wrong password.' });
+    }
+    await recordClick(intval(found.page.id), block.id);
+    ctx.json({ ok: true, url: blockTarget(block, found.page) });
+  }
+
+  // --- Weiterleitung /_/go/123 (nur geschützte Links: Passwort, Ab-18-Bestätigung, Fallback ohne JS) ---
+  // Weitergeleitet wird nur nach einem POST – so taugt /_/go nicht als offene Weiterleitung.
+  if ((m = /^\/_\/go\/(\d+)(?=\n?$)/.exec(path))) {
+    const found = await publicBlock(m[1]);
+    if (!found || !found.block.active || !blockIsClickable(found.block.type)) return notFound(ctx);
+    const { block, page } = found;
+    const pageLike = page as unknown as PageLike;
+    if (block.protection === 'none') ctx.redirect(pageUrl(pageLike));
+    if (!onPageHost(ctx, pageLike)) ctx.redirect(pageOrigin(pageLike) + '/_/go/' + intval(block.id));
+    const target = blockTarget(block, page);
+    if (target === '') ctx.redirect(pageUrl(pageLike));
+    ctx.header('Cache-Control', 'no-store');
+
+    if (block.protection === 'age') {
+      if (method !== 'POST' || (own(ctx.post, 'age') ?? '') !== 'yes') ctx.send(renderGate(page, block, 'age'));
+    } else {
+      if (method !== 'POST') ctx.send(renderGate(page, block, 'password'));
+      if (!(await attemptsAllowed(ctx, 'pw:' + block.id, 10, 200, 900))) {
+        ctx.send(renderGate(page, block, 'password', 'Too many attempts. Please wait a few minutes.'));
+      }
+      if (!(await passwordVerify(ctx.p('pw'), phpStr(block.password_hash)))) {
+        await attemptFailed(ctx, 'pw:' + block.id, 900);
+        ctx.send(renderGate(page, block, 'password', 'Wrong password.'));
+      }
+    }
+    if (!isBot(ctx.userAgent())) await recordClick(intval(page.id), block.id);
+    ctx.redirect(target, 303);
+  }
+
+  // --- Kontaktformular ---
+  if (path === '/_/contact' && method === 'POST') {
+    const found = await publicBlock(own(ctx.post, 'b') ?? '');
+    const json = wantsJson(ctx);
+    if (!found || found.block.type !== 'contact' || !found.block.active) {
+      if (json) ctx.json({ ok: false, error: 'This form is no longer available.' }, 404);
+      ctx.redirect(mainUrl('/'));
+    }
+    const page = found.page;
+    const blockId = String(found.block.id);
+    const [ok, error, spam] = await contactCheck(ctx, page, blockId, ctx.post);
+    if (ok && !spam) await storeMessage(page, ctx.post);
+    if (json) ctx.json(ok ? { ok: true } : { ok: false, error });
+    ctx.redirect(pageUrl(page as unknown as PageLike) + (ok ? '?sent=' + blockId : '') + '#contact-' + blockId);
+  }
+
+  // --- Vorschaubild für geteilte Links (Discord, WhatsApp, X …) ---
+  if ((m = /^\/_\/og\/(\d+)-([0-9a-f]{12})\.png(?=\n?$)/.exec(path))) {
+    return ogServe(ctx, intval(m[1]), m[2]);
+  }
+
+  // --- Demo-Seiten für die Startseite ---
+  if ((m = /^\/_\/demo\/([a-z0-9-]+)(?=\n?$)/.exec(path))) {
+    const demo = demoPage(m[1]);
+    if (!demo) {
+      ctx.status = 404;
+      ctx.halt();
+    }
+    if (own(ctx.get, 'layout') !== undefined && Object.hasOwn(layouts(), ctx.q('layout'))) {
+      demo.page.layout = ctx.q('layout');
+    }
+    ctx.header('Cache-Control', 'public, max-age=600');
+    ctx.send(renderPage(demo.page, demo.blocks, { mode: 'demo', entrance: 'skip', host: ctx.host }));
+  }
+
+  // --- Schnittstelle für den Discord-Bot (signiert mit bot_secret, siehe community/api.ts) ---
+  if (path.startsWith('/_/bot/')) return botApi(ctx);
+
+  // --- Wochenbericht per Web-Cron (nur mit Geheimnis aus den Einstellungen) ---
+  if (path === '/_/cron/weekly-report') {
+    const secret = phpStr(config('cron_secret', ''));
+    if (secret === '' || !safeEqual(secret, ctx.q('key'))) ctx.send('Forbidden', 403);
+    ctx.header('Content-Type', 'text/plain; charset=utf-8');
+    const result = await runWeeklyReports();
+    ctx.send('Weekly reports sent: ' + phpStr(result.sent) + ', failed: ' + phpStr(result.failed));
+  }
+
+  return notFound(ctx);
 }
-// POST /track-click (alte Klick-Zählung)
+
+// --- POST /track-click: alte Klick-Zählung (für noch offene alte Profilseiten), index.php ---
 export async function trackClick(ctx: Ctx): Promise<void> {
-  notPorted(ctx, '/track-click');
+  const data = jsonDecode(phpInput(ctx));
+  // $data['link_id'] ?? 0: nur ein Array hat Schlüssel (bei Text, Zahl oder null bleibt es 0)
+  const legacyId = intval(isArr(data) ? (own(data, 'link_id') ?? 0) : 0);
+  if (legacyId > 0 && !isBot(ctx.userAgent())) {
+    const row = await one('SELECT id, page_id FROM page_blocks WHERE legacy_link_id = ? LIMIT 1', [legacyId]);
+    if (row) await recordClick(intval(row.page_id), intval(row.id));
+  }
+  ctx.json({ status: 'success' });
 }
-// on-your.site/name[/kalender] – sonst 404
-export async function pathProfile(ctx: Ctx, _slug: string, _sub: string): Promise<void> {
-  notPorted(ctx, 'profile (path)');
+
+// oys_serve_page(): Profilseite (oder deren Termin-Seite) zeigen
+async function servePage(ctx: Ctx, page: Row, sub: string): Promise<void> {
+  ctx.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  ctx.header('X-Content-Type-Options', 'nosniff');
+  if (sub === 'kalender') {
+    const calendarKeyGiven = await calendarAccess(page, ctx.q('k'));
+    if (calendarKeyGiven === null) return notFound(ctx);
+    return kalender(ctx, page, calendarKeyGiven);
+  }
+  let notice: string | null = null;
+  const sent = own(ctx.get, 'sent');
+  if (sent !== undefined && ctypeDigit(phpStr(sent))) notice = 'sent:' + phpStr(sent);
+  ctx.send(renderPage(page, await loadBlocks(intval(page.id)), { mode: 'public', host: ctx.host, notice }));
 }
-// name.on-your.site[/kalender] – Profil oder Code-Seite, sonst 404
-export async function subdomain(ctx: Ctx, slug: string, _sub: string): Promise<void> {
-  if (await loadPageBySlug(slug)) notPorted(ctx, 'profile (subdomain)');
+
+// Abfrage weitergeben, wie sie kam (?a=1&b=2), nur wenn es eine gibt
+const queryPart = (ctx: Ctx): string => (ctx.queryString !== '' ? '?' + ctx.queryString : '');
+
+// --- Hauptdomain: on-your.site/name bzw. on-your.site/name/kalender (slug klein geschrieben, sub '' oder 'kalender') ---
+export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<void> {
+  const page = await loadPageBySlug(slug);
+  // Code-Seiten gibt es nur unter name.on-your.site (eigener Ursprung)
+  if (!page && sub === '') {
+    const site = await codeSiteBySlug(slug);
+    if (site) ctx.redirect(codeUrl(site) + '/', 302);
+  }
+  if (page) {
+    // Hauptadresse ist name.on-your.site → dorthin weiterleiten
+    if (page.address_mode !== 'path') ctx.redirect(pageUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
+    return servePage(ctx, page, sub);
+  }
+  return notFound(ctx);
+}
+
+// --- Subdomain: name.on-your.site – Profil, sonst Code-Seite, sonst 404 (sub = Pfad klein und ohne / am Rand) ---
+export async function subdomain(ctx: Ctx, slug: string, sub: string): Promise<void> {
+  const page = await loadPageBySlug(slug);
+  if (page) {
+    if (sub !== '' && sub !== 'kalender') ctx.redirect(pageUrl(page as unknown as PageLike), 302);
+    // Hauptadresse ist on-your.site/name → dorthin weiterleiten
+    if (page.address_mode === 'path') ctx.redirect(pageUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
+    return servePage(ctx, page, sub);
+  }
   const site = await codeSiteBySlug(slug);
-  if (site) return codeServe(ctx, site, ctx.path);
-  notPorted(ctx, 'subdomain 404');
+  if (site) {
+    await codeServe(ctx, site, ctx.path);
+    ctx.halt();
+  }
+  return notFound(ctx);
 }

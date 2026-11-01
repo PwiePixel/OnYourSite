@@ -64,7 +64,8 @@ export async function buildServer() {
       const ctx = new Ctx({ method: req.method, url: rawUrl, headers: req.headers, peer: req.socket.remoteAddress || '' });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       ctx.rawBody = body;
-      if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && body.length <= POST_MAX) {
+      // $_POST/$_FILES füllt PHP nur bei POST (PUT, PATCH, DELETE: leer, nur php://input hat den Inhalt)
+      if (ctx.method === 'POST' && body.length <= POST_MAX) {
         await readBody(ctx, String(req.headers['content-type'] ?? ''), body);
       }
       try {
@@ -91,8 +92,9 @@ export async function buildServer() {
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
         else reply.header(name, value);
       }
-      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher)
-      if (ctx.status === 304) {
+      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher).
+      // 204 ebenso – ohne Inhalt behält Fastify den Content-Type, den PHP auch hier mitsendet (/_/v, /_/c)
+      if (ctx.status === 304 || ctx.status === 204) {
         if (ctx.body instanceof Readable) ctx.body.destroy();
         return reply.send();
       }
@@ -160,26 +162,31 @@ export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Pro
         const chunks: Buffer[] = [];
         let size = 0;
         let tooBig = false;
-        // Nur einfache Namen wie in den Formularen der Seite (avatar, file …)
-        const key = name.replace(/\[\]$/, '');
         // php_ap_basename(): alles nach dem letzten / oder \
         const raw = info.filename ?? '';
         const fileName = raw.slice(Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\')) + 1);
+        // Nur einfache Namen wie in den Formularen der Seite (avatar, file …). name[…] ist in PHP ein Array von
+        // Dateien ($_FILES['name']['error'] usw. sind Arrays) – die Datei bleibt erreichbar, multiple merkt es sich.
+        const store = (file: UploadedFile) => {
+          const open = name.indexOf('[');
+          if (open > 0) ctx.files[name.slice(0, open)] = { ...file, multiple: true };
+          else ctx.files[name] = file;
+        };
         stream.on('data', (c: Buffer) => {
           size += c.length;
           if (size > UPLOAD_MAX) tooBig = true;
           else chunks.push(c);
         });
         stream.on('end', () => {
-          ctx.files[key] = raw === ''
+          store(raw === ''
             ? { name: '', type: '', size: 0, data: Buffer.alloc(0), error: 4 }
-            : { name: fileName, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 };
+            : { name: fileName, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 });
           done();
         });
         // Das Formular endet mitten in der Datei: wie PHP UPLOAD_ERR_PARTIAL (3) ohne Inhalt. Ohne diesen Empfänger
         // beendete der Fehler den ganzen Server.
         stream.on('error', () => {
-          ctx.files[key] = { name: fileName, type: '', size: 0, data: Buffer.alloc(0), error: 3 } satisfies UploadedFile;
+          store({ name: fileName, type: '', size: 0, data: Buffer.alloc(0), error: 3 });
           done();
         });
         stream.on('close', () => done());
