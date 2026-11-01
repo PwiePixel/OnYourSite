@@ -201,4 +201,13 @@ t('Honeycombs: view reward text', oys_hc_describe(['reason' => 'views', 'ref' =>
 t('Honeycombs: gift without a note', oys_hc_describe(['reason' => 'admin', 'ref' => 'a1-x', 'note' => '', 'amount' => 50]), 'Gift from the team');
 t('Honeycombs: correction without a note', oys_hc_describe(['reason' => 'admin', 'ref' => 'a1-y', 'note' => '', 'amount' => -5]), 'Correction by the team');
 t('Honeycombs: unlocking the code page', oys_hc_describe(['reason' => 'unlock', 'ref' => 'code_page', 'note' => 'Unlocked by the team', 'amount' => 0]), 'Unlocked your code page');
+// Discord-Bot: Eingaben und verschlüsselte Ticket-Nachrichten
+t('Bot: Discord IDs', [oys_snowflake('123456789012345678'), oys_snowflake('12ab'), oys_snowflake('1234567890123456789012345')], ['123456789012345678', null, null]);
+t('Bot: text is trimmed and shortened', oys_community_text("  Hi\r\nthere\0  ", 7), "Hi\nther");
+t('Bot: ticket messages round-trip encrypted', oys_community_open(oys_community_seal('ENC: looks encrypted')), 'ENC: looks encrypted');
+t('Bot: stored ticket messages are not plain text', strpos(oys_community_seal('secret'), 'ENC:') === 0 && strpos(oys_community_seal('secret'), 'secret') === false, true);
+$_SERVER['HTTP_X_OYS_TIMESTAMP'] = (string) time();
+$_SERVER['HTTP_X_OYS_SIGNATURE'] = str_repeat('0', 64);
+t('Bot: requests without the right signature are refused', oys_bot_verify('GET', '/_/bot/ping', ''), false);
+unset($_SERVER['HTTP_X_OYS_TIMESTAMP'], $_SERVER['HTTP_X_OYS_SIGNATURE']);
 echo $fails ? "\n$fails FAILED\n" : "\nAll tests passed\n";

@@ -73,6 +73,10 @@ Code pages only answer `GET` and `HEAD`, and names used by mail and network auto
 
 > Code pages are user content on subdomains of your main domain. If you ever want to separate them completely (like GitHub does with `github.io`), a second domain just for code pages would be the next step.
 
+## Discord bot
+
+The folder `discord-bot/` contains a small Node.js bot for the community server: welcome messages, a suggestion forum whose posts are saved on the website (accept or decline them in Discord or under **Admin → Community** – both stay in sync) and support tickets in private channels that you can read and answer on the website. It talks to the website at `/_/bot/…` with signed requests (`bot_secret` in `config.php`); without the secret, these endpoints don’t exist. Ticket messages are stored encrypted, nothing about suggestions or tickets is public, and the admin panel and endpoints are kept out of search engines. Setup: `discord-bot/README.md`.
+
 ## Updates, roadmap & Discord
 
 Everything is managed in the admin panel (`/admin`):
@@ -107,6 +111,7 @@ lib/
   storage.php          Upload folder (config: uploads_dir), delivering uploads, ZIP backup
   honeycombs.php       Honeycombs: earning, giving, spending
   codesites.php        Code pages: files, limits, delivery in the sandbox
+  community.php        Discord bot connection: suggestions, support tickets, queue for the bot
   pages.php, stats.php, spam.php, uploads.php, report.php, social.php, demo.php
 views/                 Home page, editor (dashboard.php), login, admin, calendar, updates …
 static/css/            page.css (structure & layouts), themes.css (30 themes), editor.css
@@ -115,6 +120,7 @@ static/vendor/qrcode/  QR code generator (qrcode-generator, MIT)
 static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 cron/weekly_report.php Weekly report
+discord-bot/           Discord bot (Node.js): welcome, suggestions, support – see its README
 ```
 
 ## Privacy

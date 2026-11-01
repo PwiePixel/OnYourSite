@@ -31,5 +31,6 @@ require_once __DIR__ . '/updates.php';
 require_once __DIR__ . '/share.php';
 require_once __DIR__ . '/honeycombs.php';
 require_once __DIR__ . '/codesites.php';
+require_once __DIR__ . '/community.php';
 
 oys_ensure_schema($pdo);

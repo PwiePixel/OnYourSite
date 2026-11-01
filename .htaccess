@@ -4,7 +4,8 @@
     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
     # Interne Ordner und Zugangsdaten nie direkt ausliefern
-    RewriteRule ^(lib|cron|email|PHPMailer|tests|views)(/|$) - [F,L]
+    RewriteRule ^(lib|cron|email|PHPMailer|tests|views|discord-bot)(/|$) - [F,L]
+    RewriteRule (^|/)\.env$ - [F,L]
     RewriteRule ^config(\.example)?\.php$ - [F,L]
     RewriteRule (^|/)\.git(/|$) - [F,L]
 

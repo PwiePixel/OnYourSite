@@ -217,6 +217,11 @@ if (preg_match('#^/_/demo/([a-z0-9-]+)$#', $path, $m)) {
     exit;
 }
 
+// --- Schnittstelle für den Discord-Bot (signiert mit bot_secret aus config.php, siehe lib/community.php) ---
+if (strpos($path, '/_/bot/') === 0) {
+    oys_bot_api($pdo, $path, $method);
+}
+
 // --- Wochenbericht per Web-Cron (nur mit Geheimnis aus config.php) ---
 if ($path === '/_/cron/weekly-report') {
     $secret = (string) oys_config('cron_secret', '');

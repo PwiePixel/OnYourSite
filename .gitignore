@@ -7,6 +7,10 @@
 !/static/uploads/.gitkeep
 !/static/uploads/.htaccess
 
+# Discord-Bot: Zugangsdaten und Pakete
+/discord-bot/.env
+/discord-bot/node_modules/
+
 # Lokales / Editor
 .DS_Store
 Thumbs.db

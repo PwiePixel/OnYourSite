@@ -38,6 +38,11 @@ return [
     // task "Run a PHP script" instead – then you don’t need this).
     'cron_secret' => '',
 
+    // Optional: shared secret for the Discord bot (discord-bot/), at least 32 characters.
+    // Generate one with: php -r "echo bin2hex(random_bytes(32));"
+    // Put the same value into BOT_SECRET in the bot's .env. Empty = bot connection off.
+    'bot_secret' => '',
+
     // Show errors in the browser (only set to true for testing)
     'debug' => false,
 ];
