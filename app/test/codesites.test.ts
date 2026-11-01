@@ -2,13 +2,13 @@
 // Anlegen, Speichern mit allen Grenzen, Löschen. Die Aufrufe mit Datenbank laufen wie in honeycombs.test.ts doppelt.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import type { Connection } from 'mysql2/promise';
 import { ROOT_DIR } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { time } from '../src/php.js';
 import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX, CODE_TYPES, codePreviewToken, codePreviewValid, codeStarterFiles, codeValidPath,
-  codeWrite, usedUploadsIn } from '../src/code/sites.js';
+  codeFiles, codeSave, codeSiteById, codeWrite, usedUploadsIn } from '../src/code/sites.js';
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
@@ -254,4 +254,50 @@ test('used uploads: random and hostile code files match PHP and stay fast', () =
   // Mehrere Dateien zusammen wie oys_code_used_uploads() (Reihenfolge der Namen wie die Schlüssel in PHP)
   assert.deepEqual([...usedUploadsIn(names, 5)], [...new Set(theirs.slice(0, names.length).flat())]);
   assert.ok(ms < 3000, `usedUploadsIn took ${ms} ms`);
+});
+
+test('save: waits for a save that is still running and checks the limits afterwards (PHP and Node)', async () => {
+  // Eine andere Verbindung hält die Zeile der Seite (wie ein zweiter Tab mitten im Speichern) und legt in der Zeit
+  // Dateien an. Das Speichern muss warten und danach mit dem neuen Stand rechnen – sonst wären 31 Dateien möglich.
+  const files = (prefix: string, n: number) => Object.fromEntries(Array.from({ length: n }, (_v, i) => [`${prefix}${i}.txt`, 'x']));
+  async function scenario(db: string, save: (batch: Record<string, string>) => Promise<unknown>): Promise<[unknown, number]> {
+    const holder = await adminConnection();
+    try {
+      await holder.query(`USE \`${db}\``);
+      const [rows] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
+      const have = Number((rows as Array<{ n: number }>)[0].n);
+      const k = Math.floor((CODE_MAX_FILES - have) / 2) + 1;
+      assert.ok(have + k <= CODE_MAX_FILES && have + 2 * k > CODE_MAX_FILES, `start with ${have} files`);
+      await holder.query('START TRANSACTION');
+      await holder.query('SELECT id FROM code_sites WHERE id = 1 FOR UPDATE');
+      let done = false;
+      const pending = save(files('mine', k)).finally(() => { done = true; });
+      await new Promise((r) => setTimeout(r, 700));
+      assert.equal(done, false, 'the save waits for the other one');
+      for (const [path] of Object.entries(files('other', k))) await holder.query("INSERT INTO code_files (site_id, path, content, updated_at) VALUES (1, ?, 'y', NOW())", [path]);
+      await holder.query('COMMIT');
+      const result = await pending;
+      const [after] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
+      return [result, Number((after as Array<{ n: number }>)[0].n)];
+    } finally {
+      await holder.query('ROLLBACK').catch(() => undefined);
+      await holder.end();
+    }
+  }
+  const phpSave = (batch: Record<string, string>) => new Promise<unknown>((resolve, reject) => {
+    const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_code_save($pdo, oys_code_site_by_id($pdo, 1), json_decode(stream_get_contents(STDIN), true), []), JSON_UNESCAPED_UNICODE);`],
+      { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(JSON.parse(out))));
+    child.stdin?.end(JSON.stringify(batch));
+  });
+  const php = await scenario(DB.php, phpSave);
+  await useDb(DB.node);
+  try {
+    const site = (await codeSiteById(1))!;
+    const node = await scenario(DB.node, (batch) => codeSave(site, batch, []));
+    assert.deepEqual(node, php);
+    assert.deepEqual(php[0], 'A code page can have up to 30 files.');
+    assert.equal((await codeFiles(1)).size, php[1]);
+  } finally {
+    await restoreDb();
+  }
 });
