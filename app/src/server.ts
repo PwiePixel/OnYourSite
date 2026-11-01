@@ -28,7 +28,17 @@ export async function buildServer() {
     console.error(`[${new Date().toISOString()}] ${err.message} – will retry with the next request`);
   });
 
-  const app = Fastify({ logger: false, bodyLimit: BODY_LIMIT, trustProxy: false, routerOptions: { ignoreTrailingSlash: false, ignoreDuplicateSlashes: false } });
+  // Alle Anfragen gehen an genau eine Route: Fastify soll die Adresse weder dekodieren noch ablehnen (z. B. /%FF.html),
+  // denn index.php arbeitet mit der rohen Adresse. Die Original-Adresse wird vorher gemerkt.
+  const app = Fastify({
+    logger: false,
+    bodyLimit: BODY_LIMIT,
+    trustProxy: false,
+    rewriteUrl: (req) => {
+      (req as typeof req & { oysUrl?: string }).oysUrl = req.url ?? '/';
+      return '/';
+    },
+  });
   // Ein leerer Content-Type-Header würde sonst mit 415 abgelehnt – PHP liest den Inhalt trotzdem
   app.addHook('onRequest', async (req) => {
     const ct = req.headers['content-type'];
@@ -39,9 +49,10 @@ export async function buildServer() {
 
   app.route({
     method: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    url: '/*',
+    url: '/',
     handler: async (req, reply) => {
-      const ctx = new Ctx({ method: req.method, url: req.raw.url || '/', headers: req.headers, peer: req.socket.remoteAddress || '' });
+      const rawUrl = (req.raw as typeof req.raw & { oysUrl?: string }).oysUrl || '/';
+      const ctx = new Ctx({ method: req.method, url: rawUrl, headers: req.headers, peer: req.socket.remoteAddress || '' });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       ctx.rawBody = body;
       if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && body.length <= POST_MAX) {
