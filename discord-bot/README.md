@@ -26,7 +26,7 @@ Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The end
 
    This asks for: View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, Manage Channels, Manage Roles, Manage Threads. In *Server Settings → Roles*, drag the bot’s role **above** the welcome role.
 3. **Prepare the server:** a welcome channel, a **forum** channel for suggestions (optional tags “Accepted” and “Declined”), a category for tickets, a channel for the support panel and a team role.
-4. **Website:** add `'bot_secret' => '…',` to `config.php` (at least 32 characters; *Admin → Community* shows a fresh random one).
+4. **Website:** add `'bot_secret' => '…',` to `config.php` (at least 32 characters; *Admin → Community* shows a fresh random one). On your own server, `server/install.sh` does this for you.
 5. **Bot:** Node.js 18 or newer.
    ```bash
    cd discord-bot
@@ -37,39 +37,38 @@ Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The end
    ```
 6. In the support channel, run **`/support-panel`**. `/bot-status` shows whether everything is connected (both commands need “Manage Server”).
 
-## Install on a server (Docker)
+## Install on a server
 
-The easiest way: a small Linux server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened.
+**On your own server together with the website** (recommended): `server/install.sh` of the website asks “Set up the Discord bot on this server too?” and does everything below – including the shared secret in `config.php`, so nothing has to be copied by hand. See [server/README.md](../server/README.md).
+
+**Anywhere else** – e.g. a small extra server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened:
 
 ```bash
-# 1. Get the code onto the server – clone the repository (private: use a deploy key or token)
+# 1. Get the code onto the server – clone the repository (private: use a deploy key, see server/README.md)
 #    or upload just the folder discord-bot/ via SFTP
-git clone https://github.com/PwiePixel/OnYourSite.git
+git clone git@github.com:PwiePixel/OnYourSite.git
 cd OnYourSite/discord-bot
 
 # 2. Run the installer
-sudo ./install.sh
+sudo bash install.sh
 ```
 
-The installer
-1. installs Docker if it’s missing (official script from get.docker.com, after asking),
-2. asks for the token, the IDs and the website address – and creates the secret for `config.php` if you don’t have one yet,
-3. saves everything in `.env` (readable only by root; it never goes into the Docker image),
-4. builds the image, checks the connection to the website and starts the bot.
+The installer asks how the bot should run:
 
-The bot runs as a container that restarts by itself after a crash or a reboot. It runs as a normal user, with a read-only file system, no extra rights and a 256 MB memory limit, and its logs are rotated.
+1. **As a system service with Node.js** (recommended): installs Node.js 22 if it’s missing (from deb.nodesource.com, after asking), copies the bot to `/opt/onyoursite-bot` and runs it as its own user without a login, without write access and with a 256 MB limit. The settings are stored in `/etc/onyoursite-bot.env`, readable only by root.
+2. **In Docker**: installs Docker if it’s missing (official script from get.docker.com, after asking) and runs the bot as a container with a read-only file system, no extra rights and rotated logs. The settings are stored in `.env` next to the installer, readable only by root – they never go into the image.
 
-| | |
-|---|---|
-| Logs | `docker compose logs -f bot` |
-| Restart | `docker compose restart bot` |
-| Stop | `docker compose down` |
-| Change settings | `sudo ./install.sh` (Enter keeps the current values) |
-| Update | `git pull && sudo ./install.sh --update` |
+Both ask for the **bot token** (tab *Bot* → *Reset Token*), the **application ID** (tab *General Information* – the same number Discord calls *Client ID*), the channel and role IDs and the website address, then create the secret for `config.php` if there is none yet, check the connection to the website and start the bot. It restarts by itself after a crash or a reboot. **The Client Secret is not needed** – don’t enter it anywhere.
 
-Without Docker it also runs directly with Node.js 18 or newer (`npm install` and `npm start`, see above) – then keep it running with a service manager such as systemd or pm2.
+| | System service | Docker |
+|---|---|---|
+| Logs | `journalctl -u onyoursite-bot -f` | `docker compose logs -f bot` |
+| Restart | `sudo systemctl restart onyoursite-bot` | `docker compose restart bot` |
+| Stop | `sudo systemctl stop onyoursite-bot` | `docker compose down` |
+| Change settings | `sudo bash install.sh` (Enter keeps the current values) | the same |
+| Update | `git pull && sudo bash install.sh --update` | the same |
 
-**Keep `.env` out of the website folder.** If the repository is deployed into `httpdocs`, the `.htaccess` blocks `/discord-bot/` and every `.env` file anyway – but run the bot from a folder outside the web root, or on its own server.
+**Keep the settings out of the website folder.** The `.htaccess` blocks `/discord-bot/` and every `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
 
 ## Files
 
@@ -82,6 +81,6 @@ src/suggestions.js  Suggestion forum, accept/decline
 src/support.js      Support panel, ticket channels, closing
 src/outbox.js       Picks up changes made on the website
 src/commands.js     /support-panel and /bot-status
-install.sh          Installer for a server (Docker)
+install.sh          Installer for a server (system service or Docker)
 Dockerfile, docker-compose.yml   Container setup used by the installer
 ```

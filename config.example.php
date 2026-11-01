@@ -5,7 +5,7 @@
 // config.php is NOT committed to the Git repo (see .gitignore).
 // ---------------------------------------------------------------
 return [
-    // Database (on Plesk usually localhost)
+    // Database (usually localhost – on your own server, server/install.sh fills this in)
     'db' => [
         'host' => 'localhost',
         'name' => 'onyoursite_',
@@ -34,13 +34,14 @@ return [
     'max_pages' => 3,
 
     // Optional: secret for running the weekly report via web cron
-    // (https://on-your.site/cron/weekly_report.php is blocked; use the Plesk
-    // task "Run a PHP script" instead – then you don’t need this).
+    // (https://on-your.site/cron/weekly_report.php is blocked). Not needed when the report
+    // runs on the server itself: own server (server/install.sh) or a Plesk scheduled task.
     'cron_secret' => '',
 
     // Optional: shared secret for the Discord bot (discord-bot/), at least 32 characters.
     // Generate one with: php -r "echo bin2hex(random_bytes(32));"
-    // Put the same value into BOT_SECRET in the bot's .env. Empty = bot connection off.
+    // The bot needs the same value as BOT_SECRET (its installer asks for it – server/install.sh
+    // takes care of both sides). Empty = bot connection off.
     'bot_secret' => '',
 
     // Show errors in the browser (only set to true for testing)

@@ -29,6 +29,10 @@ Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in P
 
 Everything you already had stays: the built-in booking calendar (`/kalender`), file download (PDF/vcf), SEO settings, custom CSS, “Hide branding” (premium), Discord ID, and the admin panel with “Log in as user” and newsletter.
 
+## Your own server (without Plesk)
+
+One file sets up a fresh Ubuntu or Debian server with everything OnYourSite needs – it fetches it all by itself: the code from GitHub, Apache with PHP-FPM (the same `.htaccess`), MariaDB with its own database, user and password, `config.php`, a Let’s Encrypt certificate for the domain and every subdomain that renews itself, a firewall, fail2ban and automatic security updates, the weekly report, a nightly backup, your admin account and – if you like – the Discord bot. It also moves your data from the old server: database, uploads, `config.php` (with the key for encrypted data) and the mail settings. Updates later: `sudo bash server/install.sh --update`. Step by step: [server/README.md](server/README.md).
+
 ## Updating an existing installation (Plesk)
 
 1. **Back up** your database and files.
@@ -121,6 +125,7 @@ static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 cron/weekly_report.php Weekly report
 discord-bot/           Discord bot (Node.js): welcome, suggestions, support – see its README
+server/                Installer for your own server (one file does everything), backup, certificate check – see server/README.md
 ```
 
 ## Privacy
