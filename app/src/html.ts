@@ -79,7 +79,8 @@ export function phpJson(value: unknown, flags: JsonFlags = {}): string {
   if (flags.hexTag) s = s.replace(/</g, '\\u003C').replace(/>/g, '\\u003E');
   if (flags.hexAmp) s = s.replace(/&/g, '\\u0026');
   if (flags.hexApos) s = s.replace(/'/g, '\\u0027');
-  if (flags.hexQuot) s = s.replace(/\\"/g, '\\u0022');
+  // Nur maskierte Anführungszeichen (\") ersetzen – ein \\ am Ende eines Textes gehört nicht dazu
+  if (flags.hexQuot) s = s.replace(/\\(.)/g, (m, c: string) => (c === '"' ? '\\u0022' : m));
   // PHP schreibt Steuerzeichen wie JSON.stringify (\n, \t, \u0000 …) – nur \u007f wird oben behandelt
   return s;
 }
