@@ -1,5 +1,6 @@
 // HTML sicher zusammensetzen: html`…${wert}…` maskiert jeden eingesetzten Wert wie e() in PHP
 // (htmlspecialchars mit ENT_QUOTES). Fertiges HTML (andere Vorlagen, raw()) wird unverändert eingesetzt.
+import { phpStr } from './php.js';
 
 export class SafeHtml {
   constructor(public readonly value: string) {}
@@ -10,24 +11,11 @@ export class SafeHtml {
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
 
-// e(): wie htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+// e(): wie htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') – bereits fertiges HTML (SafeHtml)
+// wird wie ein Text behandelt und also auch maskiert, genau wie e() in PHP
 export function e(value: unknown): string {
-  return phpString(value).replace(/[&<>"']/g, (c) => ESC[c]);
-}
-
-// (string) $v in PHP: null → '', true → '1', false → '', Zahlen ohne Exponent wie PHP
-export function phpString(value: unknown): string {
-  if (value === null || value === undefined || value === false) return '';
-  if (value === true) return '1';
-  if (typeof value === 'number') return phpNumberString(value);
-  if (value instanceof SafeHtml) return value.value;
-  return String(value);
-}
-
-export function phpNumberString(n: number): string {
-  if (Number.isInteger(n)) return String(n);
-  // PHP 8: Gleitkommazahlen mit bis zu 17 signifikanten Stellen, kürzeste Darstellung
-  return String(n);
+  const s = value instanceof SafeHtml ? value.value : phpStr(value);
+  return s.replace(/[&<>"']/g, (c) => ESC[c]);
 }
 
 export function raw(value: string): SafeHtml {
@@ -75,7 +63,8 @@ export function phpJson(value: unknown, flags: JsonFlags = {}): string {
   if (s === undefined) s = 'null';
   if (!flags.unescapedSlashes) s = s.replace(/\//g, '\\/');
   if (!flags.unescapedUnicode) {
-    s = s.replace(/[\u007f-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    // Alles über ASCII als \uXXXX (Ersatzpaare einzeln, klein geschrieben); DEL (0x7F) bleibt wie in PHP
+    s = s.replace(/[\u0080-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
   } else {
     // PHP maskiert U+2028/U+2029 auch mit JSON_UNESCAPED_UNICODE (außer mit JSON_UNESCAPED_LINE_TERMINATORS)
     s = s.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
