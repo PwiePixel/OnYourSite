@@ -11,6 +11,7 @@ import { phpIntBig } from '../src/admin/page.js';
 import { emailTemplates, saveSmtp, setEmailDirForTests, smtpConfig, utf8Substitute } from '../src/admin/newsletter.js';
 import { phpJsonDecode } from '../src/community/json.js';
 import { e } from '../src/html.js';
+import { passwordHash, passwordVerify } from '../src/crypto.js';
 
 // PHP-Ausdruck über alle Eingaben (JSON hinein, JSON heraus)
 function php(code: string, input: unknown): unknown {
@@ -85,6 +86,30 @@ test('SMTP form values (htmlspecialchars($smtp_config[key] ?? \'\')) match PHP f
   assert.deepEqual(files.map((f) => smtpValue(phpJsonDecode(f), 'host')), ref);
   // Ein Array als Wert: TypeError wie in PHP
   assert.throws(() => smtpValue(phpJsonDecode('{"host":{"a":1}}'), 'host'), TypeError);
+});
+
+test('more smtp.json shapes match PHP: BOM, lone surrogate, nesting depth 512, INF, small floats, trailing text', () => {
+  const deep = (n: number) => '{"host":"x","d":' + '['.repeat(n) + ']'.repeat(n) + '}';
+  const files = ['﻿{"host":"x"}', '{"host":"\\ud800"}', '{"host":"\\ud83d\\ude00"}', '{"host":"a\\u0000b"}', '{"host":1e400}', '{"host":-1e400}',
+    '{"host":1e-5}', '{"host":0.00001}', '{"host":1e20}', '{"host":1.0}', '{"host":-0}', '{"host":1.5e300}', '{"host":1234567890123456789}',
+    deep(510), deep(511), deep(512), ' {"host":"ws"} ', '{"host":"x"} x', '{"host":"x",}', "{'host':'x'}", '{"Host":"case"}', '{"host ":"space"}',
+    '[]', '{}', 'true', '1.5', '{"host":false}'];
+  const ref = php('return array_map(function ($j) { $c = json_decode($j, true); return htmlspecialchars($c[\'host\'] ?? \'\'); }, $in);', files);
+  assert.deepEqual(files.map((f) => smtpValue(phpJsonDecode(f), 'host')), ref);
+});
+
+test('passwords the admin sets (no rules) verify both ways with PHP: 72-byte limit, multibyte, spaces', async () => {
+  const pws = [' spaced pass ', 'p', 'x'.repeat(100), 'ä'.repeat(40), 'a' + 'ä'.repeat(36), '😀'.repeat(20), 'a'.repeat(71) + 'ä'];
+  const hashes: string[] = [];
+  for (const pw of pws) hashes.push(await passwordHash(pw));
+  // PHP prüft die Node-Hashes: ganzes Passwort, die ersten 72 Bytes, bei längeren nicht die ersten 71
+  const ref = php('return array_map(fn($x) => [password_verify($x[0], $x[1]), password_verify(substr($x[0], 0, 72), $x[1]), strlen($x[0]) > 72 ? password_verify(substr($x[0], 0, 71), $x[1]) : false, password_hash($x[0], PASSWORD_DEFAULT)], $in);',
+    pws.map((pw, i) => [pw, hashes[i]])) as [boolean, boolean, boolean, string][];
+  for (const [i, [full, first72, first71, phpHash]] of ref.entries()) {
+    assert.deepEqual([full, first72, first71], [true, true, false], pws[i]);
+    // Node prüft den PHP-Hash (Anmelden nach einem Zurücksetzen in der PHP-Fassung)
+    assert.equal(await passwordVerify(pws[i], phpHash), true, pws[i]);
+  }
 });
 
 test('smtp.json is read like file_exists() + json_decode(), without a file as an empty array', () => {
