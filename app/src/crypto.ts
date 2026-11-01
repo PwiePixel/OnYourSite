@@ -58,17 +58,20 @@ export function safeEqual(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-// password_hash(PASSWORD_DEFAULT) = bcrypt mit Kosten 10 und Präfix $2y$ (gleichwertig zu $2b$)
+// password_hash(PASSWORD_DEFAULT) = bcrypt mit Kosten 10 und Präfix $2y$ (gleichwertig zu $2b$).
+// Ein Nullbyte im Passwort lehnt PHP mit einem ValueError ab (die Anfrage endet mit 500).
 export async function passwordHash(password: string): Promise<string> {
+  if (password.includes('\0')) throw new Error('Bcrypt password must not contain null character');
   const hash = await bcrypt.hash(password, 10);
   return hash.replace(/^\$2[ab]\$/, '$2y$');
 }
 
-// password_verify(): leere, fehlende oder fremde Hashes ergeben false
+// password_verify(): leere, fehlende oder fremde Hashes ergeben false. Wie crypt() in PHP endet das Passwort am
+// ersten Nullbyte („abc\0x“ passt zu „abc“).
 export async function passwordVerify(password: string, hash: unknown): Promise<boolean> {
   if (typeof hash !== 'string' || !/^\$2[aby]\$\d\d\$/.test(hash)) return false;
   try {
-    return await bcrypt.compare(password, hash.replace(/^\$2y\$/, '$2b$'));
+    return await bcrypt.compare(password.split('\0')[0], hash.replace(/^\$2y\$/, '$2b$'));
   } catch {
     return false;
   }
