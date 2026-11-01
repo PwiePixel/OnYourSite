@@ -7,7 +7,6 @@ import { dispatch } from './router.js';
 import { setPhpVar, parseStr } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
-import { registerAll } from './routes/index.js';
 import { ensureSchema } from './schema.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
@@ -21,7 +20,6 @@ export async function buildServer() {
   process.env.TZ = timeZone();
   // Tabellen anlegen bzw. auf den neuesten Stand bringen (einmal beim Start statt bei jeder Anfrage)
   await ensureSchema();
-  registerAll();
 
   const app = Fastify({ logger: false, bodyLimit: BODY_LIMIT, trustProxy: false, routerOptions: { ignoreTrailingSlash: false, ignoreDuplicateSlashes: false } });
   app.removeAllContentTypeParsers();

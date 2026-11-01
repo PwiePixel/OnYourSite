@@ -3,7 +3,12 @@ import type { Ctx } from './web/ctx.js';
 import { isDenied, serveStatic } from './web/static.js';
 import { configString } from './config.js';
 import { strtolower, phpTrim } from './php.js';
-import { routes } from './routes/registry.js';
+import { serveUpload } from './content/storage.js';
+import { api } from './public/api.js';
+import { notFound } from './public/notFound.js';
+import { pathProfile, publicRoutes, subdomain, trackClick } from './public/routes.js';
+import { adminImpersonate, adminReturn } from './app/impersonate.js';
+import { appRoutes } from './app/dispatch.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -39,15 +44,15 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // 0. Hochgeladene Dateien (vor allem anderen, ohne Datenbank)
   if (ctx.path.startsWith('/static/uploads/')) {
     if (await serveStatic(ctx)) ctx.halt();
-    await routes.serveUpload(ctx, ctx.path.slice('/static/uploads/'.length));
+    await serveUpload(ctx, ctx.path.slice('/static/uploads/'.length));
     ctx.halt();
   }
   // Vorhandene Dateien (bisher Apache)
   if (await serveStatic(ctx)) ctx.halt();
   // Frühere PHP-Einstiege unter derselben Adresse
-  if (ctx.path === '/api.php') return routes.api(ctx);
-  if (ctx.path === '/admin_impersonate.php') return routes.adminImpersonate(ctx);
-  if (ctx.path === '/admin_return.php') return routes.adminReturn(ctx);
+  if (ctx.path === '/api.php') return api(ctx);
+  if (ctx.path === '/admin_impersonate.php') return adminImpersonate(ctx);
+  if (ctx.path === '/admin_return.php') return adminReturn(ctx);
 
   const host = ctx.host;
   const path = ctx.path;
@@ -56,24 +61,24 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // 1. Öffentliche Endpunkte ohne Cookies (auf jeder Adresse gleich)
   if (path.startsWith('/_/')) {
     ctx.header('X-Robots-Tag', 'noindex');
-    return routes.publicRoutes(ctx);
+    return publicRoutes(ctx);
   }
   // Alte Klick-Zählung
-  if (path === '/track-click' && ctx.method === 'POST') return routes.trackClick(ctx);
+  if (path === '/track-click' && ctx.method === 'POST') return trackClick(ctx);
 
   // 2. Hauptdomain: App und Profile im Pfad-Modus
   if (isMainHost(host)) {
-    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path)) return routes.appRoutes(ctx);
+    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
-    if (m) return routes.pathProfile(ctx, m[1], m[2] ?? '');
-    return routes.notFound(ctx);
+    if (m) return pathProfile(ctx, m[1], m[2] ?? '');
+    return notFound(ctx);
   }
 
   // 3. Subdomain: Profil oder Code-Seite
   if (host.endsWith('.' + base)) {
     const slug = host.slice(0, host.length - base.length - 1);
-    return routes.subdomain(ctx, slug, phpTrim(strtolower(path), '/'));
+    return subdomain(ctx, slug, phpTrim(strtolower(path), '/'));
   }
 
-  return routes.notFound(ctx);
+  return notFound(ctx);
 }
