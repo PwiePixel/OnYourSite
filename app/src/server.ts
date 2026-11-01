@@ -29,6 +29,11 @@ export async function buildServer() {
   });
 
   const app = Fastify({ logger: false, bodyLimit: BODY_LIMIT, trustProxy: false, routerOptions: { ignoreTrailingSlash: false, ignoreDuplicateSlashes: false } });
+  // Ein leerer Content-Type-Header würde sonst mit 415 abgelehnt – PHP liest den Inhalt trotzdem
+  app.addHook('onRequest', async (req) => {
+    const ct = req.headers['content-type'];
+    if (typeof ct === 'string' && ct.trim() === '') delete req.headers['content-type'];
+  });
   app.removeAllContentTypeParsers();
   app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: BODY_LIMIT }, (_req, body, done) => done(null, body));
 
