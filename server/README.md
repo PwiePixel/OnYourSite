@@ -8,116 +8,103 @@ curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/in
 
 - **the code** from GitHub
 - **Apache with PHP-FPM** (the same `.htaccess` as on Plesk) and **MariaDB** – the database, its own database user, a random password, `config.php` with new keys and the upload folder are created automatically
+- a **Cloudflare Tunnel** (if the DNS is at Cloudflare): the installer creates the tunnel, points `on-your.site`, `www` and every subdomain to it and removes old records and tunnels of the website – visitors come in through Cloudflare and the server needs no open web ports
 - **HTTPS for the domain and every subdomain** (`*.on-your.site` – also the ones added later) with a free Let’s Encrypt certificate that **renews itself**; if a renewal ever fails, all admins get an email two weeks before it runs out
-- **protection**: a firewall (only SSH, HTTP and HTTPS), fail2ban against password guessing on SSH, automatic security updates, a database that only answers the server itself, PHP that can’t start other programs, hardened network settings – and, if you like, SSH logins only with a key
+- **protection**: a firewall, fail2ban against password guessing on SSH, automatic security updates, a database that only answers the server itself, PHP that can’t start other programs, hardened network settings – and, if you like, SSH logins only with a key
 - the **weekly report** every Monday at 8:00 and a **backup** every night
-- your **admin account** (on a new installation)
+- your **admin account**
 - the **Discord bot** as a system service (optional)
-- **moving your data** from the old server: database, uploads, `config.php` and the mail settings
+- **start from scratch** any time (`--reset`) – and, if you want, moving the data of an old server
 
 ## What you need
 
 - **A server (VPS)** with Ubuntu 24.04 (22.04, Debian 12 and 13 work too), root access via SSH, 2 GB RAM recommended (1 GB works) and enough disk space for the uploads. A minimal Debian may lack `curl` – then `apt update && apt install -y curl` first. Logged in as root? Then leave out `sudo` in all commands here.
-- **API access to the DNS of your domain.** A certificate for all subdomains (`*.on-your.site`) is only issued after a check in the DNS, and the installer does that check through the API of your DNS provider – it finds the provider by itself from the nameservers. Built in: **Cloudflare, Hetzner, IONOS, Netcup, INWX, all-inkl.com and Porkbun**; more than 150 others work through [acme.sh](https://github.com/acmesh-official/acme.sh/wiki/dnsapi). If the DNS of your domain is managed by Plesk itself or by a provider without an API, move the DNS to one of these first (Cloudflare is free – use “DNS only”, the grey cloud).
-- **Mail:** the website sends its emails through the SMTP server in `email/smtp.json`. If your mailboxes are on the Plesk server, they don’t move with this installer – move them to a mail provider first and change the mail server under *Admin → Mail Server* and the MX records.
+- **The DNS of your domain at Cloudflare** (recommended – the free plan is enough) and **one API token** for it: Cloudflare → *My Profile* → *API Tokens* → *Create Token* → *Create Custom Token* with these permissions:
+  - Account · Cloudflare Tunnel · Edit
+  - Zone · DNS · Edit
+  - Zone · Zone · Read
 
-## Moving step by step
+  Account Resources: your account – Zone Resources: *Specific zone* → `on-your.site`. The installer uses this one token for the tunnel and for the certificate.
 
-### 1. A day before: shorten the DNS time
+  Without Cloudflare it works too: the certificate then comes through the API of your DNS provider (built in: Hetzner, IONOS, Netcup, INWX, all-inkl.com, Porkbun; more than 150 others through [acme.sh](https://github.com/acmesh-official/acme.sh/wiki/dnsapi)), and you point the DNS to the server yourself.
+- **Mail:** the website sends its emails through the SMTP server you enter under *Admin → Mail Server*. Mailboxes aren’t part of this installer – if they were on the Plesk server, move them to a mail provider first.
 
-At your DNS provider, set the TTL of the records for `@`, `www` and `*` to 300 seconds. Then the switch in step 5 takes minutes instead of hours.
+## Set up a new server
 
-### 2. Collect the data from the old server
-
-Do this at a quiet time – whatever is saved on the old server after this moment doesn’t move.
-
-| What | Where |
-|---|---|
-| Uploads | Website → *Admin → Storage & backups → Download all uploads (ZIP)* |
-| Database | Plesk → *Databases* → your database → *Export Dump* (download the file) |
-| `config.php` | Plesk → *Files* → `httpdocs/config.php` |
-| `smtp.json` | Plesk → *Files* → `httpdocs/email/smtp.json` |
-
-Put the four files into one folder on the new server, e.g. from your computer:
-
-```bash
-ssh root@NEW-SERVER mkdir -p /root/import
-scp config.php smtp.json DATABASE-DUMP.zip onyoursite-uploads-DATE.zip root@NEW-SERVER:/root/import/
-```
-
-(or upload them with an SFTP program like FileZilla or WinSCP).
-
-### 3. Run the installer
-
-Log in to the new server (`ssh root@NEW-SERVER`) and start the installer with one command:
+Log in to the new server (`ssh root@NEW-SERVER`) and start the installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash
 ```
 
-(As root, `sudo` can be left out. No `curl` on a fresh Debian? `apt update && apt install -y curl` first. Rather keep the file? `curl -fsSLo install.sh https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh && sudo bash install.sh` does the same.)
+(As root, `sudo` can be left out. Rather keep the file? `curl -fsSLo install.sh https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh && sudo bash install.sh` does the same.)
 
-The installer installs git, gets the code into `/var/www/onyoursite` and goes on by itself. It asks for:
+It installs git, gets the code into `/var/www/onyoursite` and goes on by itself. It asks for:
 
 1. the **domain** (Enter = `on-your.site`),
-2. the **folder with the files from the old server** (found automatically in `/root/import`),
-3. the **API access of your DNS provider** – the provider is detected from the nameservers, Enter picks it; the values are typed in hidden and stay on the server (in `/root/.acme.sh`),
-4. whether **SSH logins only with a key** are wanted (only asked if the server has an SSH key – say yes only if you log in with a key),
-5. on a new installation: **your admin account** (name, email, page address, password),
-6. whether to set up the **Discord bot**.
+2. a **folder with data from an old server** – just press Enter for a fresh start,
+3. the **Cloudflare Tunnel** – Enter says yes when the DNS is at Cloudflare; then the **API token** (typed in hidden). It shows what it will create and delete and asks once more before it changes anything,
+4. the **certificate** – the DNS provider is detected, Enter picks it; with Cloudflare it uses the same token,
+5. whether **SSH logins only with a key** are wanted (only asked if the server has an SSH key – say yes only if you log in with a key),
+6. **your admin account** (name, email, page address, password),
+7. whether to set up the **Discord bot** (token and IDs from the Discord Developer Portal; the shared secret is set up by itself).
 
-Everything else happens by itself. Running it again is safe – Enter keeps every value.
+Everything else happens by itself. Running it again is safe – Enter keeps every value. With the tunnel, the website is live as soon as the installer is done; without it, point the A records of `@`, `www` and `*` to the server (the installer shows the IP).
 
-From the import it takes the database (a dump from Plesk, phpMyAdmin or mysqldump: `.sql`, `.sql.gz` or `.zip`), the uploads, the mail settings and everything from `config.php` except the database access – above all `aes_key`: without it, encrypted data (Discord IDs, messages, booking requests, tickets) can’t be read. The database gets its own user with a new password, and on the first request the website brings the tables up to date by itself.
+> Already have the code on the server? Then start `sudo bash /var/www/onyoursite/server/install.sh` – it’s the same installer. To try a branch before it’s merged: `… | sudo bash -s -- --branch NAME` (once that branch is merged and deleted, `--update` switches back to `main` by itself).
 
-> Already have the code on the server (e.g. `git clone` into `/var/www/onyoursite`)? Then start `sudo bash /var/www/onyoursite/server/install.sh` – it’s the same installer. To try a branch before it’s merged: `… | sudo bash -s -- --branch NAME` (once that branch is merged and deleted, `--update` switches back to `main` by itself). If the repository is ever private, the installer shows a read-only deploy key to add once on GitHub.
+## Cloudflare Tunnel
 
-### 4. Test before switching
+The server opens a connection to Cloudflare by itself (`cloudflared`); visitors come in through it. So the server needs **no open web ports** (the firewall only lets SSH in), its IP address stays hidden and Cloudflare filters attacks.
 
-Add this line to the hosts file of your computer (Windows: `C:\Windows\System32\drivers\etc\hosts`, opened as administrator; macOS and Linux: `/etc/hosts`):
+What the installer does through the Cloudflare API:
 
+- creates a tunnel for this server (`onyoursite-<server name>`) and its rules: `on-your.site`, `www.on-your.site` and `*.on-your.site` go to Apache on this server,
+- **deletes** the A, AAAA and CNAME records of `on-your.site`, `www` and `*` – e.g. the ones that still point to the old server – and creates CNAMEs to the tunnel (through Cloudflare),
+- **deletes** old tunnels of the website: tunnels whose name starts with `onyoursite` or that serve this domain,
+- leaves everything else alone: mail records (MX, TXT/SPF), other names like `mail.on-your.site` and other tunnels. If the mail of the domain would stop working (MX pointing to a name that becomes the tunnel), it warns first.
+
+It shows this plan and changes nothing until you say yes. The DNS is only switched once the tunnel is connected. On the server, `cloudflared` runs as the service `onyoursite-tunnel` (its own user without rights, the tunnel token in `/etc/onyoursite/tunnel.env`, readable only by root), and Apache passes the real visitor IP from Cloudflare on to the website – the spam and login protection keep working.
+
+Running the installer again (or `--tunnel`) keeps the tunnel and only repairs what is missing. To stop using the tunnel: delete it in Cloudflare (*Zero Trust → Networks → Tunnels*), point the DNS to the server again, delete `TUNNEL=yes` from `/etc/onyoursite/server.conf` and run the installer – it opens the web ports again.
+
+## Start from scratch
+
+```bash
+sudo bash /var/www/onyoursite/server/install.sh --reset
 ```
-NEW-SERVER-IP  on-your.site www.on-your.site yourname.on-your.site
-```
 
-Open the website, log in, open a profile, upload a picture, look at the admin panel. Remove the line afterwards.
-
-### 5. Switch the DNS
-
-At your DNS provider, point the A records of `@`, `www` and `*` to the new server (and the AAAA records, if the server has IPv6 – delete AAAA records that still point to the old server). The certificate is already there: it was created through the DNS API, no matter where the domain pointed at that time.
-
-### 6. Afterwards
-
-- **Discord bot:** if you skipped it, run the installer again and answer `y` at “Set up the Discord bot” – it puts the shared secret into `config.php` by itself.
-- **Delete the import folder** – it holds passwords and the whole database: `rm -rf /root/import`
-- **Switch off the website on the old server**, so nobody keeps using it by accident. Keep a Plesk backup for a while.
+Deletes all OnYourSite data on this server – the database (accounts, pages, stats, messages, suggestions, tickets), all uploads and the keys in `config.php` – and sets everything up fresh, including a new admin account. You have to type the domain to confirm, and a backup is made first. The code, the certificate, the Cloudflare tunnel, the mail server settings and the bot settings stay.
 
 ## HTTPS certificate
 
-One certificate covers `on-your.site` and `*.on-your.site`, so every profile and code page – also every new one – has HTTPS right away. A timer checks it every day: about 30 days before it ends, it is renewed through the DNS API and Apache reloads it, without any downtime. If the renewal doesn’t work (most often because the API token was deleted or has expired) and the certificate has less than 14 days left, every admin gets an email through the mail server of the website. Then run `sudo bash /var/www/onyoursite/server/install.sh --https` and enter a new API token.
+One certificate covers `on-your.site` and `*.on-your.site`, so every profile and code page – also every new one – has HTTPS right away. A timer checks it every day: about 30 days before it ends, it is renewed through the DNS API and Apache reloads it, without any downtime. If the renewal doesn’t work (most often because the API token was deleted or has expired) and the certificate has less than 14 days left, every admin gets an email through the mail server of the website. Then run `sudo bash /var/www/onyoursite/server/install.sh --https` and enter a new API token. With the tunnel, visitors see Cloudflare’s certificate; the one on the server is used between Cloudflare and Apache and by the Discord bot.
 
 ## Protection
 
 | | |
 |---|---|
-| Firewall (ufw) | Only SSH, HTTP (80) and HTTPS (443) come in. The SSH port is detected – also when it isn’t 22 – so you can’t lock yourself out. |
+| Firewall (ufw) | Only SSH comes in – plus HTTP (80) and HTTPS (443) when the server is reached without the tunnel. The SSH port is detected – also when it isn’t 22 – so you can’t lock yourself out. |
 | fail2ban | 5 wrong SSH logins within 10 minutes block that address for an hour. |
 | Updates | Security updates of the system install by themselves every day. |
 | SSH | Optional: logins only with a key (`/etc/ssh/sshd_config.d/00-onyoursite.conf`; undo: delete it and `systemctl reload ssh`). |
 | Database | Only reachable from the server itself, its own user with a long random password, no reading of files through SQL. |
 | PHP | Can’t start other programs; hidden version; uploads up to 16 MB, bigger requests are refused before they reach PHP. |
 | Web server | Internal folders, `config.php`, `.git` and hidden files are locked twice (`.htaccess` and server config); unknown addresses (like the bare IP) get a 404; logs without IP addresses. |
-| Files | The code belongs to root – the web server may only write to the upload folder and `email/`. `config.php` is readable only by root and the web server. |
+| Files | The code belongs to root – the web server may only write to the upload folder and `email/`. `config.php` is readable only by root and the web server. Tokens and keys in `/etc/onyoursite` only by root. |
 | Network | No redirected or source-routed packets, SYN cookies against floods. |
 
 ## Everyday
 
 | | |
 |---|---|
-| Update to the newest version | `sudo bash /var/www/onyoursite/server/install.sh --update` – gets the code (git pull), reloads everything and updates the bot; settings stay |
+| Update to the newest version | `sudo bash /var/www/onyoursite/server/install.sh --update` – gets the code (git pull), reloads everything, updates `cloudflared` and the bot; settings stay |
 | Change settings, turn something on | `sudo bash /var/www/onyoursite/server/install.sh` (Enter keeps the current values) |
+| Cloudflare Tunnel: set up or repair | `sudo bash /var/www/onyoursite/server/install.sh --tunnel` |
 | Certificate after “Later” or for a new DNS provider | `sudo bash /var/www/onyoursite/server/install.sh --https` |
+| Start from scratch | `sudo bash /var/www/onyoursite/server/install.sh --reset` |
 | Website errors | `/var/log/apache2/onyoursite-error.log` |
+| Tunnel | `journalctl -u onyoursite-tunnel -f` |
 | Bot | `journalctl -u onyoursite-bot -f` · `sudo systemctl restart onyoursite-bot` |
 | Backup right now | `sudo systemctl start onyoursite-backup` |
 | When the timers run next | `systemctl list-timers 'onyoursite-*'` |
@@ -148,13 +135,20 @@ rsync -a --delete /var/backups/onyoursite/2026-11-01/uploads/ /var/lib/onyoursit
 | `config.php` | `/var/www/onyoursite/config.php` |
 | Uploads | `/var/lib/onyoursite/uploads` (outside the code, so updates never touch them) |
 | Server settings | `/etc/onyoursite/server.conf` |
+| Cloudflare | API token in `/etc/onyoursite/cloudflare.env`, tunnel token in `/etc/onyoursite/tunnel.env` (only root), service `onyoursite-tunnel` |
 | Certificate | `/etc/ssl/onyoursite/` – issued and renewed by acme.sh (`/root/.acme.sh`) |
-| Apache | `/etc/apache2/sites-available/onyoursite.conf` |
+| Apache | `/etc/apache2/sites-available/onyoursite.conf` (with the tunnel also `conf-available/onyoursite-tunnel.conf`) |
 | PHP | `/etc/php/<version>/fpm/conf.d/90-onyoursite.ini` |
 | Discord bot | `/opt/onyoursite-bot`, settings in `/etc/onyoursite-bot.env` (only root) |
 
-The installer rewrites the Apache, PHP, firewall and timer settings every time it runs, so change the installer instead of these files.
+The installer rewrites the Apache, PHP, firewall, tunnel and timer settings every time it runs, so change the installer instead of these files.
 
-## New installation without old data
+## Moving data from an old server (optional)
 
-Run the installer and answer `no` at the import folder. At the end it creates your admin account with your page. More admins later: *Admin → User Management*.
+Only if you want to keep the accounts and pages of an old OnYourSite (e.g. on Plesk) – for a fresh start, skip this.
+
+1. On the old server, at a quiet time: *Admin → Storage & backups → Download all uploads (ZIP)*; in Plesk *Databases → Export Dump*, and download `httpdocs/config.php` and `httpdocs/email/smtp.json`.
+2. Put the four files into `/root/import` on the new server (`scp` or an SFTP program).
+3. Run the installer and enter `/root/import` as the folder. It imports the database (`.sql`, `.sql.gz` or `.zip`), the uploads, the mail settings and the keys from `config.php` – above all `aes_key`, without which encrypted data can’t be read.
+4. Test before switching: put `NEW-SERVER-IP on-your.site www.on-your.site yourname.on-your.site` into the hosts file of your computer. With the Cloudflare Tunnel, do the import before you let the installer switch the DNS.
+5. Delete the folder afterwards (`rm -rf /root/import`) – it holds passwords and the whole database – and switch off the old website.
