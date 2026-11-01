@@ -312,8 +312,9 @@ function oys_code_serve(PDO $pdo, array $site, string $path): void
     $etag = '"' . substr(md5($body), 0, 16) . '"';
     http_response_code($status);
     header('Content-Type: ' . $type . (strpos($type, 'text/') === 0 || in_array($ext, ['json', 'svg', 'xml', 'webmanifest'], true) ? '; charset=utf-8' : ''));
-    // Immer kurz nachfragen (304 bei gleichem Stand), damit Änderungen sofort sichtbar sind
-    header('Cache-Control: no-cache');
+    // Immer kurz nachfragen (304 bei gleichem Stand), damit Änderungen sofort sichtbar sind.
+    // no-transform: Cloudflare ändert die Dateien nicht (keine E-Mail-Verschleierung, keine eingefügten Skripte)
+    header('Cache-Control: no-cache, no-transform');
     header('ETag: ' . $etag);
     if ($status === 200 && ($_SERVER['HTTP_IF_NONE_MATCH'] ?? '') === $etag) {
         http_response_code(304);

@@ -2,7 +2,7 @@
 # OnYourSite – nächtliche Sicherung (systemd-Timer „onyoursite-backup“, eingerichtet von server/install.sh).
 # Sichert Datenbank, Uploads, config.php, email/ und die Bot-Einstellungen nach /var/backups/onyoursite/<Datum>/.
 # Die Uploads sind Schnappschüsse mit festen Verknüpfungen: unveränderte Dateien belegen nur einmal Platz.
-# Von Hand: sudo systemctl start onyoursite-backup
+# Von Hand: sudo systemctl start onyoursite-backup  ·  mit eigenem Namen: sudo bash server/backup.sh before-reset
 set -euo pipefail
 umask 077
 
@@ -17,7 +17,10 @@ KEEP=$(get BACKUP_DAYS)
 KEEP=${KEEP:-14}
 [ -f "$CODE/config.php" ] || { echo "Backup: no config.php in '$CODE'." >&2; exit 1; }
 
-dir=$DEST/$(date +%F)
+# Optional ein Zusatz im Ordnernamen, z. B. „before-reset“ – sonst überschriebe die nächtliche Sicherung denselben Tag
+label=${1:-}
+[[ $label =~ ^[a-z0-9-]*$ ]] || { echo "Backup: invalid name '$label'." >&2; exit 1; }
+dir=$DEST/$(date +%F)${label:+-$label}
 mkdir -p "$dir"
 chmod 700 "$DEST"
 

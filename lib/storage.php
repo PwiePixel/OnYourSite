@@ -90,7 +90,8 @@ function oys_serve_upload(string $raw): void
         header('Content-Disposition: attachment');
     }
     header('X-Content-Type-Options: nosniff');
-    header('Cache-Control: public, max-age=2592000');
+    // Browser: 30 Tage. Zwischenspeicher wie Cloudflare: 1 Stunde – gelöschte Dateien verschwinden dort bald
+    header('Cache-Control: public, max-age=2592000, s-maxage=3600');
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $mtime) . ' GMT');
     header('ETag: ' . $etag);
     header('Accept-Ranges: bytes');
