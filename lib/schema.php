@@ -3,8 +3,8 @@
 // Läuft beim ersten Aufruf nach dem Update einmalig durch. Alte Tabellen werden NICHT gelöscht.
 
 // 1: neue Profilseiten + Übernahme der alten Profile, 2: Updates, Roadmap, Discord,
-// 3: Honigwaben und Code-Seiten
-const OYS_SCHEMA_VERSION = 3;
+// 3: Honigwaben und Code-Seiten, 4: Discord-Bot (Vorschläge, Support-Tickets)
+const OYS_SCHEMA_VERSION = 4;
 
 function oys_schema_version(PDO $pdo): int
 {
@@ -40,6 +40,9 @@ function oys_ensure_schema(PDO $pdo): void
         }
         if ($version < 3) {
             oys_create_code_tables($pdo);
+        }
+        if ($version < 4) {
+            oys_create_community_tables($pdo);
         }
         $pdo->prepare("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)")
             ->execute([(string) OYS_SCHEMA_VERSION]);
@@ -315,6 +318,69 @@ function oys_create_code_tables(PDO $pdo): void
         UNIQUE KEY uq_path (site_id, path)
     ) $opts");
     oys_add_column($pdo, 'users', 'code_terms_at', 'DATETIME NULL');
+}
+
+// Discord-Bot: Vorschläge aus dem Forum-Kanal, Support-Tickets und Aufträge der Webseite an den Bot
+function oys_create_community_tables(PDO $pdo): void
+{
+    $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+    $pdo->exec("CREATE TABLE IF NOT EXISTS community_suggestions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        thread_id VARCHAR(22) NOT NULL,
+        author_id VARCHAR(22) NOT NULL,
+        author_name VARCHAR(100) NOT NULL DEFAULT '',
+        title VARCHAR(200) NOT NULL,
+        body TEXT NOT NULL,
+        status VARCHAR(10) NOT NULL DEFAULT 'open',
+        reason VARCHAR(500) NOT NULL DEFAULT '',
+        decided_by VARCHAR(100) NOT NULL DEFAULT '',
+        decided_via VARCHAR(10) NOT NULL DEFAULT '',
+        decided_at DATETIME NULL,
+        status_message_id VARCHAR(22) NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_thread (thread_id),
+        KEY idx_status (status, id)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS community_tickets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id VARCHAR(22) NOT NULL,
+        user_name VARCHAR(100) NOT NULL DEFAULT '',
+        subject VARCHAR(100) NOT NULL,
+        channel_id VARCHAR(22) NULL,
+        status VARCHAR(10) NOT NULL DEFAULT 'open',
+        closed_by VARCHAR(100) NOT NULL DEFAULT '',
+        closed_via VARCHAR(10) NOT NULL DEFAULT '',
+        closed_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_channel (channel_id),
+        KEY idx_user (user_id, status),
+        KEY idx_status (status, updated_at)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS community_ticket_messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        ticket_id INT NOT NULL,
+        discord_message_id VARCHAR(22) NULL,
+        author_id VARCHAR(22) NULL,
+        author_name VARCHAR(100) NOT NULL DEFAULT '',
+        is_team TINYINT(1) NOT NULL DEFAULT 0,
+        source VARCHAR(10) NOT NULL DEFAULT 'discord',
+        body MEDIUMTEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_message (discord_message_id),
+        KEY idx_ticket (ticket_id, id)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS community_outbox (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        action VARCHAR(30) NOT NULL,
+        payload MEDIUMTEXT NOT NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        last_error VARCHAR(200) NULL,
+        created_at DATETIME NOT NULL,
+        done_at DATETIME NULL,
+        KEY idx_pending (done_at, id)
+    ) $opts");
 }
 
 function oys_update_seeds(): array

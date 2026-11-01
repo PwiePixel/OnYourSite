@@ -77,7 +77,7 @@ function oys_handle_upload(array $upload, string $kind, int $userId): array
 
     $err = $upload['error'] ?? UPLOAD_ERR_NO_FILE;
     if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
-        return ['error' => 'The file is too large for the server (increase upload_max_filesize in Plesk).'];
+        return ['error' => 'The file is too large for the server (raise upload_max_filesize and post_max_size in the PHP settings).'];
     }
     if ($err !== UPLOAD_ERR_OK || !is_uploaded_file($upload['tmp_name'] ?? '')) {
         return ['error' => 'Upload failed (error code ' . (int) $err . ').'];

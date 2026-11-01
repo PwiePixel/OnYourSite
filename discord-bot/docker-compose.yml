@@ -1,0 +1,23 @@
+# OnYourSite Discord-Bot. Am einfachsten mit ./install.sh – oder von Hand: docker compose up -d --build
+services:
+  bot:
+    build: .
+    image: onyoursite-discord-bot
+    container_name: onyoursite-discord-bot
+    env_file: .env
+    # Läuft nach Abstürzen und Server-Neustarts von selbst wieder an
+    restart: unless-stopped
+    # Der Bot braucht keine Schreibrechte und keine besonderen Rechte
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

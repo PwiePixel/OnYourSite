@@ -1,0 +1,10 @@
+# Nichts davon gehört ins Image – vor allem nicht .env (Token und Geheimnis)
+.env
+.env.*
+node_modules
+npm-debug.log
+*.md
+install.sh
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -50,7 +50,7 @@ $suggested = oys_uploads_suggested_dir();
                     </div>
                     <p class="text-sm text-gray-400 mb-4">For a complete backup, save these four things. When you restore one, put them back the same way – nobody has to upload anything again.</p>
                     <ul class="space-y-2 text-sm text-gray-300 mb-6">
-                        <li class="flex gap-2"><i class='bx bx-data text-lg text-teal-400 shrink-0'></i><span><b class="text-white">The database</b> – in Plesk under <i>Databases → Export dump</i> or via Plesk backups.</span></li>
+                        <li class="flex gap-2"><i class='bx bx-data text-lg text-teal-400 shrink-0'></i><span><b class="text-white">The database</b> – on your own server (set up with <code>server/install.sh</code>) it’s saved every night together with the other three to <code>/var/backups/onyoursite</code>; in Plesk under <i>Databases → Export dump</i>.</span></li>
                         <li class="flex gap-2"><i class='bx bx-images text-lg text-teal-400 shrink-0'></i><span><b class="text-white">The upload folder</b> above – or simply download it here as a ZIP.</span></li>
                         <li class="flex gap-2"><i class='bx bx-key text-lg text-teal-400 shrink-0'></i><span><b class="text-white">config.php</b> – your database password and the encryption key (without the key, encrypted data can’t be read).</span></li>
                         <li class="flex gap-2"><i class='bx bx-envelope text-lg text-teal-400 shrink-0'></i><span><b class="text-white">The folder email/</b> – mail server settings and newsletter templates.</span></li>

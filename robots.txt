@@ -1,0 +1,7 @@
+# Profile pages may be found; the app, the admin panel and internal endpoints may not.
+User-agent: *
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /_/
+Disallow: /login
+Disallow: /register

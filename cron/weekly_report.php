@@ -1,6 +1,8 @@
 <?php
 // Weekly report: every Monday a short email with views, clicks and the best link.
 //
+// Own server (server/install.sh): runs by itself, Mondays at 8:00 (systemd timer onyoursite-weekly-report).
+//
 // Plesk: "Scheduled Tasks" → "Run a PHP script"
 //   Script:   /httpdocs/cron/weekly_report.php   (adjust the path to your installation)
 //   Schedule: Mondays, 8:00   (cron: 0 8 * * 1)

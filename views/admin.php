@@ -33,6 +33,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['storage_action'])) {
     exit;
 }
 
+// Community: Vorschläge aus Discord entscheiden, Tickets beantworten (lib/community.php)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['community_action'])) {
+    $result = oys_admin_community_handle($pdo, $_POST, (string) ($user_data['full_name'] ?? ''));
+    if ($result) {
+        $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok'];
+    }
+    $back = strpos((string) $_POST['community_action'], 'ticket_') === 0 ? '?ticket=' . (int) ($_POST['id'] ?? 0) : '';
+    header('Location: /admin' . $back . '#community');
+    exit;
+}
+
 // Honigwaben vergeben/einstellen, Code-Seiten sperren (lib/honeycombs.php)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hc_action'])) {
     $result = oys_admin_hc_handle($pdo, $_POST, (int) $_SESSION['user_id']);
@@ -228,6 +239,7 @@ if (file_exists($smtp_file)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
     <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->
     <meta name="color-scheme" content="dark">
     <meta name="darkreader-lock">
@@ -299,6 +311,10 @@ if (file_exists($smtp_file)) {
                 </button>
 
                 <div class="my-4 border-t border-bordercolor"></div>
+
+                <button type="button" onclick="switchAdminTab('community')" id="nav-community" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
+                    <i class='bx bx-conversation text-xl'></i> <span class="hidden lg:block text-sm">Community</span>
+                </button>
 
                 <button type="button" onclick="switchAdminTab('honeycombs')" id="nav-honeycombs" class="admin-nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:bg-white/5 text-gray-400 hover:text-white font-medium transition-all">
                     <i class='bx bx-hive text-xl'></i> <span class="hidden lg:block text-sm">Honeycombs &amp; code pages</span>
@@ -575,6 +591,7 @@ if (file_exists($smtp_file)) {
             </div>
 
             <?php require __DIR__ . '/admin_updates.php'; ?>
+            <?php require __DIR__ . '/admin_community.php'; ?>
             <?php require __DIR__ . '/admin_honeycombs.php'; ?>
             <?php require __DIR__ . '/admin_storage.php'; ?>
 
@@ -611,6 +628,7 @@ if (file_exists($smtp_file)) {
             updates: ['Updates', 'border-sky-500/30 bg-sky-500/10 text-sky-400'],
             roadmap: ['Roadmap', 'border-amber-500/30 bg-amber-500/10 text-amber-400'],
             discord: ['Discord', 'border-[#5865F2]/40 bg-[#5865F2]/10 text-[#8b93ff]'],
+            community: ['Community', 'border-indigo-400/30 bg-indigo-400/10 text-indigo-300'],
             honeycombs: ['Honeycombs & code pages', 'border-brand-500/30 bg-brand-500/10 text-brand-400'],
             storage: ['Storage & backups', 'border-teal-500/30 bg-teal-500/10 text-teal-400'],
         };
