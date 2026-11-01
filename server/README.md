@@ -47,7 +47,7 @@ It installs git, gets the code into `/var/www/onyoursite` and goes on by itself.
 4. the **certificate** – the DNS provider is detected, Enter picks it; with Cloudflare it uses the same token,
 5. whether **SSH logins only with a key** are wanted (only asked if the server has an SSH key – say yes only if you log in with a key),
 6. **your admin account** (name, email, page address, password),
-7. whether to set up the **Discord bot** (token and IDs from the Discord Developer Portal; the shared secret is set up by itself).
+7. whether to set up the **Discord bot** – only the bot token and the Application ID from the Discord Developer Portal; the installer invites the bot (link), creates the Staff role and the channels on your Discord server, fills in all IDs and sets up the shared secret by itself (details: [discord-bot/README.md](../discord-bot/README.md)).
 
 Everything else happens by itself. Running it again is safe – Enter keeps every value. With the tunnel, the website is live as soon as the installer is done; without it, point the A records of `@`, `www` and `*` to the server (the installer shows the IP).
 
