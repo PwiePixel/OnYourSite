@@ -38,9 +38,9 @@ export function getPool(): Pool {
     connectionLimit: 10,
     // Datumswerte als Text wie bei PDO ('2026-11-01 10:00:00'), keine JS-Date-Objekte
     dateStrings: true,
-    // Große Zahlen (BIGINT) als Text, damit nichts gerundet wird; DECIMAL ebenso
+    // Wie PDO (PHP 8.1+): ganze Zahlen auch bei BIGINT/COUNT(*) als Zahl (über 2^53 als Text), DECIMAL/SUM/AVG als Text
     supportBigNumbers: true,
-    bigNumberStrings: true,
+    bigNumberStrings: false,
     decimalNumbers: false,
     namedPlaceholders: false,
     multipleStatements: false,
