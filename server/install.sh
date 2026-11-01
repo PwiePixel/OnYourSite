@@ -19,6 +19,9 @@
 {
 set -euo pipefail
 umask 022
+# Pakete immer ohne Rückfragen installieren – auch die Programme, die apt nebenbei startet
+# (debconf, apt-listchanges bei Debian, needrestart bei Ubuntu), sonst warten sie unsichtbar auf eine Taste
+export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a
 
 # Bei „bash <(curl …)“ oder „bash /dev/stdin“ gibt es keinen Ordner – dann leer, get_code holt den Code
 CODE=$( { cd "$(dirname "$(readlink -f "$0" 2>/dev/null)")/.." 2>/dev/null && pwd; } || true)
@@ -78,6 +81,22 @@ conf_get() {
   if [ -f "$CONF" ]; then sed -n "s/^$1=//p" "$CONF" | tail -n 1; fi
 }
 
+# Paketverwaltung: auf einem frisch gestarteten Server laufen oft noch cloud-init oder automatische Updates –
+# dann warten statt sofort mit „Could not get lock“ abzubrechen
+apt_update() {
+  local i
+  if command -v cloud-init >/dev/null 2>&1; then timeout 900 cloud-init status --wait >/dev/null 2>&1 || true; fi
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if apt-get -o DPkg::Lock::Timeout=600 update -qq; then return 0; fi
+    info "The package lists are busy (an automatic update is running?) – trying again in 10 seconds …"
+    sleep 10
+  done
+  fail "apt-get update didn’t work – see above."
+}
+apt_install() {
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq "$@" >/dev/null
+}
+
 save_conf() {
   install -d -m 700 "$CONF_DIR"
   local tmp
@@ -135,7 +154,7 @@ check_location() {
   case "$(choose "Copy the code to $target and continue there? [Y/n]" y)" in
     [nN]*) fail "Put the code into a folder like $target and run the installer from there." ;;
   esac
-  [ ! -e "$target" ] || fail "$target already exists – run the installer from there: sudo bash $target/server/install.sh"
+  [ ! -e "$target" ] || fail "$target already exists – run the installer from there: ${SUDO_HINT}bash $target/server/install.sh"
   install -d -m 755 /var/www
   cp -a "$CODE" "$target"
   info "Copied. Continuing from $target …"
@@ -155,9 +174,9 @@ step_packages() {
   { [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; } || fail "This server doesn’t use systemd."
   export DEBIAN_FRONTEND=noninteractive
   info "Installing Apache, PHP, MariaDB and a few tools – the first time this takes a few minutes …"
-  apt-get update -qq
-  apt-get install -y -qq apache2 mariadb-server php-fpm php-cli php-mysql php-mbstring php-gd php-curl php-zip \
-    git curl unzip rsync openssl ca-certificates bind9-dnsutils >/dev/null
+  apt_update
+  apt_install apache2 mariadb-server php-fpm php-cli php-mysql php-mbstring php-gd php-curl php-zip \
+    git curl unzip rsync openssl ca-certificates bind9-dnsutils
   PHPV=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
   info "Apache $(apache2ctl -v 2>/dev/null | sed -n 's/^Server version: Apache\/\([0-9.]*\).*/\1/p'), PHP $PHPV, MariaDB $(mariadb -N -e 'SELECT VERSION()' 2>/dev/null | cut -d- -f1)"
 }
@@ -251,6 +270,7 @@ GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
   info "Database $DB_NAME with its own user is ready (only reachable from this server)."
+  if [ "$(mariadb -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME'")" = 0 ]; then DB_EMPTY=1; fi
   if [ -n "$IMP_DUMP" ]; then import_dump "$IMP_DUMP"; fi
 }
 
@@ -292,6 +312,7 @@ import_dump() {
   fi
   tables=$(mariadb -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME'")
   users=$(mariadb -N "$DB_NAME" -e "SELECT COUNT(*) FROM users" 2>/dev/null || echo "?")
+  DB_IMPORTED=1
   info "Imported $tables tables with $users accounts."
 }
 
@@ -361,30 +382,44 @@ PHP
   rm -f "$script"
   chown root:"$WEB" "$tmp"
   chmod 640 "$tmp"
+  # Die vorige Fassung bleibt für den Notfall (nur root): /etc/onyoursite/config.php.previous
+  if [ -f "$CODE/config.php" ] && ! cmp -s "$tmp" "$CODE/config.php"; then
+    install -d -m 700 "$CONF_DIR"
+    install -m 600 "$CODE/config.php" "$CONF_DIR/config.php.previous"
+  fi
   mv "$tmp" "$CODE/config.php"
 }
 
 import_uploads() {
-  local src=$1 tmp dir count=0 f
-  tmp=$(mktemp -d)
-  case $src in
-    *.zip) unzip -q "$src" -d "$tmp" ;;
-    *.tar.gz|*.tgz) tar -xzf "$src" -C "$tmp" --no-same-owner ;;
-    *.tar) tar -xf "$src" -C "$tmp" --no-same-owner ;;
-    *) cp -a "$src/." "$tmp/" ;;
-  esac
+  local src=$1 tmp="" dir count=0 f
+  if [ -d "$src" ]; then
+    dir=$src
+  else
+    # Auf derselben Platte auspacken wie die Uploads – /tmp liegt z. B. bei Debian 13 im Arbeitsspeicher
+    tmp=$(mktemp -d "$DATA_DIR/.import.XXXXXX")
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" EXIT
+    case $src in
+      *.zip) unzip -q "$src" -d "$tmp" ;;
+      *.tar.gz|*.tgz) tar -xzf "$src" -C "$tmp" --no-same-owner ;;
+      *.tar) tar -xf "$src" -C "$tmp" --no-same-owner ;;
+    esac
+    dir=$tmp
+  fi
   # Bis zum Ordner mit den Dateien hinab (im ZIP aus dem Admin-Bereich: uploads/)
-  dir=$tmp
   while [ -z "$(find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name '.*' -print -quit)" ] \
     && [ "$(find "$dir" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; do
     dir=$(find "$dir" -mindepth 1 -maxdepth 1 -type d)
   done
   # Nur normale Dateien (keine Verknüpfungen, nichts Verstecktes)
   while IFS= read -r -d '' f; do
-    cp --preserve=timestamps "$f" "$UPLOADS/"
+    if [ -n "$tmp" ]; then mv -f "$f" "$UPLOADS/"; else cp --preserve=timestamps "$f" "$UPLOADS/"; fi
     count=$((count + 1))
   done < <(find "$dir" -mindepth 1 -maxdepth 1 -type f ! -name '.*' -print0)
-  rm -rf "$tmp"
+  if [ -n "$tmp" ]; then
+    rm -rf "$tmp"
+    trap - EXIT
+  fi
   chown -R "$WEB:$WEB" "$UPLOADS"
   info "$count uploaded files copied to $UPLOADS"
 }
@@ -499,6 +534,13 @@ EOF
   a2ensite -q onyoursite >/dev/null
 }
 
+# Passt das Zertifikat zur Domain und zu ihren Subdomains?
+cert_matches() {
+  [ -s "$SSL_DIR/fullchain.pem" ] || return 1
+  openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -checkhost "$DOMAIN" 2>/dev/null | grep -q "does match" \
+    && openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -checkhost "check.$DOMAIN" 2>/dev/null | grep -q "does match"
+}
+
 # Vorläufiges Zertifikat, damit Apache startet, bis das echte da ist
 cert_temporary() {
   [ -s "$SSL_DIR/fullchain.pem" ] || return 0
@@ -509,7 +551,7 @@ cert_temporary() {
 ensure_cert() {
   install -d -m 750 "$SSL_DIR"
   if [ ! -s "$SSL_DIR/privkey.pem" ] || [ ! -s "$SSL_DIR/fullchain.pem" ] \
-    || { cert_temporary && ! openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -subject | grep -q "CN *= *$DOMAIN\$"; }; then
+    || ! cert_matches; then
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 90 -subj "/CN=$DOMAIN" \
       -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN" -addext "basicConstraints=critical,CA:FALSE" \
       -keyout "$SSL_DIR/privkey.pem" -out "$SSL_DIR/fullchain.pem" 2>/dev/null
@@ -522,7 +564,16 @@ step_website() {
   # Root-Timer und git pull laufen aus diesem Ordner – niemand außer root darf darin etwas ändern.
   # Vor write_config, das config.php danach root und dem Webserver gibt.
   chown -R root:root "$CODE"
-  write_config "$IMP_CONFIG" ""
+  local cfg_from=""
+  if [ -n "$IMP_CONFIG" ]; then
+    # Die Schlüssel der alten config.php gehören zu ihrer Datenbank
+    if [ "$DB_IMPORTED" = 1 ] || [ "$DB_EMPTY" = 1 ]; then
+      cfg_from=$IMP_CONFIG
+    else
+      warn "The old config.php isn’t used: its keys belong to its database, which wasn’t imported."
+    fi
+  fi
+  write_config "$cfg_from" ""
   info "config.php is written (readable only by root and the web server)."
   # Der Code gehört root – schreiben darf der Webserver nur in den Upload-Ordner und in email/ (Mail-Einstellungen)
   install -d -m 750 -o root -g "$WEB" "$DATA_DIR"
@@ -620,7 +671,12 @@ cert_until() {
 step_https() {
   local force=${1:-} hook="" name n=1 choice i=1 var label kind value creds=() rc=0 args extra lines line guess def
   bold "5/8  HTTPS certificate"
-  if [ -z "$force" ] && ! cert_temporary; then
+  # Neue Domain: das alte acme.sh-Zertifikat würde bei seiner Erneuerung die Dateien des neuen überschreiben
+  if [ -n "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" != "$DOMAIN" ] && [ -x "$ACME" ] && [ -d "$ACME_HOME/${OLD_DOMAIN}_ecc" ]; then
+    "$ACME" --remove -d "$OLD_DOMAIN" --ecc --home "$ACME_HOME" >/dev/null 2>&1 || true
+    info "The certificate of the old domain $OLD_DOMAIN won’t be renewed any more."
+  fi
+  if [ -z "$force" ] && ! cert_temporary && cert_matches; then
     info "The certificate for $DOMAIN and *.$DOMAIN is in place (valid until $(cert_until), renews by itself)."
     return 0
   fi
@@ -647,7 +703,7 @@ step_https() {
   done
   if [ "$choice" -eq $((n + 1)) ]; then
     info "Keeping the temporary certificate. Browsers will warn until the real one is there:"
-    info "  sudo bash $CODE/server/install.sh --https"
+    info "  ${SUDO_HINT}bash $CODE/server/install.sh --https"
     return 0
   fi
   if [ "$choice" -lt "$n" ]; then
@@ -685,7 +741,7 @@ step_https() {
   fi
 
   if ! install_acme; then
-    info "The website keeps the temporary certificate until then. Try again: sudo bash $CODE/server/install.sh --https"
+    info "The website keeps the temporary certificate until then. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --https"
     return 0
   fi
   args=(--issue --dns "$hook" -d "$DOMAIN" -d "*.$DOMAIN" --server "${OYS_ACME_SERVER:-letsencrypt}" --keylength ec-256 --home "$ACME_HOME")
@@ -701,7 +757,7 @@ step_https() {
     || ! "$ACME" --install-cert -d "$DOMAIN" --ecc --home "$ACME_HOME" \
       --key-file "$SSL_DIR/privkey.pem" --fullchain-file "$SSL_DIR/fullchain.pem" --reloadcmd "systemctl reload apache2"; then
     warn "The certificate couldn’t be created. Check the API access (and that the DNS of $DOMAIN is really managed there)."
-    info "The website keeps the temporary certificate until then. Try again: sudo bash $CODE/server/install.sh --https"
+    info "The website keeps the temporary certificate until then. Try again: ${SUDO_HINT}bash $CODE/server/install.sh --https"
     return 0
   fi
   chmod 600 "$SSL_DIR/privkey.pem"
@@ -810,7 +866,7 @@ write_if_changed() {
 
 step_protect() {
   local ssh_cfg ssh_sock ssh_live ssh_now ports list p
-  apt-get install -y -qq ufw fail2ban python3-systemd unattended-upgrades >/dev/null
+  apt_install ufw fail2ban python3-systemd unattended-upgrades
   # Firewall: nur SSH, HTTP und HTTPS. Der SSH-Port wird nie ausgesperrt – auch wenn er nicht 22 ist
   # sshd -T braucht den Ordner, den sonst erst der laufende SSH-Dienst anlegt (z. B. Socket-Aktivierung bei Ubuntu 24.04)
   if command -v sshd >/dev/null 2>&1; then install -d -m 755 /run/sshd; fi
@@ -872,7 +928,9 @@ EOF
 # SSH nur mit Schlüssel – nur wenn es hier schon einen Schlüssel gibt, und nur auf Nachfrage
 step_ssh() {
   local f home="" keys=0 conf=/etc/ssh/sshd_config.d/00-onyoursite.conf
-  [ "$MODE" = install ] && [ -z "$SSH_KEYONLY" ] || return 0
+  [ "$MODE" = install ] || return 0
+  # Schon entschieden? „nokey“ heißt: damals gab es keinen Schlüssel – dann jetzt noch einmal prüfen
+  if [ -n "$SSH_KEYONLY" ] && [ "$SSH_KEYONLY" != nokey ]; then return 0; fi
   command -v sshd >/dev/null 2>&1 || return 0
   grep -qsE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config || return 0
   if [ -n "${SUDO_USER:-}" ]; then home=$(getent passwd "$SUDO_USER" | cut -d: -f6); fi
@@ -881,7 +939,7 @@ step_ssh() {
   done
   if [ "$keys" = 0 ]; then
     info "SSH: logins with a password stay allowed (there is no SSH key on this server)."
-    SSH_KEYONLY=no
+    SSH_KEYONLY=nokey
     return 0
   fi
   echo
@@ -923,7 +981,7 @@ step_admin() {
   case "$(choose "There is no admin account yet. Create yours now? [Y/n]" y)" in
     [nN]*)
       info "Later: register on the website, then make your account an admin:"
-      info "  sudo mariadb $DB_NAME -e \"UPDATE users SET is_admin = 1 WHERE email = 'you@example.com'\""
+      info "  ${SUDO_HINT}mariadb $DB_NAME -e \"UPDATE users SET is_admin = 1 WHERE email = 'you@example.com'\""
       return 0 ;;
   esac
   while true; do
@@ -955,14 +1013,21 @@ step_bot() {
     return 0
   fi
   if [ "$MODE" != install ]; then info "Not set up on this server."; return 0; fi
+  if cert_temporary; then
+    info "The bot can be set up once the real HTTPS certificate is there (${SUDO_HINT}bash $CODE/server/install.sh --https)."
+    info "Then run ${SUDO_HINT}bash $CODE/server/install.sh again and answer y here."
+    return 0
+  fi
   case "$(choose "Set up the Discord bot on this server too? [y/N]" n)" in
     [yY]*) ;;
-    *) info "Skipped – you can do it any time: sudo bash $CODE/discord-bot/install.sh"; return 0 ;;
+    *) info "Skipped – run ${SUDO_HINT}bash $CODE/server/install.sh again any time and answer y here."; return 0 ;;
   esac
   if ! points_here; then
-    warn "$DOMAIN doesn’t point to this server yet – and the bot reaches the website through that address."
-    info "Set it up once the DNS points here: sudo bash $CODE/discord-bot/install.sh"
-    return 0
+    warn "As far as this server can tell, $DOMAIN doesn’t point here yet – and the bot reaches the website through it."
+    case "$(choose "Set it up anyway (e.g. the DNS is switched, but the server is behind a cloud NAT)? [y/N]" n)" in
+      [yY]*) ;;
+      *) info "Run ${SUDO_HINT}bash $CODE/server/install.sh again once the DNS points here and answer y."; return 0 ;;
+    esac
   fi
   secret=$(php_cfg "$CODE/config.php" bot_secret)
   if [ "${#secret}" -lt 32 ]; then
@@ -971,7 +1036,7 @@ step_bot() {
     info "A new bot_secret is in config.php."
   fi
   OYS_SITE_URL="https://$DOMAIN" OYS_BOT_SECRET=$secret bash "$CODE/discord-bot/install.sh" --service \
-    || warn "The bot isn’t running yet – see above. Its installer can run again any time: sudo bash $CODE/discord-bot/install.sh"
+    || warn "The bot isn’t running yet – see above. Its installer can run again any time: ${SUDO_HINT}bash $CODE/discord-bot/install.sh"
 }
 
 check_site() {
@@ -996,17 +1061,17 @@ summary() {
   info "Website: https://$DOMAIN · code: $CODE · uploads: $UPLOADS"
   if ! points_here; then
     echo
-    info "Next: point the DNS of $DOMAIN to this server (at your DNS provider):"
+    info "If the DNS of $DOMAIN doesn’t point to this server yet, change it at your DNS provider:"
     info "  A     @, www and *   ${v4:-<public IPv4 of this server>}"
     if [ -n "$v6" ]; then info "  AAAA  @, www and *   $v6"; fi
     info "Test it before switching – add this line to the hosts file of your computer:"
     info "  ${v4:-<IPv4>}  $DOMAIN www.$DOMAIN yourname.$DOMAIN"
   fi
   if cert_temporary; then
-    warn "HTTPS still uses a temporary certificate. Set up the real one: sudo bash $CODE/server/install.sh --https"
+    warn "HTTPS still uses a temporary certificate. Set up the real one: ${SUDO_HINT}bash $CODE/server/install.sh --https"
   fi
   echo
-  info "Update:   sudo bash $CODE/server/install.sh --update"
+  info "Update:   ${SUDO_HINT}bash $CODE/server/install.sh --update"
   info "Backups:  $BACKUPS – every night, kept $BACKUP_DAYS days. Copy them off the server now and then."
   info "Errors:   /var/log/apache2/onyoursite-error.log"
   if [ -n "${IMPORT:-}" ]; then
@@ -1031,7 +1096,7 @@ github_host_keys() {
 }
 
 get_code() {
-  local url ssh_cmd asked=0
+  local url ssh_cmd asked=0 current
   bold "Getting OnYourSite"
   # shellcheck source=/dev/null
   case "$(. /etc/os-release && echo "${ID:-}")" in
@@ -1040,6 +1105,10 @@ get_code() {
   esac
   if [ -f "$TARGET/index.php" ] && [ -f "$TARGET/lib/bootstrap.php" ] && [ -f "$TARGET/server/install.sh" ]; then
     info "The code is already in $TARGET."
+    current=$(git -c safe.directory="$TARGET" -C "$TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$BRANCH_GIVEN" = 1 ] && [ -n "$current" ] && [ "$current" != "$BRANCH" ]; then
+      info "It is on the branch $current. To switch: ${SUDO_HINT}bash $TARGET/server/install.sh --update --branch $BRANCH"
+    fi
     exec bash "$TARGET/server/install.sh" "$@"
   fi
   if [ -e "$TARGET" ] && [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
@@ -1047,10 +1116,11 @@ get_code() {
   fi
   export DEBIAN_FRONTEND=noninteractive
   info "Installing git …"
-  apt-get update -qq
-  apt-get install -y -qq git openssh-client curl ca-certificates >/dev/null
+  apt_update
+  apt_install git openssh-client curl ca-certificates
   url=${OYS_REPO_URL:-https://github.com/$REPO.git}
   if GIT_TERMINAL_PROMPT=0 git ls-remote "$url" >/dev/null 2>&1; then
+    git ls-remote --exit-code --heads "$url" "$BRANCH" >/dev/null 2>&1 || fail "There is no branch $BRANCH in $REPO."
     git clone -q --branch "$BRANCH" "$url" "$TARGET"
   else
     # Privates Repository: Lesezugriff mit einem Deploy-Key, der nur zu diesem Server gehört
@@ -1072,6 +1142,7 @@ get_code() {
         asked=1
       done
     fi
+    GIT_SSH_COMMAND=$ssh_cmd git ls-remote --exit-code --heads "$url" "$BRANCH" >/dev/null 2>&1 || fail "There is no branch $BRANCH in $REPO."
     GIT_SSH_COMMAND=$ssh_cmd git clone -q --branch "$BRANCH" "$url" "$TARGET"
     git -C "$TARGET" config core.sshCommand "$ssh_cmd"
   fi
@@ -1095,7 +1166,12 @@ elif [ "$(id -u)" -ne 0 ]; then
   exec sudo bash "$0" "$@"
 fi
 
+# In Meldungen: „sudo“ nur, wenn über sudo gestartet (als root angemeldet gibt es oft gar kein sudo)
+SUDO_HINT=""
+if [ -n "${SUDO_USER:-}" ]; then SUDO_HINT="sudo "; fi
+
 MODE=install
+BRANCH_GIVEN=0
 while [ $# -gt 0 ]; do
   case $1 in
     --update) MODE=update ;;
@@ -1103,17 +1179,21 @@ while [ $# -gt 0 ]; do
     --branch)
       [[ ${2:-} =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || fail "--branch needs the name of a branch."
       BRANCH=$2
+      BRANCH_GIVEN=1
       shift ;;
     *) fail "Unknown option: $1 (use --update, --https, --branch NAME or nothing)" ;;
   esac
   shift
 done
 if [ ! -f "$CODE/index.php" ] || [ ! -f "$CODE/lib/bootstrap.php" ]; then
-  [ "$MODE" = install ] || fail "Run this inside the code folder: sudo bash $TARGET/server/install.sh ${ARGS[*]}"
+  [ "$MODE" = install ] || fail "Run this inside the code folder: ${SUDO_HINT}bash $TARGET/server/install.sh ${ARGS[*]}"
   get_code "${ARGS[@]}"
 fi
 
 SSH_KEYONLY=$(conf_get SSH_KEYONLY)
+OLD_DOMAIN=$(conf_get DOMAIN)
+DB_EMPTY=0
+DB_IMPORTED=0
 BACKUP_DAYS=$(conf_get BACKUP_DAYS)
 BACKUP_DAYS=${BACKUP_DAYS:-14}
 IMPORT="" IMP_CONFIG="" IMP_SMTP="" IMP_DUMP="" IMP_UPLOADS=""
@@ -1133,7 +1213,7 @@ case $MODE in
     summary
     ;;
   update)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: sudo bash $CODE/server/install.sh"
+    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
     if [ -d "$CODE/.git" ] && [ -z "${OYS_PULLED:-}" ]; then
       bold "Getting the new version"
@@ -1141,7 +1221,11 @@ case $MODE in
       branch=$("${git_c[@]}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
       rc=0
       "${git_c[@]}" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || rc=$?
-      if [ "$branch" != main ] && [ "$rc" = 2 ]; then
+      if [ "$BRANCH_GIVEN" = 1 ] && [ "$branch" != "$BRANCH" ]; then
+        info "Switching to the branch $BRANCH."
+        "${git_c[@]}" fetch -q origin "$BRANCH" || fail "There is no branch $BRANCH on GitHub."
+        "${git_c[@]}" checkout -q -B "$BRANCH" --track "origin/$BRANCH" || fail "Switching didn’t work – see above."
+      elif [ "$branch" != main ] && [ "$rc" = 2 ]; then
         # 2 = den Branch gibt es nicht mehr (z. B. nach dem Merge gelöscht)
         info "The branch $branch is gone on GitHub (merged?) – switching to main."
         "${git_c[@]}" fetch -q origin main || fail "git fetch didn’t work – see above."
@@ -1165,7 +1249,7 @@ case $MODE in
     bold "Done."
     ;;
   https)
-    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: sudo bash $CODE/server/install.sh"
+    [ -f "$CONF" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
     PHPV=$(conf_get PHP_VERSION)
     ensure_cert

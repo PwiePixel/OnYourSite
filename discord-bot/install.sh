@@ -12,6 +12,9 @@
 # und nie im Docker-Image. Beim erneuten Aufruf behält Enter die bisherigen Werte.
 # server/install.sh übergibt OYS_SITE_URL und OYS_BOT_SECRET, dann muss nichts in config.php kopiert werden.
 set -euo pipefail
+# Pakete immer ohne Rückfragen installieren – auch die Programme, die apt nebenbei startet
+# (debconf, apt-listchanges bei Debian, needrestart bei Ubuntu), sonst warten sie unsichtbar auf eine Taste
+export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a
 cd "$(dirname "$(readlink -f "$0")")"
 SRC=$(pwd)
 
@@ -39,6 +42,10 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo bash "$SRC/$(basename "$0")" "$@"
 fi
 
+# In Meldungen: „sudo“ nur, wenn über sudo gestartet
+SUDO_HINT=""
+if [ -n "${SUDO_USER:-}" ]; then SUDO_HINT="sudo "; fi
+
 UPDATE=0
 MODE=""
 for arg in "$@"; do
@@ -57,7 +64,7 @@ if [ -z "$MODE" ]; then
   elif [ -f "$SRC/.env" ] && [ -f "$SRC/docker-compose.yml" ]; then
     MODE=docker
   elif [ "$UPDATE" = 1 ]; then
-    fail "The bot isn’t installed yet. Run: sudo bash $SRC/install.sh"
+    fail "The bot isn’t installed yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   else
     bold "How should the bot run?"
     info "1) As a system service with Node.js   (recommended – also on the same server as the website)"
@@ -86,8 +93,16 @@ if [ "$MODE" = service ]; then
       [nN]*) fail "Install Node.js 22 and run this again." ;;
     esac
     command -v curl >/dev/null 2>&1 || fail "curl is missing – install it first (apt install curl)."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs >/dev/null
+    info "Installing Node.js 22 – this takes a minute or two …"
+    # Die Ausgabe kommt in eine Datei und wird nur bei einem Fehler gezeigt
+    log=$(mktemp)
+    if ! { curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; } >"$log" 2>&1 \
+      || ! apt-get -o DPkg::Lock::Timeout=600 install -y -qq nodejs >>"$log" 2>&1; then
+      tail -n 25 "$log" | grep -v "stable CLI interface" | sed 's/^/    /'
+      rm -f "$log"
+      fail "Node.js couldn’t be installed – see above."
+    fi
+    rm -f "$log"
     NODE=$(command -v node || true)
     if [ -z "$NODE" ] || ! node_ok "$NODE"; then fail "Node.js couldn’t be installed."; fi
   fi
@@ -156,7 +171,7 @@ ask() {
 }
 
 if [ "$UPDATE" = 1 ]; then
-  [ -f "$ENV_FILE" ] || fail "There are no settings yet. Run: sudo bash $SRC/install.sh"
+  [ -f "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   info "Keeping the settings in $ENV_FILE"
 else
   info "From the Discord Developer Portal (discord.com/developers/applications) → your application:"
@@ -308,8 +323,8 @@ UNIT_FILE
   info "Logs:            journalctl -u $NAME -f"
   info "Restart:         systemctl restart $NAME"
   info "Stop:            systemctl stop $NAME"
-  info "Change settings: sudo bash $SRC/install.sh"
-  info "After an update: sudo bash $SRC/install.sh --update   (server/install.sh --update does this for you)"
+  info "Change settings: ${SUDO_HINT}bash $SRC/install.sh"
+  info "After an update: ${SUDO_HINT}bash $SRC/install.sh --update   (server/install.sh --update does this for you)"
 else
   "${COMPOSE[@]}" up -d --remove-orphans
   sleep 6
@@ -320,7 +335,7 @@ else
   info "Logs:            ${COMPOSE[*]} logs -f bot      (in $SRC)"
   info "Restart:         ${COMPOSE[*]} restart bot"
   info "Stop:            ${COMPOSE[*]} down"
-  info "Change settings: sudo bash install.sh"
-  info "After an update: git pull && sudo bash install.sh --update"
+  info "Change settings: ${SUDO_HINT}bash install.sh"
+  info "After an update: git pull && ${SUDO_HINT}bash install.sh --update"
 fi
 info "In Discord, run /support-panel in your support channel and /bot-status to see the connection."

@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/in
 
 ## What you need
 
-- **A server (VPS)** with Ubuntu 24.04 (22.04, Debian 12 and 13 work too), root access via SSH, 2 GB RAM recommended (1 GB works) and enough disk space for the uploads.
+- **A server (VPS)** with Ubuntu 24.04 (22.04, Debian 12 and 13 work too), root access via SSH, 2 GB RAM recommended (1 GB works) and enough disk space for the uploads. A minimal Debian may lack `curl` – then `apt update && apt install -y curl` first. Logged in as root? Then leave out `sudo` in all commands here.
 - **API access to the DNS of your domain.** A certificate for all subdomains (`*.on-your.site`) is only issued after a check in the DNS, and the installer does that check through the API of your DNS provider – it finds the provider by itself from the nameservers. Built in: **Cloudflare, Hetzner, IONOS, Netcup, INWX, all-inkl.com and Porkbun**; more than 150 others work through [acme.sh](https://github.com/acmesh-official/acme.sh/wiki/dnsapi). If the DNS of your domain is managed by Plesk itself or by a provider without an API, move the DNS to one of these first (Cloudflare is free – use “DNS only”, the grey cloud).
 - **Mail:** the website sends its emails through the SMTP server in `email/smtp.json`. If your mailboxes are on the Plesk server, they don’t move with this installer – move them to a mail provider first and change the mail server under *Admin → Mail Server* and the MX records.
 
@@ -133,11 +133,11 @@ Every night at about 3:30, `server/backup.sh` saves to `/var/backups/onyoursite/
 
 Backups are kept for 14 days (`BACKUP_DAYS` in `/etc/onyoursite/server.conf`). They are on the same disk as the website, so they help against mistakes, not against losing the server: copy them somewhere else now and then (e.g. `scp -r root@SERVER:/var/backups/onyoursite/latest ./onyoursite-backup`) or turn on the backups of your server provider.
 
-Restore a day:
+Restore a day – as root (with a sudo user, run `sudo -i` first):
 
 ```bash
-gunzip -c /var/backups/onyoursite/2026-11-01/database.sql.gz | sudo mariadb onyoursite
-sudo rsync -a --delete /var/backups/onyoursite/2026-11-01/uploads/ /var/lib/onyoursite/uploads/
+gunzip -c /var/backups/onyoursite/2026-11-01/database.sql.gz | mariadb onyoursite
+rsync -a --delete /var/backups/onyoursite/2026-11-01/uploads/ /var/lib/onyoursite/uploads/
 ```
 
 ## Where things are
