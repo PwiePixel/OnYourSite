@@ -49,7 +49,8 @@ test('page URLs, uploads and assets match PHP', () => {
 
 test('time ago and spam check match PHP', () => {
   const now = time();
-  const stamps = [now - 5, now - 61, now - 3599, now - 3600, now - 7200, now - 86400, now - 3 * 86400, now - 30 * 86400].map((t) => date('Y-m-d H:i:s', t));
+  // Abstand zu den Grenzen (60 s, 1 h, 1 Tag): PHP startet unter Last ein paar Sekunden später
+  const stamps = [now - 5, now - 61, now - 3570, now - 3600, now - 7200, now - 86400, now - 3 * 86400, now - 30 * 86400].map((t) => date('Y-m-d H:i:s', t));
   assert.deepEqual(stamps.map(timeAgo), each('oys_time_ago($v)', stamps));
   const msgs = ['Hello, I like your page!', 'Buy cheap followers now', 'see http://a.com http://b.com http://c.com', '<a href="x">x</a>', 'Привет как дела это тест сообщения на русском языке'];
   assert.deepEqual(msgs.map(looksLikeSpam), each('oys_looks_like_spam($v)', msgs));
