@@ -36,7 +36,7 @@ node_ok() {
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || fail "Please run this as root."
-  exec sudo bash "$0" "$@"
+  exec sudo bash "$SRC/$(basename "$0")" "$@"
 fi
 
 UPDATE=0

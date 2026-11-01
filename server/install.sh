@@ -20,7 +20,8 @@
 set -euo pipefail
 umask 022
 
-CODE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+# Bei „bash <(curl …)“ oder „bash /dev/stdin“ gibt es keinen Ordner – dann leer, get_code holt den Code
+CODE=$( { cd "$(dirname "$(readlink -f "$0" 2>/dev/null)")/.." 2>/dev/null && pwd; } || true)
 TARGET=/var/www/onyoursite
 REPO=${OYS_REPO:-PwiePixel/OnYourSite}
 BRANCH=${OYS_BRANCH:-main}
@@ -123,9 +124,14 @@ check_location() {
   case $CODE in
     *[[:space:]]*) fail "The code folder must not contain spaces: $CODE" ;;
   esac
-  if runuser -u "$WEB" -- test -r "$CODE/index.php" 2>/dev/null; then return 0; fi
   local target=$TARGET
-  warn "The web server can’t read $CODE (folders like /root are private)."
+  case $CODE in
+    /tmp/*|/var/tmp/*|/dev/shm/*|/run/*)
+      warn "$CODE is a temporary folder – the system may clear it." ;;
+    *)
+      if runuser -u "$WEB" -- test -r "$CODE/index.php" 2>/dev/null; then return 0; fi
+      warn "The web server can’t read $CODE (folders like /root are private)." ;;
+  esac
   case "$(choose "Copy the code to $target and continue there? [Y/n]" y)" in
     [nN]*) fail "Put the code into a folder like $target and run the installer from there." ;;
   esac
@@ -513,19 +519,25 @@ ensure_cert() {
 
 step_website() {
   bold "4/8  Website"
+  # Root-Timer und git pull laufen aus diesem Ordner – niemand außer root darf darin etwas ändern.
+  # Vor write_config, das config.php danach root und dem Webserver gibt.
+  chown -R root:root "$CODE"
   write_config "$IMP_CONFIG" ""
   info "config.php is written (readable only by root and the web server)."
   # Der Code gehört root – schreiben darf der Webserver nur in den Upload-Ordner und in email/ (Mail-Einstellungen)
   install -d -m 750 -o root -g "$WEB" "$DATA_DIR"
   install -d -m 750 -o "$WEB" -g "$WEB" "$UPLOADS"
-  find "$CODE" \( -path "$CODE/config.php" -o -path "$CODE/email" \) -prune -o ! -type l -exec chmod go+rX,go-w {} +
+  find "$CODE" \( -path "$CODE/config.php" -o -path "$CODE/email" -o -name '.env' -o -name '.env.*' \) -prune \
+    -o ! -type l -exec chmod go+rX,go-w {} +
   chown -R "$WEB:$WEB" "$CODE/email"
   chmod 750 "$CODE/email"
   if [ -n "$IMP_SMTP" ]; then
+    rm -f "$CODE/email/smtp.json"
     install -m 640 -o "$WEB" -g "$WEB" "$IMP_SMTP" "$CODE/email/smtp.json"
     info "Mail server settings (smtp.json) copied."
   fi
-  if [ -f "$CODE/email/smtp.json" ]; then chmod 640 "$CODE/email/smtp.json"; fi
+  # email/ gehört dem Webserver: nur eine echte Datei anfassen, nie einem Symlink folgen
+  if [ -f "$CODE/email/smtp.json" ] && [ ! -L "$CODE/email/smtp.json" ]; then chmod 640 "$CODE/email/smtp.json"; fi
   if [ -n "$IMP_UPLOADS" ]; then import_uploads "$IMP_UPLOADS"; fi
   write_php
   write_apache
@@ -576,9 +588,13 @@ provider_vars() {
 
 install_acme() {
   if [ -x "$ACME" ]; then return 0; fi
+  local tmp
   info "Installing acme.sh, the Let’s Encrypt client …"
-  curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh \
-    | sh -s -- --install-online --nocron --home "$ACME_HOME" >/dev/null 2>&1 || true
+  # Der Installer packt im aktuellen Ordner aus – darum in einem eigenen, leeren Ordner
+  tmp=$(mktemp -d)
+  (cd "$tmp" && curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh \
+    | sh -s -- --install-online --nocron --home "$ACME_HOME") >/dev/null 2>&1 || true
+  rm -rf "$tmp"
   if [ ! -x "$ACME" ]; then warn "acme.sh couldn’t be installed (no connection to github.com?)."; return 1; fi
 }
 
@@ -793,13 +809,17 @@ write_if_changed() {
 }
 
 step_protect() {
-  local ssh_cfg ssh_live ssh_now ports list p
+  local ssh_cfg ssh_sock ssh_live ssh_now ports list p
   apt-get install -y -qq ufw fail2ban python3-systemd unattended-upgrades >/dev/null
   # Firewall: nur SSH, HTTP und HTTPS. Der SSH-Port wird nie ausgesperrt – auch wenn er nicht 22 ist
+  # sshd -T braucht den Ordner, den sonst erst der laufende SSH-Dienst anlegt (z. B. Socket-Aktivierung bei Ubuntu 24.04)
+  if command -v sshd >/dev/null 2>&1; then install -d -m 755 /run/sshd; fi
   ssh_cfg=$( { sshd -T 2>/dev/null || true; } | awk '$1 == "port" {print $2}')
-  ssh_live=$( { ss -Htlnp 2>/dev/null || true; } | awk '/"sshd/ {n = split($4, a, ":"); print a[n]}')
-  ssh_now=$( { ss -Htnp state established 2>/dev/null || true; } | awk '/"sshd/ {n = split($3, a, ":"); print a[n]}')
-  ports=$(printf '%s\n%s\n%s\n' "$ssh_cfg" "$ssh_live" "$ssh_now" | grep -E '^[0-9]+$' | sort -un | paste -sd, - || true)
+  ssh_sock=$( { systemctl show -p Listen --value ssh.socket 2>/dev/null || true; } | sed -n 's/.*:\([0-9][0-9]*\) .*/\1/p')
+  # Weiterleitungen von sshd lauschen nur auf localhost – die zählen nicht
+  ssh_live=$( { ss -Htlnp 2>/dev/null || true; } | awk '/"sshd/ && $4 !~ /^(127\.|\[::1\]|::1)/ {n = split($4, a, ":"); print a[n]}')
+  ssh_now=$( { ss -Htnp state established 2>/dev/null || true; } | awk '/"sshd/ && $3 !~ /^(127\.|\[::1\]|::1)/ {n = split($3, a, ":"); print a[n]}')
+  ports=$(printf '%s\n%s\n%s\n%s\n' "$ssh_cfg" "$ssh_sock" "$ssh_live" "$ssh_now" | grep -E '^[0-9]+$' | sort -un | paste -sd, - || true)
   [ -n "$ports" ] || ports=22
   IFS=, read -ra list <<< "$ports"
   for p in "${list[@]}"; do ufw allow "$p/tcp" comment SSH >/dev/null; done
@@ -871,8 +891,8 @@ step_ssh() {
     [yY]*) ;;
     *) SSH_KEYONLY=no; return 0 ;;
   esac
-  printf '%s\n' "# OnYourSite – written by server/install.sh" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
-    "PermitRootLogin prohibit-password" > "$conf"
+  # Nur Passwörter abschalten – PermitRootLogin bleibt, wie der Admin es eingestellt hat
+  printf '%s\n' "# OnYourSite – written by server/install.sh" "PasswordAuthentication no" "KbdInteractiveAuthentication no" > "$conf"
   # Die Prüfung braucht den Ordner, den sonst der laufende SSH-Dienst anlegt
   install -d -m 755 /run/sshd
   if sshd -t 2>/dev/null; then
@@ -1018,7 +1038,7 @@ get_code() {
     ubuntu|debian) ;;
     *) fail "This installer is made for Ubuntu (22.04 or newer) and Debian (12 or newer)." ;;
   esac
-  if [ -f "$TARGET/index.php" ] && [ -f "$TARGET/server/install.sh" ]; then
+  if [ -f "$TARGET/index.php" ] && [ -f "$TARGET/lib/bootstrap.php" ] && [ -f "$TARGET/server/install.sh" ]; then
     info "The code is already in $TARGET."
     exec bash "$TARGET/server/install.sh" "$@"
   fi
@@ -1054,6 +1074,10 @@ get_code() {
     fi
     GIT_SSH_COMMAND=$ssh_cmd git clone -q --branch "$BRANCH" "$url" "$TARGET"
     git -C "$TARGET" config core.sshCommand "$ssh_cmd"
+  fi
+  if [ ! -f "$TARGET/server/install.sh" ] || [ ! -f "$TARGET/lib/bootstrap.php" ]; then
+    rm -rf "$TARGET"
+    fail "The branch $BRANCH doesn’t contain the installer (server/install.sh) – nothing was installed."
   fi
   info "The code is in $TARGET (branch $BRANCH)."
   exec bash "$TARGET/server/install.sh" "$@"
@@ -1113,7 +1137,17 @@ case $MODE in
     DOMAIN=$(conf_get DOMAIN)
     if [ -d "$CODE/.git" ] && [ -z "${OYS_PULLED:-}" ]; then
       bold "Getting the new version"
-      git -c safe.directory="$CODE" -C "$CODE" pull --ff-only || fail "git pull didn’t work – see above."
+      git_c=(git -c safe.directory="$CODE" -C "$CODE")
+      branch=$("${git_c[@]}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+      rc=0
+      "${git_c[@]}" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || rc=$?
+      if [ "$branch" != main ] && [ "$rc" = 2 ]; then
+        # 2 = den Branch gibt es nicht mehr (z. B. nach dem Merge gelöscht)
+        info "The branch $branch is gone on GitHub (merged?) – switching to main."
+        "${git_c[@]}" fetch -q origin main || fail "git fetch didn’t work – see above."
+        "${git_c[@]}" checkout -q -B main --track origin/main || fail "Switching to main didn’t work – see above."
+      fi
+      "${git_c[@]}" pull --ff-only || fail "git pull didn’t work – see above."
       # Mit dem neuen Installer weitermachen
       exec env OYS_PULLED=1 bash "$CODE/server/install.sh" --update
     fi

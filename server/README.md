@@ -55,7 +55,7 @@ Log in to the new server (`ssh root@NEW-SERVER`) and start the installer with on
 curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash
 ```
 
-(As root, `sudo` can be left out. Rather keep the file? `curl -fsSLo install.sh https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh && sudo bash install.sh` does the same.)
+(As root, `sudo` can be left out. No `curl` on a fresh Debian? `apt update && apt install -y curl` first. Rather keep the file? `curl -fsSLo install.sh https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh && sudo bash install.sh` does the same.)
 
 The installer installs git, gets the code into `/var/www/onyoursite` and goes on by itself. It asks for:
 
@@ -70,7 +70,7 @@ Everything else happens by itself. Running it again is safe – Enter keeps ever
 
 From the import it takes the database (a dump from Plesk, phpMyAdmin or mysqldump: `.sql`, `.sql.gz` or `.zip`), the uploads, the mail settings and everything from `config.php` except the database access – above all `aes_key`: without it, encrypted data (Discord IDs, messages, booking requests, tickets) can’t be read. The database gets its own user with a new password, and on the first request the website brings the tables up to date by itself.
 
-> Already have the code on the server (e.g. `git clone` into `/var/www/onyoursite`)? Then start `sudo bash /var/www/onyoursite/server/install.sh` – it’s the same installer. To try a branch before it’s merged: `… | sudo bash -s -- --branch NAME`. If the repository is ever private, the installer shows a read-only deploy key to add once on GitHub.
+> Already have the code on the server (e.g. `git clone` into `/var/www/onyoursite`)? Then start `sudo bash /var/www/onyoursite/server/install.sh` – it’s the same installer. To try a branch before it’s merged: `… | sudo bash -s -- --branch NAME` (once that branch is merged and deleted, `--update` switches back to `main` by itself). If the repository is ever private, the installer shows a read-only deploy key to add once on GitHub.
 
 ### 4. Test before switching
 
