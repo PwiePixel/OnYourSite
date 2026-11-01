@@ -3,6 +3,7 @@
 import { LockBusyError, withNamedLock, type Db, type Row } from '../db.js';
 import { date, field, intval, mbSubstr, numberFormat, phpStr, ucfirst, type PhpArray } from '../php.js';
 import { cleanText } from '../helpers.js';
+import { phpJson } from '../html.js';
 import { randomHex } from '../crypto.js';
 import { codeSiteById } from '../code/sites.js';
 import { PhpNumber, jsonInt, jsonIsNumeric, phpInt, phpJsonDecode, poolDb } from './util.js';
@@ -70,7 +71,7 @@ export async function hcSaveSettings(input: PhpArray, sql: Db = poolDb): Promise
   const s = {} as HcSettings;
   for (const key of KEYS) s[key] = clamp(phpInt(input[key] ?? defaults[key]));
   s.views_step = Math.max(1, s.views_step);
-  await sql.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [JSON.stringify(s)]);
+  await sql.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [phpJson(s)]);
 }
 
 // oys_hc_balance()
