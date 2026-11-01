@@ -3,8 +3,12 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2023"],
-    "types": ["node"],
+    "lib": [
+      "ES2023"
+    ],
+    "types": [
+      "node"
+    ],
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
@@ -15,7 +19,12 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "sourceMap": true,
-    "declaration": false
+    "declaration": false,
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js"
+  ]
 }

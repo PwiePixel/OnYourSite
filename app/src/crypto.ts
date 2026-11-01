@@ -1,51 +1,23 @@
 // Verschlüsselung und Hashes – Byte für Byte wie die PHP-Version (security.php, lib/helpers.php), damit alle
 // gespeicherten Daten (ENC:…), Passwörter ($2y$…) und Signaturen weiter gelten.
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { configString } from './config.js';
 
-// PHP: openssl_* nimmt den Schlüssel als Bytes; zu kurz wird mit Nullbytes aufgefüllt, zu lang abgeschnitten
-function aesKey(): Buffer {
-  const raw = Buffer.from(configString('aes_key', ''), 'utf8');
-  const key = Buffer.alloc(32);
-  raw.copy(key, 0, 0, Math.min(32, raw.length));
-  return key;
-}
+// encryptData()/decryptData(): die geprüften Nachbauten aus compat/core.js (strenges Base64 wie PHP, Schlüssel als
+// Bytes, zu kurz mit Nullbytes aufgefüllt) – hier nur mit dem Schlüssel aus den Einstellungen verbunden
+import * as compat from './compat/core.js';
 
-// PHP empty(): '' und '0' gelten als leer
 export function phpEmpty(value: unknown): boolean {
   return value === null || value === undefined || value === '' || value === '0' || value === 0 || value === false;
 }
 
-// encryptData(): 'ENC:' + base64(IV + base64(Ciphertext)) – openssl_encrypt mit Optionen 0 liefert schon Base64
 export function encryptData(plaintext: string | null | undefined): string | null | undefined {
-  if (phpEmpty(plaintext)) return plaintext;
-  const text = String(plaintext);
-  if (text.startsWith('ENC:')) return text;
-  const iv = randomBytes(16);
-  const cipher = createCipheriv('aes-256-cbc', aesKey(), iv);
-  const ctB64 = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]).toString('base64');
-  return 'ENC:' + Buffer.concat([iv, Buffer.from(ctB64, 'latin1')]).toString('base64');
+  return compat.encryptData(plaintext, configString('aes_key', '')) as string | null | undefined;
 }
 
-// decryptData(): bei allem, was nicht passt, kommt der Text unverändert zurück (wie in PHP)
 export function decryptData(value: string | null | undefined): string | null | undefined {
-  if (phpEmpty(value)) return value;
-  const text = String(value);
-  if (!text.startsWith('ENC:')) return text;
-  const b64 = text.slice(4);
-  // base64_decode(..., true): nur gültige Zeichen
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64.replace(/\s+/g, ''))) return text;
-  const data = Buffer.from(b64, 'base64');
-  if (data.length <= 16) return text;
-  const iv = data.subarray(0, 16);
-  const ctB64 = data.subarray(16).toString('latin1');
-  try {
-    const decipher = createDecipheriv('aes-256-cbc', aesKey(), iv);
-    return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]).toString('utf8');
-  } catch {
-    return text;
-  }
+  return compat.decryptData(value, configString('aes_key', '')) as string | null | undefined;
 }
 
 // Kurzform für Felder aus der Datenbank: immer ein String
