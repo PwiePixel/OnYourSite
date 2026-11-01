@@ -8,6 +8,7 @@ import { setPhpVar, parseStr } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { registerAll } from './routes/index.js';
+import { ensureSchema } from './schema.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
 const POST_MAX = 20 * 1024 * 1024;
@@ -18,6 +19,8 @@ export async function buildServer() {
   loadConfig();
   // Zeitzone der Seite für alles, was Date benutzt
   process.env.TZ = timeZone();
+  // Tabellen anlegen bzw. auf den neuesten Stand bringen (einmal beim Start statt bei jeder Anfrage)
+  await ensureSchema();
   registerAll();
 
   const app = Fastify({ logger: false, bodyLimit: BODY_LIMIT, trustProxy: false, routerOptions: { ignoreTrailingSlash: false, ignoreDuplicateSlashes: false } });

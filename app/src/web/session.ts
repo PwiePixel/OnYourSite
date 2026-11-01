@@ -1,6 +1,7 @@
 // Sitzungen wie PHP: Cookie PHPSESSID (nur für diesen Host, HttpOnly, SameSite=Lax, secure bei https), gespeichert in
 // der Datenbank statt in Dateien. Unbekannte IDs bekommen eine neue (strict mode); nach 24 Minuten ohne Aufruf läuft
 // eine Sitzung ab. Je Sitzung läuft immer nur eine Anfrage gleichzeitig (wie die Dateisperre von PHP).
+// Die Tabelle oys_sessions legt schema.ts an (Version 5).
 import { randomBytes } from 'node:crypto';
 import { exec, one } from '../db.js';
 import { configInt, configString } from '../config.js';
@@ -8,17 +9,6 @@ import type { Ctx } from './ctx.js';
 
 export const SESSION_COOKIE = 'PHPSESSID';
 type SessionData = Record<string, unknown>;
-
-let ready: Promise<void> | null = null;
-function ensureTable(): Promise<void> {
-  ready ||= exec(`CREATE TABLE IF NOT EXISTS oys_sessions (
-      id VARCHAR(64) NOT NULL PRIMARY KEY,
-      data MEDIUMTEXT NOT NULL,
-      last_seen INT UNSIGNED NOT NULL,
-      KEY idx_seen (last_seen)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`).then(() => undefined);
-  return ready;
-}
 
 const idleSeconds = () => configInt('session_idle_seconds', 1440);
 const now = () => Math.floor(Date.now() / 1000);
@@ -62,7 +52,6 @@ export class Session {
   // session_start()
   static async start(ctx: Ctx): Promise<Session> {
     if (ctx.session) return ctx.session;
-    await ensureTable();
     const cookieId = ctx.cookie(SESSION_COOKIE);
     let session: Session | null = null;
     if (cookieId && /^[0-9a-zA-Z,-]{22,64}$/.test(cookieId)) {
