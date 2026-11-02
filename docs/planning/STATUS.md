@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 05:15 (UTC+1).
+Last update: 2026-11-02 06:16 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -12,8 +12,11 @@ Last update: 2026-11-02 05:15 (UTC+1).
 | Core hardening: password hashing in worker threads, raw bytes for invalid UTF-8, exact float printing, errors while sending, database down, test isolation | Done |
 | Input-handling audit: linear trimming, CSS, markdown, file-type detection, share image, Apache-like answers for odd paths, cookie names | Done |
 | Parity gate: every golden-master request SAME or a documented intended difference; browser suites equal on PHP and Node | Passed |
-| Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | In progress |
-| Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | In progress |
+| Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | Done |
+| Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | Done |
+
+**Release 3.0 is complete and ready to merge** (PR #15 merges cleanly into `main`). The PHP removal is being merged
+into `feature/new-features` next.
 
 Points to settle before or soon after 3.0:
 - Node checks only bcrypt password hashes (`$2y$`, `$2a$`, `$2b$`). Check production before the switch:
@@ -25,6 +28,8 @@ Points to settle before or soon after 3.0:
 - Several JSON decoders exist in the packages – merge them into one in the core.
 - The privacy page should mention Cloudflare and the Discord bot data.
 - On a real server: `systemd-analyze verify` for the new units (the container had no systemd).
+- Slow but linear on 20 MB hostile input (follow-ups): `e()`/`xmlEscape` in html.ts, the NUL strip in css.ts, the raw
+  e-mail kept in the session after a failed sign-up (cap its length), and the phone check in `cleanUrl` (V8 regex stack).
 
 ## New features (PR #14, `feature/new-features`)
 
