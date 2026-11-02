@@ -3214,6 +3214,225 @@
       '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (free ? '' : ' disabled') + '><span class="track"></span></label></div>';
   }
 
+  // ================================================================
+  // Einstellungen → Eigene Domain (PD-4): eigener Abschnitt, den renderDomain() allein neu zeichnet. Nach „Connect
+  // domain“ oder „Check now“ fragt der Editor nach (alle 3 s, solange geprüft wird, höchstens 60 s; danach alle 15 s
+  // bis 15 Minuten nach dem Klick) – nie bei verborgenem Tab, nie über das Ende hinaus, nie mit einer neuen Prüfung.
+  // ================================================================
+  var dom = { data: null, pageId: 0, timer: 0, fastUntil: 0, checkingSince: 0, claim: null, err: '', busy: false };
+  var DOMAIN_BADGES = { verifying: ['amber', 'Waiting for DNS'], pending: ['amber', 'Setting up HTTPS'], active: ['green', 'Live'], broken: ['red', 'Not reachable'], suspended: ['', 'Paused'], failed: ['red', 'Couldn’t be verified'], blocked: ['red', 'Disabled by the team'], removing: ['', 'Removing…'] };
+  var DOMAIN_STEP_ICONS = { done: 'bx-check-circle text-emerald-400', waiting: 'bx-time-five text-amber-400', problem: 'bx-error-circle text-red-400', unchecked: 'bx-circle text-white/40' };
+  var DOMAIN_FINAL = ['active', 'failed', 'blocked', 'suspended'];
+
+  function domainSectionHtml() {
+    return E.domains && E.domains.available ? '<section class="max-w-3xl mx-auto mt-8" id="domainSection"></section>' : '';
+  }
+  function stopDomainPoll() { clearTimeout(dom.timer); dom.timer = 0; }
+  function scheduleDomainPoll() {
+    stopDomainPoll();
+    var d = dom.data && dom.data.domain;
+    if (!d || DOMAIN_FINAL.indexOf(d.state) !== -1 || document.hidden || activeTab !== 'settings' || !$('#domainSection')) return;
+    var now = Date.now(), wait = 0;
+    if (d.checking && now - dom.checkingSince < 60000) wait = 3000;
+    else if (now < dom.fastUntil) wait = 15000;
+    if (wait) dom.timer = setTimeout(function () { dom.timer = 0; loadDomain(); }, wait);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopDomainPoll();
+    else if (activeTab === 'settings') scheduleDomainPoll();
+  });
+  function loadDomain() {
+    if (!state.page || !$('#domainSection')) return;
+    var pid = state.page.id;
+    api('domain').then(function (r) {
+      if (!state.page || state.page.id !== pid) return;
+      if (r && r.ok) { dom.data = r; dom.pageId = pid; dom.err = ''; } else dom.err = (r && r.error) || 'Couldn’t load your custom domain.';
+      renderDomain();
+      scheduleDomainPoll();
+    });
+  }
+  function domainUse(r) {
+    // Antwort mit Domain: anzeigen und die Nachfrage starten
+    if (!dom.data) dom.data = { ok: true, available: true, enabled: true, premium: { active: true }, linkPage: true };
+    dom.data.domain = r.domain || null;
+    if (r.domain && r.domain.checking) dom.checkingSince = Date.now();
+    dom.fastUntil = Date.now() + 15 * 60000;
+    renderDomain();
+    scheduleDomainPoll();
+  }
+  function dnsRows(list) {
+    return list.map(function (r) {
+      var st = r.status === 'ok' ? '<i class="bx bx-check-circle text-emerald-400" title="Found"></i>'
+        : r.status === 'missing' || r.status === 'wrong' ? '<i class="bx bx-error-circle text-red-400" title="' + (r.status === 'missing' ? 'Missing' : 'Wrong value') + '"></i>'
+          : '<i class="bx bx-circle text-white/40" title="Not checked yet"></i>';
+      return '<div class="dns-row"><span class="dns-type">' + esc(r.type) + '</span>' +
+        '<span class="dns-cell"><code>' + esc(r.host) + '</code><button type="button" class="btn-ghost" data-copy="' + esc(r.host) + '" title="Copy name"><i class="bx bx-copy"></i></button></span>' +
+        '<span class="dns-cell"><code>' + esc(r.value) + '</code><button type="button" class="btn-ghost" data-copy="' + esc(r.value) + '" title="Copy value"><i class="bx bx-copy"></i></button></span>' +
+        '<span class="dns-st">' + st + '</span>' +
+        (r.found ? '<small class="dns-note text-red-400">Found: ' + esc(r.found) + '</small>' : '') +
+        (r.note ? '<small class="dns-note hint">' + esc(r.note) + '</small>' : '') + '</div>';
+    }).join('');
+  }
+  function dnsTableHtml(d) {
+    return '<div class="dns-table"><div class="dns-row dns-head"><span>Type</span><span>Name</span><span>Value</span><span></span></div>' + dnsRows(d.records) + '</div>' +
+      '<p class="hint">Name: some providers want only the part before your domain (shown), others the full name.</p>' +
+      '<p class="hint">Using Cloudflare DNS? Set the CNAME to “DNS only” (grey cloud).</p>' +
+      '<p class="hint">Remove other records (A, AAAA) for this name first – a CNAME can’t share its name.</p>' +
+      '<p class="hint">Using CAA records? Allow letsencrypt.org, pki.goog and ssl.com.</p>' +
+      '<p class="hint">Keep the TXT record – it lets us switch your domain back on automatically after a break.</p>' +
+      (d.apex ? '<p class="hint">If you move ' + esc(d.display) + ' away, remove it here first.</p>' : '') +
+      (d.extra && d.extra.length ? '<h3 class="lbl mt-4">Additional records</h3><div class="dns-table">' + dnsRows(d.extra) + '</div><p class="hint">Cloudflare needs these for root domains.</p>' : '');
+  }
+  function domainFormHtml(r) {
+    var c = dom.claim;
+    return '<div><label class="lbl" for="domainInput">Your domain</label>' +
+      '<div class="flex gap-2 flex-wrap"><div class="input-group flex-1"><span class="addon left">https://</span><input class="field" id="domainInput" placeholder="links.yourname.com" autocomplete="off" inputmode="url" maxlength="253" value="' + esc(dom.input || '') + '"></div>' +
+      '<button type="button" class="btn-primary" data-dom="connect"' + (dom.busy ? ' disabled' : '') + '><i class="bx bx-link"></i> Connect domain</button></div>' +
+      '<p class="hint">Use a domain you own. You’ll get two DNS records to add at your domain provider.</p>' +
+      (dom.err ? '<p class="hint text-red-400" role="alert">' + esc(dom.err) + '</p>' : '') + '</div>' +
+      (c ? '<div class="panel space-y-3" id="domainClaim"><p class="text-sm text-white/80">' + esc(c.error) + '</p><div class="dns-table">' + dnsRows([{ type: c.challenge.type, host: c.challenge.host, value: c.challenge.value, status: 'unchecked' }]) + '</div>' +
+        '<div class="flex justify-end"><button type="button" class="btn-primary" data-dom="claim"' + (dom.busy ? ' disabled' : '') + '><i class="bx bx-check"></i> I’ve added it</button></div></div>' : '');
+  }
+  function renderDomain() {
+    var sec = $('#domainSection');
+    if (!sec) return;
+    var r = dom.data && dom.pageId === (state.page && state.page.id) ? dom.data : null;
+    var body;
+    if (!r) body = dom.err ? '<p class="hint text-red-400">' + esc(dom.err) + '</p>' : '<p class="hint">Loading…</p>';
+    else if (!r.available) body = '<p class="hint">Custom domains aren’t available right now.</p>';
+    else if (!r.domain && r.linkPage === false) body = '<p class="hint">Custom domains work for link pages only.</p>';
+    else if (!r.domain && !(r.premium && r.premium.active)) {
+      body = '<div class="flex flex-wrap items-center gap-4"><i class="bx bx-globe text-white/80" style="font-size:32px"></i><div class="flex-1 min-w-0"><p class="text-sm text-white">Use your own domain, like links.yourname.com, for this page.</p><p class="hint">Included in Premium</p></div>' +
+        '<button type="button" class="btn-primary" data-dom="shop" data-arg="premium"><i class="bx bx-crown"></i> Get Premium</button></div>';
+    } else if (!r.domain && !r.enabled) body = '<p class="hint">New custom domains are paused right now.</p>';
+    else if (!r.domain) body = domainFormHtml(r);
+    else {
+      var d = r.domain, b = DOMAIN_BADGES[d.state] || ['', d.state];
+      var label = d.state === 'verifying' && d.waiting ? 'Waiting for a free place' : b[1];
+      var cool = d.state === 'removing' || d.state === 'blocked';
+      body = '<div class="flex flex-wrap items-center justify-between gap-3"><div class="min-w-0"><b class="text-white break-all" id="domainName">' + esc(d.display) + '</b>' +
+        (d.display !== d.hostname ? ' <small class="hint">' + esc(d.hostname) + '</small>' : '') + ' <span class="bdg ' + b[0] + '">' + esc(label) + '</span></div>' +
+        '<div class="flex items-center gap-2">' +
+        (cool ? '' : '<button type="button" class="btn-secondary" data-dom="check"' + (d.checking || dom.busy ? ' disabled' : '') + '><i class="bx bx-refresh' + (d.checking ? ' bx-spin' : '') + '"></i> ' + (d.state === 'failed' ? 'Check again' : 'Check now') + '</button>') +
+        (d.state === 'active' ? '<a class="btn-ghost" href="' + esc(d.url) + '" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> Open</a>' : '') +
+        '<button type="button" class="icon-btn danger" data-dom="remove" title="Remove domain"><i class="bx bx-trash"></i></button></div></div>';
+      if (r.delayed) body += '<p class="hint text-amber-400"><i class="bx bx-time-five"></i> Checks are delayed right now – your page and domain keep working.</p>';
+      if (['verifying', 'pending', 'broken'].indexOf(d.state) !== -1) {
+        body += '<ul class="check-steps">' + [['ownership', 'Ownership confirmed'], ['dns', 'Domain points to OnYourSite'], ['https', 'Secure connection (HTTPS)']].map(function (s) {
+          return '<li><i class="bx ' + DOMAIN_STEP_ICONS[d.steps[s[0]]] + '"></i> ' + s[1] + '</li>';
+        }).join('') + '</ul>';
+      }
+      if (d.message) body += '<p class="text-sm text-white/80" id="domainMessage">' + esc(d.message) + '</p>';
+      if (d.checkedAt) body += '<p class="hint">Last checked: ' + esc(d.checkedAt) + '</p>';
+      if (dom.err) body += '<p class="hint text-red-400" role="alert">' + esc(dom.err) + '</p>';
+      if (d.state === 'active') {
+        body += '<p class="text-sm text-white/80">Your page is live at ' + esc(d.url) + '. Your OnYourSite addresses, QR codes and shared links lead here.</p>' +
+          '<label class="switch"><input type="checkbox" id="domainRedirect"' + (d.redirect ? ' checked' : '') + '><span class="track"></span><span class="sw-text">Forward my OnYourSite addresses to this domain</span></label>' +
+          '<details class="mt-2"><summary class="hint cursor-pointer">DNS records</summary>' + dnsTableHtml(d) + '</details>';
+      } else if (d.state === 'suspended') {
+        body += (d.graceUntil ? '<p class="hint">Your domain forwards to your OnYourSite address until ' + esc(d.graceUntil) + '.</p>' : '') +
+          '<button type="button" class="btn-primary" data-dom="shop" data-arg="premium"><i class="bx bx-crown"></i> Renew Premium</button>';
+      } else if (d.state === 'blocked') {
+        if (d.blockedReason) body += '<p class="hint">' + esc(d.blockedReason) + '</p>';
+      } else if (d.state !== 'removing') body += dnsTableHtml(d);
+    }
+    sec.innerHTML = '<h2 class="section-title">Custom domain <small>Show this page on your own domain</small></h2><div class="panel space-y-4">' + body + '</div>';
+  }
+  function domainAdd(claim, apexOk) {
+    var input = $('#domainInput');
+    if (input) dom.input = input.value;
+    var host = dom.input;
+    dom.busy = true;
+    dom.err = '';
+    renderDomain();
+    api('domain-add', { hostname: host || '', apex_ok: !!apexOk, claim: !!claim }).then(function (r) {
+      dom.busy = false;
+      if (r && r.ok) {
+        dom.claim = null;
+        dom.input = '';
+        toast(r.transferred ? 'Domain moved to this page – we’re checking it now.' : 'Domain added – add the DNS records below.', 'ok');
+        domainUse(r);
+        return;
+      }
+      if (r && r.confirm === 'apex') {
+        renderDomain();
+        UI.choice({
+          title: 'Use a root domain?', text: r.error,
+          options: [{ value: 'cancel', text: 'Cancel' }, { value: 'www', text: 'Use ' + r.suggest }, { value: 'apex', text: 'Continue', primary: true }],
+          fallbackFocus: function () { return $('#domainInput'); }
+        }).then(function (how) {
+          if (how === 'www') { dom.input = r.suggest; renderDomain(); domainAdd(false, false); }
+          else if (how === 'apex') domainAdd(false, true);
+        });
+        return;
+      }
+      dom.claim = r && r.challenge ? r : null;
+      if (dom.claim) dom.claimApex = !!apexOk;
+      dom.err = dom.claim ? '' : (r && r.error) || 'Something went wrong. Please try again.';
+      renderDomain();
+    });
+  }
+  function domainCheck() {
+    dom.busy = true;
+    api('domain-check', {}).then(function (r) {
+      dom.busy = false;
+      if (r && r.ok) {
+        dom.err = r.cooldown ? 'Please wait a moment before checking again.' : '';
+        domainUse(r);
+      } else { dom.err = (r && r.error) || 'Something went wrong. Please try again.'; renderDomain(); }
+    });
+  }
+  function domainRemove() {
+    var d = dom.data && dom.data.domain;
+    if (!d) return;
+    UI.prompt({
+      title: 'Remove ' + d.display + '?',
+      text: 'Your page goes back to its OnYourSite address right away. Links and QR codes that use ' + d.display + ' stop working. Afterwards, delete the CNAME and TXT records at your domain provider.',
+      match: d.hostname, normalize: 'host', matchLabel: 'Type ' + d.display + ' to confirm', tone: 'danger', ok: 'Remove domain',
+      fallbackFocus: function () { return $('#domainSection [data-dom="remove"]'); }
+    }).then(function (typed) {
+      if (typed === null || typed === undefined) return;
+      api('domain-remove', { confirm: typed }).then(function (r) {
+        if (r && r.ok) {
+          stopDomainPoll();
+          dom.data.domain = null;
+          dom.err = '';
+          toast('Domain removed.', 'ok');
+          renderDomain();
+        } else toast((r && r.error) || 'Couldn’t remove the domain.', 'err');
+      });
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var sec = $('#domainSection');
+    if (!sec || !sec.contains(e.target)) return;
+    var cp = e.target.closest('[data-copy]');
+    if (cp) {
+      window.OYSShare.copy(cp.getAttribute('data-copy')).then(function () { toast('Copied.', 'ok'); });
+      return;
+    }
+    var b = e.target.closest('[data-dom]');
+    if (!b || b.disabled) return;
+    var what = b.getAttribute('data-dom');
+    if (what === 'connect') domainAdd(false, false);
+    else if (what === 'claim') domainAdd(true, dom.claimApex);
+    else if (what === 'check') domainCheck();
+    else if (what === 'remove') domainRemove();
+    else if (what === 'shop') openShop(b.getAttribute('data-arg'));
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target && e.target.id === 'domainInput') { e.preventDefault(); domainAdd(false, false); }
+  });
+  document.addEventListener('change', function (e) {
+    if (!e.target || e.target.id !== 'domainRedirect') return;
+    var on = e.target.checked;
+    api('domain-settings', { redirect: on }).then(function (r) {
+      if (r && r.ok) { dom.data.domain = r.domain; toast(on ? 'Your OnYourSite addresses forward to your domain.' : 'Forwarding is off.', 'ok'); }
+      else toast((r && r.error) || 'Couldn’t save that.', 'err');
+      renderDomain();
+    });
+  });
+
   function renderSettings() {
     var root = $('#settingsDynamic');
     var p = state.page, s = p.settings;
@@ -3227,6 +3446,8 @@
       modeCard('subdomain', p.slug + '.' + E.baseHost, p.address_mode === 'subdomain') +
       modeCard('path', E.baseHost + '/' + p.slug, p.address_mode === 'path') +
       '</div><div class="flex justify-end"><button type="button" class="btn-primary" id="saveAddress"><i class="bx bx-check"></i> Save address</button></div></div></section>' +
+
+      domainSectionHtml() +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Your pages <small>' + state.pages.length + ' of ' + max + ' · each with its own address & stats</small></h2><div class="panel">' +
       state.pages.map(function (pg) {
@@ -3265,6 +3486,9 @@
       '<p class="hint">Link your Discord ID to automatically get the customer role on our server.</p></div></section>';
 
     bindAll(root);
+    // Eigene Domain: eigener Abschnitt mit eigenem Stand
+    renderDomain();
+    loadDomain();
     var slug = $('#slugInput');
     slug.addEventListener('input', function () {
       slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
@@ -3408,7 +3632,13 @@
     stats: function () { if (state.page) switchTab('stats'); },
     messages: function () { switchTab('messages'); },
     code: function () { switchTab('code'); },
-    settings: function () { if (state.page) switchTab('settings'); },
+    settings: function (arg) {
+      if (!state.page) return;
+      switchTab('settings');
+      // settings/domain: zum Abschnitt „Custom domain“
+      var sec = arg === 'domain' && $('#domainSection');
+      if (sec) sec.scrollIntoView({ block: 'start' });
+    },
     honeycombs: function (arg) { openShop(arg); },
     // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
     status: function () { if ($('#tab-status')) switchTab('status'); }

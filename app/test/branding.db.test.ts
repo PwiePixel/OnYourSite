@@ -74,7 +74,7 @@ test('V_BRANDING_LEGACY keeps what pages show today: free pages that hide the no
   const before = new Map<number, string>();
   for (const id of Object.values(MIG)) before.set(id, await settingsOf(id));
   const page1 = await settingsOf(1);
-  await ensureSchema();
+  await ensureSchema({ upTo: V_BRANDING_LEGACY });
   assert.equal(String((await sql("SELECT meta_value FROM `DB`.oys_meta WHERE meta_key = 'schema_version'"))[0].meta_value), String(V_BRANDING_LEGACY));
   // Alter Schalter ohne Premium → Bestandsschutz (Schlüssel am Ende, sonst unverändert)
   assert.equal(await settingsOf(MIG.free), '{"seo":{"title":"","description":"","keywords":""},"custom_css":"","hide_branding":true,"notify_email":true,"branding_legacy":true}');
@@ -90,7 +90,7 @@ test('V_BRANDING_LEGACY keeps what pages show today: free pages that hide the no
   const after1 = new Map<number, string>();
   for (const id of Object.values(MIG)) after1.set(id, await settingsOf(id));
   await sql("UPDATE `DB`.oys_meta SET meta_value = ? WHERE meta_key = 'schema_version'", [String(V_BRANDING_LEGACY - 1)]);
-  await ensureSchema();
+  await ensureSchema({ upTo: V_BRANDING_LEGACY });
   for (const id of Object.values(MIG)) assert.equal(await settingsOf(id), after1.get(id), 'second run ' + id);
 });
 

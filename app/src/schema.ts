@@ -42,6 +42,7 @@ export const V_SHOP_CATALOGUE = 12; // Honigwaben: Katalog mit Preisen, Angebote
 export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge des Bots mit ref und Pausen, Einstellungen v2
 export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
 export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
+export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Cloudflare (Apex: Besitz-TXT, DCV) je Domain
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -81,6 +82,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_DISCORD_DELIVERY, name: 'discordDelivery', run: discordDelivery },
   { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
   { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
+  { version: V_DOMAIN_RECORDS, name: 'domainRecords', run: domainRecords },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -531,6 +533,14 @@ async function createSessionTable(conn: PoolConnection): Promise<void> {
 // Kontos und „gelesen bis id“. idx_user (user_id, is_read) bleibt für die Zahl der ungelesenen.
 async function notificationsIndex(conn: PoolConnection): Promise<void> {
   await addIndex(conn, 'notifications', 'idx_user_id', 'KEY idx_user_id (user_id, id)');
+}
+
+// V_DOMAIN_RECORDS (braucht custom_domains aus V_CUSTOM_DOMAINS): Einträge, die Cloudflare zusätzlich verlangt
+// (Apex-Domains: Besitz-TXT „_cf-custom-hostname“, DCV-TXT oder delegierter DCV-CNAME). Der Domain-Dienst schreibt sie
+// als JSON-Liste [{type, name, value}] bei jeder Abfrage bei Cloudflare neu; NULL = keine nötig. Der Editor zeigt sie
+// unter „Additional records“.
+async function domainRecords(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'custom_domains', 'extra_records', 'TEXT NULL');
 }
 
 // V_CUSTOM_DOMAINS (braucht nur pages aus V_PAGES): eigene Domains (Premium). Eine Zeile je Domain, Ziel ist (vorerst)

@@ -13,6 +13,7 @@ import type { DomainNoticeType } from '../notify.js';
 import type { DomainSettings } from '../settings.js';
 import type { DnsVerdict, TxtView } from './dns.js';
 import type { CfHostname } from './cloudflare.js';
+import { encodeExtraRecords, extraRecordsFrom } from '../records.js';
 import type { ProbeOutcome } from './probe.js';
 
 export type CfObs =
@@ -209,6 +210,8 @@ function pending(i: EvalInput, d: Decision, since: (col: string) => number | nul
   }
   d.set.cf_status = cf.status;
   d.set.cf_ssl_status = cf.sslStatus;
+  // Zusatz-Einträge nur aus einer vollständigen Antwort (die 10-Minuten-Liste lässt sie stehen)
+  if (cf.host) d.set.extra_records = encodeExtraRecords(extraRecordsFrom(cf.host));
   const cfOk = CF_LIVE.has(cf.status);
   const sslOk = cf.sslStatus === 'active';
   const dns = i.obs.dns;

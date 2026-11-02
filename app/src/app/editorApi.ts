@@ -22,6 +22,7 @@ import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, u
 import { entries, isArr, jsonDecode, own, type PhpArr } from '../content/util.js';
 import { hcForEditor } from '../honeycombs/honeycombs.js';
 import { isShopAction, shopApi } from '../honeycombs/editorApi.js';
+import { domainEditorApi, isDomainAction } from '../domains/editor.js';
 import { phpFloatString } from '../community/json.js';
 import {
   codeDeleteRows, codeSiteById, codeSiteOfUser,
@@ -162,6 +163,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   if (action === 'status' || action.startsWith('status-')) await statusEditorApi(ctx, user, action, isPost, input);
   // Bereich „Honeycombs“ (shop, shop-*, hc-*): Shop, Kaufen, Verlauf – ebenfalls ohne Profilseite
   if (isShopAction(action)) await shopApi(ctx, user, action, isPost, input);
+  // Eigene Domain der Seite (domain, domain-*): gehört zur gezeigten Link-Seite
+  if (isDomainAction(action)) await domainEditorApi(ctx, user, action, isPost, input, page, staff);
 
   // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
   if (action === 'upload' && isPost) {

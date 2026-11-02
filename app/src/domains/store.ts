@@ -119,7 +119,7 @@ export function clearUnknownHostsForTests(): void {
 // Spalten, die Aufrufer über DomainChange.set ändern dürfen (Namen nur aus dem Code, trotzdem geprüft)
 const SETTABLE = new Set(['is_apex', 'zone_name', 'redirect', 'cf_id', 'cf_status', 'cf_ssl_status', 'cf_created_at', 'problem', 'problem_detail',
   'fail_count', 'fail_since', 'dns_unknown_count', 'dns_unknown_since', 'checked_at', 'next_check_at', 'fast_until', 'manual_at', 'patched_at',
-  'verified_at', 'notice_state', 'notice_at', 'blocked_reason', 'cert_expires_at', 'target_type', 'target_id', 'user_id']);
+  'verified_at', 'notice_state', 'notice_at', 'blocked_reason', 'cert_expires_at', 'target_type', 'target_id', 'user_id', 'extra_records']);
 
 export interface DomainChange {
   // Neuer Zustand: setzt state_at; active setzt den Beginn der Live-Phase, suspended den Beginn der Pause

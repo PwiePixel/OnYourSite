@@ -18,6 +18,7 @@ import { currentPage, flash, isStaff } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
 import { statusAdmin } from '../status/editorApi.js';
+import { editorDomainFlags, pagesWithDomain } from '../domains/editor.js';
 
 export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
@@ -75,6 +76,10 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)
   const premiumNow = await premiumState(userId);
   const isStatusAdmin = statusAdmin(ctx, user);
+  // Eigene Domains (PD-4): Schalter für den Abschnitt und Seiten mit Domain in irgendeinem Zustand (ohne Einrichtung
+  // keine Abfrage)
+  const domainFlags = await editorDomainFlags();
+  const withDomain = await pagesWithDomain(userId);
 
   // views/dashboard.php: Daten für static/js/editor.js (Reihenfolge der Schlüssel wie in PHP)
   let slugDaysLeft = 0;
@@ -92,6 +97,7 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
       title: p.title,
       url: pageDisplayUrl(p as unknown as PageLike),
       avatar: phpTruthy(p.avatar) ? uploadUrl(p.avatar) : '',
+      custom_domain: withDomain.has(intval(p.id)),
     })),
     maxPages: allowance.max,
     premium,
@@ -99,6 +105,8 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     staff,
     premiumUntil: premiumNow.until,
     premiumForever: premiumNow.forever,
+    // Eigene Domains (PD-4): hinter den älteren Schlüsseln
+    domains: domainFlags,
     themes: themes(),
     defaultTheme: DEFAULT_THEME,
     layouts: layouts(),
