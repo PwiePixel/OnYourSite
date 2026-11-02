@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 12:36 (UTC+1).
+Last update: 2026-11-02 14:08 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -34,8 +34,10 @@ Points to settle before or soon after 3.0:
 ## New features (PR #14, `feature/new-features`)
 
 Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests and merged into
-`feature/new-features`; "reviewed" = the fixes of an independent review are merged too. Items without a separate
-review get one shared security review at the end.
+`feature/new-features`; "reviewed" = the fixes of an independent review are merged too; "security-reviewed" = covered
+by the shared security review of 2026-11-02 (dialogs, Discord, status page, Premium and domain worker, shop UI):
+every finding was reproduced with a failing test before it was fixed, and what stays open is listed under "How to
+continue" below.
 
 | # | Item | Title | State |
 |---|---|---|---|
@@ -46,19 +48,19 @@ review get one shared security review at the end.
 | 2 | DP-1 | Discord settings form and real errors (the webhook / channel ID loop of Q13) | Built and reviewed |
 | 4 | DP-4 | Own pages: changelog and roadmap | Built and reviewed |
 | 3, 5, 12 | CD-0, CD-1, CD-3 | Dialog contract, dialog and notice library, admin and sign-in confirmations | Built and reviewed |
-| 15, 23, 24 | CD-2, CD-4, CD-5b | Editor dialogs, guard and drafts; themed dialogs on profile pages; bell in the editor and admin header | Built |
+| 15, 23, 24 | CD-2, CD-4, CD-5b | Editor dialogs, guard and drafts; themed dialogs on profile pages; bell in the editor and admin header | Built and security-reviewed |
 | 11 | PD-2 | Custom domain core (dormant) | Built and reviewed |
 | 10, 18 | CS-2, CS-3 | Address registry with holds; code slots data model and routing | Built and reviewed |
-| 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Built and reviewed (units still to be wired into install.sh) |
+| 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Built and reviewed |
 | 8, 16 | HC-2, HC-3 | Ledger, entitlements, Premium status; catalogue, offers, purchases, refunds | Built and reviewed |
-| 7, 13, 14 | DP-2a, DP-3, DP-5 | Delivery model and bot API; bot 0.2.0; public suggestions page (+ 5b) | Built |
-| 20 | DP-2b | Admin UI for bot posting | Built |
-| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built |
-| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built |
-| 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Built |
-| 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built |
-| 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built |
-| 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built |
+| 7, 13, 14 | DP-2a, DP-3, DP-5 | Delivery model and bot API; bot 0.2.0; public suggestions page (+ 5b) | Built and security-reviewed |
+| 20 | DP-2b | Admin UI for bot posting | Built and security-reviewed |
+| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0, now 0.3.1) | Built and security-reviewed |
+| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built and security-reviewed |
+| 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Built and security-reviewed |
+| 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built and reviewed |
+| 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
+| 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
@@ -76,7 +78,7 @@ records – new steps take the next free number when they are merged.
 
 1. **PR #15 is merged** (squash) and `main` is merged into `feature/new-features`. Deploy `main` with
    `sudo bash server/install.sh --update` (see `server/README.md`); PR #14 is next.
-2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 971 tests pass
+2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 1012 tests pass
    (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
@@ -85,7 +87,19 @@ records – new steps take the next free number when they are merged.
    - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
    - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
-4. **Follow-ups found during the work:**
+4. **Owner decisions needed** (found in the reviews; nothing is built for them yet):
+   - An admin who uses "Log in as" on another *admin* account can then use the whole admin panel as that admin
+     (grants, refunds and prices are recorded under the other admin). Options: refuse "Log in as" for admin accounts,
+     or let `/admin` act only for the original admin.
+   - Blocked custom domains: the owner can remove and add again a domain an admin disabled (design §5.2 vs §2.8).
+     Decide before PD-5 (nothing sets `blocked` yet).
+   - Taken as read, please confirm: after a refund of `code_more`, the code pages above the free allowance go offline
+     only while `code_more` costs something (at price 0 it is free for everyone, CS-E13); "Give honeycombs" asks
+     before deductions and before gifts above 1,000 honeycombs (one constant, `GRANT_ASK_ABOVE`).
+5. **Before the 3.x deploy:** `sudo bash server/install.sh --update` also updates the Discord bot to 0.3.1 – it
+   reports which channels everyone can see; team alerts of the status page are only sent to a channel an admin saved
+   in *Editor → Status → Alerts* that is not public (until then they are skipped, with the reason in the editor).
+6. **Follow-ups found during the work:**
    - The browser flows (`tests/e2e/*.js`, `app/test/e2e/*.e2e.ts`) are not part of `npm test`; the tsconfig does not
      type-check the test files.
    - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
@@ -94,14 +108,36 @@ records – new steps take the next free number when they are merged.
      "page already over a lowered limit" rule); the terms page doesn't show the limits and both prices yet; nobody is
      told when a refund takes code pages offline (needs notifications with `ref`, CS-5); the editor bootstrap still
      lacks `pages[].code` and the code summary (CS-6).
-   - HC-6a: "Give honeycombs" doesn't ask before a negative amount yet; the free unlock in *Admin → Code pages*
-     (`app/src/code/admin.ts`) still books through `hcAdd` – switch it to `grantFeature`. Not in HC-6a: bulk grants,
-     the History tab with Reverse, freeze/unfreeze (HC-6b) and codes (HC-9).
+   - HC-6a: the free unlock in *Admin → Code pages* (`app/src/code/admin.ts`) still books through `hcAdd` (no audit
+     line) – switch it to `grantFeature`. Not in HC-6a: bulk grants, the History tab with Reverse, freeze/unfreeze
+     (HC-6b) and codes (HC-9).
    - PD-4: the worker stores only problem codes, so the editor can't show "Found: …" values; the server's
-     `fastUntil` has no time zone (the editor counts 15 minutes itself); decide whether an admin working as a user may
-     change domains (today they can); browser flows still missing: claiming another account's domain, the root-domain
-     choice, a live domain with the forwarding switch, the paused view, polling stops; the "Checks are delayed" line has
-     no test.
+     `fastUntil` has no time zone (the editor counts 15 minutes itself); browser flows still missing: claiming another
+     account's domain, the root-domain choice, a live domain with the forwarding switch, the paused view, polling
+     stops; the "Checks are delayed" line has no test. An admin working as a user may change domains (the designs
+     exempt staff; only spending is refused). Small: Enter in the domain field doesn't check the busy flag; after a 404
+     the section shows the old domain until it reloads; a takeover keeps the old owner's forwarding setting;
+     `domain-check` has no 403 without Premium (the worker refuses it) and `domain-settings` has no rate limit.
+   - Domain worker (premium review, left open on purpose – retry policy for the lead): send domain mails from their own
+     loop with a time budget instead of the minute step; a deadline for unknown TXT results and backoff for failed
+     creates; storing a hostname ID although the version moved, and not counting deleted orphans in the daily sweep.
+   - Branding hint: extending the save hint to sibling and universal selectors would also warn on normal CSS such as
+     `.oys-main > *` – decide first.
+   - Status page: the bot's setup reuses an existing public #alerts (saving it is refused now; setup could create a
+     private channel instead); the post of an incident is found by the page's current address – store the URL in
+     `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
+     sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
+     status addresses; edits of messages already posted still go out while the page is offline.
+   - Dialogs: password-protected link URLs still sit in editor drafts (blanking them needs merge logic on restore);
+     the privacy page should say that unsaved work is kept on the device.
+   - Discord: optional hourly clean-up of old dead jobs (only for installs that ran 3.x before the fix); optional notice
+     when a sent message ends with no post record.
+   - CS-4 review: a duplicate on `uq_code_site` answers 500 (inconsistent data only); `code-delete` compares the typed address
+     read before the lock.
+   - HC-6a review: gifts "for good" don't keep the form reference; the refund form pre-fills the refundable amount at page
+     load (a time-limited purchase can be "Refund at most N" later); gifts skip the shop's buying rules; unlocks that
+     exist only in the ledger can't be removed (only during a deploy); the gift form reads `user_id[]` with PHP-style
+     casts (pinned by the PHP comparison).
 
 Work in progress lives on branches of the current workspace and is pushed when it is merged into
 `feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
