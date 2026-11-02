@@ -44,8 +44,9 @@ function fixtures() {
     DELETE FROM community_tickets WHERE id = 70;
     INSERT INTO community_tickets (id, user_id, user_name, subject, channel_id, status, created_at, updated_at)
       VALUES (70, '123456789012345678', 'Tom', 'Help with my page', '223456789012345678', 'open', NOW(), NOW());`);
-  // Discord als verbunden (Webhook) – verschlüsselt wie von der Seite gespeichert; der Link entsteht erst hier
-  execSync(`node --import tsx -e "const m = await import('./src/updates/discord.ts'); await m.discordStore({ ...m.discordDefaults(), webhook_url: 'https://discord.com/api/webhooks/123456789012/' + 'w'.repeat(40) }); process.exit(0);"`,
+  // Discord als verbunden (Webhook, Einstellungen v2) – verschlüsselt wie von der Seite gespeichert; der Link entsteht
+  // erst hier
+  execSync(`node --import tsx -e "const m = await import('./src/updates/discord.ts'); const d = m.discordDefaults(); await m.discordStore({ ...d, webhook: { ...d.webhook, enabled: true, url: 'https://discord.com/api/webhooks/123456789012/' + 'w'.repeat(40) } }); process.exit(0);"`,
     { cwd: ROOT + '/app', stdio: 'inherit' });
 }
 
@@ -179,15 +180,20 @@ async function confirmAndLoad(page) {
     await confirmAndLoad(page);
     ok(count('SELECT COUNT(*) FROM milestones WHERE id = 50') === 0 && count('SELECT COUNT(*) FROM milestone_tasks WHERE milestone_id = 50') === 0, 'milestone and its tasks deleted');
 
+    // Discord: seit dem Umbau (DP-2b) entfernt „Remove“ in der Webhook-Karte den Webhook – über den eigenen Dialog.
+    // Die Einstellungen sind verschlüsselt gespeichert, deshalb prüft der Test die Seite selbst.
+    const removeHook = 'button[form=discordWebhookRemoveForm]';
     await page.goto(B + '/admin#discord');
-    await page.locator('form:has(input[value=discord_disconnect]) button[type=submit]').click();
-    ok(await dialogTitle(page) === 'Disconnect Discord?', 'disconnect dialog');
+    await page.locator(removeHook).click();
+    ok(await dialogTitle(page) === 'Remove the webhook?', 'remove webhook dialog');
     await confirmDialog(page, 'cancel');
     await sleep(200);
-    ok(count("SELECT COUNT(*) FROM oys_meta WHERE meta_key = 'discord'") === 1, 'Cancel keeps Discord');
-    await page.locator('form:has(input[value=discord_disconnect]) button[type=submit]').click();
+    await page.goto(B + '/admin#discord');
+    ok(await page.locator(removeHook).count() === 1, 'Cancel keeps the webhook');
+    await page.locator(removeHook).click();
     await confirmAndLoad(page);
-    ok(count("SELECT COUNT(*) FROM oys_meta WHERE meta_key = 'discord'") === 0, 'Discord disconnected');
+    await page.goto(B + '/admin#discord');
+    ok(await page.locator(removeHook).count() === 0, 'webhook removed');
     await ctx.close();
   });
 
