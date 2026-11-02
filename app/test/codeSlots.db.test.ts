@@ -13,7 +13,7 @@ import type { Connection, RowDataPacket } from 'mysql2/promise';
 import { closePool, one, transaction, withConnection } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { setConfigForTests, type ConfigData } from '../src/config.js';
-import { hmac } from '../src/crypto.js';
+import { hmac, passwordHash } from '../src/crypto.js';
 import { V_CODE_SLOTS, columnIsNotNull, ensureSchema, hasIndex } from '../src/schema.js';
 import { makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
@@ -220,9 +220,11 @@ test('a slot that shows a code page serves the code page at its subdomain; the p
 
 test('a parked link page does not exist for visitors: no views, clicks, passwords, messages, preview cards or API', async () => {
   const pageId = await createPage(6, 'tom-parked', 'Parked');
+  // Hash eines Passworts, das niemand eingibt (zur Laufzeit erzeugt, kein fester Wert in der Datei)
+  const lockHash = await passwordHash('parked-' + time());
   const block = async (type: string, data: unknown, protection = 'none', legacy: number | null = null): Promise<number> =>
     ((await t.admin.query("INSERT INTO page_blocks (page_id, type, position, is_visible, data, protection, password_hash, legacy_link_id, created_at) VALUES (?, ?, 9, 1, ?, ?, ?, ?, NOW())",
-      [pageId, type, JSON.stringify(data), protection, protection === 'password' ? '$2y$10$abcdefghijklmnopqrstuuJ5Bv4lS0SxYbUeZ7cK8sWq0oA6eGZJu' : null, legacy]))[0] as { insertId: number }).insertId;
+      [pageId, type, JSON.stringify(data), protection, protection === 'password' ? lockHash : null, legacy]))[0] as { insertId: number }).insertId;
   const link = await block('link', { title: 'Shop', url: 'https://example.com' });
   const locked = await block('link', { title: 'Secret', url: 'https://example.com/secret' }, 'password');
   const contact = await block('contact', { title: 'Write me' });

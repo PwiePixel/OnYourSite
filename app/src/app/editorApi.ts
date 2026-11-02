@@ -36,6 +36,17 @@ import { sendWeeklyReport } from './report.js';
 // Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
 const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
 const PAGE_BLOCKED_TEXT = 'This page shows a code page that has been blocked by the team. It can’t be deleted right now.';
+// Die Seite gibt es nicht mehr (anderer Tab) oder sie gehört inzwischen einem anderen Konto (Admin-Modus)
+const PAGE_GONE = { ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true };
+
+// 30-Tage-Regel für Adressänderungen: Tage bis zur nächsten Änderung (0 = jetzt möglich)
+function addressDaysLeft(changedAt: unknown): number {
+  const changed = phpTruthy(changedAt) ? strtotime(phpStr(changedAt)) : 0;
+  if (changed === false || !phpTruthy(changed)) return 0;
+  const left = 30 - intval(Math.floor((time() - changed) / 86400));
+  return left > 0 ? left : 0;
+}
+const addressDaysText = (days: number): string => `You can change your address again in ${days} ` + (days === 1 ? 'day.' : 'days.');
 
 // is_scalar()
 const isScalar = (v: unknown): boolean => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
@@ -117,7 +128,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     // (Admin-Modus in einem zweiten Tab) → ablehnen statt die falsche Seite zu überschreiben
     page = await loadPage(requestedPage);
     if (!page || intval(page.user_id) !== userId) {
-      ctx.json({ ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true }, 409);
+      ctx.json(PAGE_GONE, 409);
     }
     // Der Platz zeigt inzwischen eine Code-Seite: seine Link-Seite ist geparkt und wird nicht mehr bearbeitet (ein
     // älterer Tab darf nichts in sie schreiben)
@@ -331,29 +342,41 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       const slug = normalizeSlug(inp('slug') ?? page.slug);
       const mode = (inp('mode') ?? 'subdomain') === 'path' ? 'path' : 'subdomain';
       if (slug !== page.slug) {
-        const changed = phpTruthy(page.slug_changed_at) ? strtotime(phpStr(page.slug_changed_at)) : 0;
-        const last = changed === false ? 0 : changed;
-        const daysLeft = 30 - intval(Math.floor((time() - last) / 86400));
-        if (phpTruthy(changed) && daysLeft > 0 && !premium) {
-          ctx.json({ ok: false, error: `You can change your address again in ${daysLeft} ` + (daysLeft === 1 ? 'day.' : 'days.') });
-        }
+        const daysLeft = addressDaysLeft(page.slug_changed_at);
+        if (daysLeft > 0 && !premium) ctx.json({ ok: false, error: addressDaysText(daysLeft) });
         const problem = await slugProblem(slug, intval(page.id), null, { userId });
         if (problem !== null) ctx.json({ ok: false, error: problem });
-        // Neue Adresse belegen, alte für den Besitzer reservieren – zusammen mit der Seite (Sperren: pages → Adressen)
+        // Neue Adresse belegen, alte für den Besitzer reservieren – zusammen mit der Seite (Sperren: pages → Adressen).
+        // Die Seite wird dafür gesperrt neu gelesen: Hat ein anderer Tab die Adresse inzwischen geändert oder die Seite
+        // gelöscht, gilt das – freigegeben wird nur die Adresse, die die Seite wirklich hat, und für eine gelöschte Seite
+        // wird nichts belegt.
+        let refused: { body: Record<string, unknown>; status: number } | null = null;
         try {
-          await transaction(async (_conn, db) => {
-            await db.exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), page.id as Param]);
+          refused = await transaction(async (_conn, db) => {
+            const cur = await db.one('SELECT slug, slug_changed_at FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(page.id), userId]);
+            if (!cur) return { body: PAGE_GONE, status: 409 };
+            if (phpStr(cur.slug) !== phpStr(page.slug)) {
+              // Inzwischen geändert: dann gilt die Sperrfrist dieser Änderung (wie bei zwei Änderungen nacheinander)
+              const left = premium ? 0 : addressDaysLeft(cur.slug_changed_at);
+              if (left > 0) return { body: { ok: false, error: addressDaysText(left) }, status: 200 };
+              if (phpStr(cur.slug) === slug) return null;
+            }
+            await db.exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), intval(page.id)]);
             await claimAddress(db, slug, 'page', intval(page.id), userId);
-            await releaseAddress(db, phpStr(page.slug), userId, 'owner', { kind: 'page', refId: intval(page.id) });
+            await releaseAddress(db, phpStr(cur.slug), userId, 'owner', { kind: 'page', refId: intval(page.id) });
+            return null;
           });
         } catch (err) {
           if (!isTakenError(err)) throw err;
           ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
         }
+        if (refused) ctx.json(refused.body, refused.status);
       }
       await exec('UPDATE pages SET address_mode = ? WHERE id = ?', [mode, page.id as Param]);
       await syncUsername(userId);
-      ctx.json({ ok: true, page: pageForEditor((await loadPage(intval(page.id))) as Row) });
+      const saved = await loadPage(intval(page.id));
+      if (!saved) ctx.json(PAGE_GONE, 409);
+      ctx.json({ ok: true, page: pageForEditor(saved) });
     }
     case 'stats': {
       let range = intval(ctx.get.range ?? 7);

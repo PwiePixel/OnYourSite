@@ -163,21 +163,29 @@ export async function codeCreate(userId: number, slug: string, title: string): P
 }
 
 // Adresse einer Code-Seite ändern (Editor „code-address“): neue Adresse belegen, alte für den Besitzer reservieren –
-// zusammen mit der Code-Seite in einer Transaktion. Fehlermeldung oder null.
+// zusammen mit der Code-Seite in einer Transaktion. Die Code-Seite wird dafür gesperrt neu gelesen: Eine Änderung aus
+// einem anderen Tab gilt (freigegeben wird die Adresse, die sie jetzt hat), und eine inzwischen gesperrte oder
+// gelöschte Code-Seite bekommt keine neue Adresse. Fehlermeldung oder null.
 export async function codeChangeAddress(site: Row, slug: string, userId: number): Promise<string | null> {
   const problem = await slugProblem(slug, null, intval(site.id), { userId, kind: 'code' });
   if (problem !== null) return problem;
   try {
-    await transaction(async (_conn, db) => {
+    return await transaction(async (_conn, db) => {
+      const cur = await db.one('SELECT slug, is_blocked, blocked_reason FROM code_sites WHERE id = ? AND user_id = ? FOR UPDATE', [intval(site.id), userId]);
+      if (!cur || !phpTruthy(cur.slug)) return 'This code page no longer exists. Please reload the editor.';
+      if (phpTruthy(cur.is_blocked)) {
+        return 'Your code page has been blocked by the team' + (phpTruthy(cur.blocked_reason) ? ': ' + phpStr(cur.blocked_reason) : '.');
+      }
+      if (phpStr(cur.slug) === slug) return null;
       await db.exec('UPDATE code_sites SET slug = ?, updated_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), intval(site.id)]);
       await claimAddress(db, slug, 'code', intval(site.id), userId);
-      await releaseAddress(db, phpStr(site.slug), userId, 'owner', { kind: 'code', refId: intval(site.id) });
+      await releaseAddress(db, phpStr(cur.slug), userId, 'owner', { kind: 'code', refId: intval(site.id) });
+      return null;
     });
   } catch (err) {
     if (!isTakenError(err)) throw err;
     return `Sorry, the address “${slug}” is already taken.`;
   }
-  return null;
 }
 
 // oys_code_starter_files(): Startseite, Stil und Skript (Text genau wie in PHP)

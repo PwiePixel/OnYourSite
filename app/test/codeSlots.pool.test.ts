@@ -16,6 +16,8 @@ import { appRoutes } from '../src/app/dispatch.js';
 import { createPage } from '../src/content/pages.js';
 import { deleteAccount } from '../src/admin/accountDeletion.js';
 import { SLOT_BUSY_TEXT } from '../src/code/slots.js';
+import { Session } from '../src/web/session.js';
+import { setAuthMailerForTests } from '../src/app/auth.js';
 import { CSRF, adminConnection, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 
 let t: TestDb;
@@ -82,6 +84,41 @@ test('deleting an account with code slots runs on one connection', async () => {
   assert.ok(ms < 2000, 'deleting took ' + ms + ' ms');
   assert.equal(Number((await q('SELECT COUNT(*) AS n FROM code_sites WHERE user_id = 7'))[0].n), 0);
   assert.equal(Number((await q('SELECT COUNT(*) AS n FROM users WHERE id = 7'))[0].n), 0);
+});
+
+test('the other address writers – sign-up, address change, code page create and rename – run on one connection', async () => {
+  // Code-Seiten für Tom freigeschaltet, Regeln akzeptiert
+  await q("INSERT INTO honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (6, 0, 'unlock', 'code_page', '', NOW())");
+  await q('UPDATE users SET code_terms_at = NOW() WHERE id = 6');
+  await q('DELETE FROM rate_limits');
+  setAuthMailerForTests(null);
+  try {
+    const guest = makeTestCtx({ url: '/register', host: HOST });
+    const s = await Session.start(guest);
+    s.set('csrf', CSRF);
+    await s.close();
+    const form = { csrf: CSRF, fullname: 'Pool', email: 'pool@test.de', subdomain: 'pool-signup', password: 'longenough' };
+    const [reg, ms1] = await timed(() => runRequest(makeTestCtx({ method: 'POST', url: '/register', host: HOST, cookies: { PHPSESSID: s.id }, post: form }), appRoutes));
+    assert.equal(reg.header('Location'), '/dashboard');
+    assert.ok(ms1 < 2000, 'sign-up took ' + ms1 + ' ms');
+    assert.equal((await q("SELECT kind FROM site_addresses WHERE slug = 'pool-signup'"))[0]?.kind, 'page');
+  } finally {
+    setAuthMailerForTests(undefined);
+  }
+
+  const tom = Number((await q("SELECT id FROM pages WHERE slug = 'tom'"))[0].id);
+  await q('UPDATE pages SET slug_changed_at = NULL WHERE id = ?', [tom]);
+  const [moved, ms2] = await timed(() => api(6, 'address', { page_id: tom, slug: 'tom-pool-new', mode: 'subdomain' }));
+  assert.equal(moved.ok, true, JSON.stringify(moved));
+  assert.ok(ms2 < 2000, 'address took ' + ms2 + ' ms');
+
+  const [code, ms3] = await timed(() => api(6, 'code-create', { slug: 'tom-pool-code', title: 'Code', terms: true }));
+  assert.equal(code.ok, true, JSON.stringify(code).slice(0, 200));
+  assert.ok(ms3 < 2000, 'code-create took ' + ms3 + ' ms');
+  const [renamed, ms4] = await timed(() => api(6, 'code-address', { slug: 'tom-pool-code2' }));
+  assert.equal(renamed.ok, true, JSON.stringify(renamed).slice(0, 200));
+  assert.ok(ms4 < 2000, 'code-address took ' + ms4 + ' ms');
+  assert.equal((await q("SELECT kind FROM site_addresses WHERE slug = 'tom-pool-code2'"))[0]?.kind, 'code');
 });
 
 test('a busy account lock answers after about 3 s, and the one connection gets its normal lock wait back', async () => {

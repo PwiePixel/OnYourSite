@@ -498,3 +498,151 @@ test('repairAddresses runs in one transaction and leaves a consistent list behin
     UNION SELECT s.slug FROM code_sites s LEFT JOIN site_addresses a ON a.slug = s.slug AND a.kind = 'code' AND a.ref_id = s.id WHERE s.slug IS NOT NULL AND a.slug IS NULL`);
   assert.deepEqual(missing.map((r) => r.slug), []);
 });
+
+// Warten, bis so viele Verbindungen dieser Datenbank gerade eine Anweisung nach einem dieser Muster (LIKE) ausführen –
+// sie warten dann auf eine Sperre, die der Test hält
+async function waitForStatements(patterns: string[], count: number): Promise<void> {
+  const where = patterns.map(() => 'INFO LIKE ?').join(' OR ');
+  for (let i = 0; ; i++) {
+    const [w] = await q(`SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE DB = ? AND (${where})`, [t.name, ...patterns]);
+    if (Number(w.n) >= count) return;
+    if (i > 400) throw new Error(`never saw ${count} × ${patterns.join(' | ')}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+// Eine Anfrage, die eine Seite oder Code-Seite ändern will und an deren Zeile wartet (UPDATE oder Lesen mit Sperre)
+const waitingOn = (table: string, id: number): string[] => [`UPDATE ${table} SET slug%`, `SELECT % FROM ${table} WHERE id = ${id} AND user_id = % FOR UPDATE`];
+
+// Lebende Zeilen der Liste, die auf diese Seite zeigen
+const liveRows = async (kind: string, id: number): Promise<string[]> =>
+  (await q('SELECT slug FROM site_addresses WHERE kind = ? AND ref_id = ? ORDER BY slug', [kind, id])).map((r) => String(r.slug));
+
+// Seiten der Wettlauf-Tests direkt entfernen (auch nach einem fehlgeschlagenen Test)
+async function dropRacePages(prefix: string): Promise<void> {
+  const ids = (await q('SELECT id FROM pages WHERE slug LIKE ?', [prefix + '%'])).map((r) => Number(r.id));
+  for (const id of ids) {
+    await q('DELETE FROM page_blocks WHERE page_id = ?', [id]);
+    await q('DELETE FROM pages WHERE id = ?', [id]);
+  }
+  await q('DELETE FROM site_addresses WHERE slug LIKE ?', [prefix + '%']);
+  await q('DELETE FROM rate_limits');
+}
+
+test('two address changes of one page at once leave exactly one live address; the one in between is not kept', async () => {
+  await dropRacePages('mia-race-');
+  const created = await api(5, 'page-create', { slug: 'mia-race-a', title: 'Race' });
+  assert.equal(created.body.ok, true, JSON.stringify(created.body));
+  const id = Number(created.body.id);
+  const other = await (await import('./coreHarness.js')).adminConnection();
+  await other.query('USE `' + t.name + '`');
+  try {
+    // Beide Anfragen lesen die Seite (Adresse mia-race-a) und warten dann an der Zeile, die der Test sperrt
+    await other.query('START TRANSACTION');
+    await other.query('SELECT id FROM pages WHERE id = ? FOR UPDATE', [id]);
+    const first = api(5, 'address', { page_id: id, slug: 'mia-race-b', mode: 'subdomain' });
+    await waitForStatements(waitingOn('pages', id), 1);
+    const second = api(5, 'address', { page_id: id, slug: 'mia-race-c', mode: 'subdomain' });
+    await waitForStatements(waitingOn('pages', id), 2);
+    await other.query('COMMIT');
+    const answers = [(await first).body, (await second).body];
+    // Die Änderung, die als zweite an die Reihe kommt, sieht die erste: für sie gilt deren Sperrfrist (wie bei zwei
+    // Änderungen nacheinander)
+    const won = answers.findIndex((b) => b.ok === true);
+    assert.notEqual(won, -1, JSON.stringify(answers));
+    assert.deepEqual(answers[1 - won], { ok: false, error: 'You can change your address again in 30 days.' });
+    const [winner, loser] = won === 0 ? ['mia-race-b', 'mia-race-c'] : ['mia-race-c', 'mia-race-b'];
+    // Die Liste kennt genau die Adresse, die die Seite jetzt hat – keine zweite bleibt für sie belegt
+    assert.equal(String((await q('SELECT slug FROM pages WHERE id = ?', [id]))[0].slug), winner);
+    assert.deepEqual(await liveRows('page', id), [winner], JSON.stringify(answers));
+    assert.equal(await row(loser), undefined);
+  } finally {
+    await other.query('ROLLBACK').catch(() => undefined);
+    await other.end();
+    await dropRacePages('mia-race-');
+  }
+});
+
+test('an address change that waited for the deletion of its page answers 409 and claims nothing', async () => {
+  await dropRacePages('mia-race-');
+  const created = await api(5, 'page-create', { slug: 'mia-race-d', title: 'Race' });
+  assert.equal(created.body.ok, true, JSON.stringify(created.body));
+  const id = Number(created.body.id);
+  const other = await (await import('./coreHarness.js')).adminConnection();
+  await other.query('USE `' + t.name + '`');
+  try {
+    await other.query('START TRANSACTION');
+    await other.query('SELECT id FROM pages WHERE id = ? FOR UPDATE', [id]);
+    // Zuerst wartet das Löschen (unter der Sperre der Seitenplätze), dann die Adressänderung – beide an derselben Zeile
+    const del = api(5, 'page-delete', { id, confirm: 'mia-race-d' });
+    await waitForStatements(waitingOn('pages', id), 1);
+    const pending = api(5, 'address', { page_id: id, slug: 'mia-race-e', mode: 'subdomain' }).catch((err: Error) => err);
+    await waitForStatements(waitingOn('pages', id), 2);
+    await other.query('COMMIT');
+    assert.deepEqual((await del).body, { ok: true });
+    const change = await pending;
+    assert.ok(!(change instanceof Error), 'the address change must not crash: ' + String(change));
+    // Das Löschen wartete zuerst und kommt zuerst dran: die Änderung findet ihre Seite nicht mehr (409, neu laden). Ginge
+    // die Änderung voraus, gäbe das Löschen danach ihre neue Adresse frei – in beiden Fällen bleibt nichts belegt.
+    if (change.status === 409) assert.equal(change.body.reload, true, JSON.stringify(change.body));
+    else assert.equal(change.body.ok, true, JSON.stringify(change.body));
+    // Keine Zeile der Liste zeigt auf die gelöschte Seite, und die neue Adresse ist nicht belegt
+    assert.deepEqual(await liveRows('page', id), []);
+    assert.equal(await row('mia-race-e'), undefined);
+    assert.equal(await isFree('mia-race-e'), true);
+  } finally {
+    await other.query('ROLLBACK').catch(() => undefined);
+    await other.end();
+    await dropRacePages('mia-race-');
+  }
+});
+
+test('two address changes of one code page at once leave exactly one live address', async () => {
+  const site = Number((await q('SELECT id FROM code_sites WHERE user_id = 6 AND slug IS NOT NULL'))[0].id);
+  const before = String((await q('SELECT slug FROM code_sites WHERE id = ?', [site]))[0].slug);
+  const other = await (await import('./coreHarness.js')).adminConnection();
+  await other.query('USE `' + t.name + '`');
+  try {
+    await other.query('START TRANSACTION');
+    await other.query('SELECT id FROM code_sites WHERE id = ? FOR UPDATE', [site]);
+    const first = api(6, 'code-address', { slug: 'tom-race-b' });
+    await waitForStatements(waitingOn('code_sites', site), 1);
+    const second = api(6, 'code-address', { slug: 'tom-race-c' });
+    await waitForStatements(waitingOn('code_sites', site), 2);
+    await other.query('COMMIT');
+    const answers = [(await first).body, (await second).body];
+    assert.equal(answers[0].ok, true, JSON.stringify(answers[0]));
+    assert.equal(answers[1].ok, true, JSON.stringify(answers[1]));
+    // Beide nacheinander: die zweite gilt; die Adresse dazwischen war nur kurz belegt und ist sofort wieder frei
+    const slug = String((await q('SELECT slug FROM code_sites WHERE id = ?', [site]))[0].slug);
+    assert.ok(slug === 'tom-race-b' || slug === 'tom-race-c', slug);
+    assert.deepEqual(await liveRows('code', site), [slug], JSON.stringify(answers));
+    assert.equal(await row(slug === 'tom-race-b' ? 'tom-race-c' : 'tom-race-b'), undefined);
+    assert.notEqual((await row(before))?.kind, 'code');
+  } finally {
+    await other.query('ROLLBACK').catch(() => undefined);
+    await other.end();
+  }
+});
+
+test('a block by the team that lands while a code page changes its address wins: the address stays', async () => {
+  const site = Number((await q('SELECT id FROM code_sites WHERE user_id = 6 AND slug IS NOT NULL'))[0].id);
+  const before = String((await q('SELECT slug FROM code_sites WHERE id = ?', [site]))[0].slug);
+  const other = await (await import('./coreHarness.js')).adminConnection();
+  await other.query('USE `' + t.name + '`');
+  try {
+    // Das Team sperrt die Code-Seite (noch nicht bestätigt), während die Anfrage sie noch als offen gelesen hat
+    await other.query('START TRANSACTION');
+    await other.query("UPDATE code_sites SET is_blocked = 1, blocked_reason = 'Phishing' WHERE id = ?", [site]);
+    const pending = api(6, 'code-address', { slug: 'tom-race-d' });
+    await waitForStatements(waitingOn('code_sites', site), 1);
+    await other.query('COMMIT');
+    assert.deepEqual((await pending).body, { ok: false, error: 'Your code page has been blocked by the team: Phishing' });
+    assert.equal(String((await q('SELECT slug FROM code_sites WHERE id = ?', [site]))[0].slug), before);
+    assert.equal(await row('tom-race-d'), undefined);
+    assert.deepEqual(await liveRows('code', site), [before]);
+  } finally {
+    await other.query('ROLLBACK').catch(() => undefined);
+    await other.end();
+    await q('UPDATE code_sites SET is_blocked = 0, blocked_reason = NULL WHERE id = ?', [site]);
+  }
+});
