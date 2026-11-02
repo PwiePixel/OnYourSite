@@ -120,6 +120,17 @@ async function seed(): Promise<void> {
     const { insertId } = await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, 0, 1, ?, NOW())', [pageId, type, data]);
     await exec("INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, '', CURDATE() - INTERVAL 2 DAY, ?, 99)", [insertId, pageId]);
   }
+  // Gleich viele Klicks für zwei Links: oys_week_best_link() sortiert nur nach den Klicks, bei Gleichstand wählt MariaDB
+  // selbst bei gleichen Daten, gleichem Plan und gleicher Statistik mal den einen, mal den anderen (auch PHP gegen
+  // PHP). Node schickt dieselbe Abfrage – verglichen wird darum ohne Gleichstand: der erste der Gleichen bekommt einen
+  // Klick mehr.
+  for (const page of await q("SELECT DISTINCT page_id FROM block_clicks_daily WHERE page_id IN (SELECT id FROM pages WHERE slug LIKE 'wr%')")) {
+    const top = await q(`SELECT block_id, item, SUM(clicks) AS clicks, MAX(day) AS day FROM block_clicks_daily WHERE page_id = ?
+      AND day BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE() - INTERVAL 1 DAY GROUP BY block_id, item ORDER BY clicks DESC, block_id, item LIMIT 2`, [page.page_id as number]);
+    if (top.length === 2 && Number(top[0].clicks) > 0 && Number(top[0].clicks) === Number(top[1].clicks)) {
+      await exec('UPDATE block_clicks_daily SET clicks = clicks + 1 WHERE block_id = ? AND item = ? AND day = ?', [top[0].block_id as number, top[0].item as string, top[0].day as string]);
+    }
+  }
 }
 
 // PHP mit lib/report.php und einem Ersatz für sendCustomEmail() (zeichnet auf; Adressen mit „fail“ schlagen fehl)
@@ -248,26 +259,17 @@ function runPhpCli(root: string, ca: string): Promise<{ code: number; stdout: st
 }
 
 // Der Befehl in diesem Prozess (dieselbe Funktion wie node dist/cli/weekly-report.js), Ausgabe aufgefangen
+// Ausgabe über eigene Empfänger (process.stdout zu ersetzen fing auch Nachrichten des Test-Runners ein)
 async function runNodeCli(cfg: ConfigData, mailDir: string | null): Promise<{ code: number; stdout: string; stderr: string }> {
   const out: string[] = [];
   const err: string[] = [];
-  const write = process.stdout.write.bind(process.stdout);
-  const error = console.error;
-  process.stdout.write = ((chunk: string | Uint8Array, cb?: unknown) => {
-    out.push(String(chunk));
-    if (typeof cb === 'function') (cb as () => void)();
-    return true;
-  }) as typeof process.stdout.write;
-  console.error = (...a: unknown[]) => err.push(a.map(String).join(' '));
   setReportMailerForTests(undefined);
   setMailDirForTests(mailDir);
   setConfigForTests(cfg);
   try {
-    const code = await weeklyReportCli();
+    const code = await weeklyReportCli({ out: async (text) => void out.push(text), err: (line) => void err.push(line) });
     return { code, stdout: out.join(''), stderr: err.join('\n') };
   } finally {
-    process.stdout.write = write;
-    console.error = error;
     setConfigForTests(CONFIG);
   }
 }
