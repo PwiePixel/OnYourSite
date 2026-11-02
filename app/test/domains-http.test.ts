@@ -175,6 +175,21 @@ test('uploads on a custom domain: only files of the domain’s owner', async () 
   assert.equal((await req('GET', '/static/uploads/' + files.foreign, 'oys.test:8080')).statusCode, 200);
 });
 
+test('a domain whose account doesn’t own the page never shows that page', async () => {
+  // Zeile und Seite gehören verschiedenen Konten (darf nie vorkommen – wenn doch, zeigt die Domain nichts von der Seite)
+  await setState('active', { user_id: 6 });
+  try {
+    neutral(await req('GET', '/', HOST), 'page of another account');
+    neutral(await req('GET', '/kalender', HOST), 'calendar of another account');
+    neutral(await req('POST', '/_/v', HOST, { form: { p: '2' }, headers: { origin: ORIGIN } }), 'view on a page of another account');
+    neutral(await req('GET', '/_/go/' + ids.link, HOST), 'link of another account');
+    neutral(await req('GET', '/static/uploads/' + files.own, HOST), 'upload of the page owner, not of the domain’s account');
+  } finally {
+    await setState('active', { user_id: 5 });
+  }
+  assert.equal((await req('GET', '/', HOST)).statusCode, 200);
+});
+
 test('/_/ endpoints on a custom domain take only ids of this page', async () => {
   await setState('active');
   const before = await views(2);
@@ -361,3 +376,36 @@ test('without the setup an unknown host gets today’s 404 and costs no database
   assert.equal(await transition((await domainById(id))!, { state: 'active' }), true);
   assert.equal((await req('GET', '/', 'nothing.example.net')).statusCode, 200);
 });
+
+test('without the setup a domain that is still live is no primary address: the page stays on its OnYourSite addresses', async () => {
+  await setState('active', { redirect: 1 });
+  assert.equal((await loadPage(2))!.custom_domain, HOST);
+  const plainHash = ogHash({ ...(await loadPage(2))!, custom_domain: null });
+  // z. B. config.json nach einer Wiederherstellung ohne die Werte von --domains: der Router beantwortet die Domain
+  // dann nicht – ein Verweis dorthin machte die Seite unerreichbar
+  setConfigForTests({ ...cfg, cloudflare: {} });
+  try {
+    neutralFree(await req('GET', '/', HOST));
+    const sub = await req('GET', '/?x=1', 'mia.oys.test:8080');
+    assert.equal(sub.statusCode, 200);
+    assert.equal(canonical(sub.body), 'http://mia.oys.test:8080');
+    assert.ok(!sub.body.includes(HOST), 'nothing on the page points to the domain');
+    assert.equal((await req('GET', '/xyz', 'mia.oys.test:8080')).headers.location, 'http://mia.oys.test:8080');
+    const path = await req('GET', '/mia/kalender', 'oys.test:8080');
+    assert.equal(path.headers.location, 'http://mia.oys.test:8080/kalender');
+    const api = JSON.parse((await req('GET', '/api.php?user=mia', 'oys.test:8080')).body);
+    assert.equal(api.data.profile.url, 'http://mia.oys.test:8080');
+    assert.deepEqual(Object.keys(api.data.profile.urls), ['subdomain', 'path']);
+    assert.equal(ogHash((await loadPage(2))!), plainHash);
+  } finally {
+    setConfigForTests(cfg);
+  }
+  // Mit der Einrichtung ist die Domain wieder die Hauptadresse
+  assert.equal((await req('GET', '/', 'mia.oys.test:8080')).headers.location, ORIGIN);
+});
+
+// Ohne Einrichtung: der Host bekommt die bisherige 404 von OnYourSite (nicht die neutrale Seite und nicht die Seite)
+function neutralFree(res: LightMyRequestResponse): void {
+  assert.equal(res.statusCode, 404);
+  assert.ok(!res.body.includes(NEUTRAL));
+}

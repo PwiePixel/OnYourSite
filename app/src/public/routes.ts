@@ -5,7 +5,7 @@ import { one, type Row } from '../db.js';
 import { config } from '../config.js';
 import { passwordVerify, safeEqual } from '../crypto.js';
 import { e } from '../html.js';
-import { addressUrl, cleanUrl, customOrigin, isBot, isMainHost, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
+import { addressUrl, cleanUrl, customOrigin, isBot, isMainHost, liveDomain, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
 import { ctypeDigit, intval, phpStr, phpTruthy, strtolower } from '../php.js';
 import { attemptFailed, attemptsAllowed } from '../web/security.js';
 import { botApi } from '../community/api.js';
@@ -323,7 +323,7 @@ export async function subdomain(ctx: Ctx, slug: string, sub: string): Promise<vo
   const page = await loadPageBySlug(slug);
   if (page) {
     if (sub !== '' && sub !== 'kalender') {
-      if (phpStr(page.custom_domain ?? '') !== '') redirectToDomain(ctx, page, '', false);
+      if (liveDomain(page as unknown as PageLike) !== '') redirectToDomain(ctx, page, '', false);
       ctx.redirect(pageUrl(page as unknown as PageLike), 302);
     }
     // Hauptadresse ist die Live-Domain (mit eingeschalteter Weiterleitung) → dorthin

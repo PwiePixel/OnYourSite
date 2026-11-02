@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync,
 import { PCRE_WS } from '../compat/core.js';
 import { ROOT_DIR } from '../config.js';
 import { safeEqual } from '../crypto.js';
-import { baseAuthority, initials, pageOrigin, pageUrl, type PageLike } from '../helpers.js';
+import { baseAuthority, initials, liveDomain, pageOrigin, pageUrl, type PageLike } from '../helpers.js';
 import { intval, phpLtrim, phpRtrim, phpStr, phpTrim, phpTruthy, rawurlencode } from '../php.js';
 import type { Ctx } from '../web/ctx.js';
 import { GdImage, trueColorAlpha } from './gdImage.js';
@@ -51,7 +51,8 @@ export function ogHash(page: Record<string, unknown>): string {
     themeKey(page.theme ?? DEFAULT_THEME), own(s, 'accent'), phpTruthy(own(s, 'hide_branding')) ? 1 : 0, baseAuthority(),
   ];
   // Live-Domain (Premium) als letzter Teil: die Karte zeigt sie als Adresse. Ohne Domain bleibt der Wert wie bisher.
-  if (phpStr(page.custom_domain ?? '') !== '') parts.push(page.custom_domain);
+  const domain = liveDomain(page as unknown as PageLike);
+  if (domain !== '') parts.push(domain);
   return createHash('sha1').update(parts.map(phpStr).join('\n'), 'utf8').digest('hex').slice(0, 12);
 }
 

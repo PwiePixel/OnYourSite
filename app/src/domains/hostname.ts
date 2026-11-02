@@ -6,6 +6,9 @@ import { domainToASCII, domainToUnicode } from 'node:url';
 import { phpTrim } from '../php.js';
 
 export const HOSTNAME_MAX = 253;
+// Längste Eingabe, die überhaupt geprüft wird (auch eine eingefügte Adresse mit langer Abfrage passt hinein); längere
+// Eingaben sind nie ein Name und kommen gar nicht erst an die Muster unten
+export const INPUT_MAX = 2048;
 // Höchstens so viele Teile (a.b.c.d …) – mehr braucht keine echte Adresse einer Profilseite
 export const LABELS_MAX = 10;
 // Name des TXT-Eintrags für den Besitznachweis: _onyoursite.<domain>
@@ -46,11 +49,25 @@ export function hostnameError(problem: HostnameProblem, base: string): string {
 
 const fail = (problem: HostnameProblem, base: string): HostnameResult => ({ ok: false, problem, error: hostnameError(problem, base) });
 
+// Ein Leerzeichen im Sinne der Eingabe: auch geschützte (U+00A0), breite (U+3000) und unsichtbare (U+200B, U+FEFF)
+const SPACE = /[\s\u200b\ufeff]/u;
+// Leerraum am Rand entfernen – als Schleife, nicht als Muster: /[\s]+$/ prüft bei einer langen Folge von Leerzeichen
+// jede Startstelle neu (quadratische Laufzeit). Einzelne UTF-16-Einheiten genügen: kein Leerzeichen liegt über U+FFFF.
+function trimSpace(s: string): string {
+  let from = 0;
+  let to = s.length;
+  while (from < to && SPACE.test(s[from])) from++;
+  while (to > from && SPACE.test(s[to - 1])) to--;
+  return s.slice(from, to);
+}
+
 // Eingabe → gespeicherte Form. Eine eingefügte Adresse (https://Links.Example.com/pfad?x) wird auf den Namen gekürzt:
 // Schema, Pfad, Abfrage und Port werden entfernt (nicht übernommen), ein Punkt am Ende ebenso. base = Domain der Seite.
 export function normalizeHostname(input: unknown, base: string): HostnameResult {
+  const raw = typeof input === 'string' ? input : '';
+  if (raw.length > INPUT_MAX) return fail('invalid', base);
   // Leerraum am Rand auch in Unicode – eingefügte Werte enthalten oft geschützte oder unsichtbare Leerzeichen
-  let s = phpTrim(typeof input === 'string' ? input : '').replace(/^[\s​﻿]+|[\s​﻿]+$/gu, '');
+  let s = trimSpace(phpTrim(raw));
   s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^\/\//, '');
   s = s.split(/[/?#\\]/)[0];
   if (s === '') return fail('empty', base);

@@ -33,7 +33,7 @@ test('hostnames: pasted addresses, case, IDN and the trailing dot end up as one 
   // Wie im Browser: ein Backslash beginnt den Pfad
   assert.equal(ok('links.example.com\\x').ascii, 'links.example.com');
   assert.equal(ok('  links.example.com\t').ascii, 'links.example.com');
-  assert.equal(ok(' links.example.com​').ascii, 'links.example.com');
+  assert.equal(ok('\u00a0links.example.com\u200b').ascii, 'links.example.com');
   assert.equal(ok('ＬＩＮＫＳ。example。com').ascii, 'links.example.com');
   assert.deepEqual(ok('bücher.de'), { ascii: 'xn--bcher-kva.de', unicode: 'bücher.de' });
   assert.deepEqual(ok('XN--BCHER-KVA.de'), { ascii: 'xn--bcher-kva.de', unicode: 'bücher.de' });
@@ -62,6 +62,20 @@ test('hostnames: addresses, wildcards, underscores and reserved names are refuse
   assert.equal(hostnameError('base', 'on-your.site'), 'Addresses on on-your.site can’t be used as a custom domain – choose them under Address above.');
   const r = normalizeHostname('mia.oys.test', 'oys.test');
   assert.ok(!r.ok && r.error.includes('Addresses on oys.test '));
+});
+
+test('long or space-padded input is refused at once (no pattern with quadratic run time)', () => {
+  // Geschützte Leerzeichen zwischen zwei Zeichen: ein Muster wie /\s+$/ prüft jede Startstelle neu (Sekunden bis
+  // Minuten je Anfrage, der eine Web-Prozess stünde so lange still)
+  const padded = 'a' + '\u00a0'.repeat(100_000) + 'a';
+  const started = performance.now();
+  assert.equal(problem(padded), 'invalid');
+  assert.equal(problem('\u00a0'.repeat(100_000) + 'links.example.com'), 'invalid');
+  assert.equal(problem('links.example.com/' + 'x'.repeat(100_000)), 'invalid');
+  assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+  // Gewöhnliche Eingaben mit Leerraum am Rand bleiben gültig – auch eine lange eingefügte Adresse
+  assert.equal(ok('\u00a0\u200b links.example.com \ufeff\u3000').ascii, 'links.example.com');
+  assert.equal(ok('https://links.example.com/?utm_source=' + 'x'.repeat(1500)).ascii, 'links.example.com');
 });
 
 test('hostnames are not run through the word filter of page addresses', () => {

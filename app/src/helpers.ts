@@ -8,7 +8,7 @@ import { md5Hex } from './crypto.js';
 import { strtolower, phpStr, phpTruthy, rawurlencode, strtotime, date, time, phpLtrim } from './php.js';
 import * as compat from './compat/core.js';
 import type { Ctx } from './web/ctx.js';
-import { reservedSlugs as domainReservedSlugs } from './domains/config.js';
+import { domainsAvailable, reservedSlugs as domainReservedSlugs } from './domains/config.js';
 
 // ---------------------------------------------------------------- Domains & Adressen
 
@@ -23,8 +23,15 @@ export interface PageLike { slug: unknown; address_mode?: unknown; custom_domain
 
 // Eigene Domain (Premium): Ursprung https://<domain> – Schema wie die Seite, in lokalen Tests mit custom_domains.url_port
 export const customOrigin = (host: string): string => scheme() + '://' + host + configString('custom_domains.url_port', '');
-const customUrl = (p: PageLike): string | null => {
+// Live-Domain einer Seite als Hauptadresse – nur, solange eigene Domains eingerichtet sind. Fehlen die Werte in
+// config.json (z. B. nach einer Wiederherstellung ohne --domains), beantwortet der Router die Domain nicht: dann bleibt
+// die OnYourSite-Adresse die Hauptadresse, statt auf eine Domain zu zeigen, die hier niemand bedient.
+export const liveDomain = (p: PageLike): string => {
   const h = phpStr(p.custom_domain ?? '');
+  return h !== '' && domainsAvailable() ? h : '';
+};
+const customUrl = (p: PageLike): string | null => {
+  const h = liveDomain(p);
   return h !== '' ? customOrigin(h) : null;
 };
 
@@ -53,7 +60,7 @@ export function pageUrl(p: PageLike, sub = ''): string {
 export const pageDisplayUrl = (p: PageLike): string => pageUrl(p).replace(/^https?:\/\//, '');
 export const pageOrigin = (p: PageLike): string => customUrl(p) ?? (phpStr(p.address_mode) === 'path' ? mainUrl('') : pageUrls(p).subdomain);
 export function onPageHost(ctx: Ctx, p: PageLike): boolean {
-  const custom = phpStr(p.custom_domain ?? '');
+  const custom = liveDomain(p);
   if (custom !== '') return ctx.host === custom;
   if (phpStr(p.address_mode) === 'path') return isMainHost(ctx.host);
   return ctx.host === strtolower(phpStr(p.slug)) + '.' + baseHost();

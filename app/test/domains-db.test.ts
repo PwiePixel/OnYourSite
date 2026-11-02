@@ -128,6 +128,32 @@ test('compare-and-set: a stale version writes nothing; the live state sets and c
   await t.admin.query(`DELETE FROM \`${t.name}\`.custom_domains WHERE id = ?`, [id]);
 });
 
+test('a domain that moves to another page (transfer) takes its primary address along – the old page never keeps it', async () => {
+  // Live auf Leas Seite (4)
+  const d = await domainIn('active', 'moving.example.com', 4, 7);
+  assert.equal(await pageDomain(4), 'moving.example.com');
+  // Übernahme in den Zustand verifying (wie das Design sie vorsieht): beide Seiten ohne Hauptadresse
+  assert.equal(await transition(d, { state: 'verifying', set: { target_id: 3, user_id: 6 } }), true);
+  assert.equal(await pageDomain(4), null);
+  assert.equal(await pageDomain(3), null);
+  // Wieder live – jetzt auf Toms Seite (3), nie auf der alten
+  assert.equal(await transition(await fresh(d.id), { state: 'active' }), true);
+  assert.equal(await pageDomain(3), 'moving.example.com');
+  // Ziel wechseln, während die Domain live bleibt: die Hauptadresse wandert mit, die alte Seite leitet nicht weiter
+  assert.equal(await transition(await fresh(d.id), { set: { target_id: 4, user_id: 7 } }), true);
+  assert.equal(await pageDomain(3), null);
+  assert.equal(await pageDomain(4), 'moving.example.com');
+  assert.equal(await forwardingDomain((await one('SELECT * FROM pages WHERE id = 3'))!), null);
+  // Ziel und Zustand zugleich: nur das neue Ziel zählt
+  assert.equal(await transition(await fresh(d.id), { state: 'active', set: { target_id: 3, user_id: 6 } }), true);
+  assert.equal(await pageDomain(4), null);
+  assert.equal(await pageDomain(3), 'moving.example.com');
+  const row = await fresh(d.id);
+  assert.deepEqual([row.target_id, row.user_id, row.state], [3, 6, 'active']);
+  assert.equal(await removeDomain(POOL, d.id, 'test'), 'deleted');
+  assert.equal(await pageDomain(3), null);
+});
+
 test('hasDomain and hostnameForPage see a domain in every state (XD-02); removing it frees the page', async () => {
   for (const [i, state] of STATES.entries()) {
     const host = `s${i}.example.org`;
