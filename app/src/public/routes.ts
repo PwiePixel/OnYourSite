@@ -5,7 +5,7 @@ import { one, type Row } from '../db.js';
 import { config } from '../config.js';
 import { passwordVerify, safeEqual } from '../crypto.js';
 import { e } from '../html.js';
-import { cleanUrl, isBot, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
+import { addressUrl, cleanUrl, customOrigin, isBot, isMainHost, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
 import { ctypeDigit, intval, phpStr, phpTruthy, strtolower } from '../php.js';
 import { attemptFailed, attemptsAllowed } from '../web/security.js';
 import { botApi } from '../community/api.js';
@@ -22,6 +22,9 @@ import { isArr, jsonDecode, own } from '../content/util.js';
 import { codeServe } from '../code/serve.js';
 import { codeSiteBySlug, codeUrl } from '../code/sites.js';
 import { runWeeklyReports } from '../app/report.js';
+import { domainsAvailable } from '../domains/config.js';
+import { controlResponse } from '../domains/answers.js';
+import { forwardingDomain, hostnameForPage } from '../domains/store.js';
 import { notFound } from './notFound.js';
 import { kalender } from './views/kalender.js';
 
@@ -39,12 +42,13 @@ export async function publicBlock(id: unknown): Promise<{ block: PublicBlock; pa
   return { block: { ...block, active: scheduleActive(block.schedule, Date.now() / 1000) }, page };
 }
 
-// oys_block_target(): Ziel-Adresse eines klickbaren Blocks
-export function blockTarget(block: Block, page: Row): string {
+// oys_block_target(): Ziel-Adresse eines klickbaren Blocks. extraHosts: weitere eigene Hosts der Seite für den
+// Termin-Block (ihre Domain in jedem Zustand, siehe bookingHosts)
+export function blockTarget(block: Block, page: Row, extraHosts: readonly string[] = []): string {
   const d = block.data;
   switch (block.type) {
     case 'booking':
-      if (bookingIsInternal(d, page as unknown as PageLike)) {
+      if (bookingIsInternal(d, page as unknown as PageLike, extraHosts)) {
         // Geschützter Termin-Block: Kalender nur mit Schlüssel (sonst ließe sich der Schutz über /kalender umgehen)
         return pageUrl(page as unknown as PageLike, 'kalender') + (block.protection !== 'none' ? '?k=' + calendarKey(page, block) : '');
       }
@@ -62,6 +66,14 @@ export function blockTarget(block: Block, page: Row): string {
       return url;
     }
   }
+}
+
+// Eigene Domain der Seite (in jedem Zustand) für einen Termin-Block mit voller Adresse – eine Abfrage nur dann, wenn
+// der Block nicht schon so auf den eigenen Kalender zeigt (/kalender oder eine OnYourSite-Adresse)
+export async function bookingHosts(block: Block, page: Row): Promise<string[]> {
+  if (block.type !== 'booking' || bookingIsInternal(block.data, page as unknown as PageLike)) return [];
+  const host = await hostnameForPage(intval(page.id));
+  return host !== null ? [host] : [];
 }
 
 // oys_wants_json(): stripos() vergleicht nur ASCII ohne Groß-/Kleinschreibung
@@ -119,6 +131,11 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
   const method = ctx.method;
   let m: RegExpExecArray | null;
 
+  // --- Selbsttest des Domain-Dienstes (nur mit eigenen Domains, nur auf der Hauptdomain) ---
+  if (path === '/_/domain-check' && (method === 'GET' || method === 'HEAD') && domainsAvailable() && isMainHost(ctx.host)) {
+    return controlResponse(ctx);
+  }
+
   // --- Aufruf zählen ---
   if (path === '/_/v' && method === 'POST') {
     if (!isBot(ctx.userAgent()) && requestFromOwnSite(ctx)) {
@@ -162,7 +179,7 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
       ctx.json({ ok: false, error: 'Wrong password.' });
     }
     await recordClick(intval(found.page.id), block.id);
-    ctx.json({ ok: true, url: blockTarget(block, found.page) });
+    ctx.json({ ok: true, url: blockTarget(block, found.page, await bookingHosts(block, found.page)) });
   }
 
   // --- Weiterleitung /_/go/123 (nur geschützte Links: Passwort, Ab-18-Bestätigung, Fallback ohne JS) ---
@@ -174,7 +191,7 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
     const pageLike = page as unknown as PageLike;
     if (block.protection === 'none') ctx.redirect(pageUrl(pageLike));
     if (!onPageHost(ctx, pageLike)) ctx.redirect(pageOrigin(pageLike) + '/_/go/' + intval(block.id));
-    const target = blockTarget(block, page);
+    const target = blockTarget(block, page, await bookingHosts(block, page));
     if (target === '') ctx.redirect(pageUrl(pageLike));
     ctx.header('Cache-Control', 'no-store');
 
@@ -198,16 +215,18 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
   if (path === '/_/contact' && method === 'POST') {
     const found = await publicBlock(own(ctx.post, 'b') ?? '');
     const json = wantsJson(ctx);
+    // Auf einer eigenen Domain bleibt der Besucher auf ihr (nie zur OnYourSite-Startseite)
+    const domainHome = ctx.customDomain ? customOrigin(ctx.customDomain.hostname) : null;
     if (!found || found.block.type !== 'contact' || !found.block.active) {
       if (json) ctx.json({ ok: false, error: 'This form is no longer available.' }, 404);
-      ctx.redirect(mainUrl('/'));
+      ctx.redirect(domainHome !== null ? domainHome + '/' : mainUrl('/'));
     }
     const page = found.page;
     const blockId = String(found.block.id);
     const [ok, error, spam] = await contactCheck(ctx, page, blockId, ctx.post);
     if (ok && !spam) await storeMessage(page, ctx.post);
     if (json) ctx.json(ok ? { ok: true } : { ok: false, error });
-    ctx.redirect(pageUrl(page as unknown as PageLike) + (ok ? '?sent=' + blockId : '') + '#contact-' + blockId);
+    ctx.redirect((domainHome ?? pageUrl(page as unknown as PageLike)) + (ok ? '?sent=' + blockId : '') + '#contact-' + blockId);
   }
 
   // --- Vorschaubild für geteilte Links (Discord, WhatsApp, X …) ---
@@ -256,8 +275,8 @@ export async function trackClick(ctx: Ctx): Promise<void> {
   ctx.json({ status: 'success' });
 }
 
-// oys_serve_page(): Profilseite (oder deren Termin-Seite) zeigen
-async function servePage(ctx: Ctx, page: Row, sub: string): Promise<void> {
+// oys_serve_page(): Profilseite (oder deren Termin-Seite) zeigen – auch auf einer eigenen Domain (domains/targets.ts)
+export async function servePage(ctx: Ctx, page: Row, sub: string): Promise<void> {
   ctx.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   ctx.header('X-Content-Type-Options', 'nosniff');
   if (sub === 'kalender') {
@@ -274,6 +293,13 @@ async function servePage(ctx: Ctx, page: Row, sub: string): Promise<void> {
 // Abfrage weitergeben, wie sie kam (?a=1&b=2), nur wenn es eine gibt
 const queryPart = (ctx: Ctx): string => (ctx.queryString !== '' ? '?' + ctx.queryString : '');
 
+// Weiterleitung auf eine eigene Domain: nie aus dem Zwischenspeicher (pausiert die Domain, leitet sie zurück – ein
+// gespeichertes 301/302 ergäbe eine Schleife)
+function redirectToDomain(ctx: Ctx, page: Row, sub: string, withQuery: boolean): never {
+  ctx.header('Cache-Control', 'no-store');
+  ctx.redirect(pageUrl(page as unknown as PageLike, sub) + (withQuery ? queryPart(ctx) : ''), 302);
+}
+
 // --- Hauptdomain: on-your.site/name bzw. on-your.site/name/kalender (slug klein geschrieben, sub '' oder 'kalender') ---
 export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<void> {
   const page = await loadPageBySlug(slug);
@@ -283,8 +309,10 @@ export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<
     if (site) ctx.redirect(codeUrl(site) + '/', 302);
   }
   if (page) {
+    // Hauptadresse ist die Live-Domain (mit eingeschalteter Weiterleitung) → dorthin
+    if ((await forwardingDomain(page)) !== null) redirectToDomain(ctx, page, sub, true);
     // Hauptadresse ist name.on-your.site → dorthin weiterleiten
-    if (page.address_mode !== 'path') ctx.redirect(pageUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
+    if (page.address_mode !== 'path') ctx.redirect(addressUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
     return servePage(ctx, page, sub);
   }
   return notFound(ctx);
@@ -294,9 +322,14 @@ export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<
 export async function subdomain(ctx: Ctx, slug: string, sub: string): Promise<void> {
   const page = await loadPageBySlug(slug);
   if (page) {
-    if (sub !== '' && sub !== 'kalender') ctx.redirect(pageUrl(page as unknown as PageLike), 302);
+    if (sub !== '' && sub !== 'kalender') {
+      if (phpStr(page.custom_domain ?? '') !== '') redirectToDomain(ctx, page, '', false);
+      ctx.redirect(pageUrl(page as unknown as PageLike), 302);
+    }
+    // Hauptadresse ist die Live-Domain (mit eingeschalteter Weiterleitung) → dorthin
+    if ((await forwardingDomain(page)) !== null) redirectToDomain(ctx, page, sub, true);
     // Hauptadresse ist on-your.site/name → dorthin weiterleiten
-    if (page.address_mode === 'path') ctx.redirect(pageUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
+    if (page.address_mode === 'path') ctx.redirect(addressUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
     return servePage(ctx, page, sub);
   }
   const site = await codeSiteBySlug(slug);

@@ -10,6 +10,7 @@ import { pathProfile, publicRoutes, subdomain, trackClick } from './public/route
 import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
+import { domainsAvailable, hostRoute } from './domains/index.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -44,6 +45,9 @@ export async function dispatch(ctx: Ctx): Promise<void> {
     ctx.write('Forbidden');
     ctx.halt();
   }
+  // Eigene Domains (Premium): nur wenn eingerichtet (sonst keine einzige Abfrage). Steht vor den Uploads, damit fremde
+  // Dateien nie unter einer Kunden-Domain erscheinen; die Sperrliste davor gilt auch hier.
+  if (domainsAvailable() && !isMainHost(ctx.host) && !ctx.host.endsWith('.' + baseHost())) return hostRoute(ctx, isAppPath);
   // 0. Hochgeladene Dateien (vor allem anderen, ohne Datenbank)
   if (ctx.path.startsWith('/static/uploads/')) {
     if (await serveStatic(ctx)) ctx.halt();
@@ -94,4 +98,9 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   }
 
   return notFound(ctx);
+}
+
+// Seiten der App auf der Hauptdomain (wie oben in dispatch) – auf eigenen Domains antworten sie nie
+function isAppPath(path: string): boolean {
+  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path);
 }

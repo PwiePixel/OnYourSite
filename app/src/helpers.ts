@@ -8,6 +8,7 @@ import { md5Hex } from './crypto.js';
 import { strtolower, phpStr, phpTruthy, rawurlencode, strtotime, date, time, phpLtrim } from './php.js';
 import * as compat from './compat/core.js';
 import type { Ctx } from './web/ctx.js';
+import { reservedSlugs as domainReservedSlugs } from './domains/config.js';
 
 // ---------------------------------------------------------------- Domains & Adressen
 
@@ -17,21 +18,43 @@ export const scheme = (): 'http' | 'https' => (configString('scheme', 'https') =
 export const mainUrl = (path = '/'): string => scheme() + '://' + baseAuthority() + path;
 export const isMainHost = (host: string): boolean => host === baseHost() || host === 'www.' + baseHost();
 
-export interface PageLike { slug: unknown; address_mode?: unknown }
+// custom_domain: Live-Domain der Seite (pages.custom_domain, nur im Zustand active gesetzt) – dann ist sie die Hauptadresse
+export interface PageLike { slug: unknown; address_mode?: unknown; custom_domain?: unknown }
 
-// oys_page_urls(): Reihenfolge der Schlüssel zählt (api.php)
-export function pageUrls(p: PageLike): { subdomain: string; path: string } {
+// Eigene Domain (Premium): Ursprung https://<domain> – Schema wie die Seite, in lokalen Tests mit custom_domains.url_port
+export const customOrigin = (host: string): string => scheme() + '://' + host + configString('custom_domains.url_port', '');
+const customUrl = (p: PageLike): string | null => {
+  const h = phpStr(p.custom_domain ?? '');
+  return h !== '' ? customOrigin(h) : null;
+};
+
+// oys_page_urls(): Reihenfolge der Schlüssel zählt (api.php); custom nur mit Live-Domain (ohne bleibt alles wie bisher)
+export function pageUrls(p: PageLike): { subdomain: string; path: string; custom?: string } {
   const slug = phpStr(p.slug);
-  return { subdomain: scheme() + '://' + slug + '.' + baseAuthority(), path: scheme() + '://' + baseAuthority() + '/' + slug };
+  const urls: { subdomain: string; path: string; custom?: string } = {
+    subdomain: scheme() + '://' + slug + '.' + baseAuthority(), path: scheme() + '://' + baseAuthority() + '/' + slug,
+  };
+  const c = customUrl(p);
+  if (c !== null) urls.custom = c;
+  return urls;
 }
-export function pageUrl(p: PageLike, sub = ''): string {
+// OnYourSite-Adresse nach address_mode (ohne eigene Domain) – Ziel der Weiterleitungen zwischen Subdomain und Pfad
+export function addressUrl(p: PageLike, sub = ''): string {
   const urls = pageUrls(p);
   const url = phpStr(p.address_mode) === 'path' ? urls.path : urls.subdomain;
   return sub !== '' ? url + '/' + phpLtrim(sub, '/') : url;
 }
+// oys_page_url(): Hauptadresse – die Live-Domain, sonst die OnYourSite-Adresse
+export function pageUrl(p: PageLike, sub = ''): string {
+  const c = customUrl(p);
+  if (c === null) return addressUrl(p, sub);
+  return sub !== '' ? c + '/' + phpLtrim(sub, '/') : c;
+}
 export const pageDisplayUrl = (p: PageLike): string => pageUrl(p).replace(/^https?:\/\//, '');
-export const pageOrigin = (p: PageLike): string => (phpStr(p.address_mode) === 'path' ? mainUrl('') : pageUrls(p).subdomain);
+export const pageOrigin = (p: PageLike): string => customUrl(p) ?? (phpStr(p.address_mode) === 'path' ? mainUrl('') : pageUrls(p).subdomain);
 export function onPageHost(ctx: Ctx, p: PageLike): boolean {
+  const custom = phpStr(p.custom_domain ?? '');
+  if (custom !== '') return ctx.host === custom;
   if (phpStr(p.address_mode) === 'path') return isMainHost(ctx.host);
   return ctx.host === strtolower(phpStr(p.slug)) + '.' + baseHost();
 }
@@ -72,6 +95,8 @@ export async function slugProblem(slug: string, exceptPageId: number | null = nu
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug) || slug.includes('--')) return 'Only a–z, 0–9 and single hyphens are allowed (not at the start or end).';
   if (isForbiddenSubdomain(slug)) return `The address “${slug}” is reserved or not allowed.`;
   if (RESERVED.includes(slug)) return `The address “${slug}” is reserved.`;
+  // Namen der eigenen Domains aus der Einrichtung (CNAME-Ziel, Rückfall-Ursprung) gehören nie einer Seite
+  if (domainReservedSlugs(baseHost()).includes(slug)) return `The address “${slug}” is reserved.`;
   if (await one('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptPageId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
   if (await one('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptCodeId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
   return null;

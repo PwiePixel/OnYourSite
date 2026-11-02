@@ -4,6 +4,7 @@ import type { Ctx } from '../web/ctx.js';
 import { e } from '../html.js';
 import { baseHost, mainUrl, slugProblem } from '../helpers.js';
 import { date, phpRtrim, rawurlencode, strtolower } from '../php.js';
+import { neutralNotFound } from '../domains/answers.js';
 
 // Daten der Vorlage
 export interface NotFoundData {
@@ -31,6 +32,8 @@ export async function notFoundData(ctx: Ctx): Promise<NotFoundData> {
 
 // http_response_code(404); require views/404.php; exit;
 export async function notFound(ctx: Ctx): Promise<void> {
+  // Auf einer eigenen Domain (Premium) nie die OnYourSite-Seite, sondern die neutrale 404
+  if (ctx.customDomain) neutralNotFound(ctx);
   const d = await notFoundData(ctx);
   ctx.send(notFoundView(d), 404);
 }

@@ -50,6 +50,8 @@ export function ogHash(page: Record<string, unknown>): string {
     page.subtitle ?? '', phpStr(page.bio ?? ''), phpStr(page.avatar ?? ''),
     themeKey(page.theme ?? DEFAULT_THEME), own(s, 'accent'), phpTruthy(own(s, 'hide_branding')) ? 1 : 0, baseAuthority(),
   ];
+  // Live-Domain (Premium) als letzter Teil: die Karte zeigt sie als Adresse. Ohne Domain bleibt der Wert wie bisher.
+  if (phpStr(page.custom_domain ?? '') !== '') parts.push(page.custom_domain);
   return createHash('sha1').update(parts.map(phpStr).join('\n'), 'utf8').digest('hex').slice(0, 12);
 }
 

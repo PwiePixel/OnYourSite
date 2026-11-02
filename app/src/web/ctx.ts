@@ -12,6 +12,16 @@ export class Halt {
 }
 export const isHalt = (err: unknown): err is Halt => !!err && typeof err === 'object' && (err as Halt).halt === true;
 
+// Eigene Domain einer Anfrage: Zeile aus custom_domains (Zustand pending, active, broken oder suspended)
+export interface CustomHost {
+  id: number;
+  hostname: string;
+  state: string;
+  targetType: string;
+  targetId: number;
+  userId: number;
+}
+
 export interface UploadedFile {
   name: string;
   type: string;
@@ -45,6 +55,8 @@ export class Ctx {
   readonly locals: Record<string, unknown> = {};
   // Von web/static.ts wie von Apache ausgeliefert: dann gelten die PHP-Regeln für Header nicht
   apacheStatic = false;
+  // Anfrage auf einer eigenen Domain (Premium), gesetzt von domains/host.ts – sonst null
+  customDomain: CustomHost | null = null;
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];

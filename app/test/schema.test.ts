@@ -172,14 +172,22 @@ test('old profiles are taken over exactly like PHP does it', async () => {
 
 test('Node upgrades a database PHP has migrated, and a second run changes nothing', async () => {
   const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)));
+  // Spalten, die spätere Schritte anfügen (z. B. pages.custom_domain), sind bei bestehenden Zeilen leer; alle bisherigen
+  // Werte bleiben, wie sie waren
+  const known = async (): Promise<unknown[][]> => (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
+    (rows as Array<Record<string, unknown>>).map((row, j) => {
+      const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
+      for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
+      return Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
+    }));
   await nodeEnsure(DBS.phpLegacy);
   assert.equal(await version(DBS.phpLegacy), String(SCHEMA_VERSION));
   assert.ok((await tables(DBS.phpLegacy)).includes('oys_sessions'));
-  assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t))), before);
+  assert.deepEqual(await known(), before);
   // PHP kommt mit der höheren Version zurecht (nichts wird erneut ausgeführt)
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.phpLegacy);
-  assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t))), before);
+  assert.deepEqual(await known(), before);
 });
 
 test('the feature steps give a database PHP installed the same tables as a fresh Node install', async () => {

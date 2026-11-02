@@ -24,6 +24,7 @@ export const V_COMMUNITY = 4; // Discord-Bot (Vorschläge, Support-Tickets)
 export const V_SESSIONS = 5; // Sitzungen in der Datenbank (Node-Version)
 // Funktionen nach dem Umstieg (Nummer = Reihenfolge des Zusammenführens)
 export const V_NOTIFICATIONS_INDEX = 6; // Glocke: neueste zuerst und „gelesen bis“
+export const V_CUSTOM_DOMAINS = 7; // Eigene Domains (Premium): Domains, Verlauf, Hauptadresse der Seite
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -54,6 +55,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_COMMUNITY, name: 'community', run: createCommunityTables },
   { version: V_SESSIONS, name: 'sessions', run: createSessionTable },
   { version: V_NOTIFICATIONS_INDEX, name: 'notificationsIndex', run: notificationsIndex },
+  { version: V_CUSTOM_DOMAINS, name: 'customDomains', run: customDomains },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -504,6 +506,75 @@ async function createSessionTable(conn: PoolConnection): Promise<void> {
 // Kontos und „gelesen bis id“. idx_user (user_id, is_read) bleibt für die Zahl der ungelesenen.
 async function notificationsIndex(conn: PoolConnection): Promise<void> {
   await addIndex(conn, 'notifications', 'idx_user_id', 'KEY idx_user_id (user_id, id)');
+}
+
+// V_CUSTOM_DOMAINS (braucht nur pages aus V_PAGES): eigene Domains (Premium). Eine Zeile je Domain, Ziel ist (vorerst)
+// eine Profilseite; Hostnamen immer klein in ASCII/Punycode. Jede Änderung zählt version hoch (Compare-and-set).
+// Der Verlauf ist zugleich die Mail-Warteschlange des Domain-Dienstes und die Liste aller Cloudflare-IDs, die er
+// angelegt hat. pages.custom_domain ist die Hauptadresse, solange die Domain live ist (mehrfach NULL erlaubt).
+async function customDomains(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS custom_domains (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        hostname VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+        target_type VARCHAR(8) NOT NULL DEFAULT 'page',
+        target_id INT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        state VARCHAR(12) NOT NULL DEFAULT 'verifying',
+        version INT UNSIGNED NOT NULL DEFAULT 0,
+        state_at DATETIME NOT NULL,
+        is_apex TINYINT(1) NOT NULL DEFAULT 0,
+        zone_name VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        redirect TINYINT(1) NOT NULL DEFAULT 1,
+        cf_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        cf_status VARCHAR(32) NOT NULL DEFAULT '',
+        cf_ssl_status VARCHAR(32) NOT NULL DEFAULT '',
+        cf_created_at DATETIME NULL,
+        problem VARCHAR(32) NOT NULL DEFAULT '',
+        problem_detail VARCHAR(255) NOT NULL DEFAULT '',
+        fail_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        fail_since DATETIME NULL,
+        dns_unknown_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        dns_unknown_since DATETIME NULL,
+        checked_at DATETIME NULL,
+        next_check_at DATETIME NULL,
+        fast_until DATETIME NULL,
+        manual_at DATETIME NULL,
+        patched_at DATETIME NULL,
+        verified_at DATETIME NULL,
+        activated_at DATETIME NULL,
+        suspended_at DATETIME NULL,
+        notice_state TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        notice_at DATETIME NULL,
+        blocked_reason VARCHAR(200) NULL,
+        cert_expires_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_hostname (hostname),
+        UNIQUE KEY uq_target (target_type, target_id),
+        KEY idx_user (user_id, state),
+        KEY idx_due (next_check_at),
+        KEY idx_state (state, state_at),
+        KEY idx_cf (cf_id)
+    ) ${OPTS}`);
+  await run(conn, `CREATE TABLE IF NOT EXISTS custom_domain_log (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        domain_id INT UNSIGNED NULL,
+        hostname VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+        user_id INT NULL,
+        event VARCHAR(24) NOT NULL,
+        detail VARCHAR(255) NOT NULL DEFAULT '',
+        cf_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        mail TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        mail_tries TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        mailed_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_domain (domain_id, id),
+        KEY idx_host (hostname, id),
+        KEY idx_cf (cf_id),
+        KEY idx_mail (mail, mailed_at)
+    ) ${OPTS}`);
+  await addColumn(conn, 'pages', 'custom_domain', 'VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NULL');
+  await addIndex(conn, 'pages', 'uq_custom_domain', 'UNIQUE KEY uq_custom_domain (custom_domain)');
 }
 
 type Seed = [string | null, string, string, string, string];

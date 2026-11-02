@@ -11,8 +11,9 @@ import { ctypeDigit, date, intval, mbSubstr, phpStr, phpTruthy, strtolower } fro
 import { codeUsedUploads } from '../code/sites.js';
 import { isFile, uploadsDir } from './storage.js';
 import { DEFAULT_THEME, fontChoices, layoutKey, themeKey } from './themes.js';
-import { IMAGE_EXTS, blockNormalize, bookingIsInternal, calendarKey, pick, scheduleActive, validUpload } from './blocks.js';
+import { IMAGE_EXTS, blockNormalize, bookingIsInternal, bookingPointsTo, calendarKey, pick, scheduleActive, validUpload } from './blocks.js';
 import { ogSupported, ogUrl } from './share.js';
+import { hostnameForPage } from '../domains/store.js';
 import { arrayKey, arrayReplace, isArr, jsonDecode, own, phpArray, toObject, values, type PhpArr } from './util.js';
 
 // Einstellungen nach oys_settings_normalize(): feste Schlüssel in fester Reihenfolge
@@ -76,7 +77,8 @@ export interface EditorPage {
   layout: string;
   address_mode: 'path' | 'subdomain';
   settings: PageSettings;
-  urls: { subdomain: string; path: string };
+  // custom: nur mit Live-Domain (Premium)
+  urls: { subdomain: string; path: string; custom?: string };
   url: string;
   og: string;
 }
@@ -301,6 +303,8 @@ export async function savePage(page: Row, input: PhpArr, userId: number, premium
   const idMap: Array<[string, number]> = [];
   const kept = new Set<number>();
   const now = date('Y-m-d H:i:s');
+  // Eigene Domain der Seite (jeder Zustand), nur nachgeschlagen bei einem Termin-Block mit voller Adresse
+  let domainHost: string | null | undefined;
 
   await transaction(async (conn) => {
     const sets = fields.map(([k]) => `${k} = ?`).join(', ');
@@ -322,6 +326,11 @@ export async function savePage(page: Row, input: PhpArr, userId: number, premium
       const norm = await blockNormalize(blockIn, userId, old);
       if (!norm) continue;
       if (norm.warning) warnings.push(norm.warning);
+      // Termin-Block mit der vollen Adresse der eigenen Domain → /kalender: bleibt intern, auch nach dem Entfernen
+      if (norm.type === 'booking' && /^https?:\/\//i.test(phpStr(norm.data.url ?? ''))) {
+        if (domainHost === undefined) domainHost = await hostnameForPage(intval(page.id));
+        if (domainHost !== null && bookingPointsTo(norm.data, domainHost)) norm.data.url = '/kalender';
+      }
       const vals: Param[] = [
         norm.type, position++, norm.is_visible,
         phpJson(norm.data, { unescapedUnicode: true }),
@@ -397,8 +406,18 @@ export function pageFiles(page: Row, blocks: ReadonlyArray<{ data: unknown }>): 
 export async function calendarAccess(page: Row, given: string): Promise<string | null> {
   const now = Date.now() / 1000;
   let access: string | null = null;
+  // Eigene Domain der Seite (jeder Zustand) – nur nachgeschlagen, wenn ein Termin-Block eine volle Adresse hat
+  let domainHosts: string[] | null = null;
+  const internal = async (b: Block): Promise<boolean> => {
+    if (bookingIsInternal(b.data, page as unknown as PageLike)) return true;
+    if (domainHosts === null) {
+      const h = await hostnameForPage(intval(page.id));
+      domainHosts = h !== null ? [h] : [];
+    }
+    return domainHosts.length > 0 && bookingIsInternal(b.data, page as unknown as PageLike, domainHosts);
+  };
   for (const b of await loadBlocks(intval(page.id))) {
-    if (b.type !== 'booking' || !phpTruthy(b.is_visible) || !scheduleActive(b.schedule, now) || !bookingIsInternal(b.data, page as unknown as PageLike)) continue;
+    if (b.type !== 'booking' || !phpTruthy(b.is_visible) || !scheduleActive(b.schedule, now) || !(await internal(b))) continue;
     if (b.protection === 'none') return '';
     const key = calendarKey(page, b);
     if (given !== '' && safeEqual(key, given)) access = key;
