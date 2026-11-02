@@ -242,6 +242,13 @@ test('R2: removing a blocked domain detaches it, but the hostname stays blocked 
   const claim = await add(U, pages.u3, 'blocked.example.net', { claim: true });
   assert.equal(claim.status, 409);
   assert.equal(jsonBody(claim).error, BLOCKED_TEXT);
+  // Andere Schreibweisen desselben Namens (groß mit Punkt am Ende, eingefügte Adresse mit Port, Breitzeichen): erst
+  // normalisiert, dann gegen die Sperre geprüft
+  for (const variant of ['BLOCKED.Example.NET.', 'https://blocked.example.net:8443/x?y=1', 'ｂｌｏｃｋｅｄ．ｅｘａｍｐｌｅ．ｎｅｔ']) {
+    const r = await add(U, pages.u3, variant);
+    assert.equal(r.status, 409, variant);
+    assert.equal(jsonBody(r).error, BLOCKED_TEXT, variant);
+  }
   assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', ['blocked.example.net']), 0);
   // Ein Admin gibt den Hostnamen frei: danach lässt er sich wieder verbinden
   assert.equal(await releaseBlock('blocked.example.net'), true);
