@@ -82,11 +82,11 @@ sudo bash /var/www/onyoursite/server/install.sh --update
 - The **PHP website keeps running** until the Node.js version is built and checked with the data of the server (the old installer fetches the code first, so the website may show an error for a second or two before the PHP version is back in place).
 - `config.php` becomes **`config.json`** – the same keys and values; it is read without PHP. The new settings stay outside the folder that PHP serves until the switch.
 - The backup is called `…-before-node` and also holds `config.php`.
-- The switch itself takes a moment (one or two failed requests at most): Node.js is already running, then Apache changes over to it. If the check after the switch fails, the **PHP website comes back by itself** – the database only got additions that the PHP version ignores.
+- The switch itself takes a moment: Node.js is already running, Apache changes over to it, and only then the code folder gets the new version. Apache processes that still finish a request for the PHP website can’t hand out files from the code folder any more – a `.htaccess` there denies everything (it stays; nothing is served from that folder directly). If the check after the switch fails, the **PHP website comes back by itself** – the database only got additions that the PHP version ignores.
 - Afterwards, **OnYourSite doesn’t need PHP any more**: its PHP settings and the PHP weekly report are removed, `config.php` is kept as a copy for root in `/etc/onyoursite/config.php.previous`, PHP-FPM is turned off and the installer offers to remove the PHP packages. If other websites on the server still use PHP (another site in Apache, phpMyAdmin, an own PHP-FPM pool), PHP stays as it is and the installer names them.
 - **Everyone has to log in once more** – the logins of the PHP version don’t carry over. Passwords, pages and everything else stay. Tell your users before you update.
 - Accounts with a very old kind of password hash (not bcrypt) can’t log in with Node.js; the installer counts them first and asks before it goes on. An admin can set a new password for them (*Admin → Users*).
-- There is no way back to PHP with the installer. The backup from before the move holds everything a 2.x installation needs.
+- There is no way back to PHP. The backup from before the move can be put back into the Node.js version: [Restore a backup](#restore-a-backup).
 
 Was OnYourSite on Plesk or other PHP hosting? 3.0 can’t run there as before – set up your own server with this installer and move the data ([Moving data from an old server](#moving-data-from-an-old-server-optional)).
 
@@ -177,13 +177,25 @@ The database belongs to the version of the code that made it – put that versio
 
 ```bash
 . $B/release
-git -C /var/www/onyoursite checkout -f -B "$branch" "$commit"
+git -C /var/www/onyoursite checkout -f ${branch:+-B "$branch"} "$commit"
 bash /var/www/onyoursite/server/install.sh
 ```
 
 The bot settings are in the same file: `tar -xzf $B/settings.tar.gz -C /etc onyoursite-bot.env`, then `systemctl restart onyoursite-bot`. The next `--update` brings the newest version back, with a new backup first.
 
-Backups made by version 2.x (PHP) hold `config.php` instead of `config.json` and no `release` – they belong to a 2.x installation. For a new server, use them like the files from an old server: [Moving data from an old server](#moving-data-from-an-old-server-optional).
+**The backup from before the move to Node.js** (`…-before-node`) and backups made by version 2.x hold `config.php` instead of `config.json`, and the version they belong to is the PHP version – don’t put that back (3.x doesn’t run PHP). Bring their data into the Node.js version instead, the way data from an old server comes in:
+
+```bash
+B=/var/backups/onyoursite/2026-11-20-031500-before-node
+systemctl stop onyoursite-web
+rsync -a --delete $B/uploads/ /var/lib/onyoursite/uploads/
+mkdir -p /root/import
+cp $B/database.sql.gz /root/import/
+tar -xzf $B/settings.tar.gz -C /root/import config.php email
+bash /var/www/onyoursite/server/install.sh
+```
+
+When it asks for the folder with the files from the old server, enter `/root/import`, and answer *y* when it asks to replace the database. It reads `config.php` without PHP, keeps its keys (above all `aes_key`) and brings the database up to date. Everyone logs in once more. Then delete the folder: `rm -rf /root/import`. (A 2.x backup made by its nightly timer has its uploads in `uploads/` too and works the same way.)
 
 ## Where things are
 

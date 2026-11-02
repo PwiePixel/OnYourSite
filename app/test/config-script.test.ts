@@ -134,6 +134,10 @@ const EDGE: string[] = [
   // Kommentare in allen Formen, auch mit ?> im Zeilenkommentar
   "<?php\n// eins\n# zwei\n/* drei\n vier */\n/** doc */\nreturn [ // nach\n  'a' /* mitten */ => # hier\n  'b', /* */ 'c' => 'd' // ?>\n];",
   "<?php\nreturn ['a' => 1]; // ?> rest\n",
+  // Zeilenkommentare enden auch an einem einzelnen \r (alte Mac-Zeilenenden, gemischte Dateien) wie im PHP-Lexer
+  "<?php\rreturn [\r'a' => 1, // c\r'b' => 2, # d\r'c' => 3,\r];\r",
+  "<?php\nreturn ['a' => 1, // c\r'aes_key' => 'k', # x\r\n'b' => [1, //\r2], #\r'c' => 3];\n",
+  "<?php\r\nreturn [ // eins\r# zwei\r\n'a' => 'b' /* \r */, // ?>\r];",
   // Texte in '…': nur \\' und \\\\ sind Escapes
   String.raw`<?php return ['a' => 'it\'s', 'b' => 'back\\slash', 'c' => 'keep \n \t \x41 \$ \"', 'd' => '\\\'', 'e' => '\\', 'f' => '\a\\\\b'];`,
   // Texte in "…" mit allen Escapes
@@ -323,6 +327,55 @@ test('random texts and numbers in every notation are read exactly like PHP', { s
   assert.ok(interpolated < 60, `${interpolated} of 300 had variables`);
 });
 
+// Zufällige Anordnung: Leerraum und Kommentare jeder Art zwischen allen Teilen (auch \r allein als Zeilenende, ?> im
+// Zeilenkommentar, Kommentarzeichen in Kommentaren), verschachtelte Listen, Verkettung mit .
+test('random layouts with comments and line ends of every kind are read exactly like PHP', { skip: !HAS_PHP && 'php is not installed' }, () => {
+  // mulberry32: genug Zufall für viele tausend Aufrufe (das einfache LCG oben wiederholt sich nach etwa 14 000)
+  let seed = 20261102;
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T>(a: T[]): T => a[Math.floor(rand() * a.length)];
+  const gaps = [' ', '\n', '\r', '\r\n', '\t', '', '// c\n', '# c\n', '// c\r', '# c\r', '//\r\n', '#\r', '/* c */', '/* \r */', '/** d */',
+    '/* // */', '// /* \n', '#/*\r', '// a ?> b\n', '# [x]\n'];
+  const gap = (closing = true) => {
+    let s = '';
+    for (let i = Math.floor(rand() * 3); i > 0; i--) s += pick(closing ? gaps : gaps.filter((g) => !g.includes('?>')));
+    return s;
+  };
+  const scalar = () => pick(["'a'", "'it\\'s'", '"\\n\\x41\\u{e4}"', '"$ {"', "''", '0', '-7', '+ 3', '0x1F', '1.5', '.5', '1e3', 'true', 'FALSE', 'null']);
+  const value = (d: number): string => {
+    if (d < 3 && rand() < 0.25) return list(d + 1);
+    if (rand() < 0.15) return scalar().startsWith("'") ? `'x'${gap()}.${gap()}"y"` : scalar();
+    return scalar();
+  };
+  const list = (d: number): string => {
+    const items: string[] = [];
+    for (let k = Math.floor(rand() * 4); k > 0; k--) {
+      items.push(rand() < 0.6 ? `${gap()}${pick(["'k'", "'8'", '3', '"x y"', "'aes_key'"])}${gap()}=>${gap()}${value(d)}${gap()}` : `${gap()}${value(d)}${gap()}`);
+    }
+    const long = rand() < 0.2;
+    // Selten passt die Klammer nicht (array( … ]) – dann lehnen beide ab, das zählt mit
+    const close = rand() < 0.03 ? (long ? ']' : ')') : long ? ')' : ']';
+    return (long ? 'array(' : '[') + items.join(',') + (rand() < 0.3 ? ',' : '') + gap() + close;
+  };
+  const files: string[] = [];
+  for (let i = 0; i < 250; i++) {
+    // Außerhalb der Liste vor dem ; kein ?> (es beendete die Anweisung, der Rest wäre HTML – das lehnt config.mjs ab);
+    // in der Liste lehnen es beide ab
+    let src = pick(['<?php\n', '<?php\r', '<?php\r\n', '<?php ']) + gap(false) + 'return' + pick([' ', '\r', '\n', '/**/']) + gap(false) + list(0) + gap(false) + ';' + gap();
+    if (rand() < 0.1) src += '?>\n';
+    files.push(file(Buffer.from(src, 'latin1')));
+  }
+  compare(files, 'layout');
+  // Die meisten Dateien sind gültig – sonst prüfte der Test nichts
+  const readable = files.filter((f) => nodeTyped(f)[0] === 'ok').length;
+  assert.ok(readable > 120, `only ${readable} of 250 files were readable`);
+});
+
 // ---------------------------------------------------------------- Was nur PHP ausführen könnte, wird abgelehnt
 
 const REFUSED: string[] = [
@@ -375,9 +428,9 @@ test('refusals name the file, the line and what was found', () => {
 
 const JSON_PHP = '$c = include $argv[1]; $j = json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); if ($j === false) exit(3); echo $j, "\\n";';
 
-function runScript(args: string[], env: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } {
+function runScript(args: string[], env: Record<string, string> = {}, input?: string): { status: number | null; stdout: string; stderr: string } {
   // Ohne PHP im Suchpfad: das Werkzeug darf es nie brauchen
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], { env: { PATH: '/nonexistent', ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], { env: { PATH: '/nonexistent', ...env }, encoding: 'utf8', input });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -385,7 +438,7 @@ test('from-php prints the same JSON as PHP json_encode (and runs without PHP)', 
   const sub = mkdtempSync(join(dir, 'j-'));
   const writer = file(WRITE_CONFIG_PHP, 'write_config2.php');
   execFileSync('php', ['-d', 'display_errors=stderr', '-r', RANDOM_CONFIGS_PHP, writer, sub, '60', '99', 'utf8'], { stdio: ['ignore', 'ignore', 'inherit'] });
-  const files = [join(ROOT_DIR, 'config.example.php'), ...EDGE.slice(0, 22).map((s) => file(Buffer.from(s, 'latin1')))];
+  const files = [join(ROOT_DIR, 'config.example.php'), ...EDGE.slice(0, 25).map((s) => file(Buffer.from(s, 'latin1')))];
   for (let i = 0; i < 60; i++) files.push(join(sub, `written${i}.php`));
   let utf8 = 0;
   let broken = 0;
@@ -485,6 +538,18 @@ test('write converts the config.php next to it when there is no config.json yet'
   assert.ok(existsSync(join(sub, 'config.php')));
 });
 
+test('a comment ending in a bare CR doesn’t swallow the settings after it (aes_key is kept)', () => {
+  const sub = mkdtempSync(join(dir, 'cr-'));
+  const key = 'k'.repeat(16) + 'e'.repeat(16);
+  // Wie PHP: der Kommentar endet am \r – dahinter stehen noch Einstellungen
+  writeFileSync(join(sub, 'config.php'), `<?php\rreturn [\r  'timezone' => 'UTC', // old line end\r  'aes_key' => '${key}', # another\r  'max_pages' => 5,\r];\r`);
+  main(['write', '--file', join(sub, 'config.json'), '--domain', 'd.test', '--uploads', '/u', '--db-name', 'n', '--db-user', 'u', '--previous', join(dir, 'prev-cr.json')], {}, { write() {} });
+  const cfg = JSON.parse(readFileSync(join(sub, 'config.json'), 'utf8'));
+  assert.equal(cfg.aes_key, key);
+  assert.equal(cfg.timezone, 'UTC');
+  assert.equal(cfg.max_pages, 5);
+});
+
 test('write refuses a config.php it can’t read and leaves everything as it was', () => {
   const sub = mkdtempSync(join(dir, 'ref-'));
   writeFileSync(join(sub, 'config.php'), "<?php\nreturn ['aes_key' => AES_KEY];\n");
@@ -566,6 +631,39 @@ test('set and reset-keys change only what they should (secrets come from the env
   const missing = runScript(['set', 'a', 'b', '--file', join(sub, 'none.json')], env);
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /doesn’t exist yet/);
+});
+
+test('set --stdin takes the value from one input line, so a pasted secret never is on a command line', () => {
+  const sub = mkdtempSync(join(dir, 'stdin-'));
+  const target = join(sub, 'config.json');
+  writeFileSync(target, JSON.stringify({ aes_key: 'k', bot_secret: 'old' }));
+  const env = { OYS_CONFIG_PREVIOUS: join(sub, 'prev.json') };
+  // Zur Laufzeit zusammengesetzt (kein schlüsselartiger Text im Repository)
+  const secret = ['b0t', 'f'.repeat(29), '7'].join('');
+  // Eingefügt mit Leerzeichen und Windows-Zeilenende, danach noch eine Zeile, die nicht dazugehört
+  const r = runScript(['set', 'bot_secret', '--stdin', '--file', target], env, `  ${secret} \r\nnext line\n`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout + r.stderr, '');
+  assert.equal(JSON.parse(readFileSync(target, 'utf8')).bot_secret, secret);
+  // Ohne Zeilenende (Eingabe endet) zählt der Rest; eine leere Eingabe ändert nichts
+  assert.equal(runScript(['set', 'bot_secret', '--stdin', '--file', target], env, 'abc').status, 0);
+  assert.equal(JSON.parse(readFileSync(target, 'utf8')).bot_secret, 'abc');
+  const empty = runScript(['set', 'bot_secret', '--stdin', '--file', target], env, '\n');
+  assert.equal(empty.status, 1);
+  assert.match(empty.stderr, /no value given/);
+  assert.equal(JSON.parse(readFileSync(target, 'utf8')).bot_secret, 'abc');
+  // --stdin und ein Wert zugleich: Fehler statt Raten
+  assert.equal(runScript(['set', 'bot_secret', 'x', '--stdin', '--file', target], env, 'y\n').status, 1);
+});
+
+test('the bot installer never puts a new secret on a command line it tells the admin to run', () => {
+  const bot = readFileSync(join(ROOT_DIR, 'discord-bot', 'install.sh'), 'utf8');
+  const lines = bot.split('\n').filter((l) => /^\s*echo .*config\.mjs set/.test(l));
+  assert.ok(lines.length >= 1);
+  for (const line of lines) {
+    assert.doesNotMatch(line, /SECRET|OYS_VALUE=/, line);
+    assert.match(line, /--stdin/, line);
+  }
 });
 
 test('the JSON model keeps PHP lists as arrays and maps in their order', () => {

@@ -7,6 +7,9 @@
 //        OYS_BOT_SECRET), nie über die Befehlszeile. Schlüssel (aes_key, app_secret) entstehen nur, wenn sie fehlen.
 //   node app/scripts/config.mjs get <schlüssel.mit.punkten> [--file F]      Wert ausgeben (config.json oder config.php)
 //   node app/scripts/config.mjs set <schlüssel> [wert] [--json] [--file F]  Wert setzen (ohne Wert: aus OYS_VALUE)
+//   node app/scripts/config.mjs set <schlüssel> --stdin [--file F]          Wert als eine Zeile von der Eingabe (für
+//                                                                          Geheimnisse, die von Hand kommen: so stehen
+//                                                                          sie weder in der Prozessliste noch im Verlauf)
 //   node app/scripts/config.mjs reset-keys [--file F]                       aes_key, app_secret, cron_secret löschen
 //   node app/scripts/config.mjs from-php <config.php>                       config.php als JSON ausgeben
 //
@@ -16,7 +19,7 @@
 // abgelehnt. Geschrieben wird immer atomar (neue Datei, dann umbenennen) als root:www-data 0640; die vorige Fassung
 // kommt nach /etc/onyoursite/config.json.previous (nur root).
 import { randomBytes } from 'node:crypto';
-import { closeSync, chmodSync, chownSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, chmodSync, chownSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -142,7 +145,7 @@ class PhpReader {
     return value;
   }
 
-  // Leerraum und Kommentare (// und # enden am Zeilenende oder vor ?>)
+  // Leerraum und Kommentare (// und # enden wie im PHP-Lexer am Zeilenende – \n oder ein einzelnes \r – oder vor ?>)
   space() {
     for (;;) {
       const c = this.s[this.i];
@@ -152,7 +155,7 @@ class PhpReader {
         // Attribute (PHP 8) sind kein Kommentar
         this.unsupported();
       } else if (this.peek('//') || c === '#') {
-        while (this.i < this.s.length && this.s[this.i] !== '\n' && !this.peek('?>')) this.i++;
+        while (this.i < this.s.length && this.s[this.i] !== '\n' && this.s[this.i] !== '\r' && !this.peek('?>')) this.i++;
       } else if (this.peek('/*')) {
         const end = this.s.indexOf('*/', this.i + 2);
         if (end < 0) this.fail('a /* comment */ isn’t closed');
@@ -701,6 +704,30 @@ function parseArgs(argv, flags, valueFlags) {
   return out;
 }
 
+// Eine Zeile von der Eingabe (Terminal oder Pipe), ohne Zeilenende und Leerraum außen; nichts davon wird ausgegeben
+function stdinLine() {
+  const buf = Buffer.alloc(4096);
+  let line = Buffer.alloc(0);
+  for (;;) {
+    let n;
+    try {
+      n = readSync(0, buf, 0, buf.length, null);
+    } catch (err) {
+      if (err.code === 'EAGAIN') continue;
+      if (err.code === 'EOF') break;
+      throw err;
+    }
+    if (n === 0) break;
+    line = Buffer.concat([line, buf.subarray(0, n)]);
+    const nl = line.indexOf(10);
+    if (nl >= 0) {
+      line = line.subarray(0, nl);
+      break;
+    }
+  }
+  return line.toString('utf8').replace(/^[ \t\r]+|[ \t\r]+$/g, '');
+}
+
 function loadExisting(file) {
   const settings = loadSettings(file);
   if (!settings) throw new ConfigError(`${file} doesn’t exist.`);
@@ -744,13 +771,13 @@ export function main(argv, env = process.env, out = process.stdout) {
       return 0;
     }
     case 'set': {
-      const a = parseArgs(rest, ['--json'], ['--file', '--group']);
-      if (a._.length < 1 || a._.length > 2) throw new ConfigError('usage: config.mjs set <key> [value] [--json] [--file F]');
+      const a = parseArgs(rest, ['--json', '--stdin'], ['--file', '--group']);
+      if (a._.length < 1 || a._.length > 2 || (a.stdin && a._.length !== 1)) throw new ConfigError('usage: config.mjs set <key> [value | --stdin] [--json] [--file F]');
       const file = resolve(a.file ?? join(ROOT, 'config.json'));
       const settings = existsSync(file) && !isPhpSource(readFileSync(file)) ? loadSettings(file) : null;
       if (!settings) throw new ConfigError(`${file} doesn’t exist yet – run the installer first.`);
-      const raw = a._.length === 2 ? a._[1] : env.OYS_VALUE;
-      if (raw === undefined) throw new ConfigError('no value given (argument or OYS_VALUE).');
+      const raw = a.stdin ? stdinLine() : a._.length === 2 ? a._[1] : env.OYS_VALUE;
+      if (raw === undefined || (a.stdin && raw === '')) throw new ConfigError('no value given (argument, --stdin or OYS_VALUE).');
       let value = raw;
       if (a.json) {
         try {

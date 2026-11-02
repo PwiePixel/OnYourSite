@@ -43,10 +43,13 @@ done
 if [ -f /etc/onyoursite-bot.env ]; then settings+=(-C /etc onyoursite-bot.env); fi
 tar -czf "$dir/settings.tar.gz" "${settings[@]}"
 
-# Welche Version lief: zum Wiederherstellen gehört diese Version des Codes (server/README.md)
+# Welche Version lief: zum Wiederherstellen gehört diese Version des Codes (server/README.md). Ohne Branch (losgelöster
+# Stand) bleibt branch leer – „git checkout -B HEAD“ ginge nicht.
 git_c=(git -c safe.directory="$CODE" -C "$CODE")
 if "${git_c[@]}" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-  printf 'commit=%s\nbranch=%s\n' "$("${git_c[@]}" rev-parse HEAD)" "$("${git_c[@]}" rev-parse --abbrev-ref HEAD)" > "$dir/release"
+  branch=$("${git_c[@]}" rev-parse --abbrev-ref HEAD)
+  if [ "$branch" = HEAD ]; then branch=""; fi
+  printf 'commit=%s\nbranch=%s\n' "$("${git_c[@]}" rev-parse HEAD)" "$branch" > "$dir/release"
 fi
 
 ln -sfn "$dir" "$DEST/latest"
