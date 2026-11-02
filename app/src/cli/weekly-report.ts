@@ -1,14 +1,13 @@
 // Wochenbericht als Befehl (cron/weekly_report.php). Eigener Server: montags um 8:00 über den systemd-Timer
 // onyoursite-weekly-report.
 //   node dist/cli/weekly-report.js        (Entwicklung: node --import tsx src/cli/weekly-report.ts)
-// Ausgabe und Rückgabewert wie in PHP: eine Zeile „Y-m-d H:i – Weekly reports sent: N, failed: M“ (dazu „, skipped: K“,
-// wenn Konten nichts zu berichten hatten) und 0. Ist die Datenbank nicht erreichbar, steht wie bei PHP (db.php) die
-// Hinweisseite in der Ausgabe – auch dann mit 0. Jeder andere Fehler endet wie ein PHP Fatal error mit 255.
+// Ausgabe: eine Zeile „Y-m-d H:i – Weekly reports sent: N, failed: M“ (dazu „, skipped: K“, wenn Konten nichts zu
+// berichten hatten) und 0. Ist die Datenbank nicht erreichbar: „The database can’t be reached: …“ und 1, damit der
+// systemd-Timer den Fehler zeigt. Jeder andere Fehler: Meldung mit Stack und 255.
 import { ConfigMissingError, loadConfig } from '../config.js';
 import { DbUnavailableError, closePool, timeZone, value } from '../db.js';
 import { ensureSchemaOnce } from '../schema.js';
 import { date } from '../php.js';
-import { DB_FAILED_TEXT, DB_FAILED_TITLE, setupErrorPage } from '../web/setupError.js';
 import { runWeeklyReports } from '../app/report.js';
 
 // Ausgabe des Befehls: Text auf stdout (erst weiter, wenn er geschrieben ist – stdout an eine Datei oder Pipe ist
@@ -36,15 +35,14 @@ export async function weeklyReportCli(io: CliOutput = stdio): Promise<number> {
   }
   process.env.TZ = timeZone();
   try {
-    // lib/bootstrap.php: Verbindung (db.php) und Schema – schlägt die Verbindung fehl, die Hinweisseite
+    // Verbindung und Schema – ist die Datenbank nicht erreichbar, eine klare Meldung und 1 (systemd zeigt den Fehler)
     try {
       await value('SELECT 1');
       await ensureSchemaOnce();
     } catch (err) {
       if (!(err instanceof DbUnavailableError)) throw err;
-      io.err('DB connection failed: ' + err.message);
-      await io.out(setupErrorPage(DB_FAILED_TITLE, DB_FAILED_TEXT));
-      return 0;
+      io.err('The database can’t be reached: ' + (err.message.split('\n').find((l) => l.trim() !== '') ?? 'unknown error'));
+      return 1;
     }
     const result = await runWeeklyReports();
     await io.out(date('Y-m-d H:i') + ' – Weekly reports sent: ' + result.sent + ', failed: ' + result.failed

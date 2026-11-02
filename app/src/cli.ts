@@ -16,7 +16,6 @@ import { SCHEMA_VERSION, ensureSchema, ensureSchemaOnce, schemaVersion } from '.
 import { decryptData, passwordHash } from './crypto.js';
 import { baseHost, cleanText, mainUrl, normalizeSlug, pageUrls, slugProblem, validateEmail } from './helpers.js';
 import { intval, phpTrim, strlen, strtolower } from './php.js';
-import { DB_FAILED_TEXT, DB_FAILED_TITLE, setupErrorPage } from './web/setupError.js';
 
 // Ausgabe und Umgebung – Tests geben eigene mit
 export interface CliIo {
@@ -219,30 +218,29 @@ async function checkCrypto(io: CliIo): Promise<number> {
 
 // ---------------------------------------------------------------- create-admin (server/create-admin.php)
 
-// lib/bootstrap.php in der Kommandozeile: Verbindung und Schema – ist die Datenbank nicht erreichbar, gibt PHP die
-// Hinweisseite aus und endet (exit; also mit 0). Gibt false zurück, wenn es so endet.
+// Verbindung und Schema vor einem Befehl – ist die Datenbank nicht erreichbar, eine klare Meldung und false (der Befehl
+// endet dann mit 1, damit Installer und systemd den Fehler sehen)
 async function bootstrap(io: CliIo): Promise<boolean> {
   try {
-    // db.php verbindet sich zuerst – auch wenn das Schema in diesem Prozess schon geprüft ist
+    // Erst verbinden – auch wenn das Schema in diesem Prozess schon geprüft ist
     await value('SELECT 1');
     await ensureSchemaOnce();
     return true;
   } catch (err) {
     if (!(err instanceof DbUnavailableError)) throw err;
-    io.err('DB connection failed: ' + err.message + '\n');
-    io.out(setupErrorPage(DB_FAILED_TITLE, DB_FAILED_TEXT));
+    io.err(`The database can’t be reached: ${firstLine(err)}\n`);
     return false;
   }
 }
 
-// Ein Fehler, den PHP nicht abfängt (z. B. PDOException): „PHP Fatal error“ und Rückgabe 255
+// Ein unerwarteter Fehler (z. B. eine fehlgeschlagene Abfrage): erste Zeile der Meldung und Rückgabe 1
 function fatal(io: CliIo, err: unknown): number {
-  io.err(`PHP Fatal error:  Uncaught ${firstLine(err)}\n`);
-  return 255;
+  io.err(`The command failed: ${firstLine(err)}\n`);
+  return 1;
 }
 
 async function createAdmin(io: CliIo): Promise<number> {
-  if (!(await bootstrap(io))) return 0;
+  if (!(await bootstrap(io))) return 1;
   const fail = (message: string): number => {
     io.err(message + '\n');
     return 1;
@@ -276,7 +274,7 @@ async function createAdmin(io: CliIo): Promise<number> {
 // ---------------------------------------------------------------- cert-alert – früher server/cert-alert.php
 
 async function certAlert(args: string[], io: CliIo): Promise<number> {
-  if (!(await bootstrap(io))) return 0;
+  if (!(await bootstrap(io))) return 1;
   try {
     const { phpJsonDecode, PhpArr, phpJsonTruthy, jsonField } = await import('./community/json.js');
     const { sendPlainEmail, smtpConfigPath } = await import('./mail.js');

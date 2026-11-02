@@ -300,12 +300,13 @@ test('create-admin answers like server/create-admin.php and writes the same rows
   }
 });
 
-test('create-admin prints the setup page and ends with 0 when the database is down', async () => {
+// Der Installer wertet den Rückgabewert aus: ohne Datenbank kein Erfolg (2.x endete hier mit 0 und einer HTML-Seite)
+test('create-admin ends with 1 and a clear message when the database is down', async () => {
   const db = BASE.db as ConfigData;
   const n = await node(['create-admin'], DB.node, { OYS_NAME: 'x' }, { db: { ...db, name: DB.node, pass: 'wrong-' + 'password' } });
-  assert.equal(n.code, 0);
-  assert.match(n.out, /^<!DOCTYPE html>.*Database connection failed\./);
-  assert.match(n.err, /^DB connection failed: /);
+  assert.equal(n.code, 1);
+  assert.equal(n.out, '');
+  assert.match(n.err, /^The database can’t be reached: \S/);
 });
 
 // ---------------------------------------------------------------- cert-alert = server/cert-alert.php

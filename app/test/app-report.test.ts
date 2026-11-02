@@ -426,27 +426,13 @@ test('the command prints the same line, sends the same mails and marks the same 
   }
 });
 
-test('without a database the command prints the setup page and ends with 0', async () => {
+// 2.x (PHP) gab hier die HTML-Hinweisseite aus und endete mit 0 – der Timer sah keinen Fehler. Seit 3.0: Meldung und 1.
+test('without a database the command says so and ends with 1', async () => {
   const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
   await closePool();
   const nodeRun = await runNodeCli(broken, null);
   await closePool();
-  assert.equal(nodeRun.code, 0);
-  assert.match(nodeRun.stdout, /^<!DOCTYPE html>.*Database connection failed\..*<code>config\.json<\/code>/s);
-  assert.match(nodeRun.stderr, /^DB connection failed: /);
-});
-
-test('without a database the command prints the setup page and ends with 0 like PHP', { skip: PHP_SKIP }, async () => {
-  const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
-  const root = phpTree(broken, null);
-  const phpRun = await runPhpCli(root, '/dev/null');
-  await closePool();
-  const nodeRun = await runNodeCli(broken, null);
-  await closePool();
-  assert.equal(phpRun.code, 0);
-  assert.equal(nodeRun.code, 0);
-  // Gleiche Seite – die Node-Version nennt config.json statt config.php (wie der Server)
-  assert.equal(nodeRun.stdout, phpRun.stdout.replace('<code>config.php</code>', '<code>config.json</code>'));
-  assert.match(phpRun.stdout, /^<!DOCTYPE html>.*Database connection failed\./s);
-  assert.match(nodeRun.stderr, /^DB connection failed: /);
+  assert.equal(nodeRun.code, 1);
+  assert.equal(nodeRun.stdout, '');
+  assert.match(nodeRun.stderr, /^The database can’t be reached: \S/);
 });
