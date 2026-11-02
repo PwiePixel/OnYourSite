@@ -12,7 +12,10 @@ import { strtotime, time } from '../src/php.js';
 import { ensureSchema, SCHEMA_VERSION } from '../src/schema.js';
 
 const BASE = loadConfig();
-const DBS = { phpFresh: 'oys_test_schema_pf', nodeFresh: 'oys_test_schema_nf', phpLegacy: 'oys_test_schema_pl', nodeLegacy: 'oys_test_schema_nl' };
+// Eigene Namen je Arbeitsordner (abgeleitet von der Datenbank der Einstellungen) – feste Namen kollidierten bei
+// gleichzeitigen Läufen
+const SOURCE = configString('db.name', 'oys_test');
+const DBS = { phpFresh: SOURCE + '_schema_pf', nodeFresh: SOURCE + '_schema_nf', phpLegacy: SOURCE + '_schema_pl', nodeLegacy: SOURCE + '_schema_nl' };
 let admin: Connection;
 let started = 0;
 

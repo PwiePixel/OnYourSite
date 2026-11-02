@@ -1,5 +1,6 @@
 // Kleine Nachbauten von PHP-Funktionen, deren Verhalten die Ausgabe der Seite bestimmt. JavaScript macht vieles
 // anders (Wahrheitswerte, trim, Groß-/Kleinschreibung, Datumsformate, Formular-Felder) – hier steht es einmal richtig.
+import { isUtf8 } from 'node:buffer';
 import { timeZone } from './db.js';
 
 // ---------------------------------------------------------------- Werte
@@ -25,17 +26,80 @@ export function phpStr(v: unknown): string {
   return String(v);
 }
 
-// Gleitkommazahl als Text wie PHP (precision = 14)
+// (string) $float wie PHP mit precision = 14 (zend_gcvt): aus den exakten Ziffern der Zahl gerechnet, nicht mit
+// toPrecision() – PHP schreibt schon ab 1e-5 mit Exponent (1.0E-5, toPrecision erst unter 1e-6) und rundet bei genau
+// der Hälfte an der 14. Stelle zur geraden Ziffer (toPrecision immer auf). -0 bleibt "-0", unendlich "INF"/"-INF".
+// Die einzige Fassung: community/json.ts, content/phpValues.ts und compat/core.js nutzen sie.
 export function phpFloatToString(f: number): string {
-  if (!Number.isFinite(f)) return f > 0 ? 'INF' : f < 0 ? '-INF' : 'NAN';
-  const s = f.toPrecision(14);
-  if (s.includes('e')) {
-    let [m, ex] = s.split('e');
-    m = m.includes('.') ? m.replace(/\.?0+$/, '') : m;
-    const n = parseInt(ex, 10);
-    return m + (m.includes('.') ? '' : '.0') + 'E' + (n < 0 ? '-' : '+') + Math.abs(n);
+  if (Number.isNaN(f)) return 'NAN';
+  if (!Number.isFinite(f)) return f > 0 ? 'INF' : '-INF';
+  if (f === 0) return Object.is(f, -0) ? '-0' : '0';
+  const exact = exactDigits(f);
+  // Ganze Zahlen von 1e14 bis unter 1e15 mit genau der Hälfte an der 15. Stelle rechnet zend_dtoa auf einem eigenen
+  // Weg, der die Nullen am Ende stehen lässt: 100000000000005 → 1.0000000000000E+14
+  const keepZeros = Number.isInteger(f) && Math.abs(f) >= 1e14 && Math.abs(f) < 1e15;
+  const r = roundDigits(exact.digits, exact.decpt, 14, keepZeros);
+  return (f < 0 ? '-' : '') + phpGcvt(r.digits, r.decpt, 14, 'E');
+}
+
+// Exakte Dezimalziffern einer Kommazahl (ohne Vorzeichen und ohne Nullen am Ende) und die Lage des Kommas wie decpt
+// in zend_dtoa (0.d1d2… × 10^decpt)
+function exactDigits(f: number): { digits: string; decpt: number } {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, Math.abs(f));
+  const bits = view.getBigUint64(0);
+  const expBits = Number((bits >> 52n) & 0x7ffn);
+  let mant = bits & ((1n << 52n) - 1n);
+  let exp: number;
+  if (expBits === 0) {
+    exp = -1074;
+  } else {
+    mant |= 1n << 52n;
+    exp = expBits - 1075;
   }
-  return s.includes('.') ? s.replace(/\.?0+$/, '') : s;
+  let digits: string;
+  let decpt: number;
+  if (exp >= 0) {
+    digits = (mant << BigInt(exp)).toString();
+    decpt = digits.length;
+  } else {
+    // mant / 2^-exp = mant * 5^-exp / 10^-exp
+    digits = (mant * 5n ** BigInt(-exp)).toString();
+    decpt = digits.length + exp;
+  }
+  return { digits: digits.replace(/0+$/, ''), decpt };
+}
+
+// Auf n gültige Stellen runden – bei genau der Hälfte zur geraden Ziffer (zend_dtoa, Modus 2)
+function roundDigits(digits: string, decpt: number, n: number, keepZerosOnTie = false): { digits: string; decpt: number } {
+  if (digits.length <= n) return { digits, decpt };
+  const head = digits.slice(0, n);
+  const rest = digits.slice(n);
+  const first = rest.charCodeAt(0) - 48;
+  // Ohne Nullen am Ende heißt "5" genau die Hälfte
+  const tie = rest === '5';
+  const up = first > 5 || (first === 5 && !tie) || (tie && (head.charCodeAt(n - 1) - 48) % 2 === 1);
+  if (!up) return { digits: tie && keepZerosOnTie ? head : head.replace(/0+$/, ''), decpt };
+  let carried = (BigInt(head) + 1n).toString();
+  let newDecpt = decpt;
+  if (carried.length > head.length) {
+    newDecpt++;
+    carried = carried.slice(0, n);
+  }
+  return { digits: carried.replace(/0+$/, ''), decpt: newDecpt };
+}
+
+// php_gcvt(): Ziffern (ohne Nullen am Ende) als feste Schreibweise oder mit Exponent (1.0E+25, 1.0E-5) – je nach Lage
+// des Kommas und der Zahl der Stellen. Auch für json_encode() (17 Stellen, 'e') in community/json.ts
+export function phpGcvt(digits: string, decpt: number, precision: number, expChar: string): string {
+  if (decpt < 0 ? decpt < -3 : decpt > precision) {
+    const e = decpt - 1;
+    return digits[0] + '.' + (digits.length > 1 ? digits.slice(1) : '0') + expChar + (e < 0 ? '-' : '+') + String(Math.abs(e));
+  }
+  if (decpt <= 0) return '0.' + '0'.repeat(-decpt) + digits;
+  const int = digits.length >= decpt ? digits.slice(0, decpt) : digits + '0'.repeat(decpt - digits.length);
+  const frac = digits.slice(decpt);
+  return frac === '' ? int : int + '.' + frac;
 }
 
 // (int) $v: Leerraum am Anfang, Vorzeichen, Ziffern; "1e3" → 1000, "12abc" → 12, Arrays → 0/1
@@ -85,26 +149,35 @@ export function phpLtrim(s: string, chars = TRIM): string {
   return s.slice(a);
 }
 
-// mb_* zählen Unicode-Zeichen (Codepoints), nicht UTF-16-Einheiten
-export const mbStrlen = (s: string): number => Array.from(s).length;
+// mb_* zählen Unicode-Zeichen (Codepoints), nicht UTF-16-Einheiten. Rohe Bytes (siehe phpText) zählen wie in PHP:
+// jede ungültige Folge ist ein Zeichen und wird in mb_substr() zu "?"
+export const mbStrlen = (s: string): number => mbChars(s).length;
 export function mbSubstr(s: string, start: number, len?: number): string {
-  const a = Array.from(s);
+  const a = mbChars(s);
   const st = start < 0 ? Math.max(0, a.length + start) : start;
   if (len === undefined || len === null) return a.slice(st).join('');
   const en = len < 0 ? a.length + len : st + len;
   return a.slice(st, Math.max(st, en)).join('');
 }
-// strlen(): Bytes
-export const strlen = (s: string): number => Buffer.byteLength(s, 'utf8');
+// strlen(): Bytes (rohe Bytes zählen einzeln)
+export const strlen = (s: string): number => (hasRawBytes(s) ? phpBytes(s).length : Buffer.byteLength(s, 'utf8'));
 
 // strtolower/strtoupper/ucfirst arbeiten in PHP 8.2+ nur auf ASCII
 export const strtolower = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 export const strtoupper = (s: string): string => s.replace(/[a-z]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 32));
 export const ucfirst = (s: string): string => (s === '' ? s : strtoupper(s[0]) + s.slice(1));
 
-// rawurlencode (RFC 3986) und urlencode (Leerzeichen als +)
-export const rawurlencode = (s: string): string =>
-  encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+// rawurlencode (RFC 3986) und urlencode (Leerzeichen als +). Mit rohen Bytes (phpText) oder einzelnen Surrogaten
+// würde encodeURIComponent() werfen – dann Byte für Byte wie PHP (%FF)
+export function rawurlencode(s: string): string {
+  if (!/[\uD800-\uDFFF]/.test(s)) return encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  let out = '';
+  for (const b of phpBytes(s)) {
+    const plain = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b === 0x2d || b === 0x2e || b === 0x5f || b === 0x7e;
+    out += plain ? String.fromCharCode(b) : '%' + b.toString(16).toUpperCase().padStart(2, '0');
+  }
+  return out;
+}
 // rawurldecode(): %XX → Byte, „+“ bleibt. Ungültige Folgen bleiben stehen; Bytes werden als UTF-8 gelesen.
 // Gearbeitet wird auf den UTF-8-Bytes (Zeichen außerhalb der BMP wie 😀 bestehen aus zwei JavaScript-Einheiten).
 const isHexByte = (b: number): boolean => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46) || (b >= 0x61 && b <= 0x66);
@@ -135,6 +208,164 @@ export function numberFormat(n: number, decimals = 0, dec = '.', thousands = ','
   const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, thousands);
   const sign = n < 0 && rounded !== 0 ? '-' : '';
   return sign + grouped + (decimals > 0 ? dec + frac : '');
+}
+
+// ---------------------------------------------------------------- Rohe Bytes (ungültiges UTF-8 in Formularen)
+
+// PHP-Texte sind Bytes: Formularwerte mit ungültigem UTF-8 behält PHP unverändert – strlen() zählt die rohen Bytes,
+// preg_* mit /u (oys_clean_text, oys_clean_url) liefert dann '' und password_hash() rechnet mit genau diesen Bytes.
+// Node las sie früher als U+FFFD. Jetzt wird jedes Byte, das nicht zu gültigem UTF-8 gehört, als eigenes Zeichen
+// U+DC80–U+DCFF gehalten: eine allein stehende Hälfte eines Surrogatpaars, die aus gültigem UTF-8 nie entsteht.
+// Verlustfrei (phpBytes() ergibt wieder genau die Bytes der Anfrage); gültige Texte bleiben genau wie bisher.
+const RAW_BYTE = /(?<![\uD800-\uDBFF])[\uDC80-\uDCFF]/;
+export const hasRawBytes = (s: string): boolean => RAW_BYTE.test(s);
+
+// Bytes → Text: gültiges UTF-8 wie Buffer.toString(), jedes andere Byte als U+DC80–U+DCFF
+export function phpText(b: Buffer): string {
+  if (isUtf8(b)) return b.toString('utf8');
+  let out = '';
+  let start = 0;
+  let i = 0;
+  while (i < b.length) {
+    const n = utf8SeqLength(b, i);
+    if (n > 0) {
+      i += n;
+      continue;
+    }
+    if (start < i) out += b.toString('utf8', start, i);
+    out += String.fromCharCode(0xdc00 + b[i]);
+    start = ++i;
+  }
+  return start < b.length ? out + b.toString('utf8', start) : out;
+}
+
+// Text → Bytes (Gegenstück zu phpText): U+DC80–U+DCFF wieder als einzelne Bytes, alles andere UTF-8
+export function phpBytes(s: string): Buffer {
+  if (!hasRawBytes(s)) return Buffer.from(s, 'utf8');
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0xdc80 || c > 0xdcff) continue;
+    const prev = i > 0 ? s.charCodeAt(i - 1) : 0;
+    if (prev >= 0xd800 && prev <= 0xdbff) continue;
+    if (start < i) parts.push(Buffer.from(s.slice(start, i), 'utf8'));
+    parts.push(Buffer.of(c - 0xdc00));
+    start = i + 1;
+  }
+  if (start < s.length) parts.push(Buffer.from(s.slice(start), 'utf8'));
+  return Buffer.concat(parts);
+}
+
+// Länge einer gültigen UTF-8-Folge ab Stelle i (Unicode, Tabelle 3-7), 0 = ungültig
+function utf8SeqLength(b: Buffer, i: number): number {
+  const c = b[i];
+  if (c < 0x80) return 1;
+  const tail = (k: number, lo = 0x80, hi = 0xbf): boolean => i + k < b.length && b[i + k] >= lo && b[i + k] <= hi;
+  if (c >= 0xc2 && c <= 0xdf) return tail(1) ? 2 : 0;
+  if (c === 0xe0) return tail(1, 0xa0) && tail(2) ? 3 : 0;
+  if (c === 0xed) return tail(1, 0x80, 0x9f) && tail(2) ? 3 : 0;
+  if (c >= 0xe1 && c <= 0xef) return tail(1) && tail(2) ? 3 : 0;
+  if (c === 0xf0) return tail(1, 0x90) && tail(2) && tail(3) ? 4 : 0;
+  if (c === 0xf4) return tail(1, 0x80, 0x8f) && tail(2) && tail(3) ? 4 : 0;
+  if (c >= 0xf1 && c <= 0xf3) return tail(1) && tail(2) && tail(3) ? 4 : 0;
+  return 0;
+}
+
+// Zeichen wie mbstring sie sieht: Codepoints; mit rohen Bytes ist jede ungültige Folge (der längste Anfang einer
+// gültigen Folge, sonst ein Byte – wie der UTF-8-Decoder von PHP 8.3) ein Zeichen "?"
+function mbChars(s: string): string[] {
+  if (!hasRawBytes(s)) return Array.from(s);
+  const b = phpBytes(s);
+  const out: string[] = [];
+  let i = 0;
+  while (i < b.length) {
+    const n = utf8SeqLength(b, i);
+    if (n > 0) {
+      out.push(b.toString('utf8', i, i + n));
+      i += n;
+    } else {
+      out.push('?');
+      i += maximalSubpart(b, i);
+    }
+  }
+  return out;
+}
+
+// Länge des ungültigen Stücks ab i: so viele Bytes, wie noch zu einer gültigen Folge passen könnten (mindestens 1)
+function maximalSubpart(b: Buffer, i: number): number {
+  const c = b[i];
+  const [lo, need] = c === 0xe0 ? [0xa0, 2] : c === 0xed ? [0x80, 2] : c >= 0xe1 && c <= 0xef ? [0x80, 2]
+    : c === 0xf0 ? [0x90, 3] : c >= 0xf1 && c <= 0xf3 ? [0x80, 3] : c === 0xf4 ? [0x80, 3] : c >= 0xc2 && c <= 0xdf ? [0x80, 1] : [0, 0];
+  const hi = c === 0xed ? 0x9f : c === 0xf4 ? 0x8f : 0xbf;
+  let n = 1;
+  for (let k = 1; k <= need && i + k < b.length; k++) {
+    const t = b[i + k];
+    if (t < (k === 1 ? lo : 0x80) || t > (k === 1 ? hi : 0xbf)) break;
+    n++;
+  }
+  return n;
+}
+
+// htmlspecialchars(…, ENT_SUBSTITUTE) und json_encode(…, JSON_INVALID_UTF8_SUBSTITUTE) lesen UTF-8 mit eigenen Regeln
+// (get_next_char() in ext/standard/html.c): jede ungültige Folge wird ein U+FFFD – ein kodiertes Surrogat (ED A0 80)
+// oder eine zu lange Form ist dabei ein Fehler für die ganze Folge
+export function phpUtf8Substitute(b: Buffer): string {
+  const lead = (c: number | undefined): boolean => c !== undefined && (c < 0x80 || (c >= 0xc2 && c <= 0xf4));
+  const trail = (c: number | undefined): boolean => c !== undefined && c >= 0x80 && c <= 0xbf;
+  let out = '';
+  let i = 0;
+  const fail = (n: number): void => {
+    out += '\uFFFD';
+    i += n;
+  };
+  while (i < b.length) {
+    const c = b[i];
+    const left = b.length - i;
+    if (c < 0x80) {
+      out += String.fromCharCode(c);
+      i++;
+    } else if (c < 0xc2) {
+      fail(1);
+    } else if (c < 0xe0) {
+      if (left < 2) fail(1);
+      else if (!trail(b[i + 1])) fail(lead(b[i + 1]) ? 1 : 2);
+      else {
+        out += String.fromCharCode(((c & 0x1f) << 6) | (b[i + 1] & 0x3f));
+        i += 2;
+      }
+    } else if (c < 0xf0) {
+      if (left < 3 || !trail(b[i + 1]) || !trail(b[i + 2])) {
+        if (left < 2 || lead(b[i + 1])) fail(1);
+        else if (left < 3 || lead(b[i + 2])) fail(2);
+        else fail(3);
+        continue;
+      }
+      const cp = ((c & 0x0f) << 12) | ((b[i + 1] & 0x3f) << 6) | (b[i + 2] & 0x3f);
+      if (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff)) fail(3);
+      else {
+        out += String.fromCharCode(cp);
+        i += 3;
+      }
+    } else if (c < 0xf5) {
+      if (left < 4 || !trail(b[i + 1]) || !trail(b[i + 2]) || !trail(b[i + 3])) {
+        if (left < 2 || lead(b[i + 1])) fail(1);
+        else if (left < 3 || lead(b[i + 2])) fail(2);
+        else if (left < 4 || lead(b[i + 3])) fail(3);
+        else fail(4);
+        continue;
+      }
+      const cp = ((c & 0x07) << 18) | ((b[i + 1] & 0x3f) << 12) | ((b[i + 2] & 0x3f) << 6) | (b[i + 3] & 0x3f);
+      if (cp < 0x10000 || cp > 0x10ffff) fail(4);
+      else {
+        out += String.fromCodePoint(cp);
+        i += 4;
+      }
+    } else {
+      fail(1);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- Formular- und Adress-Daten (parse_str)
@@ -171,8 +402,23 @@ export function parseStr(input: string, post = false): PhpArray {
   return out;
 }
 
-// urldecode(): + wird Leerzeichen, %XX ein Byte, ungültige %-Folgen bleiben stehen (auch neben gültigem UTF-8)
-const decodeForm = (s: string): string => rawurldecode(s.replace(/\+/g, ' '));
+// urldecode(): + wird Leerzeichen, %XX ein Byte, ungültige %-Folgen bleiben stehen (auch neben gültigem UTF-8).
+// Ergibt das kein gültiges UTF-8, bleiben die Bytes erhalten wie in PHP (phpText) – auch schon rohe Bytes im Text
+function decodeForm(s: string): string {
+  if (!s.includes('%')) return s.includes('+') ? s.replace(/\+/g, ' ') : s;
+  const src = phpBytes(s);
+  const out = Buffer.alloc(src.length);
+  let n = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] === 0x25 && i + 2 < src.length && isHexByte(src[i + 1]) && isHexByte(src[i + 2])) {
+      out[n++] = parseInt(src.toString('latin1', i + 1, i + 3), 16);
+      i += 2;
+    } else {
+      out[n++] = src[i] === 0x2b ? 0x20 : src[i];
+    }
+  }
+  return phpText(out.subarray(0, n));
+}
 
 // max_input_nesting_level (Vorgabe von PHP)
 const MAX_INPUT_NESTING = 64;

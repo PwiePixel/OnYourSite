@@ -10,6 +10,7 @@ import { pathProfile, publicRoutes, subdomain, trackClick } from './public/route
 import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
+import { dbReachable } from './db.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -52,8 +53,10 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   }
   // Vorhandene Dateien (bisher Apache)
   if (await serveStatic(ctx)) ctx.halt();
-  // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt)
+  // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt). Wie db.php bei jeder Anfrage: ohne
+  // Datenbank die 503-Seite, auch für Seiten, die sonst keine Abfrage bräuchten
   await ensureSchemaOnce();
+  await dbReachable();
   // Frühere PHP-Einstiege unter derselben Adresse
   if (ctx.path === '/api.php') return api(ctx);
   if (ctx.path === '/admin_impersonate.php') return adminImpersonate(ctx);

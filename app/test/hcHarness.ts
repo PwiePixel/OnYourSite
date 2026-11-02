@@ -13,6 +13,9 @@ import * as code from '../src/code/sites.js';
 
 export const BASE = loadConfig();
 export const started = time();
+// Name einer Test-Datenbank: abgeleitet von der Datenbank der Einstellungen (je Arbeitsordner eine eigene), damit
+// gleichzeitige Läufe in verschiedenen Arbeitsordnern sich nicht gegenseitig die Daten löschen
+export const testDbName = (suffix: string): string => String((BASE.db as ConfigData).name ?? 'oys_test') + '_' + suffix;
 export type Op = [string, ...unknown[]];
 
 // Verbindung ohne feste Datenbank (für CREATE DATABASE und Vergleiche)

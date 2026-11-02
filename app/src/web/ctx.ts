@@ -50,8 +50,18 @@ export class Ctx {
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];
-  // Antwort: Text, Bytes oder ein Datenstrom (große Dateien, ZIP)
-  body: string | Buffer | Readable = '';
+  private bodyValue: string | Buffer | Readable = '';
+
+  // Antwort: Text, Bytes oder ein Datenstrom (große Dateien, ZIP). Ein Datenstrom bekommt gleich einen Empfänger für
+  // Fehler: scheitert er, bevor Fastify ihn sendet (Datei inzwischen gelöscht, Lesefehler), beendete ein Fehler-Ereignis
+  // ohne Empfänger sonst den ganzen Server. Beim Senden sieht Fastify den Fehler trotzdem (500 bzw. Abbruch).
+  get body(): string | Buffer | Readable {
+    return this.bodyValue;
+  }
+  set body(value: string | Buffer | Readable) {
+    if (isReadable(value) && !value.listeners('error').includes(ignoreError)) value.on('error', ignoreError);
+    this.bodyValue = value;
+  }
 
   constructor(opts: { method: string; url: string; headers: IncomingHttpHeaders; peer: string }) {
     this.method = opts.method.toUpperCase();
@@ -168,6 +178,10 @@ export class Ctx {
   userAgent(): string {
     return String(this.headers['user-agent'] ?? '');
   }
+}
+
+function ignoreError(): void {
+  // nur damit das Fehler-Ereignis einen Empfänger hat (siehe Ctx.body)
 }
 
 function isReadable(v: unknown): v is Readable {

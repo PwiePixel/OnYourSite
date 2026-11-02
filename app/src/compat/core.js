@@ -3,6 +3,7 @@
 // ---------- PHP primitives ----------
 import crypto from 'node:crypto'; import net from 'node:net';
 import { PCRE_CYRILLIC_HAN, PCRE_LETTER } from './pcre14.js';
+import { phpFloatToString, hasRawBytes } from '../php.js';
 export const PCRE_WS = '\\t\\n\\v\\f\\r \\x85\\xA0\\u1680\\u180E\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000';
 // trim(): als Schleife – /^[…]+|[…]+$/g lief von jeder Stelle einer langen Leerraum-Folge im Text bis zu ihrem Ende
 // (quadratisch: 16 000 Leerzeichen 0,6 s, ein großes Formularfeld Minuten)
@@ -23,10 +24,8 @@ export function phpString(v) {
   if (v === null || v === undefined || v === false) return ''; if (v === true) return '1';
   if (typeof v === 'number') {
     if (Number.isInteger(v) && Math.abs(v) < 1e15) return Object.is(v, -0) ? '-0' : String(v);
-    let s = v.toPrecision(14);
-    if (s.includes('e')) { let [m, ex] = s.split('e'); m = m.includes('.') ? m.replace(/0+$/, '').replace(/\.$/, '.0') : m + '.0';
-      return m + 'E' + (ex[0] === '-' ? '-' : '+') + ex.replace(/^[+-]/, ''); }
-    return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+    // Kommazahlen exakt wie PHP (1.0E-5, Rundung zur geraden Ziffer, INF statt Infinity) – Fassung des Kerns
+    return phpFloatToString(v);
   }
   return Array.isArray(v) || typeof v === 'object' ? 'Array' : String(v);
 }
@@ -91,12 +90,16 @@ export function oysClientKey(remoteAddr, cfg, now = new Date()) {
 const isScalar = (v) => ['string', 'number', 'boolean'].includes(typeof v);
 export function oysCleanText(value, max = 255, multiline = false) {
   let v = isScalar(value) ? phpString(value) : '';
+  // Ungültiges UTF-8 (rohe Bytes aus dem Formular): preg_replace() mit /u liefert null, übrig bleibt ''
+  if (hasRawBytes(v)) return '';
   v = multiline ? v.replace(/\r\n/g, '\n').replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]+|[\u202A-\u202E\u2066-\u2069]+/g, '')
                 : v.replace(/[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]+/g, '');
   v = phpTrim(v); if (multiline) v = v.replace(/\n{3,}/g, '\n\n'); return mbSubstr(v, 0, max);
 }
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 export function oysCleanUrl(value, allowRelative = false) {
+  // Ungültiges UTF-8 (rohe Bytes): preg_replace() mit /u liefert null, daraus wird am Ende ''
+  if (isScalar(value) && hasRawBytes(phpString(value))) return '';
   let url = phpTrim(isScalar(value) ? phpString(value) : '').replace(new RegExp(`[${PCRE_WS}]+`, 'gu'), '');
   if (url === '') return '';
   if (allowRelative && /^\/[^/]/.test(url)) return mbSubstr(url, 0, 500);

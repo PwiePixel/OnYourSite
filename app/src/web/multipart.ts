@@ -3,9 +3,9 @@
 // max_input_vars, max_file_uploads, max_multipart_body_parts, upload_max_filesize und das Formularfeld MAX_FILE_SIZE.
 // Wichtig für $_FILES: Nach einem verworfenen Datei-Teil (Klammern im Namen kaputt, mehr als 20 Dateien) verwirft PHP
 // auch alle folgenden Dateien. Gearbeitet wird auf Bytes (latin1-Text: ein Zeichen = ein Byte), Namen und Werte
-// werden erst am Ende als UTF-8 gelesen – wie bisher bei Formularen. Jeder Schritt ist linear in der Länge des
-// Inhalts (das Formular liest der Server vor jeder Anmeldung).
-import { setPhpVar, strtolower, type PhpArray } from '../php.js';
+// werden erst am Ende als UTF-8 gelesen (Formularfelder mit ungültigem UTF-8 als rohe Bytes, siehe phpText). Jeder
+// Schritt ist linear in der Länge des Inhalts (das Formular liest der Server vor jeder Anmeldung).
+import { phpText, setPhpVar, strtolower, type PhpArray } from '../php.js';
 import type { UploadedFile } from './ctx.js';
 
 const FILLUNIT = 1024 * 5;
@@ -21,6 +21,9 @@ const cstr = (s: string): string => {
   return z < 0 ? s : s.slice(0, z);
 };
 const utf8 = (latin1: string): string => Buffer.from(latin1, 'latin1').toString('utf8');
+// Formularfelder: ungültiges UTF-8 bleibt wie in PHP als rohe Bytes erhalten (phpText; strlen, oys_clean_text und
+// password_hash hängen davon ab)
+const text = (latin1: string): string => phpText(Buffer.from(latin1, 'latin1'));
 
 // Grenze wie rfc1867_post_handler(): das erste "boundary" (sonst ohne Rücksicht auf Groß-/Kleinschreibung), ab dem
 // nächsten '=' der Wert in Anführungszeichen oder bis ',' bzw. ';'. Auch leer möglich. null = PHP liest gar nicht
@@ -475,7 +478,7 @@ export function phpMultipart(contentType: string, body: Buffer, uploadMax: numbe
     // Normales Formularfeld
     if (filename === null && param !== null) {
       const value = mbuff.readBody();
-      if (++count <= MAX_INPUT_VARS) register(post, param, utf8(value));
+      if (++count <= MAX_INPUT_VARS) setPhpVar(post, text(param), text(value));
       if (param.length === 13 && strtolower(param) === 'max_file_size') maxFileSize = strtoll(cstr(value));
       continue;
     }

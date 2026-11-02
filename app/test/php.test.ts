@@ -2,7 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { date, gmdate, strtotime, parseStr, intval, numberFormat, strtolower, phpTrim, mbSubstr, nl2br, rawurlencode, urlencode, phpStr } from '../src/php.js';
+import { date, gmdate, strtotime, parseStr, intval, numberFormat, strtolower, phpTrim, mbSubstr, nl2br, rawurlencode, urlencode, phpStr, phpFloatToString, phpBytes, type PhpValue } from '../src/php.js';
+import { cleanText } from '../src/helpers.js';
+import { ROOT_DIR } from '../src/config.js';
 
 const TZ = 'Europe/Berlin';
 function php(code: string, input: unknown): unknown {
@@ -43,6 +45,25 @@ test('parseStr() matches parse_str()', () => {
   assert.deepEqual(ours.map(norm), theirs.map(norm));
 });
 
+test('parseStr() matches parse_str() byte for byte: open brackets, broken %-escapes next to non-ASCII, random input', () => {
+  // Schlüssel und Werte als Hex (ungültiges UTF-8 bleibt als rohe Bytes erhalten), Reihenfolge der Schlüssel egal
+  const tree = (v: PhpValue): unknown => (typeof v === 'string' ? phpBytes(v).toString('hex')
+    : Object.entries(v).map(([k, x]) => [phpBytes(k).toString('hex'), tree(x)]).sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)));
+  const fixed = ['a[b[c=1', 'a[b[c]=1', 'a[b]c[d=1', 'a.b[c.d=1', 'a b[c d=1', 'a[=1', 'a[b[=1', 'a][b=1', 'x=ä%2', 'x=%ä', 'x=%%C3%A4', 'ä%=1', 'x=%C3%A4%',
+    'x=%E2%82', 'x=%FF', 'x=ä%E2%82ä', '%C3[ä=%ZZä', 'k%FF[%E2%82]=%ED%A0%80', 'x=%c3%A4%C3', 'a[%FF[b=1'];
+  let seed = 17;
+  const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const alpha = ['a', 'b', '[', ']', '.', ' ', '%', '2', 'E', 'C3', '%C3', '%A4', '%5B', '%5D', '%2E', '%20', 'ä', '€', '+', '=', '&', '%00', '%FF', '%E2%82', '0', '-', '_', '\t', '%09', '1'];
+  const inputs = [...fixed, ...Array.from({ length: 3000 }, () => Array.from({ length: 1 + rnd(14) }, () => alpha[rnd(alpha.length)]).join(''))];
+  const theirs = php(`function h($v) { if (!is_array($v)) return bin2hex($v); $o = []; foreach ($v as $k => $x) $o[] = [bin2hex((string) $k), h($x)]; usort($o, fn ($a, $b) => strcmp($a[0], $b[0])); return $o; }
+    return array_map(function ($s) { parse_str($s, $o); return h($o); }, $in);`, inputs) as unknown[];
+  const diffs = inputs.map((input, i) => ({ input, node: tree(parseStr(input)), php: theirs[i] })).filter((d) => JSON.stringify(d.node) !== JSON.stringify(d.php));
+  assert.deepEqual(diffs.slice(0, 5), []);
+  // Die offenen Klammern im Einzelnen (Namensregeln von php_register_variable_ex)
+  assert.deepEqual(parseStr('a[b[c=1'), { a_b_c: '1' });
+  assert.deepEqual(parseStr('a[b[c]=1'), { a: { 'b[c': '1' } });
+});
+
 test('casts and text helpers match PHP', () => {
   const ints = ['12abc', '  7', '1e3', '0x1A', '-5.9', '', 'abc', '+3'];
   assert.deepEqual(ints.map(intval), php('return array_map("intval", $in);', ints));
@@ -57,4 +78,40 @@ test('casts and text helpers match PHP', () => {
   assert.deepEqual(texts.map(urlencode), php('return array_map("urlencode", $in);', texts));
   const floats = [0.07, 0.1 + 0.2, 1.5, 100.0, 1e20, 1.23456789012345678];
   assert.deepEqual(floats.map(phpStr), php('return array_map(function ($f) { return (string) $f; }, $in);', floats));
+});
+
+test('(string) of floats matches PHP exactly: 1.0E-5, ties at the 14th digit, INF', () => {
+  let seed = 11;
+  const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  // Grenzfälle: Exponent ab 1e-5 (toPrecision erst unter 1e-6), genau die Hälfte an der 15. Stelle (PHP rundet zur
+  // geraden Ziffer), große ganze Zahlen als Kommazahl, kleinste und größte Werte
+  const vals: number[] = [1e-5, 1.5e-5, 9.9e-5, 1e-4, 1e-7, 3e-6, 0.00012345, 100000000000005, 100000000000015, 12345678901234.5, 12345678901233.5,
+    1000000000000.25, 70368744177664.5, 1e14, 1e15, 99999999999999.95, 0.1 + 0.2, 5e-324, 1.7976931348623157e308, 2 ** 53 + 2, 1 / 3, 2 / 3];
+  for (let i = 0; i < 3000; i++) {
+    vals.push(Number(String(rnd(1e8)) + '.' + String(rnd(1e8)).padStart(8, '0') + 'e' + (rnd(40) - 20)));
+    // Werte mit genau 15 Stellen und einer 5 am Ende (Gleichstand an der 14. Stelle)
+    vals.push((rnd(2e9) * 10000 + rnd(10000)) * 10 + 5);
+    vals.push((rnd(2e9) + 0.5) * 2 ** (rnd(30) - 10));
+  }
+  const all = vals.flatMap((v) => [v, -v]);
+  const ref = php('return array_map(function ($s) { return (string) (float) $s; }, $in);', all.map((v) => v.toPrecision(17))) as string[];
+  const mine = all.map((v) => phpFloatToString(Number(v.toPrecision(17))));
+  const diffs = mine.map((m, i) => [all[i], m, ref[i]]).filter(([, m, r]) => m !== r);
+  assert.deepEqual(diffs, []);
+  // phpStr nimmt für Kommazahlen dieselbe Fassung (ganze Zahlen unter 1e15 gelten als int)
+  assert.deepEqual([1e-5, 0.5, 1e15, 2.5e15, -2.5e-7, 100000000000005].map(phpStr), ['1.0E-5', '0.5', '1.0E+15', '2.5E+15', '-2.5E-7', '100000000000005']);
+  // Unendlich und NaN wie PHP, -0 bleibt "-0"
+  const special = ['1e400', '-1e400', '-0.0'];
+  assert.deepEqual(special.map((s) => phpFloatToString(Number(s))), php('return array_map(function ($s) { return (string) (float) $s; }, $in);', special));
+  assert.equal(phpFloatToString(NaN), php('return (string) NAN;', null));
+});
+
+test('cleanText() of a float uses the same text as PHP (INF, 1.0E-5)', () => {
+  // oys_clean_text($v) mit einer Kommazahl (z. B. aus json_decode): (string) $v wie PHP
+  const inputs = ['1e400', '-1e400', '1e-5', '0.30000000000000004', '1e15', '-0.0', '123456789.125'];
+  const ref = execFileSync('php', ['-r', `require '${ROOT_DIR}/lib/config.php'; require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php';`
+    + ' echo json_encode(array_map(function ($s) { return oys_clean_text((float) $s); }, json_decode(stream_get_contents(STDIN), true)));'], { input: JSON.stringify(inputs) }).toString();
+  assert.deepEqual(inputs.map((s) => cleanText(Number(s))), JSON.parse(ref));
+  assert.equal(cleanText(1e400), 'INF');
+  assert.equal(cleanText(-1e400), '-INF');
 });
