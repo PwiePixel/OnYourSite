@@ -13,7 +13,7 @@ import { Ctx } from '../src/web/ctx.js';
 import { adminUpdatesHandle } from '../src/updates/admin.js';
 import { adminUpdatesView } from '../src/updates/adminView.js';
 import { discordSettings } from '../src/updates/discord.js';
-import { updatesFeed, updatesPage, updateLink } from '../src/updates/pages.js';
+import { roadmapPage, updatesFeed, updatesPage, updateLink } from '../src/updates/pages.js';
 import { milestoneGet, milestones, taskGet, updateGet, updatePageOf, updatesCount, updatesList } from '../src/updates/updates.js';
 import { startDiscordStandIn, GOOD_TOKEN, type StandIn } from './fixtures/updates/discordStandIn.js';
 import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type TestEnv } from './fixtures/updates/harness.js';
@@ -30,6 +30,14 @@ const post = (action: unknown, fields: Fields = {}): Step => ({ post: { oys_acti
 const mock = (path: string): Step => ({ mock: path });
 const sql = (q: string): Step => ({ sql: q });
 const call = (fn: string, ...args: unknown[]): Step => ({ call: fn, args });
+
+// Discord-Einstellungen direkt speichern (auf beiden Seiten gleich, unverschlüsselt – beide lesen auch das). Die
+// Formulare dafür sind seit der Reparatur des Discord-Bereichs bewusst anders als in PHP (discord-admin.test.ts).
+const sqlString = (v: string): string => "'" + v.replace(/\\/g, '\\\\').replace(/'/g, "''") + "'";
+const discordSetup = (fields: Fields): Step => sql(`REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', ${sqlString(JSON.stringify({
+  mode: 'webhook', webhook_url: '', bot_token: '', channel_id: '', mention: '', username: '', avatar_url: '', invite_url: '', auto_post: true, ...fields,
+}))})`);
+const discordOff = (): Step => sql("DELETE FROM oys_meta WHERE meta_key = 'discord'");
 
 const TODAY = date('Y-m-d');
 const hook = (id: string, base = apiBase): string => `${base}/webhooks/${id}/AbCdEfGhIjKlMnOpQrStUvWxYz0123`;
@@ -300,51 +308,9 @@ test('reading updates, pages and permalinks like PHP', async () => {
   ], { fixture: bigFixture });
 });
 
-test('Discord settings: validation, storage and odd stored values like PHP', async () => {
-  await same([
-    post('discord_save', { mode: 'webhook', webhook_url: 'https://discord.com/channels/123456789012345678/123456789012345678' }),
-    call('oys_discord_settings'),
-    post('discord_save', { mode: 'webhook', webhook_url: ' ' + hook('123456') + '\n', username: 'OnYourSite Updates', avatar_url: 'https://x.y/logo.png', mention: '@everyone', invite_url: 'discord.gg/abc', auto_post: '1' }),
-    call('oys_discord_settings'),
-    post('discord_save', { mode: 'webhook', webhook_url: '', username: 'admin@test.de', mention: '', invite_url: 'http://insecure.example', avatar_url: 'http://x.y/a.png', auto_post: '' }),
-    call('oys_discord_settings'),
-    post('discord_save', { username: 'My Discord News' }),
-    post('discord_save', { username: 'CLYDE bot' }),
-    post('discord_save', { mention: '@someone' }),
-    post('discord_save', { mention: '<@&1301234567890123457>', username: '\u{1F41D} News \u{E4}' }),
-    call('oys_discord_settings'),
-    post('discord_save', { mention: ' 1301234567890123457\n' }),
-    call('oys_discord_settings'),
-    post('discord_save', { mention: 'HERE' }),
-    post('discord_save', { mode: 'bot', bot_token: 'short' }),
-    post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '12345' }),
-    post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' }),
-    call('oys_discord_settings'),
-    post('discord_save', { mode: 'bot', bot_token: '', channel_id: CHANNEL }),
-    call('oys_discord_settings'),
-    post('discord_save', { mode: 'webhook', webhook_url: ['x'] }),
-    post('discord_save', { mode: ['bot'], invite_url: 'HTTPS://Discord.gg/x', auto_post: '0' }),
-    call('oys_discord_settings'),
-    post('discord_save', { invite_url: 'javascript:alert(1)', avatar_url: 'HTTPS://cdn.example/a b.png' }),
-    call('oys_discord_settings'),
-    post('discord_disconnect'),
-    call('oys_discord_settings'),
-    sql("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', 'ENC:garbage')"),
-    call('oys_discord_settings'),
-    sql("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', '[1,2]')"),
-    call('oys_discord_settings'),
-    sql(`REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', '{"mode":"bot","extra":1,"bot_token":"${GOOD_TOKEN}","channel_id":"${CHANNEL}"}')`),
-    call('oys_discord_settings'),
-    post('discord_save', { mode: 'bot' }),
-    post('discord_test'),
-  ]);
-});
-
 test('Discord webhook: announce, sync and remove send the same requests as PHP', async () => {
   const { log } = await same([
-    post('discord_test'),
-    post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), username: 'OnYourSite Updates', avatar_url: 'https://x.y/logo.png', mention: '@everyone', invite_url: 'discord.gg/abc', auto_post: '1' }),
-    post('discord_test'),
+    discordSetup({ webhook_url: hook('123456'), username: 'OnYourSite Updates', avatar_url: 'https://x.y/logo.png', mention: 'everyone', invite_url: 'https://discord.gg/abc' }),
     post('update_save', { title: 'New thing', body: '**x** and [docs](/updates#roadmap)\n- one', version: 'v2.5', category: 'new', publish: '1', announce_field: '1', post_discord: '1', date: TODAY, date_default: TODAY }),
     post('update_save', { id: '9', title: 'New thing, edited', body: 'changed', version: '2.5.1', category: 'fixed', publish: '1', announce_field: '1', date: '2026-10-30', date_default: TODAY }),
     post('update_publish', { id: '9', state: '' }),
@@ -363,111 +329,14 @@ test('Discord webhook: announce, sync and remove send the same requests as PHP',
     post('update_delete', { id: '10' }),
     post('update_save', { title: 'L'.repeat(150), body: 'w\u{E4}rd '.repeat(900), version: 'v9', publish: '1', post_discord: '1', announce_field: '1' }),
     post('update_save', { id: '1', title: 'Launch', publish: '1', post_discord: '1', announce_field: '1' }),
-    post('discord_disconnect'),
+    discordOff(),
   ]);
   assert.ok(log.length >= 10, 'the flow talked to Discord');
 });
 
-test('Discord webhook: deleted posts, other webhooks and failures like PHP', async () => {
-  await same([
-    post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), mention: '1301234567890123457', auto_post: '1' }),
-    post('update_save', { id: '4', title: 'On Discord', publish: '1' }),
-    post('update_discord', { id: '4' }),
-    post('update_save', { id: '8', title: 'Bad message id', publish: '1' }),
-    post('update_discord', { id: '1' }),
-    mock('/__forget'),
-    post('update_save', { id: '1', title: 'Launch again', publish: '1' }),
-    post('update_discord', { id: '1' }),
-    post('discord_save', { mode: 'webhook', webhook_url: hook('654321'), auto_post: '1' }),
-    post('update_save', { id: '1', title: 'Launch three', publish: '1' }),
-    post('update_discord', { id: '1' }),
-    mock('/__fail=500'),
-    post('update_save', { id: '1', title: 'Launch four', publish: '1' }),
-    mock('/__fail=503'),
-    post('update_delete', { id: '1' }),
-    mock('/__fail=403'),
-    post('update_publish', { id: '1', state: '' }),
-    post('update_publish', { id: '1', state: '1' }),
-    mock('/__fail=429'),
-    post('update_discord', { id: '2' }),
-    mock('/__fail=403'),
-    post('update_delete', { id: '1' }),
-    mock('/__fail=401'),
-    post('update_discord', { id: '2' }),
-    mock('/__fail=404'),
-    post('update_discord', { id: '6' }),
-    mock('/__fail=418'),
-    post('discord_test'),
-    post('discord_save', { mode: 'webhook', webhook_url: hook('4041234') }),
-    post('update_discord', { id: '6' }),
-    sql("UPDATE updates SET discord_message_id = '1300000000000000077', discord_target = 'webhook:4041234' WHERE id = 6"),
-    post('update_save', { id: '6', title: 'Tie', publish: '1' }),
-    sql("UPDATE updates SET discord_message_id = '1300000000000000078', discord_target = 'webhook:4041234' WHERE id = 6"),
-    post('update_delete', { id: '6' }),
-    post('discord_save', { mode: 'webhook', webhook_url: hook('4011234') }),
-    post('update_discord', { id: '2' }),
-    post('discord_test'),
-    post('discord_save', { mode: 'webhook', webhook_url: hook('4291234') }),
-    post('update_discord', { id: '2' }),
-    sql("UPDATE updates SET discord_message_id = '1300000000000000079', discord_target = 'webhook:4291234' WHERE id = 2"),
-    post('update_delete', { id: '2' }),
-    post('discord_disconnect'),
-    post('update_save', { id: '7', title: 'Bot posted', publish: '1' }),
-    post('update_publish', { id: '7', state: '' }),
-    post('update_delete', { id: '7' }),
-  ]);
-});
-
-test('Discord bot: announce, sync, remove and its errors like PHP', async () => {
-  await same([
-    post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL, mention: '<@&1301234567890123457>', username: 'not used for bots', avatar_url: 'https://x.y/a.png', auto_post: '1' }),
-    post('update_save', { title: 'Bot news', body: 'Hello **bot**', publish: '1', announce_field: '1', post_discord: '1' }),
-    post('update_save', { id: '9', title: 'Bot news, edited', publish: '1' }),
-    post('update_save', { id: '7', title: 'Bot posted', publish: '1' }),
-    post('update_publish', { id: '9', state: '' }),
-    post('update_publish', { id: '9', state: '1' }),
-    post('discord_test'),
-    post('update_discord_remove', { id: '9' }),
-    post('discord_save', { mode: 'bot', bot_token: '', channel_id: '4031234567890123456' }),
-    post('update_discord', { id: '9' }),
-    post('update_save', { id: '9', title: 'Other channel', publish: '1' }),
-    post('discord_save', { mode: 'bot', bot_token: 'x'.repeat(72), channel_id: CHANNEL }),
-    post('update_discord', { id: '2' }),
-    post('discord_test'),
-    post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' }),
-    post('update_save', { title: 'Not ready', publish: '1', announce_field: '1', post_discord: '1' }),
-    post('update_publish', { id: '6', state: '1' }),
-    post('discord_test'),
-  ]);
-});
-
-test('Discord: a stored message ID with a line break is never sent, like curl in PHP', async () => {
-  // /^\d{5,25}$/ lässt in PHP ein \n am Ende durch; curl lehnt die Adresse dann ab – nichts wird geändert oder gelöscht
-  await same([
-    post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1' }),
-    sql("UPDATE updates SET discord_message_id = '1300000000000000050\\n' WHERE id = 4"),
-    post('update_save', { id: '4', title: 'On Discord, edited', publish: '1' }),
-    post('update_discord', { id: '4' }),
-    post('update_publish', { id: '4', state: '' }),
-    post('update_discord_remove', { id: '4' }),
-    post('update_delete', { id: '4' }),
-  ]);
-});
-
-test('Discord unreachable: the same message (curl wording) as PHP', async () => {
-  const closed = `http://127.0.0.1:${await freePort()}/api`;
-  await same([
-    post('discord_save', { mode: 'webhook', webhook_url: hook('123456', closed), auto_post: '1' }),
-    post('discord_test'),
-    post('update_discord', { id: '1' }),
-    post('update_save', { id: '4', title: 'On Discord', publish: '1' }),
-    post('update_delete', { id: '4' }),
-  ], { base: closed });
-});
-
 // Zufällige Folgen von Admin-Aktionen mit Grenzwerten in allen Feldern (leer, Leerraum, Zahlen als Text, Arrays,
-// Unicode, Daten, feindliche Adressen, Discord-Einstellungen, erzwungene Fehler bei Discord) – Ergebnis, Tabellen und
-// Aufrufe bei Discord wie in PHP
+// Unicode, Daten, feindliche Adressen) mit einem Webhook – Ergebnis, Tabellen und Aufrufe bei Discord wie in PHP.
+// Discord-Formulare und Fehler von Discord sind seit der Reparatur bewusst anders (discord-admin.test.ts).
 test('random admin action sequences behave like PHP', async () => {
   const rnd = random(20261102);
   const pick = <T>(list: readonly T[]): T => list[rnd(list.length)];
@@ -483,9 +352,8 @@ test('random admin action sequences behave like PHP', async () => {
   };
   const step = (): Step => {
     const action = pick(['update_save', 'update_save', 'update_save', 'update_publish', 'update_discord', 'update_discord_remove', 'update_delete', 'milestone_save',
-      'milestone_save', 'milestone_status', 'milestone_move', 'milestone_delete', 'task_add', 'task_toggle', 'task_delete', 'discord_save', 'discord_save', 'discord_test',
-      'discord_disconnect', 'mock', 'nope'] as const);
-    if (action === 'mock') return mock(pick(['/__fail=500', '/__fail=429', '/__fail=404', '/__fail=403', '/__forget']));
+      'milestone_save', 'milestone_status', 'milestone_move', 'milestone_delete', 'task_add', 'task_toggle', 'task_delete', 'mock', 'nope'] as const);
+    if (action === 'mock') return mock('/__forget');
     const f: Fields = {};
     maybe(f, 'id', ids);
     if (action === 'update_save') {
@@ -514,21 +382,11 @@ test('random admin action sequences behave like PHP', async () => {
       maybe(f, 'dir', ['up', 'down', 'UP', '', ['up']]);
     } else if (action === 'task_add') {
       maybe(f, 'title', values);
-    } else if (action === 'discord_save') {
-      maybe(f, 'mode', ['webhook', 'bot', 'BOT', '', ['bot']]);
-      maybe(f, 'webhook_url', ['', ' ', hook('123456'), hook('654321') + '\n', hook('4041234'), 'https://discord.com/api/webhooks/12/short', ['x']]);
-      maybe(f, 'bot_token', ['', GOOD_TOKEN, 'x'.repeat(72), 'short']);
-      maybe(f, 'channel_id', ['', CHANNEL, '4031234567890123456', '123', ' ' + CHANNEL + ' ']);
-      maybe(f, 'mention', ['', 'everyone', '@here', 'HERE', '<@&1301234567890123457>', ' 1301234567890123457\n', 'someone']);
-      maybe(f, 'username', ['', 'News', 'My Discord', 'clyde', '\u{1F41D} \u{E4}']);
-      maybe(f, 'avatar_url', ['', 'https://x.y/a.png', 'http://x.y/a.png', 'HTTPS://x.y/a b.png', 'javascript:x']);
-      maybe(f, 'invite_url', ['', 'https://discord.gg/x', 'discord.gg/abc', 'http://x.y', 'javascript:x']);
-      maybe(f, 'auto_post', ['1', '', '0']);
     }
     return post(action, f);
   };
   for (let run = 0; run < 4; run++) {
-    const steps = [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1' }), ...Array.from({ length: 45 }, step)];
+    const steps = [discordSetup({ webhook_url: hook('123456') }), ...Array.from({ length: 45 }, step)];
     await same(steps);
   }
 });
@@ -541,19 +399,27 @@ async function sessionCtx(url: string, csrf: string): Promise<Ctx> {
   return new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080', cookie: 'PHPSESSID=' + id }, peer: '127.0.0.1' });
 }
 
-test('admin view: the HTML of admin_updates.php for every state', async () => {
+// Updates und Roadmap wie admin_updates.php; der Discord-Reiter ist neu (discord-admin.test.ts)
+const DISCORD_TAB = '<!-- ===================== Discord ===================== -->';
+function beforeDiscordTab(html: string): string {
+  assert.ok(html.includes(DISCORD_TAB), 'the Discord tab follows');
+  // „View roadmap“ zeigt jetzt auf die eigene Seite
+  return html.slice(0, html.indexOf(DISCORD_TAB)).replace('<a href="/updates#roadmap" target="_blank"', '<a href="/roadmap" target="_blank"');
+}
+
+test('admin view: the HTML of admin_updates.php for every state (Updates and Roadmap)', async () => {
   const csrf = 'c'.repeat(64);
   const variants: Array<{ get: Record<string, string>; setup: Step[] }> = [
     { get: {}, setup: [] },
     { get: { edit_update: '1' }, setup: [] },
-    { get: { edit_update: '3' }, setup: [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '' })] },
-    { get: { edit_update: '4' }, setup: [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1', username: 'A "quoted" <name>', mention: 'here', invite_url: 'https://discord.gg/x' })] },
-    { get: { edit_update: '7', edit_milestone: '1' }, setup: [post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL })] },
-    { get: { edit_update: '999', new_update_for: '3' }, setup: [post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' })] },
-    { get: { new_update_for: '1' }, setup: [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1' })] },
+    { get: { edit_update: '3' }, setup: [discordSetup({ webhook_url: hook('123456'), auto_post: false })] },
+    { get: { edit_update: '4' }, setup: [discordSetup({ webhook_url: hook('123456'), username: 'A "quoted" <name>', mention: 'here', invite_url: 'https://discord.gg/x' })] },
+    { get: { edit_update: '7', edit_milestone: '1' }, setup: [discordSetup({ mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL })] },
+    { get: { edit_update: '999', new_update_for: '3' }, setup: [discordSetup({ mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' })] },
+    { get: { new_update_for: '1' }, setup: [discordSetup({ webhook_url: hook('123456') })] },
     { get: { edit_milestone: '4', edit_update: 'abc' }, setup: [] },
     { get: { edit_milestone: '999', new_update_for: '' }, setup: [sql('DELETE FROM updates'), sql('DELETE FROM milestones')] },
-    { get: { edit_update: '5' }, setup: [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1' }), sql("UPDATE updates SET version = 'V3.1', title = '<b>x</b> & ''y''' WHERE id = 5")] },
+    { get: { edit_update: '5' }, setup: [discordSetup({ webhook_url: hook('123456') }), sql("UPDATE updates SET version = 'V3.1', title = '<b>x</b> & ''y''' WHERE id = 5")] },
   ];
   for (const v of variants) {
     const html: Record<string, string> = {};
@@ -570,15 +436,41 @@ test('admin view: the HTML of admin_updates.php for every state', async () => {
         await ctx.session?.close();
       }
     }
-    assert.equal(html.node, html.php, JSON.stringify(v.get));
+    assert.equal(beforeDiscordTab(html.node), beforeDiscordTab(html.php), JSON.stringify(v.get));
   }
 });
 
-test('public pages: /updates, the feed and permalinks render the same HTML as PHP', async () => {
+// /updates war früher Changelog und Roadmap auf einer Seite; jetzt hat die Roadmap ihre eigene Seite (/roadmap,
+// updates-pages.test.ts). Gleich geblieben und weiter wie PHP: der Changelog (ohne die Meilenstein-Chips, die jetzt
+// immer auf /roadmap zeigen) und die drei Spalten der Roadmap.
+const CHIP = new RegExp(String.raw`<(a href="(?:/roadmap)?#milestone-\d+"|span) class="inline-flex items-center gap-1 text-xs text-gray-400 (?:hover:text-white )?border border-bordercolor rounded-full px-2\.5 py-1\.5"><i class='bx bx-flag'></i> [^<]*</(?:a|span)>\n {32}`, 'g');
+function changelogPart(html: string): string {
+  const start = html.indexOf('<section id="changelog"');
+  assert.ok(start >= 0, 'changelog section');
+  return html.slice(start, html.indexOf('</section>', start)).replace(CHIP, '');
+}
+// Titel der Meilenstein-Chips im Changelog (PHP: Link oder Text; Node: immer ein Link auf /roadmap)
+function chipTitles(html: string): string[] {
+  const start = html.indexOf('<section id="changelog"');
+  const part = html.slice(start, html.indexOf('</section>', start));
+  return [...part.matchAll(CHIP)].map((m) => (/<\/i> ([^<]*)</.exec(m[0]) as RegExpExecArray)[1]);
+}
+function roadmapColumnsPart(html: string): string | null {
+  const start = html.indexOf('<section id="roadmap"');
+  if (start < 0) return null;
+  return html.slice(start, html.indexOf('</section>', start));
+}
+async function nodeRoadmap(user: unknown): Promise<string> {
+  const ctx = new Ctx({ method: 'GET', url: '/roadmap', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+  await roadmapPage(ctx, user as never);
+  return String(ctx.body);
+}
+
+test('public pages: the changelog, the roadmap columns, the feed and permalinks render the same HTML as PHP', async () => {
   const user = { id: 5, email: 'mia@test.de', full_name: 'Mia', is_admin: 0 };
   const cases: Array<{ url: string; user: unknown; fixture: () => Record<string, Array<Record<string, unknown>>>; setup?: Step[] }> = [
     { url: '/updates', user: null, fixture },
-    { url: '/updates', user, fixture, setup: [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), invite_url: 'https://discord.gg/abc?x=1&y=2' })] },
+    { url: '/updates', user, fixture, setup: [discordSetup({ webhook_url: hook('123456'), invite_url: 'https://discord.gg/abc?x=1&y=2' })] },
     { url: '/updates?page=2', user: null, fixture: bigFixture },
     { url: '/updates?page=3', user, fixture: bigFixture },
     { url: '/updates?page=99', user: null, fixture: bigFixture },
@@ -605,9 +497,12 @@ test('public pages: /updates, the feed and permalinks render the same HTML as PH
         const ctx = new Ctx({ method: 'GET', url: c.url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
         await updatesPage(ctx, c.user as never);
         html.node = String(ctx.body);
+        html.roadmap = await nodeRoadmap(c.user);
       }
     }
-    assert.equal(html.node, html.php, c.url);
+    assert.equal(changelogPart(html.node), changelogPart(html.php), c.url);
+    const columns = roadmapColumnsPart(html.php);
+    if (columns !== null) assert.equal(roadmapColumnsPart(html.roadmap), columns, c.url + ' (roadmap columns)');
   }
   for (const f of [fixture, bigFixture, () => ({ updates: [], milestones: [], milestone_tasks: [] })]) {
     const xml: Record<string, string> = {};
@@ -677,7 +572,7 @@ function randomData(rnd: (n: number) => number, discord = false): Record<string,
   return { milestones, milestone_tasks: tasks, updates };
 }
 
-test('random data: every page of /updates and the feed render the same HTML as PHP', async () => {
+test('random data: the changelog, the roadmap columns and the feed render the same HTML as PHP', async () => {
   const rnd = random(77001);
   for (let round = 0; round < 6; round++) {
     const rows = randomData(rnd);
@@ -698,25 +593,35 @@ test('random data: every page of /updates and the feed render the same HTML as P
           const ctx = new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
           await (feed ? updatesFeed(ctx) : updatesPage(ctx, null));
           out.node = String(ctx.body);
+          if (!feed) out.roadmap = await nodeRoadmap(null);
         }
       }
-      // Ohne Updates steht im Feed die aktuelle Zeit – sie darf sich um eine Sekunde unterscheiden
-      assert.equal(normalizeNow(out.node, time() - 5, time()), normalizeNow(out.php, time() - 5, time()), `round ${round} ${url}`);
+      if (url.endsWith('.xml')) {
+        // Ohne Updates steht im Feed die aktuelle Zeit – sie darf sich um eine Sekunde unterscheiden
+        assert.equal(normalizeNow(out.node, time() - 5, time()), normalizeNow(out.php, time() - 5, time()), `round ${round} ${url}`);
+        continue;
+      }
+      assert.equal(changelogPart(out.node), changelogPart(out.php), `round ${round} ${url}`);
+      // Jeder Chip, den PHP zeigte (als Link oder Text), ist jetzt ein Link auf /roadmap
+      assert.deepEqual(chipTitles(out.node), chipTitles(out.php), `round ${round} ${url} (chips)`);
+      assert.ok(!/<span class="inline-flex[^"]*"><i class='bx bx-flag'>/.test(out.node));
+      const columns = roadmapColumnsPart(out.php);
+      if (columns !== null) assert.equal(roadmapColumnsPart(out.roadmap), columns, `round ${round} (roadmap columns)`);
     }
   }
 });
 
 // Die Admin-Ansicht auf zufälligen Daten: Formulare zum Bearbeiten, Vorbefüllen aus einem Meilenstein, alle Spalten und
 // alle Discord-Zustände (nicht verbunden, Webhook, Bot, Bot ohne Kanal) – wie admin_updates.php
-test('random data: the admin view renders the same HTML as PHP', async () => {
+test('random data: the admin view renders the same HTML as PHP (Updates and Roadmap)', async () => {
   const rnd = random(99017);
   const csrf = 'd'.repeat(64);
   const discordSetups: Step[][] = [
     [],
-    [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1', username: 'News <x>', mention: 'everyone', invite_url: 'https://discord.gg/x' })],
-    [post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '' })],
-    [post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL, auto_post: '1' })],
-    [post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' })],
+    [discordSetup({ webhook_url: hook('123456'), username: 'News <x>', mention: 'everyone', invite_url: 'https://discord.gg/x' })],
+    [discordSetup({ webhook_url: hook('123456'), auto_post: false })],
+    [discordSetup({ mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL })],
+    [discordSetup({ mode: 'bot', bot_token: GOOD_TOKEN, channel_id: '' })],
   ];
   for (let round = 0; round < 10; round++) {
     const rows = randomData(rnd, true);
@@ -740,6 +645,6 @@ test('random data: the admin view renders the same HTML as PHP', async () => {
         await ctx.session?.close();
       }
     }
-    assert.equal(html.node, html.php, `round ${round} ${JSON.stringify(get)}`);
+    assert.equal(beforeDiscordTab(html.node), beforeDiscordTab(html.php), `round ${round} ${JSON.stringify(get)}`);
   }
 });

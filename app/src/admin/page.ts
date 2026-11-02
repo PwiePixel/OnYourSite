@@ -74,7 +74,7 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
 
   // Updates, Roadmap und Discord – nur weiterleiten, wenn die Aktion dorthin gehört
   if (isPost && post.oys_action !== undefined) {
-    const result = await adminUpdatesHandle(post);
+    const result = await adminUpdatesHandle(post, ctx);
     if (result) {
       flashResult(session, result);
       ctx.redirect('/admin' + (result.query ?? '') + '#' + result.tab);

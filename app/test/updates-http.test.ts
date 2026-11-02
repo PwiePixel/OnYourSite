@@ -114,6 +114,13 @@ function php(method: string, url: string, payload: unknown, headers: string[]): 
 
 // Millisekunden in den Texten von curl
 const ms = (v: unknown): unknown => JSON.parse(JSON.stringify(v).replace(/after \d+ (ms|milliseconds)/g, 'after N $1'));
+// Gewollter Unterschied: bricht eine Antwort ab, zählt sie in Node als „keine Antwort“ (Status 0) – curl behält den
+// schon gelesenen Status (z. B. 200), und PHP hielt einen abgeschnittenen Erfolg für einen Erfolg ohne Nachrichten-ID
+const brokenIsNoAnswer = (v: unknown): unknown => {
+  const list = Array.isArray(v) ? v : [v];
+  const out = list.map((r) => (r && typeof r === 'object' && (r as { error?: string }).error ? { ...(r as object), status: 0 } : r));
+  return Array.isArray(v) ? out : out[0];
+};
 
 // Rohe Anfrage: Anfragezeile, Kopfzeilen (sortiert, ohne Connection) und Inhalt
 function raw(text: string): { line: string; headers: string[]; body: string } {
@@ -156,7 +163,7 @@ test('Discord answers, broken replies and network errors give the same result as
     for (const [method, body] of [['POST', { a: 1 }], ['DELETE', null]] as const) {
       const theirs = await php(method, url, body, []);
       const ours = await discordRequest(method, url, body, []);
-      assert.deepEqual(ms(ours), ms(theirs), `${method} ${url}`);
+      assert.deepEqual(ms(ours), ms(brokenIsNoAnswer(theirs)), `${method} ${url}`);
     }
   }
 });
@@ -169,5 +176,5 @@ test('Discord timeouts: no answer, a stuck body and a stuck TLS handshake give t
     Promise.all([...urls.map((u) => php('POST', u, { a: 1 }, [])), php('DELETE', stuckTls, null, [])]),
     Promise.all([...urls.map((u) => discordRequest('POST', u, { a: 1 }, [])), discordRequest('DELETE', stuckTls, null, [])]),
   ]);
-  assert.deepEqual(ms(ours), ms(theirs));
+  assert.deepEqual(ms(ours), ms(brokenIsNoAnswer(theirs)));
 });

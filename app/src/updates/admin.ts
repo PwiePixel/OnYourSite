@@ -1,26 +1,48 @@
 // Admin-Aktionen für Updates, Roadmap und Discord (lib/updates.php: oys_admin_updates_handle). Die Formulare stehen in
 // adminView.ts; views/admin.php ruft das hier für jedes POST mit oys_action auf und leitet danach weiter.
+// Die Discord-Einstellungen (discord_*) behandelt app/src/discord/admin.ts.
+import type { Ctx } from '../web/ctx.js';
+import { configString } from '../config.js';
+import { LockBusyError, withNamedLock } from '../db.js';
 import { intval, phpRtrim, phpStr, phpTrim, phpTruthy } from '../php.js';
-import { baseHost, mainUrl } from '../helpers.js';
 import {
   MILESTONE_STATUSES, isMilestoneStatus, milestoneDelete, milestoneGet, milestoneMove, milestoneSave, milestoneSetStatus,
   taskAdd, taskDelete, taskGet, taskToggle, updateDelete, updateGet, updateSave, updateSetPublished, type Input,
 } from './updates.js';
 import {
-  discordAnnounceUpdate, discordConfigured, discordRemoveNote, discordRemoveUpdate, discordSaveSettings, discordSend, discordSettings,
-  discordStore, discordSyncUpdate, discordWithMention,
+  discordAnnounceUpdate, discordConfigured, discordRemoveNote, discordRemoveUpdate, discordSettings, discordSyncUpdate,
 } from './discord.js';
+import { discordAdminHandle, type AdminResult } from '../discord/admin.js';
 
 // ['tab', 'ok'|'error', 'query'?] – admin.php macht daraus die Meldung und leitet nach /admin{query}#{tab} weiter
-export interface AdminResult { tab: string; ok?: string; error?: string; query?: string }
+export type { AdminResult };
 
 const ok = (tab: string, text: string): AdminResult => ({ tab, ok: text });
 const fail = (tab: string, text: string, query?: string): AdminResult => (query === undefined ? { tab, error: text } : { tab, error: text, query });
 
+// Aktionen, die ein Update in Discord posten, ändern oder entfernen, laufen je Update nacheinander: ein zweiter Klick
+// während des Postens wartet nicht, sondern bekommt sofort Bescheid (kein doppelter Beitrag)
+const DISCORD_ACTIONS = new Set(['update_save', 'update_publish', 'update_discord', 'update_discord_remove', 'update_delete']);
+export const ALREADY_POSTING = 'Already posting to Discord – this takes a few seconds.';
+
 // oys_admin_updates_handle(): null, wenn die Aktion nicht hierher gehört (dann geht es in admin.php weiter)
-export async function adminUpdatesHandle(post: Input): Promise<AdminResult | null> {
+export async function adminUpdatesHandle(post: Input, ctx?: Ctx): Promise<AdminResult | null> {
   const action = phpStr(post.oys_action ?? '');
+  if (action.startsWith('discord_')) return discordAdminHandle(action, post, ctx);
   const id = intval(post.id ?? 0);
+  if (DISCORD_ACTIONS.has(action) && id > 0) {
+    try {
+      // Sperren gelten für den ganzen Datenbank-Server – darum mit dem Namen der Datenbank
+      return await withNamedLock(configString('db.name') + ':discord_update:' + id, 0, () => handle(action, id, post), 'fail');
+    } catch (err) {
+      if (err instanceof LockBusyError) return fail('updates', ALREADY_POSTING);
+      throw err;
+    }
+  }
+  return handle(action, id, post);
+}
+
+async function handle(action: string, id: number, post: Input): Promise<AdminResult | null> {
   const discord = await discordSettings();
   const ready = discordConfigured(discord);
 
@@ -147,30 +169,6 @@ export async function adminUpdatesHandle(post: Input): Promise<AdminResult | nul
       else await taskDelete(task);
       return ok('roadmap', action === 'task_toggle' ? 'Task updated.' : 'Task removed.');
     }
-
-    case 'discord_save': {
-      const err = await discordSaveSettings(post);
-      return err ? fail('discord', err) : ok('discord', 'Discord settings saved.');
-    }
-
-    case 'discord_test': {
-      if (!ready) return fail('discord', 'Please save a webhook link or bot first.');
-      const payload = discordWithMention({
-        embeds: [{
-          title: 'Discord is connected',
-          description: 'New updates from ' + baseHost() + ' will show up here.',
-          url: mainUrl('/updates'),
-          color: 0x6366f1,
-          footer: { text: 'OnYourSite Updates' },
-        }],
-      }, { ...discord, mention: '' });
-      const sent = await discordSend(discord, payload);
-      return sent.ok ? ok('discord', 'Test message sent – check your Discord channel.') : fail('discord', phpStr(sent.error));
-    }
-
-    case 'discord_disconnect':
-      await discordStore(null);
-      return ok('discord', 'Discord disconnected.');
   }
   return null;
 }

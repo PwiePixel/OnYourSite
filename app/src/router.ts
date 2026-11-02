@@ -29,6 +29,8 @@ export function isMainHost(host: string): boolean {
   return host === base || host === 'www.' + base;
 }
 
+// Eigene Seiten der Hauptdomain, deren Namen der Profil-Pfad sonst einer Profilseite gäbe
+const OWN_PAGES = new Set(['updates', 'roadmap']);
 const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap']);
 
 export async function dispatch(ctx: Ctx): Promise<void> {
@@ -73,6 +75,14 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   if (isMainHost(host)) {
     if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
+    // Die eigenen Seiten in jeder anderen Schreibweise (Schrägstrich am Ende, Groß-/Kleinschreibung): zur richtigen
+    // Adresse – sonst landete z. B. /updates/ oder /Updates bei einer Profilseite mit diesem Namen. Nur eine Stunde im
+    // Cache, damit sich eine spätere Änderung nicht festsetzt. Einen Kalender haben sie nicht.
+    if (m && OWN_PAGES.has(m[1])) {
+      if (m[2] !== undefined) return notFound(ctx);
+      ctx.header('Cache-Control', 'max-age=3600');
+      ctx.redirect('/' + m[1] + (ctx.queryString !== '' ? '?' + ctx.queryString : ''), 301);
+    }
     if (m) return pathProfile(ctx, m[1], m[2] ?? '');
     return notFound(ctx);
   }

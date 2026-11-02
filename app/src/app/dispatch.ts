@@ -10,7 +10,7 @@ import { login, logout, register } from './auth.js';
 import { dashboard } from './dashboard.js';
 import { editorApi } from './editorApi.js';
 import { adminPage } from '../admin/page.js';
-import { updateLink, updatesFeed, updatesPage } from '../updates/pages.js';
+import { roadmapPage, updateLink, updatesFeed, updatesPage } from '../updates/pages.js';
 import { notFound } from '../public/notFound.js';
 
 // Startseite und Updates setzen für Besucher kein Cookie
@@ -29,7 +29,7 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   if (path === '/') return landing(ctx, ctx.session ? await currentUser(ctx) : null);
 
   // Updates & Roadmap (öffentlich)
-  if (path === '/roadmap') ctx.redirect('/updates#roadmap', 301);
+  if (path === '/roadmap') return roadmapPage(ctx, ctx.session ? await currentUser(ctx) : null);
   if (path === '/updates') return updatesPage(ctx, ctx.session ? await currentUser(ctx) : null);
   if (path === '/updates/feed.xml') return updatesFeed(ctx);
   const m = /^\/updates\/(\d+)$/.exec(path);
