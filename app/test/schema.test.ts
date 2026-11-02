@@ -12,7 +12,9 @@ import { strtotime, time } from '../src/php.js';
 import { ensureSchema, SCHEMA_VERSION, V_SESSIONS } from '../src/schema.js';
 
 const BASE = loadConfig();
-const DBS = { phpFresh: 'oys_test_schema_pf', nodeFresh: 'oys_test_schema_nf', phpLegacy: 'oys_test_schema_pl', nodeLegacy: 'oys_test_schema_nl' };
+// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
+const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
+const DBS = { phpFresh: SOURCE + '_schema_pf', nodeFresh: SOURCE + '_schema_nf', phpLegacy: SOURCE + '_schema_pl', nodeLegacy: SOURCE + '_schema_nl' };
 let admin: Connection;
 let started = 0;
 

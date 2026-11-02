@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection } from 'mysql2/promise';
-import { ROOT_DIR } from '../src/config.js';
+import { ROOT_DIR, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { time } from '../src/php.js';
 import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX, CODE_TYPES, codePreviewToken, codePreviewValid, codeStarterFiles, codeValidPath,
@@ -12,9 +12,11 @@ import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
-import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
 
-const DB = { php: 'oys_test_hcu_code_php', node: 'oys_test_hcu_code_node' };
+// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
+const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
+const DB = { php: SOURCE + '_codephp', node: SOURCE + '_codenode' };
 let admin: Connection;
 
 // Reine Funktion mit JSON-Ein- und Ausgabe in PHP aufrufen

@@ -7,6 +7,10 @@ import { closePool, exec, one, q, value, withNamedLock, withConnection, transact
 
 const BASE = loadConfig();
 const withDb = (patch: Record<string, unknown>) => setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), ...patch } as ConfigData });
+// Sperren (GET_LOCK) gelten für den ganzen Server, nicht je Datenbank: eigene Namen je Arbeitskopie (abgeleitet vom Namen
+// aus der Konfiguration), damit gleichzeitige Läufe anderer Arbeitskopien dieselben Sperren nicht belegen
+const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
+const LOCK = SOURCE + '_lock';
 
 after(async () => {
   setConfigForTests(BASE);
@@ -76,16 +80,16 @@ test('named locks: a busy lock fails or runs as asked', async () => {
   const strict = process.env.OYS_DB_STRICT;
   delete process.env.OYS_DB_STRICT;
   try {
-    await withNamedLock('oys_test_lock', 1, async () => {
+    await withNamedLock(LOCK, 1, async () => {
       // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
-      await outsidePinned(() => assert.rejects(withNamedLock('oys_test_lock', 0, async () => 'never', 'fail'), LockBusyError));
-      inner = await outsidePinned(() => withNamedLock('oys_test_lock', 0, async () => 'ran anyway', 'run'));
+      await outsidePinned(() => assert.rejects(withNamedLock(LOCK, 0, async () => 'never', 'fail'), LockBusyError));
+      inner = await outsidePinned(() => withNamedLock(LOCK, 0, async () => 'ran anyway', 'run'));
     });
   } finally {
     if (strict !== undefined) process.env.OYS_DB_STRICT = strict;
   }
   assert.equal(inner, 'ran anyway');
-  assert.equal(await withNamedLock('oys_test_lock', 1, async () => 'free again', 'fail'), 'free again');
+  assert.equal(await withNamedLock(LOCK, 1, async () => 'free again', 'fail'), 'free again');
 });
 
 test('queries inside a locked section reuse its connection – no deadlock when the pool is full', async () => {
@@ -93,7 +97,7 @@ test('queries inside a locked section reuse its connection – no deadlock when 
   await closePool();
   try {
     // 6 Abschnitte gleichzeitig bei nur 2 Verbindungen; jeder fragt innen über die Pool-Funktionen ab
-    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`oys_test_dl_${i}`, 5, async () => {
+    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`${SOURCE}_dl_${i}`, 5, async () => {
       const own = await value('SELECT CONNECTION_ID()');
       const again = await q('SELECT CONNECTION_ID() AS id');
       assert.equal(again[0].id, own, 'inner query runs on the section\'s connection');
