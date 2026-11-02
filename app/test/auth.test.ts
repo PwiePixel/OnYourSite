@@ -100,7 +100,9 @@ test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () =>
       let node = withoutDialogs(fn());
       if (name === 'privacy.php') node = node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '');
       if (name === 'terms.php') node = node.replace(HONEYCOMBS_SECTION, '').replace('11. Modifications to Terms', '10. Modifications to Terms');
-      assert.equal(node, res[i], name);
+      // Seit 3.0 ohne „(PHP Sessions)“ – die Sitzung führt Node
+      const ref = name === 'privacy.php' ? res[i].replace('<strong>essential session cookies</strong> (PHP Sessions) which', '<strong>essential session cookies</strong> which') : res[i];
+      assert.equal(node, ref, name);
     });
     break;
   }

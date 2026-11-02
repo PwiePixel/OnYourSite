@@ -133,7 +133,7 @@ test('newsletter: failures count, an array as template name becomes "Array", tri
   calls = capture(false);
   ctx = await post({ send_newsletter: '1', template_file: { 0: 'welcome.json' }, audience: 'single', single_email: 'mia@test.de' });
   assert.equal(calls[0][1], 'Array');
-  assert.equal(ctx.session!.data.admin_error, 'Failed to send emails. Check your SMTP settings and PHPMailer installation.');
+  assert.equal(ctx.session!.data.admin_error, 'Failed to send emails. Check the mail server settings.');
   calls = capture(true);
   await assert.rejects(post({ send_newsletter: '1', template_file: 'x.json', audience: 'all', email_subject: { 0: 'x' } }), TypeError);
   await assert.rejects(post({ send_newsletter: '1', template_file: 'x.json', audience: 'all', single_email: { 0: 'x' } }), TypeError);

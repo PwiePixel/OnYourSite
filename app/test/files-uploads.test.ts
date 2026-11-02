@@ -222,7 +222,10 @@ test('uploads are accepted, rejected, named and converted like PHP', { skip: PHP
         mode = (statSync(stored).mode & 0o777).toString(8);
       }
       const node = { res: normName(res as Record<string, string>), img, colors, mode };
-      const ref = { res: normName(p.res), img: p.img, colors: p.colors, mode: p.mode };
+      // Seit 3.0 nennt die Meldung die Grenze statt der PHP-Einstellungen
+      const pres = p.res?.error === 'The file is too large for the server (raise upload_max_filesize and post_max_size in the PHP settings).'
+        ? { error: 'The file is too large for the server (max. 16 MB per file).' } : p.res;
+      const ref = { res: normName(pres), img: p.img, colors: p.colors, mode: p.mode };
       if (JSON.stringify(node) !== JSON.stringify(ref)) mismatches.push({ label, node, php: ref });
     }
   } finally {

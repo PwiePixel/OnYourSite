@@ -84,9 +84,9 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
   }
   o += "                    </div>\n                </div>\n\n                ";
   if (!botReady) {
-    o += "                <div class=\"rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 text-sm text-gray-300 space-y-2\">\n                    <p class=\"font-semibold text-amber-300\">Connect the Discord bot</p>\n                    <ol class=\"list-decimal pl-5 space-y-1\">\n                        <li>Add this line to <code>config.php</code> (a random secret, made just now): <code class=\"text-white break-all\">'bot_secret' =&gt; '";
+    o += "                <div class=\"rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 text-sm text-gray-300 space-y-2\">\n                    <p class=\"font-semibold text-amber-300\">Connect the Discord bot</p>\n                    <ol class=\"list-decimal pl-5 space-y-1\">\n                        <li>Add this line to <code>config.json</code> (a random secret, made just now) and restart the website: <code class=\"text-white break-all\">&quot;bot_secret&quot;: &quot;";
     o += randomHex(32);
-    o += "',</code></li>\n                        <li>Put the same value into <code>BOT_SECRET</code> in the bot’s <code>.env</code> and start the bot – see <code>discord-bot/README.md</code>.</li>\n                    </ol>\n                </div>\n                ";
+    o += "&quot;,</code></li>\n                        <li>Put the same value into <code>BOT_SECRET</code> in the bot’s <code>.env</code> and start the bot – see <code>discord-bot/README.md</code>.</li>\n                    </ol>\n                </div>\n                ";
   }
   o += "                ";
   for (const f of failedOutbox) {

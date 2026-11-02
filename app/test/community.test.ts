@@ -420,7 +420,7 @@ const VIEW_CASES: Array<{ name: string; query: string; get: unknown; variant?: '
 test('admin view offers a fresh bot secret while the bot isn’t set up', async () => {
   await useTestDb({ bot_secret: null });
   await fixtures('full', String(time() - 10));
-  assert.match(await adminCommunityView(fakeCtx('')), /'bot_secret' =&gt; '[0-9a-f]{64}'/);
+  assert.match(await adminCommunityView(fakeCtx('')), /<code>config\.json<\/code>.*&quot;bot_secret&quot;: &quot;[0-9a-f]{64}&quot;,/);
   await useTestDb();
 });
 
@@ -433,8 +433,11 @@ test('admin view renders the same HTML as PHP', { skip: PHP_SKIP }, async () => 
     const mine = await adminCommunityView(fakeCtx(c.query));
     // Nur das frisch erzeugte Geheimnis im Hinweis „Connect the Discord bot“ ist zufällig
     const norm = (h: string) => h.replace(/('bot_secret' =&gt; ')[0-9a-f]{64}'/, '$1SECRET\'');
-    assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(norm(mine)))), withoutNativeConfirms(norm(ref)), c.name);
-    if (c.noSecret) assert.match(mine, /'bot_secret' =&gt; '[0-9a-f]{64}'/);
+    // Seit 3.0 eine JSON-Zeile für config.json (mit Neustart) statt der PHP-Zeile für config.php
+    const asPhp = (h: string) => h.replace(/<code>config\.json<\/code> \(a random secret, made just now\) and restart the website: <code class="text-white break-all">&quot;bot_secret&quot;: &quot;([0-9a-f]{64})&quot;,<\/code>/,
+      '<code>config.php</code> (a random secret, made just now): <code class="text-white break-all">\'bot_secret\' =&gt; \'$1\',</code>');
+    assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(norm(asPhp(mine))))), withoutNativeConfirms(norm(ref)), c.name);
+    if (c.noSecret) assert.match(mine, /&quot;bot_secret&quot;: &quot;[0-9a-f]{64}&quot;,/);
   }
   await useTestDb();
 });
