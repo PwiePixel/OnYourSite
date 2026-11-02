@@ -1,8 +1,8 @@
 # Status
 
-Last update: 2026-11-02 08:12 (UTC+1).
+Last update: 2026-11-02 12:10 (UTC+1).
 
-## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
+## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
 | Part | State |
 |---|---|
@@ -15,8 +15,8 @@ Last update: 2026-11-02 08:12 (UTC+1).
 | Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | Done |
 | Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | Done |
 
-**Release 3.0 is complete and ready to merge** (PR #15 merges cleanly into `main`). The PHP removal and everything
-else from `feature/node-complete` is merged into `feature/new-features` too.
+**Release 3.0 is merged into `main`** (PR #15, squash commit `2e6f6de`). `main` is merged into `feature/new-features`
+(`0a15a2e`, same tree as `feature/node-complete`), so PR #14 shows only the feature changes and merges cleanly.
 
 Points to settle before or soon after 3.0:
 - Node checks only bcrypt password hashes (`$2y$`, `$2a$`, `$2b$`). Check production before the switch:
@@ -71,10 +71,8 @@ steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
-1. **Merge PR #15 first** ("Create a merge commit" keeps `feature/new-features` in line; after a squash merge, bring
-   `main` into `feature/new-features` with `git merge -s ours origin/main` – only when the tree of `main` equals the
-   tree of `feature/node-complete` – so #14 shows only the feature changes). Then deploy with
-   `sudo bash server/install.sh --update` (see `server/README.md`).
+1. **PR #15 is merged** (squash) and `main` is merged into `feature/new-features`. Deploy `main` with
+   `sudo bash server/install.sh --update` (see `server/README.md`); PR #14 is next.
 2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 927 tests pass
    (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
@@ -86,12 +84,6 @@ steps take the next free number when they are merged.
    - Status pages: ST-4 (status pages for users – needs HC-6a), then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Follow-ups found during the work:**
-   - Texts that still name the PHP setup: `app/src/content/storage.ts` (uploads_dir hint), `app/src/admin/views/storage.ts`
-     (config.php line, backup list), `app/src/community/adminView.ts` (bot secret hint), `app/src/admin/newsletter.ts`
-     (PHPMailer), `app/src/content/uploads.ts` (PHP settings), the privacy page ("PHP Sessions"), `app/src/cli.ts`
-     ("PHP Fatal error" text; exit code 0 when the database is down).
-   - README: the "Updates, roadmap & Discord" section still describes the old single Discord form and the `/roadmap`
-     redirect; "Structure" is missing `src/discord`, `src/domains`, `src/notify`, `src/status`.
    - The browser flows (`tests/e2e/*.js`, `app/test/e2e/*.e2e.ts`) are not part of `npm test`; the tsconfig does not
      type-check the test files.
    - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
