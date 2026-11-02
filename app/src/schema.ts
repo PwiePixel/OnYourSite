@@ -43,6 +43,7 @@ export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge d
 export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
 export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
 export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Cloudflare (Apex: Besitz-TXT, DCV) je Domain
+export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnamen bleiben gesperrt, auch nach „Entfernen“ (R2)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -83,6 +84,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
   { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
   { version: V_DOMAIN_RECORDS, name: 'domainRecords', run: domainRecords },
+  { version: V_DOMAIN_BLOCKS, name: 'domainBlocks', run: domainBlocks },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -541,6 +543,18 @@ async function notificationsIndex(conn: PoolConnection): Promise<void> {
 // unter „Additional records“.
 async function domainRecords(conn: PoolConnection): Promise<void> {
   await addColumn(conn, 'custom_domains', 'extra_records', 'TEXT NULL');
+}
+
+// V_DOMAIN_BLOCKS (braucht custom_domains aus V_CUSTOM_DOMAINS): vom Team gesperrte Hostnamen (Entscheidung R2).
+// Solange die gesperrte Domain an ihrer Seite hängt, sperrt ihre Zeile (Zustand blocked) den Hostnamen. Entfernt der
+// Besitzer sie (oder gehen Seite oder Konto), verschwindet die Zeile wie sonst – die Sperre bleibt hier stehen, für
+// jedes Konto, bis ein Admin sie aufhebt (releaseBlock in domains/store.ts).
+async function domainBlocks(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS custom_domain_blocks (
+        hostname VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+        reason VARCHAR(200) NULL,
+        created_at DATETIME NOT NULL
+    ) ${OPTS}`);
 }
 
 // V_CUSTOM_DOMAINS (braucht nur pages aus V_PAGES): eigene Domains (Premium). Eine Zeile je Domain, Ziel ist (vorerst)

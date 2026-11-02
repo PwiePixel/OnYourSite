@@ -22,8 +22,8 @@ import { poolDb } from '../src/honeycombs/util.js';
 import { toggleAdmin } from '../src/admin/users.js';
 import { LeaderLock } from '../src/status/lock.js';
 import {
-  capacity, createDomain, domainById, health, ownershipToken, reconcileUser, removeDomain, requestWorker, saveDomainSettings, transition, workerState,
-  type DomainRow,
+  capacity, createDomain, domainById, health, hostnameBlocked, ownershipToken, reconcileUser, releaseBlock, removeDomain, requestWorker, saveDomainSettings,
+  transition, workerState, type DomainRow,
 } from '../src/domains/index.js';
 import { logEvent } from '../src/domains/store.js';
 import { adminAlert } from '../src/domains/notify.js';
@@ -913,4 +913,31 @@ test('health for the status page: worker seen, last good probe through Cloudflar
   assert.match(lateCheck.reason, /^The domain worker was last seen at /);
   assert.deepEqual(foreign, [], 'every request went to the stand-ins');
   assert.ok(dns.queries.length > 0 && cf.calls.length > 0);
+});
+
+test('R2: a blocked domain its owner removes: the worker deletes the old hostname, never creates one while the block stands', { skip }, async () => {
+  const H = 'stop.example.com';
+  const id = await bringLive(H, await newPage(5, 'mia-blocked'), 5);
+  assert.ok(onCf(H));
+  // Ein Admin sperrt die Domain (so setzt PD-5 den Zustand); der Besitzer entfernt sie, bevor der Dienst den Hostnamen löscht
+  assert.equal(await transition(await row(id), { state: 'blocked', set: { blocked_reason: 'spam' }, log: { event: 'blocked', detail: 'spam' } }), true);
+  assert.equal(await transaction((_c, db) => removeDomain(db, id, 'user')), 'removing');
+  const posts = (): number => cf.calls.filter((c) => c.method === 'POST').length;
+  const before = posts();
+  await w.check(id);
+  assert.equal(await gone(id), true);
+  assert.equal(onCf(H), null, 'the old hostname is deleted');
+  assert.equal(await hostnameBlocked(H), true, 'the hostname stays blocked');
+  // Selbst eine Zeile am Editor vorbei (TXT und CNAME stimmen) bekommt keinen Hostnamen, solange die Sperre steht
+  const again = await createDomain({ hostname: H, targetId: await newPage(5, 'mia-blocked2'), userId: 5 });
+  await w.check(again);
+  assert.deepEqual([(await row(again)).state, (await row(again)).cf_id, onCf(H), posts()], ['verifying', null, null, before]);
+  // Freigegeben: dieselbe Zeile wird eingerichtet
+  assert.equal(await releaseBlock(H), true);
+  await w.check(again);
+  assert.equal((await row(again)).state, 'pending');
+  assert.ok(onCf(H));
+  assert.equal(await transaction((_c, db) => removeDomain(db, again, 'user')), 'removing');
+  await w.check(again);
+  assert.equal(onCf(H), null);
 });

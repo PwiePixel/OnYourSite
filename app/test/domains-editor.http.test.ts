@@ -9,7 +9,7 @@ import { loadConfig, setConfigForTests } from '../src/config.js';
 import { makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { appRoutes } from '../src/app/dispatch.js';
 import { ensureSchema } from '../src/schema.js';
-import { createDomain, ownershipToken, saveDomainSettings } from '../src/domains/index.js';
+import { createDomain, hostnameBlocked, ownershipToken, releaseBlock, saveDomainSettings } from '../src/domains/index.js';
 import { setDohForTests } from '../src/domains/editor.js';
 import type { Doh, DohReply } from '../src/domains/worker/dns.js';
 import { CSRF, jsonBody, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
@@ -23,6 +23,7 @@ const N = 7; // ohne Premium
 const Y = 8; // Premium, Konto neu
 const S = 9; // Premium endet bald
 const pages: Record<string, number> = {};
+const BLOCKED_TEXT = 'This domain was disabled by the OnYourSite team and can’t be connected. Please contact support.';
 
 async function sql(query: string, params: unknown[] = []): Promise<RowDataPacket[]> {
   const [r] = await t.admin.query<RowDataPacket[]>(query.replace(/`DB`/g, '`' + t.name + '`'), params);
@@ -218,8 +219,40 @@ test('blocked and removing domains of other accounts cannot be claimed', async (
   txt = [ownershipToken(U, 'blocked.example.net')];
   const r = await add(U, pages.u3, 'blocked.example.net', { claim: true });
   assert.equal(r.status, 409);
-  assert.equal(jsonBody(r).error, 'This domain can’t be connected right now. Please contact support.');
+  assert.equal(jsonBody(r).error, BLOCKED_TEXT);
   assert.equal((await sql('SELECT user_id FROM `DB`.custom_domains WHERE hostname = ?', ['blocked.example.net']))[0].user_id, V);
+});
+
+test('R2: removing a blocked domain detaches it, but the hostname stays blocked for every account until an admin releases it', async () => {
+  // Stand aus dem Fall davor: blocked.example.net hängt gesperrt an der Seite von V
+  await sql("UPDATE `DB`.custom_domains SET blocked_reason = 'spam' WHERE hostname = 'blocked.example.net'");
+  const removed = await api('domain-remove', { userId: V, json: { page_id: pages.v1, confirm: 'blocked.example.net' } });
+  assert.equal(removed.status, 200);
+  assert.equal(jsonBody(await get(V, pages.v1)).domain, null);
+  assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', ['blocked.example.net']), 0);
+  assert.equal(await hostnameBlocked('blocked.example.net'), true);
+  // Dasselbe Konto, ein anderes Konto, ein anderes Konto mit TXT-Nachweis: abgelehnt, nichts geschrieben
+  const same = await add(V, pages.v1, 'blocked.example.net');
+  assert.equal(same.status, 409);
+  assert.equal(jsonBody(same).error, BLOCKED_TEXT);
+  const other = await add(U, pages.u3, 'blocked.example.net');
+  assert.equal(other.status, 409);
+  assert.equal(jsonBody(other).error, BLOCKED_TEXT);
+  txt = [ownershipToken(U, 'blocked.example.net')];
+  const claim = await add(U, pages.u3, 'blocked.example.net', { claim: true });
+  assert.equal(claim.status, 409);
+  assert.equal(jsonBody(claim).error, BLOCKED_TEXT);
+  assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', ['blocked.example.net']), 0);
+  // Ein Admin gibt den Hostnamen frei: danach lässt er sich wieder verbinden
+  assert.equal(await releaseBlock('blocked.example.net'), true);
+  assert.equal(await hostnameBlocked('blocked.example.net'), false);
+  const again = await add(V, pages.v1, 'blocked.example.net');
+  assert.equal(again.status, 200);
+  assert.equal((jsonBody(again).domain as { state: string }).state, 'verifying');
+  assert.equal(await releaseBlock('blocked.example.net'), false);
+  assert.equal(await count("SELECT COUNT(*) AS n FROM `DB`.custom_domain_log WHERE hostname = 'blocked.example.net' AND event = 'unblocked'"), 1);
+  // Aufräumen für die folgenden Fälle
+  assert.equal((await api('domain-remove', { userId: V, json: { page_id: pages.v1, confirm: 'blocked.example.net' } })).status, 200);
 });
 
 test('remove needs the typed domain; afterwards the page has none', async () => {

@@ -119,6 +119,37 @@ test('with Premium: connect, check, team text as text, remove', async () => {
   await page.close();
 });
 
+test('R2: a blocked domain can be removed; the form comes back, but the hostname stays refused', async () => {
+  const page = await browser.newPage();
+  await login(page, premiumEmail);
+  const BLOCKED = `blocked-${stamp}.example.com`;
+  try {
+    await open(page, '/dashboard#settings/domain');
+    const sec = page.locator('#domainSection');
+    await sec.locator('#domainInput').fill(BLOCKED);
+    await sec.getByRole('button', { name: 'Connect domain' }).click();
+    await sec.getByText('Waiting for DNS', { exact: true }).waitFor();
+    await exec("UPDATE custom_domains SET state = 'blocked', blocked_reason = 'spam' WHERE hostname = ?", [BLOCKED]);
+    await open(page, '/dashboard#settings/domain');
+    await sec.getByText('Disabled by the team', { exact: true }).waitFor();
+    await sec.locator('[data-dom="remove"]').click();
+    const dialog = page.locator('.ui-dialog').last();
+    await dialog.waitFor();
+    await dialog.locator('input').fill(BLOCKED);
+    await dialog.getByRole('button', { name: 'Remove domain' }).click();
+    await page.getByText('Domain removed.').waitFor();
+    // Die Seite kann eine andere Domain verbinden – derselbe Name bleibt gesperrt
+    await sec.locator('#domainInput').fill(BLOCKED);
+    await sec.getByRole('button', { name: 'Connect domain' }).click();
+    await page.getByText('This domain was disabled by the OnYourSite team and can’t be connected. Please contact support.').first().waitFor();
+    assert.equal(Number(await value('SELECT COUNT(*) FROM custom_domains WHERE hostname = ?', [BLOCKED])), 0);
+    assert.equal(Number(await value('SELECT COUNT(*) FROM custom_domain_blocks WHERE hostname = ?', [BLOCKED])), 1);
+  } finally {
+    await exec('DELETE FROM custom_domain_blocks WHERE hostname = ?', [BLOCKED]).catch(() => undefined);
+    await page.close();
+  }
+});
+
 test('phone: the records table fits without sideways scrolling', async () => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();
