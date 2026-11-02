@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { parseStr, setPhpVar, type PhpArray } from '../src/php.js';
 import { Ctx } from '../src/web/ctx.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const HOSTILE = [
   '__proto__[polluted]=1', 'constructor[prototype][polluted]=2', 'x[__proto__][polluted]=3', '__proto__=plain', 'a[__proto__]=1&a[b]=2',
@@ -16,9 +17,14 @@ const HOSTILE = [
 
 const polluted = (): string[] => ['polluted', 'page', 'user_id', 'y', 'oys_action'].filter((k) => k in {});
 
-test('hostile field names are ordinary keys like in PHP and never reach Object.prototype', () => {
-  const ours = HOSTILE.map(parseStr);
+test('hostile field names are ordinary keys and never reach Object.prototype', () => {
+  const ours = HOSTILE.map((s) => parseStr(s));
   assert.deepEqual(polluted(), []);
+  assert.equal(JSON.stringify(ours[7]), '{"page":"2","__proto__":{"page":"3","user_id":"3"}}');
+});
+
+test('hostile field names are ordinary keys like in PHP', { skip: PHP_SKIP }, () => {
+  const ours = HOSTILE.map(parseStr);
   const theirs = JSON.parse(execFileSync('php', ['-r', '$in = json_decode(stream_get_contents(STDIN), true); echo json_encode(array_map(function ($s) { parse_str($s, $o); return $o; }, $in));'],
     { input: JSON.stringify(HOSTILE) }).toString()) as unknown[];
   // PHP-Listen (0,1,…) kommen als JSON-Arrays – zum Vergleich in Objekte umwandeln

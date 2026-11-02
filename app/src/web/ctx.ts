@@ -1,9 +1,11 @@
 // Eine Anfrage mit allem, was PHP-Code über $_GET, $_POST, $_FILES, $_COOKIE und $_SERVER gesehen hat, und die
 // Antwort mit den Regeln von header(): gleicher Name ersetzt, Standard-Typ text/html; charset=UTF-8.
 import type { IncomingHttpHeaders } from 'node:http';
+import { isIP } from 'node:net';
 import type { Readable } from 'node:stream';
-import { parseStr, type PhpArray, field, strtolower } from '../php.js';
+import { parseStr, type PhpArray, field, strtolower, phpTrim } from '../php.js';
 import { phpParseUrl } from '../compat/core.js';
+import { configString } from '../config.js';
 import type { Session } from './session.js';
 
 // exit; in PHP: beendet die Bearbeitung, die Antwort wird so gesendet, wie sie bis dahin aufgebaut ist
@@ -19,6 +21,8 @@ export interface UploadedFile {
   data: Buffer;
   // UPLOAD_ERR_*: 0 = OK, 1 = zu groß, 4 = keine Datei
   error: number;
+  // Feld name[…]: in PHP ein Array von Dateien statt einer Datei
+  multiple?: boolean;
 }
 
 export class Ctx {
@@ -46,8 +50,18 @@ export class Ctx {
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];
-  // Antwort: Text, Bytes oder ein Datenstrom (große Dateien, ZIP)
-  body: string | Buffer | Readable = '';
+  private bodyValue: string | Buffer | Readable = '';
+
+  // Antwort: Text, Bytes oder ein Datenstrom (große Dateien, ZIP). Ein Datenstrom bekommt gleich einen Empfänger für
+  // Fehler: scheitert er, bevor Fastify ihn sendet (Datei inzwischen gelöscht, Lesefehler), beendete ein Fehler-Ereignis
+  // ohne Empfänger sonst den ganzen Server. Beim Senden sieht Fastify den Fehler trotzdem (500 bzw. Abbruch).
+  get body(): string | Buffer | Readable {
+    return this.bodyValue;
+  }
+  set body(value: string | Buffer | Readable) {
+    if (isReadable(value) && !value.listeners('error').includes(ignoreError)) value.on('error', ignoreError);
+    this.bodyValue = value;
+  }
 
   constructor(opts: { method: string; url: string; headers: IncomingHttpHeaders; peer: string }) {
     this.method = opts.method.toUpperCase();
@@ -120,10 +134,19 @@ export class Ctx {
     throw new Halt();
   }
 
-  // oys_redirect(): Location mit den UTF-8-Bytes, Status, leerer Inhalt
+  // oys_redirect(): Location mit den UTF-8-Bytes, Status, leerer Inhalt. Wie header(): Leerraum am Ende fällt weg; mit
+  // CR, LF oder NUL setzt PHP weder Header noch Status (nur eine Warnung). Andere Steuerzeichen sendet PHP roh – Node
+  // lehnt sie im Header ab (500), darum als %XX, so wie der Browser sie beim Folgen ohnehin kodiert.
   redirect(url: string, code = 302): never {
-    this.status = code;
-    this.header('Location', Buffer.from(url, 'utf8').toString('latin1'));
+    // rtrim() mit den Zeichen von isspace() wie in sapi_header_op()
+    let end = url.length;
+    while (end > 0 && ' \t\n\v\f\r'.includes(url[end - 1])) end--;
+    const value = url.slice(0, end);
+    if (!/[\r\n\0]/.test(value)) {
+      this.status = code;
+      this.header('Location', Buffer.from(value, 'utf8').toString('latin1')
+        .replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')));
+    }
     this.body = '';
     this.halt();
   }
@@ -157,6 +180,10 @@ export class Ctx {
   }
 }
 
+function ignoreError(): void {
+  // nur damit das Fehler-Ereignis einen Empfänger hat (siehe Ctx.body)
+}
+
 function isReadable(v: unknown): v is Readable {
   return !!v && typeof v === 'object' && typeof (v as Readable).pipe === 'function' && typeof (v as Readable).on === 'function';
 }
@@ -177,14 +204,16 @@ function defaultJson(v: unknown): string {
   return JSON.stringify(v).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
-// $_COOKIE: bei doppelten Namen gilt der erste; Werte werden dekodiert
+// $_COOKIE: bei doppelten Namen gilt der erste; Werte werden dekodiert. Ohne Prototyp: Namen wie constructor oder
+// toString sind gewöhnliche Cookies wie in PHP (mit „in“ fielen sie weg), __proto__ wird ein eigener Eintrag, und
+// cookie() liest nie etwas aus Object.prototype
 export function parseCookies(header: string): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out = Object.create(null) as Record<string, string>;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
     const name = part.slice(0, i).trim();
-    if (!name || name in out) continue;
+    if (!name || Object.hasOwn(out, name)) continue;
     let value = part.slice(i + 1).trim();
     try {
       value = decodeURIComponent(value);
@@ -196,14 +225,38 @@ export function parseCookies(header: string): Record<string, string> {
   return out;
 }
 
-// REMOTE_ADDR wie mit mod_remoteip: CF-Connecting-IP nur, wenn die Anfrage vom eigenen cloudflared kommt
+// REMOTE_ADDR, wie PHP die Adresse des Besuchers gesehen hat.
+// Mit client_ip_header (setzt der Installer: "x-oys-client-ip") kommt sie nur aus diesem Kopf und nur über localhost:
+// Apache setzt ihn nach mod_remoteip auf REMOTE_ADDR und ersetzt dabei jeden Wert, den ein Besucher mitschickt.
+// CF-Connecting-IP zählt dann nie – hinter Apache kommt jede Anfrage von 127.0.0.1, und bei einer Installation ohne
+// Tunnel könnte sonst jeder Besucher eine Adresse vorgeben und so die Bremsen (Anmeldung, Kontakt, Spam) umgehen.
+// Ohne den Schlüssel (Entwicklung, Tests) wie mod_remoteip: CF-Connecting-IP nur von einem cloudflared auf localhost.
 function clientIp(peer: string, headers: IncomingHttpHeaders): string {
   let ip = peer || '';
   if (ip.startsWith('::ffff:') && /^::ffff:\d+\.\d+\.\d+\.\d+$/.test(ip)) ip = ip.slice(7);
-  if (ip === '127.0.0.1' || ip === '::1') {
+  const local = ip === '127.0.0.1' || ip === '::1';
+  const trusted = trustedHeader();
+  if (trusted !== '') {
+    if (!local) return ip;
+    // Genau eine gültige Adresse (zwei gleichnamige Köpfe fügt Node mit „, “ zusammen – das ist dann keine)
+    const raw = headers[trusted];
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    return isIP(value) ? value : ip;
+  }
+  if (local) {
     const cf = headers['cf-connecting-ip'];
     const v = Array.isArray(cf) ? cf[0] : cf;
     if (v && /^[0-9a-fA-F:.]+$/.test(v.trim())) return v.trim();
   }
   return ip;
+}
+
+// Name des Kopfs mit der Besucher-Adresse (klein geschrieben wie in Node); leer = nicht eingestellt
+function trustedHeader(): string {
+  try {
+    return strtolower(phpTrim(configString('client_ip_header', '')));
+  } catch {
+    // ohne Einstellungen (nur in Werkzeugen und Tests ohne config.json)
+    return '';
+  }
 }

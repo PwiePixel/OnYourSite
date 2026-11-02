@@ -1,10 +1,10 @@
-// Anmelden und Registrieren gegen PHP: die Vorlagen (views/login.php, register.php und die festen Seiten) mit
-// ungewöhnlichen Werten aus der Sitzung, der Kopf von register.php, Anmeldeschlüssel und Passwort-Hashes.
-// Die Abläufe über HTTP (Formulare, Begrenzungen, Datenbank) vergleicht gm/auth-seq.mjs.
+// Anmelden und Registrieren gegen PHP (PHP-Version, siehe support/phpRef.ts): die Vorlagen (views/login.php,
+// register.php und die festen Seiten) mit ungewöhnlichen Werten aus der Sitzung, der Kopf von register.php,
+// Anmeldeschlüssel und Passwort-Hashes. Die Abläufe über HTTP (Formulare, Begrenzungen, Datenbank) vergleicht
+// gm/auth-seq.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR } from '../src/config.js';
 import { loginView } from '../src/app/views/login.js';
 import { registerView } from '../src/app/views/register.js';
 import { challengeView } from '../src/app/views/challenge.js';
@@ -15,18 +15,19 @@ import { registerOld } from '../src/app/auth.js';
 import { passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
 import { date } from '../src/php.js';
 import type { PhpArray } from '../src/php.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 // PHP mit den echten Hilfsfunktionen; $in kommt als JSON, das Ergebnis geht als JSON zurück
 function php(code: string, input: unknown): unknown {
-  const script = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
-    + ` require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php';`
+  const script = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
+    + ` require '${phpFile('blacklist.php')}'; require '${phpFile('lib/helpers.php')}';`
     + `$in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in); echo json_encode($out);`;
-  return JSON.parse(execFileSync('php', ['-d', 'display_errors=0', '-r', script], { input: JSON.stringify(input), cwd: ROOT_DIR, maxBuffer: 64 << 20 }).toString());
+  return JSON.parse(execFileSync('php', ['-d', 'display_errors=0', '-r', script], { input: JSON.stringify(input), cwd: phpRoot(), maxBuffer: 64 << 20 }).toString());
 }
 
 // Eine Vorlage in PHP ausgeben: $_SESSION und $_GET je Fall, danach die Ausgabe und die übrige Sitzung
 function renderPhp(view: string, cases: Array<{ session: Record<string, unknown>; get?: Record<string, unknown> }>): Array<{ html: string; session: Record<string, unknown> }> {
-  return php(`$res = []; foreach ($in as $c) { $_SESSION = $c['session']; $_GET = $c['get'] ?? []; ob_start(); include '${ROOT_DIR}/views/${view}'; `
+  return php(`$res = []; foreach ($in as $c) { $_SESSION = $c['session']; $_GET = $c['get'] ?? []; ob_start(); include '${phpFile('views/' + view)}'; `
     + `$res[] = ['html' => ob_get_clean(), 'session' => $_SESSION]; } return $res;`, cases) as Array<{ html: string; session: Record<string, unknown> }>;
 }
 
@@ -35,7 +36,7 @@ const field = `<input type="hidden" name="csrf" value="${TOKEN}">`;
 // Werte, die in PHP anders wahr/falsch sind als in JavaScript, und Zeichen, die maskiert werden müssen
 const FLASH: unknown[] = [null, '', '0', 0, '0.0', ' ', 'Wrong email or password.', `<b>"x" & 'y'</b>`, 'Zoë 🐝 – “quoted”', true, false, 12, 1.5, ' \n'];
 
-test('login view matches views/login.php for every flash value', () => {
+test('login view matches views/login.php for every flash value', { skip: PHP_SKIP }, () => {
   const cases = FLASH.flatMap((err, i) => [
     { session: { csrf: TOKEN, error: err, success: FLASH[(i + 3) % FLASH.length] } },
     { session: { csrf: TOKEN, success: err } },
@@ -49,7 +50,7 @@ test('login view matches views/login.php for every flash value', () => {
   });
 });
 
-test('register view and its head match views/register.php', () => {
+test('register view and its head match views/register.php', { skip: PHP_SKIP }, () => {
   const olds: unknown[] = [
     undefined,
     { fullname: 'Max Muster', email: 'max@example.com', subdomain: 'max' },
@@ -72,11 +73,11 @@ test('register view and its head match views/register.php', () => {
   });
 });
 
-test('static pages match the PHP views byte for byte', () => {
+test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () => {
   const views: Array<[string, () => string]> = [['challenge.php', challengeView], ['imprint.php', imprintView], ['privacy.php', privacyView], ['terms.php', termsView]];
   for (let attempt = 0; ; attempt++) {
     const day = date('Y-m-d');
-    const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${ROOT_DIR}/views/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
+    const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${phpFile('views')}/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
     // Um Mitternacht kann sich das Datum zwischen PHP und Node ändern: dann noch einmal
     if (date('Y-m-d') !== day && attempt < 2) continue;
     views.forEach(([name, fn], i) => assert.equal(fn(), res[i], name));
@@ -84,13 +85,23 @@ test('static pages match the PHP views byte for byte', () => {
   }
 });
 
-test('login keys match PHP (sha256 of the trimmed, lowercased email)', () => {
+test('login keys match PHP (sha256 of the trimmed, lowercased email)', { skip: PHP_SKIP }, () => {
   const emails = ['', 'mia@test.de', 'MİA@test.de', 'zoë@exämple.de', 'a'.repeat(300), 'x\u0000y', '🐝@bee.de'];
   const mine = emails.map((m) => 'login:' + sha256Hex(m).slice(0, 40));
   assert.deepEqual(mine, php(`return array_map(fn ($e) => 'login:' . substr(hash('sha256', $e), 0, 40), $in);`, emails));
 });
 
-test('password hashes work both ways, including NUL bytes and the 72-byte limit', async () => {
+test('password hashes refuse NUL bytes and are $2y$ with cost 10', async () => {
+  for (const p of ['abc\0def', '\0', 'test1234\0']) await assert.rejects(passwordHash(p), /null character/);
+  const h = await passwordHash('x'.repeat(72));
+  assert.match(h, /^\$2y\$10\$[./A-Za-z0-9]{53}$/);
+  // Nach 72 Bytes zählt nichts mehr (bcrypt)
+  assert.equal(await passwordVerify('x'.repeat(72) + 'tail', h), true);
+  assert.equal(await passwordVerify('x'.repeat(71), h), false);
+  for (const odd of ['', 'preview', '$2y$10$abc']) assert.equal(await passwordVerify('x', odd), false);
+});
+
+test('password hashes work both ways, including NUL bytes and the 72-byte limit', { skip: PHP_SKIP }, async () => {
   // Zufällige Passwörter: ASCII, Mehrbyte-Zeichen, genau an der 72-Byte-Grenze
   let seed = 7;
   const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n; };
@@ -130,7 +141,7 @@ test('password hashes work both ways, including NUL bytes and the 72-byte limit'
 // SELECT LEFT(password, 4), COUNT(*) FROM users GROUP BY 1
 const NOT_IN_NODE = ['$1$', '$5$', '$6$', 'DES', '_', '$2x$', '$argon2id$'];
 
-test('hash formats beyond bcrypt: PHP accepts them, Node does not (known difference)', async () => {
+test('hash formats beyond bcrypt: PHP accepts them, Node does not (known difference)', { skip: PHP_SKIP }, async () => {
   const made = php(`$pw = 'test1234'; $b = fn ($p) => str_replace('$2y$', $p, password_hash($pw, PASSWORD_BCRYPT, ['cost' => 4]));
     return ['$1$' => crypt($pw, '$1$saltsalt$'), '$5$' => crypt($pw, '$5$rounds=5000$saltsaltsaltsalt$'), '$6$' => crypt($pw, '$6$saltsaltsaltsalt$'),
       'DES' => crypt($pw, 'ab'), '_' => crypt($pw, '_J9..salt'), '$2x$' => $b('$2x$'), '$2a$' => $b('$2a$'), '$2b$' => $b('$2b$'), '$2y$' => $b('$2y$')]

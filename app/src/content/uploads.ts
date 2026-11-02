@@ -199,114 +199,394 @@ function pngAsGdReads(b: Buffer): Buffer | null {
   }
 }
 
+// Wie libjpeg in GD eine JPEG-Datei zu Ende liest: Nach den Bilddaten verarbeitet jpeg_finish_decompress() die übrigen
+// Marker bis EOI – ein unbekannter Marker, ein zweites SOI/SOF/SOS oder eine kaputte Tabelle dort ist ein Fehler, und
+// imagecreatefromjpeg() liefert false (sharp liest nicht so weit). Das betrifft nur Bilder mit einem einzigen Scan; mehrere
+// Scans (progressiv) liest libjpeg schon beim Start ganz, dort scheitern beide gleich. Die Bilddaten selbst enden am ersten
+// Marker; Restart-Marker dazwischen behandelt libjpeg wie read_restart_marker() und jpeg_resync_to_restart().
+function jpegAsGdReads(b: Buffer): boolean {
+  const size = b.length;
+  // Quelle von GD: hinter dem Dateiende folgen endlos FF D9 (eingeschobenes EOI)
+  const at = (i: number): number => (i < size ? b[i] : (i - size) % 2 === 0 ? 0xff : 0xd9);
+  let p = 2;
+  // next_marker(): Bytes bis FF überspringen, FF-Füllbytes und FF 00 (Daten) auch
+  const nextMarker = (): number => {
+    for (;;) {
+      let c = at(p++);
+      while (c !== 0xff) c = at(p++);
+      do c = at(p++); while (c === 0xff);
+      if (c !== 0) return c;
+    }
+  };
+  const word = (): number => {
+    const v = (at(p) << 8) | at(p + 1);
+    p += 2;
+    return v;
+  };
+  // Kopf bis zum ersten SOS (gültig – sharp hat ihn gelesen)
+  let width = 0;
+  let height = 0;
+  let progressive = false;
+  let restart = 0;
+  let frame: Array<[number, number]> = [];
+  let scanComps = 0;
+  for (;;) {
+    const m = nextMarker();
+    if (m === 0xc0 || m === 0xc1 || m === 0xc2 || m === 0xc9 || m === 0xca) {
+      p += 3;
+      height = word();
+      width = word();
+      const n = at(p++);
+      frame = [];
+      for (let i = 0; i < n; i++, p += 3) frame.push([at(p + 1) >> 4, at(p + 1) & 15]);
+      progressive = m === 0xc2 || m === 0xca;
+    } else if (m === 0xdd) {
+      p += 2;
+      restart = word();
+    } else if (m === 0xda) {
+      p += 2;
+      scanComps = at(p++);
+      p += scanComps * 2 + 3;
+      break;
+    } else if ((m >= 0xd0 && m <= 0xd7) || m === 0x01) {
+      continue;
+    } else if (m === 0xc4 || m === 0xcc || m === 0xdb || m === 0xdc || (m >= 0xe0 && m <= 0xef) || m === 0xfe) {
+      const len = word() - 2;
+      if (len > 0) p += len;
+    } else {
+      return true;
+    }
+  }
+  if (progressive || !frame.length || scanComps < frame.length) return true;
+  // MCUs des Scans (ein Bauteil: Blöcke, sonst MCUs aus den größten Abtastfaktoren)
+  const maxH = Math.max(...frame.map((c) => c[0]));
+  const maxV = Math.max(...frame.map((c) => c[1]));
+  const mcus = frame.length === 1
+    ? Math.ceil((width * frame[0][0]) / (maxH * 8)) * Math.ceil((height * frame[0][1]) / (maxV * 8))
+    : Math.ceil(width / (maxH * 8)) * Math.ceil(height / (maxV * 8));
+  let unread = 0;
+  if (restart > 0) {
+    let next = 0;
+    for (let k = Math.ceil(mcus / restart) - 1; k > 0; k--) {
+      if (!unread) unread = nextMarker();
+      if (unread === 0xd0 + next) {
+        unread = 0;
+      } else {
+        for (;;) {
+          const m = unread;
+          let action: number;
+          if (m < 0xc0) action = 2;
+          else if (m < 0xd0 || m > 0xd7) action = 3;
+          else if (m === 0xd0 + ((next + 1) & 7) || m === 0xd0 + ((next + 2) & 7)) action = 3;
+          else if (m === 0xd0 + ((next - 1) & 7) || m === 0xd0 + ((next - 2) & 7)) action = 2;
+          else action = 1;
+          if (action === 1) unread = 0;
+          if (action !== 2) break;
+          unread = nextMarker();
+        }
+      }
+      next = (next + 1) & 7;
+    }
+  }
+  // jpeg_finish_decompress(): Marker bis EOI
+  for (;;) {
+    const m = unread || nextMarker();
+    unread = 0;
+    if (m === 0xd9) return true;
+    if (m === 0xd8 || m === 0xda || (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xcc)) return false;
+    if (m === 0xcc) {
+      // get_dac()
+      let len = word() - 2;
+      while (len > 0) {
+        const index = at(p++);
+        const val = at(p++);
+        len -= 2;
+        if (index >= 32 || (index < 16 && (val & 15) > val >> 4)) return false;
+      }
+      if (len !== 0) return false;
+    } else if (m === 0xc4) {
+      // get_dht()
+      let len = word() - 2;
+      while (len > 16) {
+        const index = at(p++);
+        let count = 0;
+        for (let i = 0; i < 16; i++) count += at(p++);
+        len -= 17;
+        if (count > 256 || count > len) return false;
+        p += count;
+        len -= count;
+        if ((index & 0x10 ? index - 0x10 : index) >= 4) return false;
+      }
+      if (len !== 0) return false;
+    } else if (m === 0xdb) {
+      // get_dqt()
+      let len = word() - 2;
+      while (len > 0) {
+        const n = at(p++);
+        if ((n & 15) >= 4) return false;
+        p += n >> 4 ? 128 : 64;
+        len -= n >> 4 ? 129 : 65;
+      }
+      if (len !== 0) return false;
+    } else if (m === 0xdd) {
+      // get_dri()
+      if (word() !== 4) return false;
+      p += 2;
+    } else if ((m >= 0xe0 && m <= 0xef) || m === 0xfe || m === 0xdc) {
+      // APPn, COM, DNL: überspringen
+      const len = word() - 2;
+      if (len > 0) p += len;
+    } else if (!((m >= 0xd0 && m <= 0xd7) || m === 0x01)) {
+      return false;
+    }
+  }
+}
+
 // WebP mit Animation (VP8X, Bit 2): GD liest nur Einzelbilder
 const webpAnimated = (b: Buffer): boolean => b.length > 20 && b.toString('latin1', 12, 16) === 'VP8X' && (b[20] & 0x02) !== 0;
 
-const TIFF_SIZES = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8];
+// ---------------------------------------------------------------- EXIF-Ausrichtung (wie ext/exif in PHP 8.3)
 
-// exif_read_data($datei)['Orientation'] als (int) – wie PHP: erste Exif-APP1 vor den Bilddaten, IFD0 (und die
-// Exif-Unter-IFD, deren Wert gewinnt), ein Fehler in einem Eintrag beendet das Lesen. Ohne Wert: 1.
+// Bytes je Wert für die Formate 1–13 (13 = IFD, wird wie Bytes behandelt)
+const TIFF_SIZES = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 1];
+const SECTION_IFD0 = 1;
+const SECTION_EXIF = 2;
+const SECTION_GPS = 3;
+const SECTION_INTEROP = 4;
+const SECTION_THUMBNAIL = 5;
+const TAG_EXIF_IFD = 0x8769;
+const TAG_GPS_IFD = 0x8825;
+const TAG_INTEROP_IFD = 0xa005;
+const M_SOS = 0xda;
+const M_EOI = 0xd9;
+const M_COM = 0xfe;
+const M_PSEUDO = 0x123;
+const SOF_MARKERS = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+// Mit leerem Wert brechen diese Einträge das Lesen des Verzeichnisses ab (REQUIRE_NON_EMPTY)
+const NOT_EMPTY = new Set([0x829d, 0xa002, 0xa20e, 0x9206, 0xa210]);
+
+// Wert eines Eintrags, wie er in exif_read_data() landet: null (leer), Zahl, Text (Bytes) oder Liste
+type ExifValue = null | number | string | number[];
+
+// exif_read_data($datei)['Orientation'] ?? 1 als (int). Wie PHP: Die Kopfdaten werden bis zum Bildanfang (SOS) gelesen –
+// scheitert das (abgeschnitten, Müll zwischen den Abschnitten), liefert exif_read_data() false (→ 1). Gelesen wird die erste
+// gültige Exif-APP1 mit IFD0, der Exif-Unter-IFD (dessen Wert gewinnt) und den GPS/Interop-IFDs; ein Fehler in einem
+// Eintrag beendet das Verzeichnis (und das übergeordnete). Herstellerdaten (MakerNote) werden nicht ausgewertet – sie
+// stehen in sortierten Verzeichnissen hinter der Ausrichtung und ändern sie nicht.
 export function exifOrientation(b: Buffer): number {
-  if (b.length < 2 || b[0] !== 0xff || b[1] !== 0xd8) return 1;
+  const found = exifScan(b);
+  if (!found) return 1;
+  const v = found.has(SECTION_EXIF) ? found.get(SECTION_EXIF) : found.get(SECTION_IFD0);
+  return v === undefined || v === null ? 1 : intval(v);
+}
+
+// exif_scan_JPEG_header(): null, wenn PHP abbricht (exif_read_data() → false); sonst die Ausrichtungen je Abschnitt
+function exifScan(b: Buffer): Map<number, ExifValue> | null {
+  const size = b.length;
+  if (size < 2 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  const s: ExifState = { b, values: new Map(), any: false, ifd0: false, ifdCount: 0, nesting: 0, mm: false, aperture: 0, exposure: 0 };
   let p = 2;
+  let last = M_PSEUDO;
+  let correction = 1;
   for (;;) {
+    // Manche Programme zählen die Längen-Bytes eines Kommentars nicht mit: bis zu zwei Bytes danach überspringen
+    if (last === M_COM && correction) correction = 2;
     let marker: number;
     do {
-      if (p >= b.length) return 1;
+      if (p >= size) return null;
       marker = b[p++];
+      if (last === M_COM && correction > 0) {
+        if (marker !== 0xff) {
+          marker = 0xff;
+          correction--;
+        } else {
+          last = M_PSEUDO;
+        }
+      }
     } while (marker === 0xff);
-    if (p + 2 > b.length) return 1;
+    const fpos = p;
+    if (p + 2 > size) return null;
     const itemlen = (b[p] << 8) | b[p + 1];
-    if (itemlen < 2 || p + itemlen > b.length) return 1;
-    const data = b.subarray(p, p + itemlen);
-    p += itemlen;
-    if (marker === 0xda || marker === 0xd9) return 1;
-    if (marker === 0xe1) {
-      if (itemlen <= 8 || data.toString('latin1', 2, 8) !== 'Exif\0\0') continue;
-      const r = tiffOrientation(data.subarray(8), b.length);
-      if (r === 'none') continue;
-      return r;
+    if (itemlen < 2 || fpos + itemlen > size) return null;
+    const data = b.subarray(fpos, fpos + itemlen);
+    p = fpos + itemlen;
+    if (marker === M_SOS) return s.values;
+    if (marker === M_EOI) return s.any ? s.values : null;
+    if (marker === M_COM) s.any = true;
+    else if (marker === 0xe1) {
+      if (!s.ifd0) exifApp1(s, data, fpos);
+    } else if (marker === 0xec) {
+      if (itemlen > 2 && data[2] !== 0) s.any = true;
+    } else if (SOF_MARKERS.has(marker) && itemlen - 2 < 6) {
+      return null;
     }
+    last = marker;
   }
 }
 
-// TIFF-Kopf in der APP1: 'none' = ungültig (weitersuchen), sonst der Wert (1, wenn keiner da ist)
-function tiffOrientation(t: Buffer, fileSize: number): number | 'none' {
-  if (t.length < 2) return 'none';
-  const name = t.toString('latin1', 0, 2);
-  if (name !== 'II' && name !== 'MM') return 'none';
-  const mm = name === 'MM';
-  if (t.length < 8) return 'none';
-  const u16 = (o: number) => (mm ? t.readUInt16BE(o) : t.readUInt16LE(o));
-  const u32 = (o: number) => (mm ? t.readUInt32BE(o) : t.readUInt32LE(o));
-  const ifd = u32(4);
-  if (u16(2) !== 0x2a || ifd < 8 || ifd > t.length) return 'none';
-  const found: { ifd0?: unknown; exif?: unknown; other?: unknown } = {};
-  // Ein IFD lesen; false = abgebrochen (dann auch das übergeordnete)
-  const readIfd = (start: number, section: 'ifd0' | 'exif' | 'other', depth: number): boolean => {
-    if (start + 2 > t.length) return false;
-    const n = u16(start);
-    if (start + 2 + n * 12 > t.length) return false;
-    for (let i = 0; i < n; i++) {
-      const e = start + 2 + i * 12;
-      const tag = u16(e);
-      let format = u16(e + 2);
-      const count = u32(e + 4);
-      if (!format || format > 12) format = 1;
-      const bytes = count * TIFF_SIZES[format];
-      if (bytes > 0x7fffffff) return false;
-      let value: Buffer;
-      if (bytes > 4) {
-        const off = u32(e + 8);
-        if (off + bytes <= t.length) value = t.subarray(off, off + bytes);
-        // außerhalb der APP1: PHP liest dann aus der Datei – nur die Grenzen der Datei zählen
-        else if (bytes > fileSize || off > fileSize - bytes) return false;
-        else value = Buffer.alloc(0);
-      } else {
-        value = t.subarray(e + 8, e + 8 + Math.max(bytes, 0));
-      }
-      if (tag === 0x0112) found[section] = tagValue(value, format, count, mm);
-      // Unter-IFDs (Exif, GPS, Interop): Zeiger als int32; ein Fehler darin beendet auch dieses IFD
-      if ((tag === 0x8769 || tag === 0x8825 || tag === 0xa005) && depth < 3) {
-        const raw = bytes > 4 ? value : t.subarray(e + 8, e + 12);
-        if (raw.length < 4) return false;
-        const sub = mm ? raw.readInt32BE(0) : raw.readInt32LE(0);
-        if (sub < 0 || sub > t.length) return false;
-        if (!readIfd(sub, tag === 0x8769 ? 'exif' : 'other', depth + 1)) return false;
-      }
-    }
-    return true;
-  };
-  readIfd(ifd, 'ifd0', 0);
-  const v = found.exif !== undefined ? found.exif : found.ifd0;
-  return v === undefined ? 1 : intval(v);
+interface ExifState {
+  b: Buffer;
+  values: Map<number, ExifValue>;
+  any: boolean;
+  ifd0: boolean;
+  ifdCount: number;
+  nesting: number;
+  mm: boolean;
+  aperture: number;
+  exposure: number;
 }
 
-// Wert eines Eintrags wie im Array von exif_read_data(): eine Zahl, Text oder (bei mehreren Werten) ein Array
-function tagValue(v: Buffer, format: number, count: number, mm: boolean): unknown {
-  if (count === 0) return null;
+interface Tiff {
+  t: Buffer;
+  displacement: number;
+}
+
+// exif_process_APP1() + exif_process_TIFF_in_JPEG()
+function exifApp1(s: ExifState, data: Buffer, fpos: number): void {
+  if (data.length <= 8 || data.toString('latin1', 2, 8) !== 'Exif\0\0') return;
+  const t = data.subarray(8);
+  if (t.length < 2) return;
+  const order = t.toString('latin1', 0, 2);
+  if (order !== 'II' && order !== 'MM') return;
+  s.mm = order === 'MM';
+  if (t.length < 8) return;
+  const ifd = u32(s, t, 4);
+  if (u16(s, t, 2) !== 0x2a || ifd < 8 || ifd > t.length) return;
+  s.ifd0 = true;
+  s.any = true;
+  exifIfd(s, { t, displacement: fpos + 8 }, ifd, SECTION_IFD0, 0);
+}
+
+const u16 = (s: ExifState, t: Buffer, o: number): number => (s.mm ? t.readUInt16BE(o) : t.readUInt16LE(o));
+const u32 = (s: ExifState, t: Buffer, o: number): number => (s.mm ? t.readUInt32BE(o) : t.readUInt32LE(o));
+const s32 = (s: ExifState, t: Buffer, o: number): number => (s.mm ? t.readInt32BE(o) : t.readInt32LE(o));
+
+// exif_process_IFD_in_JPEG()
+function exifIfd(s: ExifState, x: Tiff, start: number, section: number, tag: number): boolean {
+  const len = x.t.length;
+  s.ifd0 = true;
+  if (start + 2 > len) return false;
+  const n = u16(s, x.t, start);
+  if (start + 2 + n * 12 > len) return false;
+  for (let i = 0; i < n; i++) {
+    if (!exifTag(s, x, start + 2 + 12 * i, section)) return false;
+  }
+  if (section === SECTION_THUMBNAIL) return true;
+  if (start + 2 + n * 12 + 4 > len) return false;
+  const next = tag !== TAG_EXIF_IFD && tag !== TAG_GPS_IFD ? u32(s, x.t, start + 2 + n * 12) : 0;
+  if (!next) return true;
+  // Das nächste Verzeichnis ist das Vorschaubild (bzw. bei Interop ein weiteres)
+  if (next > len) return false;
+  return exifIfd(s, x, next, SECTION_THUMBNAIL, 0);
+}
+
+// exif_process_IFD_TAG(): höchstens 1000 Einträge, Verschachtelung bis 10
+function exifTag(s: ExifState, x: Tiff, entry: number, section: number): boolean {
+  if (s.ifdCount++ > 1000 || s.nesting > 10) return false;
+  s.nesting++;
+  try {
+    return exifTagImpl(s, x, entry, section);
+  } finally {
+    s.nesting--;
+  }
+}
+
+function exifTagImpl(s: ExifState, x: Tiff, entry: number, section: number): boolean {
+  const t = x.t;
+  const tag = u16(s, t, entry);
+  let format = u16(s, t, entry + 2);
+  const components = u32(s, t, entry + 4);
+  if (!format || format > 13) format = 1;
+  const bytes = components * TIFF_SIZES[format];
+  if (bytes > 0x7fffffff) return false;
+  let value: Buffer;
+  if (bytes > 4) {
+    const off = u32(s, t, entry + 8);
+    if (off + bytes <= t.length) {
+      value = t.subarray(off, off + bytes);
+    } else {
+      // Außerhalb der APP1: PHP liest an derselben Stelle in der Datei (ab dem TIFF-Kopf gezählt)
+      const size = s.b.length;
+      if (bytes > size || off > size - bytes) return false;
+      const at = x.displacement + off;
+      if (at + bytes > size) return false;
+      value = s.b.subarray(at, at + bytes);
+    }
+  } else {
+    value = t.subarray(entry + 8, entry + 8 + bytes);
+  }
+  s.any = true;
+  if (section === SECTION_THUMBNAIL) {
+    if (!bytes) return false;
+  } else if (section === SECTION_IFD0 || section === SECTION_EXIF) {
+    if (NOT_EMPTY.has(tag) && !bytes) return false;
+    if (tag === 0x829d) {
+      s.aperture = Math.fround(exifNumber(s, value, format));
+    } else if ((tag === 0x9202 || tag === 0x9205) && s.aperture === 0) {
+      if (!bytes) return false;
+      s.aperture = Math.fround(Math.exp(Math.fround(exifNumber(s, value, format) * Math.fround(Math.LN2) * 0.5)));
+    } else if (tag === 0x9201 && s.exposure === 0) {
+      if (!bytes) return false;
+      s.exposure = Math.fround(Math.exp(Math.fround(-exifNumber(s, value, format) * Math.fround(Math.LN2))));
+    } else if (tag === 0x829a) {
+      s.exposure = -1;
+    } else if (tag === TAG_EXIF_IFD || tag === TAG_GPS_IFD || tag === TAG_INTEROP_IFD) {
+      if (!bytes) return false;
+      // Zeiger: immer vier Bytes ab dem Wert (bei kurzen Formaten aus dem Eintrag selbst)
+      const off = u32(s, bytes > 4 ? value : t.subarray(entry + 8, entry + 12), 0);
+      if (off > t.length) return false;
+      const sub = tag === TAG_EXIF_IFD ? SECTION_EXIF : tag === TAG_GPS_IFD ? SECTION_GPS : SECTION_INTEROP;
+      if (!exifIfd(s, x, off, sub, tag)) return false;
+    }
+    // exif_iif_add_tag(): der Name „Orientation“ gilt in IFD0 und im Exif-IFD
+    if (tag === 0x0112) s.values.set(section, exifValue(s, value, format, components));
+  }
+  return true;
+}
+
+// exif_convert_any_format() (für Blende und Belichtung)
+function exifNumber(s: ExifState, v: Buffer, format: number): number {
+  switch (format) {
+    case 6: return v.readInt8(0);
+    case 1: return v[0];
+    case 3: return u16(s, v, 0);
+    case 4: return u32(s, v, 0);
+    case 5: {
+      const den = u32(s, v, 4);
+      return den === 0 ? 0 : u32(s, v, 0) / den;
+    }
+    case 10: {
+      const den = s32(s, v, 4);
+      return den === 0 ? 0 : s32(s, v, 0) / den;
+    }
+    case 8: return (u16(s, v, 0) << 16) >> 16;
+    case 9: return s32(s, v, 0);
+    // Kommazahlen liest PHP immer als Little Endian
+    case 11: return v.readFloatLE(0);
+    case 12: return v.readDoubleLE(0);
+    default: return 0;
+  }
+}
+
+// exif_iif_add_value() + add_assoc_image_info(): Bytes und Texte werden Strings, Zahlen nur bei genau einem Wert
+function exifValue(s: ExifState, v: Buffer, format: number, components: number): ExifValue {
+  if (!components) return null;
   if (format === 2) {
     const nul = v.indexOf(0);
-    return v.toString('latin1', 0, nul < 0 ? v.length : nul);
+    const len = nul < 0 ? v.length : nul;
+    return len ? v.toString('latin1', 0, len) : null;
   }
-  if (format === 7 || ((format === 1 || format === 6) && count > 1)) return v.toString('latin1');
-  if (count > 1) return [count];
-  if (v.length < TIFF_SIZES[format]) return null;
+  if (format === 1 || format === 6 || format === 7 || format === 13) return v.toString('latin1');
+  if (components > 1) return [components];
   switch (format) {
-    case 1: return v[0];
-    case 6: return v.readInt8(0);
-    case 3: return mm ? v.readUInt16BE(0) : v.readUInt16LE(0);
-    case 8: return mm ? v.readInt16BE(0) : v.readInt16LE(0);
-    case 4: return mm ? v.readUInt32BE(0) : v.readUInt32LE(0);
-    case 9: return mm ? v.readInt32BE(0) : v.readInt32LE(0);
-    case 5: case 10: {
-      const num = format === 5 ? (mm ? v.readUInt32BE(0) : v.readUInt32LE(0)) : (mm ? v.readInt32BE(0) : v.readInt32LE(0));
-      const den = format === 5 ? (mm ? v.readUInt32BE(4) : v.readUInt32LE(4)) : (mm ? v.readInt32BE(4) : v.readInt32LE(4));
-      return num + '/' + den;
-    }
-    case 11: return mm ? v.readFloatBE(0) : v.readFloatLE(0);
-    case 12: return mm ? v.readDoubleBE(0) : v.readDoubleLE(0);
-    default: return null;
+    case 3: return u16(s, v, 0);
+    case 4: return u32(s, v, 0) | 0;
+    case 5: return u32(s, v, 0) + '/' + u32(s, v, 4);
+    case 8: return (u16(s, v, 0) << 16) >> 16;
+    case 9: return s32(s, v, 0);
+    case 10: return s32(s, v, 0) + '/' + s32(s, v, 4);
+    case 11: return v.readFloatLE(0);
+    default: return v.readDoubleLE(0);
   }
 }
 
@@ -334,6 +614,7 @@ export async function processImage(src: Buffer, ext: string, maxPx: number, targ
     src = png;
   }
   if (ext === 'webp' && webpAnimated(src)) return false;
+  if (ext === 'jpg' && !jpegAsGdReads(src)) return false;
   let width: number;
   let height: number;
   try {

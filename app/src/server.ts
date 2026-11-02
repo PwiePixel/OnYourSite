@@ -1,13 +1,13 @@
 // OnYourSite – Webserver (Node.js). Fastify nimmt die Anfragen an, alles Weitere passiert in dispatch() wie früher
 // in index.php. Formulare und Uploads werden wie von PHP gelesen ($_POST/$_FILES-Regeln).
 import Fastify from 'fastify';
-import Busboy from 'busboy';
 import { Readable } from 'node:stream';
-import { Ctx, isHalt, type UploadedFile } from './web/ctx.js';
+import { Ctx, isHalt } from './web/ctx.js';
+import { phpMultipart, rfc1867Boundary } from './web/multipart.js';
 import { DbUnavailableError } from './db.js';
 import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
-import { setPhpVar, parseStr, strtolower } from './php.js';
+import { parseFormBody, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
@@ -17,7 +17,9 @@ const POST_MAX = 20 * 1024 * 1024;
 const UPLOAD_MAX = 16 * 1024 * 1024;
 const BODY_LIMIT = 25 * 1024 * 1024;
 
-export async function buildServer() {
+// opts.dispatch: nur für Tests (z. B. ein Datenstrom, der beim Senden scheitert)
+export async function buildServer(opts: { dispatch?: (ctx: Ctx) => Promise<void> } = {}) {
+  const run = opts.dispatch ?? dispatch;
   loadConfig();
   // Zeitzone der Seite für alles, was Date benutzt
   process.env.TZ = timeZone();
@@ -56,6 +58,19 @@ export async function buildServer() {
   app.removeAllContentTypeParsers();
   app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: BODY_LIMIT }, (_req, body, done) => done(null, body));
 
+  // Fehler außerhalb von dispatch() (Datenstrom scheitert beim Senden, Inhalt zu groß, …): nie den Server beenden und
+  // nie die Fehlermeldung zeigen – wie PHP ohne Fehleranzeige eine leere Antwort (500, bei Fastify-Fehlern der Anfrage
+  // wie 413 deren Status). Ist die Antwort schon unterwegs, bleibt nur der Abbruch der Verbindung.
+  app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
+    console.error(`[${new Date().toISOString()}] ${req.method} ${(req.raw as typeof req.raw & { oysUrl?: string }).oysUrl ?? req.url}:`, err);
+    if (reply.sent || reply.raw.headersSent) {
+      reply.raw.destroy();
+      return;
+    }
+    const code = err.statusCode !== undefined && err.statusCode >= 400 && err.statusCode < 500 ? err.statusCode : 500;
+    void reply.code(code).header('content-type', 'text/html; charset=UTF-8').send('');
+  });
+
   app.route({
     method: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     url: '/',
@@ -64,11 +79,12 @@ export async function buildServer() {
       const ctx = new Ctx({ method: req.method, url: rawUrl, headers: req.headers, peer: req.socket.remoteAddress || '' });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       ctx.rawBody = body;
-      if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && body.length <= POST_MAX) {
+      // $_POST/$_FILES füllt PHP nur bei POST (PUT, PATCH, DELETE: leer, nur php://input hat den Inhalt)
+      if (ctx.method === 'POST' && body.length <= POST_MAX) {
         await readBody(ctx, String(req.headers['content-type'] ?? ''), body);
       }
       try {
-        await dispatch(ctx);
+        await run(ctx);
       } catch (err) {
         if (err instanceof DbUnavailableError) {
           // Wie db.php: Hinweisseite mit 503 statt eines leeren Fehlers
@@ -86,13 +102,22 @@ export async function buildServer() {
       } finally {
         if (ctx.session) await ctx.session.close().catch((e) => console.error('session save failed:', e));
       }
-      reply.code(ctx.status);
-      for (const [name, value] of ctx.headersOut()) {
+      // Ein Status, den Node nicht senden kann, wäre ein Fehler beim Senden: dann wie bei jedem Fehler 500
+      reply.code(Number.isInteger(ctx.status) && ctx.status >= 100 && ctx.status <= 999 ? ctx.status : 500);
+      for (const [name, rawValue] of ctx.headersOut()) {
+        const value = headerValue(name, rawValue);
+        if (value === null) continue;
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
-        else reply.header(name, value);
+        // Name so, wie der Code ihn schreibt (PHP: header('Location: …')) – Fastify schreibt ihn sonst klein. Apache reicht
+        // die Namen unverändert weiter. Content-Length braucht Fastify zusätzlich selbst (HEAD, Längenprüfung).
+        else {
+          reply.raw.setHeader(name, value);
+          if (name.toLowerCase() === 'content-length') reply.header(name, value);
+        }
       }
-      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher)
-      if (ctx.status === 304) {
+      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher).
+      // 204 ebenso – ohne Inhalt behält Fastify den Content-Type, den PHP auch hier mitsendet (/_/v, /_/c)
+      if (ctx.status === 304 || ctx.status === 204) {
         if (ctx.body instanceof Readable) ctx.body.destroy();
         return reply.send();
       }
@@ -110,6 +135,17 @@ export async function buildServer() {
   return app;
 }
 
+// Kopfzeilen, die Node nicht senden kann (ungültiger Name, Zeilenumbruch, Steuerzeichen, Zeichen über U+00FF), fallen
+// mit einer Meldung weg, statt die ganze Antwort mit einem Fehler (500) zu beenden. PHP sendet Zeilen mit Zeilenumbruch
+// ebenfalls nicht; Zeichen über U+00FF setzt der Code der Seite nirgends in Kopfzeilen (Location wandelt redirect() um).
+const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const INVALID_VALUE = /[^\t\x20-\x7e\x80-\xff]/;
+export function headerValue(name: string, value: string): string | null {
+  if (TOKEN.test(name) && !INVALID_VALUE.test(value)) return value;
+  console.error(`[${new Date().toISOString()}] header not sent (invalid characters): ${JSON.stringify(name)}`);
+  return null;
+}
+
 // $_POST/$_FILES: nur bei urlencoded und multipart. Den Typ liest PHP (SAPI) klein geschrieben bis zum ersten ';', ','
 // oder Leerzeichen – ohne trim (ein Tabulator gehört zum Typ).
 export function phpPostType(contentType: string): string {
@@ -118,67 +154,34 @@ export function phpPostType(contentType: string): string {
 }
 
 // Grenze wie rfc1867.c: das erste "boundary" im ganzen Wert (sonst ohne Rücksicht auf Groß-/Kleinschreibung), ab dem
-// nächsten '=' der Wert in Anführungszeichen oder bis zum ersten ',' oder ';'. null = PHP liest nichts.
+// nächsten '=' der Wert in Anführungszeichen oder bis zum ersten ',' oder ';'. null = keine (oder eine leere) Grenze.
 export function phpBoundary(contentType: string): string | null {
-  let at = contentType.indexOf('boundary');
-  if (at < 0) at = strtolower(contentType).indexOf('boundary');
-  const eq = at < 0 ? -1 : contentType.indexOf('=', at);
-  if (eq < 0) return null;
-  const rest = contentType.slice(eq + 1);
-  if (rest.startsWith('"')) {
-    const end = rest.indexOf('"', 1);
-    return end < 0 ? null : rest.slice(1, end) || null;
-  }
-  const end = rest.search(/[,;]/);
-  return (end >= 0 ? rest.slice(0, end) : rest) || null;
+  return rfc1867Boundary(contentType) || null;
 }
 
 export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
   const type = phpPostType(contentType);
   if (type === 'application/x-www-form-urlencoded') {
-    ctx.post = parseStr(body.toString('utf8'), true);
+    // Bytes, die kein gültiges UTF-8 sind, bleiben wie in PHP erhalten (phpText); gelesen wird auf den Bytes, ohne den
+    // ganzen Inhalt erst als Text zu lesen (parseFormBody)
+    ctx.post = parseFormBody(body);
     return;
   }
   if (type !== 'multipart/form-data') return;
-  const boundary = phpBoundary(contentType);
-  if (boundary === null) return;
-  await new Promise<void>((resolve) => {
-    let bb: Busboy.Busboy;
-    try {
-      // Busboy bekommt die Grenze, die PHP gefunden hat, in einer Form, die es sicher liest
-      const header = `multipart/form-data; boundary="${boundary.replace(/["\\]/g, '\\$&')}"`;
-      bb = Busboy({ headers: { 'content-type': header }, defParamCharset: 'utf8', limits: { fileSize: UPLOAD_MAX + 1 } });
-    } catch {
-      resolve();
-      return;
-    }
-    bb.on('field', (name, value) => setPhpVar(ctx.post, name, value));
-    bb.on('file', (name, stream, info) => {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      let tooBig = false;
-      stream.on('data', (c: Buffer) => {
-        size += c.length;
-        if (size > UPLOAD_MAX) tooBig = true;
-        else chunks.push(c);
-      });
-      stream.on('end', () => {
-        const file: UploadedFile = info.filename === undefined || info.filename === ''
-          ? { name: '', type: '', size: 0, data: Buffer.alloc(0), error: 4 }
-          : { name: info.filename, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 };
-        // Nur einfache Namen wie in den Formularen der Seite (avatar, file …)
-        ctx.files[name.replace(/\[\]$/, '')] = file;
-      });
-    });
-    bb.on('close', () => resolve());
-    bb.on('error', () => resolve());
-    bb.end(body);
-  });
+  // multipart liest PHP selbst (web/multipart.ts, wie rfc1867.c) – danach ist php://input leer
+  const form = phpMultipart(contentType, body, UPLOAD_MAX);
+  if (form === null) return;
+  ctx.rawBody = Buffer.alloc(0);
+  ctx.post = form.post;
+  ctx.files = form.files;
 }
 
 // Start: node dist/server.js (Port und Adresse aus den Einstellungen oder PORT/HOST)
 const isMain = process.argv[1] && /server\.(js|ts)$/.test(process.argv[1]);
 if (isMain) {
+  // Ein vergessenes await (z. B. eine Mail im Hintergrund) darf nicht den ganzen Server beenden – in PHP träfe so ein
+  // Fehler nur die eine Anfrage. Meldung ins Log, der Server läuft weiter.
+  process.on('unhandledRejection', (err) => console.error(`[${new Date().toISOString()}] unhandled rejection:`, err));
   try {
     const app = await buildServer();
     const port = Number(process.env.PORT) || configInt('node_port', 3000);

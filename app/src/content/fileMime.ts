@@ -497,6 +497,8 @@ const RULES: Rule[] = [
   { s: 190, test: (b) => (at(b, 0, '\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR') ? 'image/png' : null) },
   { s: 190, test: (b) => (at(b, 0, 'SQLite format 3\0') && b.length >= 18 ? 'application/vnd.sqlite3' : null) },
   { s: 180, test: (b) => (atCI(b, 0, 'BEGIN:VCALENDAR') ? 'text/calendar' : null) },
+  // MBWF/RF64 (WAV über 4 GiB, ffmpeg und Aufnahmegeräte schreiben es auch kleiner): riff, „0 string RF64\xff\xff\xff\xffWAVEds64“
+  { s: 180, test: (b) => (at(b, 0, 'RF64\xff\xff\xff\xffWAVEds64') ? 'audio/x-wav' : null) },
   { s: 170, test: (b) => (at(b, 0, '\xef\xbb\xbf%PDF-') ? 'application/pdf' : null) },
   { s: 150, test: (b) => (at(b, 0, '\n%PDF-') ? 'application/pdf' : null) },
   { s: 150, test: (b) => (at(b, 0, '\0\0\0\x0cjP  \r\n\x87\n') ? 'image/jp2' : at(b, 0, '\0\0\0\x0cJXL \r\n\x87\n') ? 'image/x-jxl' : null) },
@@ -632,8 +634,26 @@ function textMagic(t: string): string | null {
   if (/^(Path:|Xref:|Article )/.test(t)) return 'message/news';
   const c = t.slice(0, 8192);
   if (/^#include/m.test(c) || /^#[\t\n\v\f\r ]*pragma/m.test(c) || (/^#[\t\n\v\f\r ]*(if|ifn)def/m.test(c) && /^#[\t\n\v\f\r ]*(endif$|define)/m.test(c))
-    || /^struct[\t\n\v\f\r ]+/m.test(c) || /^union[\t\n\v\f\r ]+/m.test(c) || /^[\t\n\v\f\r ]*extern[\t\n\v\f\r ]+/m.test(c)) return 'text/x-c';
+    || /^struct[\t\n\v\f\r ]+/m.test(c) || /^union[\t\n\v\f\r ]+/m.test(c) || externLine(c)) return 'text/x-c';
   return null;
+}
+
+// /^[\t\n\v\f\r ]*extern[\t\n\v\f\r ]+/m ohne Rückverfolgung: Weil der Leerraum auch Zeilenumbrüche enthält, lief V8 von
+// jedem Zeilenanfang einer langen Leerraum-Folge bis zu ihrem Ende (8 KB Zeilenumbrüche: über 100 ms je Upload, quadratisch).
+// „extern“ beginnt nach dem ganzen Leerraum davor – also genügt es, von jedem Vorkommen rückwärts über Leerraum einen
+// Zeilenanfang zu suchen (Textanfang oder nach \n, \r, U+2028, U+2029 wie ^ mit /m in JavaScript).
+export function externLine(c: string): boolean {
+  const space = (x: number): boolean => x === 0x20 || (x >= 0x09 && x <= 0x0d);
+  for (let w = c.indexOf('extern'); w >= 0; w = c.indexOf('extern', w + 1)) {
+    if (!space(c.charCodeAt(w + 6))) continue;
+    for (let p = w; ; p--) {
+      if (p === 0) return true;
+      const prev = c.charCodeAt(p - 1);
+      if (prev === 0x0a || prev === 0x0d || prev === 0x2028 || prev === 0x2029) return true;
+      if (!space(prev)) break;
+    }
+  }
+  return false;
 }
 
 function nulTrimmed(b: Buffer): Buffer {

@@ -1,14 +1,15 @@
-// Eigenes CSS: cleanCss() muss Byte für Byte wie oys_clean_css() arbeiten – feste Fälle und Zufallseingaben
+// Eigenes CSS: cleanCss() muss Byte für Byte wie oys_clean_css() der PHP-Version arbeiten (siehe support/phpRef.ts) –
+// feste Fälle und Zufallseingaben
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR } from '../src/config.js';
 import { cleanCss } from '../src/css.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 function phpClean(inputs: string[]): string[] {
-  const script = `require '${ROOT_DIR}/lib/config.php'; require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/pages.php';`
+  const script = `require '${phpFile('lib/config.php')}'; require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/pages.php')}';`
     + '$in = json_decode(stream_get_contents(STDIN), true); echo json_encode(array_map("oys_clean_css", $in));';
-  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(inputs), cwd: ROOT_DIR, maxBuffer: 64 * 1024 * 1024 }).toString());
+  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(inputs), cwd: phpRoot(), maxBuffer: 64 * 1024 * 1024 }).toString());
 }
 
 const CASES = [
@@ -30,7 +31,11 @@ const CASES = [
 // (ungültiges UTF-8 nach dem Abschneiden) – die fremde Adresse bliebe stehen. Node prüft sie und entfernt sie.
 const SAFER_IN_NODE: Record<string, string> = { "a{x:url('https://evil.com/é": "a{x:url(''" };
 
-test('fixed cases match PHP', () => {
+test('the cases PHP lets through are cleaned', () => {
+  for (const [input, cleaned] of Object.entries(SAFER_IN_NODE)) assert.equal(cleanCss(input), cleaned);
+});
+
+test('fixed cases match PHP', { skip: PHP_SKIP }, () => {
   const php = phpClean(CASES);
   const mismatches = CASES.map((s, i) => ({ i, input: s.slice(0, 80), node: cleanCss(s), php: php[i] }))
     .filter((m) => m.node !== (SAFER_IN_NODE[CASES[m.i]] ?? m.php))
@@ -39,7 +44,7 @@ test('fixed cases match PHP', () => {
   for (const input of Object.keys(SAFER_IN_NODE)) assert.equal(phpClean([input])[0], input, 'PHP still lets this through');
 });
 
-test('random CSS matches PHP', () => {
+test('random CSS matches PHP', { skip: PHP_SKIP }, () => {
   // Bausteine, die den Filter fordern: Funktionen, Escapes, Anführungszeichen, Kommentare, Umlaute, Emoji
   const parts = ['url', 'URL', 'image-set', 'src', 'cross-fade', 'calc', 'var', '(', ')', '"', "'", '\\', '\\72', '\\75 ', '\\6c', '/*', '*/', '/', '//',
     'https:', 'data:', '#', 'evil.com', ' ', '\n', '\t', '@import', ';', '{', '}', '<', 'é', '🐝', 'a', 'u', 'r', 'l', '-', ':', ',', '\0', '\\\n', '\x0B', '\xA0'];

@@ -2,7 +2,7 @@
 import type { Ctx } from '../web/ctx.js';
 import { exec, q, withNamedLock, type Row } from '../db.js';
 import { mainUrl } from '../helpers.js';
-import { date, intval, strtolower, time } from '../php.js';
+import { date, intval, time } from '../php.js';
 import { PhpArr, jsonField, oysJsonBody, phpCastString, phpJsonDecode, phpJsonTruthy, type PhpJson } from './json.js';
 import {
   BOT_TEXT_MAX, botSecret, botSeen, botVerify, communityText, headerValue, snowflake, suggestionDecide, suggestionGet,
@@ -15,15 +15,6 @@ const MAX_BODY = 65536;
 // oys_json() mit den Regeln von json_encode() (ein Fehler ergibt einen leeren Inhalt)
 function json(ctx: Ctx, data: unknown, code = 200): never {
   return ctx.json(data, code, oysJsonBody);
-}
-
-// php://input: bei multipart/form-data liest PHP den Inhalt selbst ein und lässt php://input leer.
-// Den Typ vergleicht PHP klein geschrieben bis zum ersten ';', ',' oder Leerzeichen.
-function phpInput(ctx: Ctx): Buffer {
-  const type = headerValue(ctx.headers['content-type']);
-  const cut = type.search(/[;, ]/);
-  if (strtolower(cut >= 0 ? type.slice(0, cut) : type) === 'multipart/form-data') return Buffer.alloc(0);
-  return ctx.rawBody;
 }
 
 // $in['key'] ?? $fallback
@@ -41,7 +32,10 @@ export async function botApi(ctx: Ctx): Promise<void> {
   if (botSecret() === '') {
     json(ctx, { ok: false, error: 'Not found.' }, 404);
   }
-  const raw = method === 'POST' ? phpInput(ctx) : Buffer.alloc(0);
+  // php://input: ctx.rawBody. Den Inhalt von multipart/form-data liest PHP selbst und lässt php://input dann leer – das
+  // entscheidet der Kern (server.ts readBody mit web/multipart.ts) genau wie PHP: ohne gültige Grenze (boundary fehlt,
+  // Anführungszeichen ohne Ende) oder über post_max_size bleibt der Inhalt lesbar.
+  const raw = method === 'POST' ? ctx.rawBody : Buffer.alloc(0);
   if (raw.length > MAX_BODY || !botVerify(method, ctx.rawUrl, raw, headerValue(ctx.headers['x-oys-timestamp']), headerValue(ctx.headers['x-oys-signature']))) {
     json(ctx, { ok: false, error: 'Unauthorized.' }, 401);
   }

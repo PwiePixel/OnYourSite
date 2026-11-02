@@ -1,6 +1,7 @@
-// Vorschaubilder gegen PHP (lib/share.php mit GD): Textbreiten wie imagettfbbox, Umbrüche und Kürzungen wie
-// oys_og_wrap/oys_og_fit, Farben, das fertige PNG (Größe, Format, Pixel) und die Auslieferung unter /_/og/ mit
-// Zwischenspeicher, Aufräumen und Kopfzeilen – PHP läuft dafür als echter Server (php -S mit index.php).
+// Vorschaubilder gegen PHP (lib/share.php mit GD, aus der PHP-Version – siehe support/phpRef.ts): Textbreiten wie
+// imagettfbbox, Umbrüche und Kürzungen wie oys_og_wrap/oys_og_fit, Farben, das fertige PNG (Größe, Format, Pixel) und
+// die Auslieferung unter /_/og/ mit Zwischenspeicher, Aufräumen und Kopfzeilen – PHP läuft dafür als echter Server
+// (php -S mit index.php). Ohne PHP prüfen eigene Tests die Auslieferung und die Grenzen der Bilder in Node.
 import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -10,7 +11,6 @@ import { crc32, deflateSync } from 'node:zlib';
 import http from 'node:http';
 import net from 'node:net';
 import sharp from 'sharp';
-import { ROOT_DIR } from '../src/config.js';
 import { closePool, one } from '../src/db.js';
 import { makeTestCtx, isHalt } from '../src/web/ctx.js';
 import { ogClean, ogContrast, ogFit, ogFont, ogHash, ogLoadImage, ogMix, ogRender, ogRgb, ogServe, ogWidth, ogWrap } from '../src/content/share.js';
@@ -18,6 +18,7 @@ import { themes } from '../src/content/themes.js';
 import { uploadsDir } from '../src/content/storage.js';
 import { jsonDecode } from '../src/content/util.js';
 import { jsonText, rng, runPhp } from './modelHarness.js';
+import { PHP_SKIP, phpRoot } from './support/phpRef.js';
 
 after(() => closePool());
 
@@ -42,7 +43,7 @@ function titles(seed: number, n: number): string[] {
   return out;
 }
 
-test('text widths match imagettfbbox for both fonts and every size the card uses', () => {
+test('text widths match imagettfbbox for both fonts and every size the card uses', { skip: PHP_SKIP }, () => {
   const list = titles(1, 600).flatMap((t, i) => [[t, i % 2 === 0, [72, 68, 64, 60, 56, 52, 48, 164, 32, 30, 24][i % 11]]]) as Array<[string, boolean, number]>;
   const fonts = [ogFont(true), ogFont(false)];
   const expected = php('foreach ($in as [$s, $bold, $pt]) { $out[] = oys_og_width($s, oys_og_font($bold), $pt); }', list) as number[];
@@ -50,7 +51,7 @@ test('text widths match imagettfbbox for both fonts and every size the card uses
   assert.deepEqual(actual.map((w, i) => (w === expected[i] ? '' : `${JSON.stringify(list[i])}: php ${expected[i]} node ${w}`)).filter(Boolean), []);
 });
 
-test('line breaks and shortening match oys_og_wrap/oys_og_fit for typical titles, subtitles and addresses', () => {
+test('line breaks and shortening match oys_og_wrap/oys_og_fit for typical titles, subtitles and addresses', { skip: PHP_SKIP }, () => {
   const ts = titles(2, 400);
   const cases: Array<[string, boolean, number, number, number]> = [];
   for (const [i, t] of ts.entries()) {
@@ -70,7 +71,7 @@ test('line breaks and shortening match oys_og_wrap/oys_og_fit for typical titles
   assert.ok(expectWrap.filter((l) => l.length === 2 && l[1].endsWith('…')).length > 50, 'long titles are shortened on the second line');
 });
 
-test('cleaning, colours, mixing and contrast match PHP', () => {
+test('cleaning, colours, mixing and contrast match PHP', { skip: PHP_SKIP }, () => {
   const clean = ['', 'Art 🎨 & Design  ✨', ' a\tb\nc\r\nd ', ' nbsp em　', 'zero​width‏', 'var️sel', '﻿bom', 'tag\u{e0041}x', '☕ coffee ⭐', '🀄🃏',
     'ok', '0', 'a\u0085b', 'a᠎b', 'mixed \u{1F600}\u{1F64F}\u{1FAFF} end', '☀➿⬀⯿'];
   assert.deepEqual(clean.map(ogClean), php('foreach ($in as $s) { $out[] = oys_og_clean($s); }', clean));
@@ -153,7 +154,7 @@ function pngHeader(png: Buffer): { width: number; height: number; depth: number;
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20), depth: png[24], colorType: png[25] };
 }
 
-test('OG cards have the same size, format and picture as the GD version', async () => {
+test('OG cards have the same size, format and picture as the GD version', { skip: PHP_SKIP }, async () => {
   const pages = [
     { id: 7, slug: 'mia', address_mode: 'subdomain', title: 'Mia Sommer', subtitle: 'Music & livestreams', bio: '', avatar: '', theme: 'galaxy', settings: '{}' },
     { id: 8, slug: 'tom', address_mode: 'path', title: 'A really long name that will never fit on one single line of the card', subtitle: '', bio: '\n\n0\nsecond', avatar: AV + '1.webp', theme: 'minimal', settings: '{"accent":"#ffffff","hide_branding":true}' },
@@ -237,7 +238,7 @@ function gifPixels(img: { width: number; height: number; px: Int32Array } | null
   return [img.width, img.height, createHash('sha1').update(s).digest('hex')];
 }
 
-test('GIF avatars load like imagecreatefromgif: first frame in its own size, same failures and transparency', async () => {
+test('GIF avatars load like imagecreatefromgif: first frame in its own size, same failures and transparency', { skip: PHP_SKIP }, async () => {
   const base = (JSON.parse(runPhp(`${PHP_GIFS} echo json_encode([base64_encode(gif_gd(100, 80, false)), base64_encode(gif_gd(64, 48, true))]);`, '[]')) as string[])
     .map((x) => Buffer.from(x, 'base64'));
   const files = new Map<string, Buffer>();
@@ -417,7 +418,7 @@ function withoutApp14(b: Buffer): Buffer {
   return Buffer.concat(parts);
 }
 
-test('photo avatars of every PNG, JPEG and WebP kind load like oys_og_load_image (tRNS, 16 bit, palettes, CMYK)', async () => {
+test('photo avatars of every PNG, JPEG and WebP kind load like oys_og_load_image (tRNS, 16 bit, palettes, CMYK)', { skip: PHP_SKIP }, async () => {
   const w = 40;
   const h = 30;
   const plte = pngChunk('PLTE', Buffer.from(Array.from({ length: 16 * 3 }, (_v, i) => (i * 53) % 256)));
@@ -487,7 +488,8 @@ async function freePort(): Promise<number> {
 
 async function startPhp(): Promise<void> {
   port = await freePort();
-  server = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', ROOT_DIR, ROOT_DIR + '/index.php'], { cwd: ROOT_DIR, stdio: 'ignore' });
+  const root = phpRoot();
+  server = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', root, root + '/index.php'], { cwd: root, stdio: 'ignore' });
   for (let i = 0; i < 100; i++) {
     const ok = await new Promise<boolean>((resolve) => {
       const c = net.connect(port, '127.0.0.1', () => {
@@ -550,7 +552,40 @@ function prepareCache(id: number): void {
 
 const listCache = (): string[] => (existsSync(OG_DIR()) ? readdirSync(OG_DIR()).sort() : []);
 
-test('/_/og/ serves, caches and cleans up like oys_og_serve (status, headers, files)', async () => {
+test('/_/og/ serves, caches and cleans up (status, headers, files)', async () => {
+  const page = (await one('SELECT * FROM pages WHERE id = 1'))!;
+  const hash = ogHash(page);
+  try {
+    // Unbekannte Seite: nichts; alte Kennung: weiter zum aktuellen Bild
+    assert.equal((await nodeGet(99999, hash)).status, 404);
+    const old = await nodeGet(1, '000000000000');
+    assert.equal(old.status, 302);
+    assert.match(old.headers.location, new RegExp(`/_/og/1-${hash}\\.png$`));
+    // Erster Abruf: Bild erzeugen, speichern, ältere Bilder dieser Seite löschen (andere Seiten bleiben)
+    prepareCache(1);
+    const b = await nodeGet(1, hash);
+    assert.deepEqual(listCache(), ['1-cccccccccccc.png.tmp', `1-${hash}.png`, '10-bbbbbbbbbbbb.png', 'x1-a.png'].sort());
+    assert.equal(b.status, 200);
+    assert.equal(b.headers['content-type'], 'image/png');
+    assert.equal(Number(b.headers['content-length']), b.body.length);
+    assert.ok(b.body.equals(readFileSync(`${OG_DIR()}/1-${hash}.png`)), 'the response is the cached file');
+    assert.deepEqual(pngHeader(b.body).width, 1200);
+    // Weitere Abrufe kommen aus dem Zwischenspeicher
+    writeFileSync(`${OG_DIR()}/1-${hash}.png`, b.body.subarray(0, 100));
+    assert.equal((await nodeGet(1, hash)).body.length, 100);
+    // Ordner og/ lässt sich nicht anlegen (eine Datei gleichen Namens): das Bild kommt trotzdem, gespeichert wird nichts
+    rmSync(OG_DIR(), { recursive: true, force: true });
+    writeFileSync(OG_DIR(), 'not a folder');
+    const blocked = await nodeGet(1, hash);
+    assert.equal(readFileSync(OG_DIR(), 'utf8'), 'not a folder');
+    assert.equal(blocked.status, 200);
+    assert.equal(Number(blocked.headers['content-length']), blocked.body.length);
+  } finally {
+    rmSync(OG_DIR(), { recursive: true, force: true });
+  }
+});
+
+test('/_/og/ serves, caches and cleans up like oys_og_serve (status, headers, files)', { skip: PHP_SKIP }, async () => {
   await startPhp();
   const page = (await one('SELECT * FROM pages WHERE id = 1'))!;
   const hash = ogHash(page);
@@ -612,7 +647,8 @@ test('/_/og/ serves, caches and cleans up like oys_og_serve (status, headers, fi
 });
 
 // Grenzen von oys_og_load_image: höchstens 15 MiB, nur der Dateiname zählt (Ordner davor werden ignoriert)
-test('avatar files up to exactly 15 MiB load, larger ones and odd names do not – like oys_og_load_image', async () => {
+// Grenze 15 MiB und Namen: die Datei, die geladen wird (oder nicht), und das Ergebnis von PHP (nur mit OYS_PHP_REF)
+async function avatarLimits(compare: boolean): Promise<void> {
   const png = await sharp({ create: { width: 20, height: 10, channels: 3, background: '#3366cc' } }).png().toBuffer();
   const limit = 15 * 1024 * 1024;
   const files: Record<string, Buffer> = {
@@ -624,12 +660,15 @@ test('avatar files up to exactly 15 MiB load, larger ones and odd names do not �
     'avatar_5_1700000000_small.png/', '', '/', '.', '..', 'avatar_5_1700000000_missing.png'];
   try {
     for (const [k, v] of Object.entries(files)) writeFileSync(UPLOADS + '/' + k, v);
-    const expected = JSON.parse(runPhp(`${PHP_PIXELS} $out = []; foreach ($in as $n) $out[] = og_pixels($n); echo json_encode($out);`, JSON.stringify(names))) as unknown[];
     const got: unknown[] = [];
     for (const n of names) got.push(rgbaPixels(await ogLoadImage(n)));
-    assert.deepEqual(got, expected);
-    assert.deepEqual(expected.map(Boolean), [true, false, true, true, true, false, false, false, false, false]);
+    assert.deepEqual(got.map(Boolean), [true, false, true, true, true, false, false, false, false, false]);
+    if (compare) assert.deepEqual(got, JSON.parse(runPhp(`${PHP_PIXELS} $out = []; foreach ($in as $n) $out[] = og_pixels($n); echo json_encode($out);`, JSON.stringify(names))));
   } finally {
     for (const k of Object.keys(files)) rmSync(UPLOADS + '/' + k, { force: true });
   }
-});
+}
+
+test('avatar files up to exactly 15 MiB load, larger ones and odd names do not', () => avatarLimits(false));
+
+test('avatar files up to exactly 15 MiB load, larger ones and odd names do not – like oys_og_load_image', { skip: PHP_SKIP }, () => avatarLimits(true));

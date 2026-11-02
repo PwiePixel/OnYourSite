@@ -3,6 +3,8 @@
 // (Discord-IDs als Zahl), -0.0, einzelne UTF-16-Ersatzzeichen, die Verschachtelungstiefe und Objekte mit
 // Schlüsseln "0", "1" … verhalten sich in PHP anders.
 
+import { phpFloatToString, phpGcvt } from '../php.js';
+
 // ---------------------------------------------------------------- PHP-Werte
 
 // int (64 Bit) aus PHP
@@ -53,73 +55,8 @@ export function phpJsonTruthy(v: unknown): boolean {
 
 // ---------------------------------------------------------------- Kommazahlen als Text
 
-// Exakte Dezimalziffern einer Kommazahl (ohne Vorzeichen): Ziffern und Position des Kommas (wie decpt in zend_dtoa)
-function exactDigits(f: number): { digits: string; decpt: number } {
-  const view = new DataView(new ArrayBuffer(8));
-  view.setFloat64(0, Math.abs(f));
-  const bits = view.getBigUint64(0);
-  const expBits = Number((bits >> 52n) & 0x7ffn);
-  let mant = bits & ((1n << 52n) - 1n);
-  let exp: number;
-  if (expBits === 0) {
-    exp = -1074;
-  } else {
-    mant |= 1n << 52n;
-    exp = expBits - 1075;
-  }
-  let digits: string;
-  let decpt: number;
-  if (exp >= 0) {
-    digits = (mant << BigInt(exp)).toString();
-    decpt = digits.length;
-  } else {
-    // mant / 2^-exp = mant * 5^-exp / 10^-exp
-    digits = (mant * 5n ** BigInt(-exp)).toString();
-    decpt = digits.length + exp;
-  }
-  const stripped = digits.replace(/0+$/, '');
-  return { digits: stripped, decpt };
-}
-
-// Auf n gültige Stellen runden – bei genau der Hälfte zur geraden Ziffer (zend_dtoa, Modus 2)
-function roundDigits(digits: string, decpt: number, n: number): { digits: string; decpt: number } {
-  if (digits.length <= n) return { digits, decpt };
-  const head = digits.slice(0, n);
-  const rest = digits.slice(n);
-  const first = rest.charCodeAt(0) - 48;
-  const tie = first === 5 && /^5$/.test(rest);
-  const up = first > 5 || (first === 5 && !tie) || (tie && (head.charCodeAt(n - 1) - 48) % 2 === 1);
-  if (!up) return { digits: head.replace(/0+$/, ''), decpt };
-  let carried = (BigInt(head) + 1n).toString();
-  let newDecpt = decpt;
-  if (carried.length > head.length) {
-    newDecpt++;
-    carried = carried.slice(0, n);
-  }
-  return { digits: carried.replace(/0+$/, ''), decpt: newDecpt };
-}
-
-// php_gcvt(): feste Schreibweise oder Exponent (1.0E+25), je nach Lage des Kommas
-function gcvt(digits: string, decpt: number, precision: number, expChar: string): string {
-  if (decpt < 0 ? decpt < -3 : decpt > precision) {
-    const e = decpt - 1;
-    return digits[0] + '.' + (digits.length > 1 ? digits.slice(1) : '0') + expChar + (e < 0 ? '-' : '+') + String(Math.abs(e));
-  }
-  if (decpt <= 0) return '0.' + '0'.repeat(-decpt) + digits;
-  const int = digits.length >= decpt ? digits.slice(0, decpt) : digits + '0'.repeat(decpt - digits.length);
-  const frac = digits.slice(decpt);
-  return frac === '' ? int : int + '.' + frac;
-}
-
-// (string) $float – precision = 14 (php.ini), z. B. 0.1, 1.0E+25, 1.0E-5, -0
-export function phpFloatString(f: number): string {
-  if (Number.isNaN(f)) return 'NAN';
-  if (!Number.isFinite(f)) return f > 0 ? 'INF' : '-INF';
-  if (f === 0) return Object.is(f, -0) ? '-0' : '0';
-  const exact = exactDigits(f);
-  const r = roundDigits(exact.digits, exact.decpt, 14);
-  return (f < 0 ? '-' : '') + gcvt(r.digits, r.decpt, 14, 'E');
-}
+// (string) $float – die Fassung des Kerns (php.ts); der Name bleibt für bestehende Aufrufer
+export const phpFloatString = (f: number): string => phpFloatToString(f);
 
 // json_encode($float) – serialize_precision = -1: kürzeste eindeutige Ziffernfolge, z. B. 0.1, 1.0e+25;
 // unendlich und NaN lassen sich nicht schreiben (null = Fehler)
@@ -128,7 +65,7 @@ export function phpJsonFloat(f: number): string | null {
   if (f === 0) return Object.is(f, -0) ? '-0' : '0';
   const [mant, exp] = Math.abs(f).toExponential().split('e');
   const digits = mant.replace('.', '');
-  return (f < 0 ? '-' : '') + gcvt(digits, Number(exp) + 1, 17, 'e');
+  return (f < 0 ? '-' : '') + phpGcvt(digits, Number(exp) + 1, 17, 'e');
 }
 
 // ---------------------------------------------------------------- json_decode($text, true)

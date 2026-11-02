@@ -2,11 +2,12 @@
 // Node – jeweils vom selben Ausgangsstand. Verglichen werden die Ergebnisse, alle Tabellen (Discord-Einstellungen
 // entschlüsselt), die Aufrufe bei der Discord-Attrappe (Methode, Pfad, Authorization, User-Agent, JSON) und das HTML
 // der Seiten. Die Attrappe startet der Test selbst; mit OYS_DISCORD_MOCK=http://127.0.0.1:PORT läuft er stattdessen
-// gegen eine schon laufende (z. B. discord_mock.py mit /__restart).
+// gegen eine schon laufende (z. B. discord_mock.py mit /__restart). Die PHP-Seite kommt aus der PHP-Version
+// (support/phpRef.ts); ohne OYS_PHP_REF prüft nur der erste Test die Node-Seite allein.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { ROOT_DIR, setConfigForTests, type ConfigData } from '../src/config.js';
+import { setConfigForTests, type ConfigData } from '../src/config.js';
 import { exec } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { Ctx } from '../src/web/ctx.js';
@@ -18,6 +19,7 @@ import { milestoneGet, milestones, taskGet, updateGet, updatePageOf, updatesCoun
 import { startDiscordStandIn, GOOD_TOKEN, type StandIn } from './fixtures/updates/discordStandIn.js';
 import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type TestEnv } from './fixtures/updates/harness.js';
 import { random } from './fixtures/updates/random.js';
+import { PHP_SKIP, phpFile } from './support/phpRef.js';
 
 let env: TestEnv;
 let standIn: StandIn | null = null;
@@ -185,7 +187,46 @@ after(async () => {
   await standIn?.close();
 });
 
-test('updates: saving, dates, versions and validation like PHP', async () => {
+// Nur Node, vom selben Ausgangsstand: Ergebnisse und Aufrufe bei der Discord-Attrappe
+async function nodeOnly(steps: Step[]): Promise<{ results: unknown[]; log: Array<{ method: string; path: string; body: unknown }> }> {
+  await loadFixture(env, fixture());
+  await fetch(mockRoot + '/__restart');
+  const results = await runSteps('node', steps, apiBase);
+  return { results, log: (await (await fetch(mockRoot + '/__log')).json()) as Array<{ method: string; path: string; body: unknown }> };
+}
+
+test('updates, the roadmap and the Discord webhook work in Node on their own', async () => {
+  const { results, log } = await nodeOnly([
+    post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), username: 'OnYourSite Updates', auto_post: '1' }),
+    post('update_save', { title: 'New thing', body: '**x**', version: 'v2.5', category: 'new', publish: '1', announce_field: '1', post_discord: '1', date: TODAY, date_default: TODAY }),
+    post('update_save', { id: '9', title: 'New thing, edited', body: 'changed', publish: '1', announce_field: '1', date: TODAY, date_default: TODAY }),
+    call('oys_update_get', 9),
+    post('update_delete', { id: '9' }),
+    call('oys_update_get', 9),
+    post('milestone_save', { title: 'Next big thing', status: 'next', tasks: 'One\n[x] Two' }),
+    call('oys_milestones', false),
+  ]);
+  const r = results as Array<{ r: unknown }>;
+  assert.deepEqual(r[0], { r: { tab: 'discord', ok: 'Discord settings saved.' } });
+  assert.deepEqual(r[1], { r: { tab: 'updates', ok: 'Update published. It was posted to Discord.' } });
+  assert.deepEqual(r[2], { r: { tab: 'updates', ok: 'Update published. The Discord post was updated too.' } });
+  const saved = r[3].r as Fields;
+  assert.deepEqual([saved.title, saved.body, saved.is_published, saved.discord_message_id, saved.discord_target],
+    ['New thing, edited', 'changed', true, '1300000000000000001', 'webhook:123456']);
+  assert.deepEqual(r.slice(4, 7), [{ r: { tab: 'updates', ok: 'Update deleted.' } }, { r: null }, { r: { tab: 'roadmap', ok: 'Milestone added.' } }]);
+  const added = (r[7].r as Array<{ title: string; tasks: Array<{ title: string; is_done: boolean }>; progress: unknown }>).find((m) => m.title === 'Next big thing');
+  assert.deepEqual(added?.tasks.map((t) => [t.title, t.is_done]), [['One', false], ['Two', true]]);
+  assert.deepEqual(added?.progress, { done: 1, total: 2, percent: 50 });
+  // Discord: neu, bearbeitet, gelöscht – über denselben Webhook, dieselbe Nachricht
+  const path = new URL(hook('123456')).pathname.replace('/api/', '/api/v10/');
+  assert.deepEqual(log.map((l) => [l.method, l.path]), [['POST', path + '?wait=true'], ['PATCH', path + '/messages/1300000000000000001'],
+    ['DELETE', path + '/messages/1300000000000000001']]);
+  const sent = log[0].body as { username?: string; embeds?: Array<{ title?: string }> };
+  assert.equal(sent.username, 'OnYourSite Updates');
+  assert.match(String(sent.embeds?.[0]?.title), /New thing/);
+});
+
+test('updates: saving, dates, versions and validation like PHP', { skip: PHP_SKIP }, async () => {
   const { results } = await same([
     post('update_save', { title: '' }),
     post('update_save', { id: '1', title: '   ' }),
@@ -217,7 +258,7 @@ test('updates: saving, dates, versions and validation like PHP', async () => {
   assert.deepEqual(results[15], { throw: 'TypeError' });
 });
 
-test('updates: publishing, drafts and deleting without Discord like PHP', async () => {
+test('updates: publishing, drafts and deleting without Discord like PHP', { skip: PHP_SKIP }, async () => {
   await same([
     post('update_publish', { id: '3', state: '1' }),
     post('update_publish', { id: '1', state: '' }),
@@ -238,7 +279,7 @@ test('updates: publishing, drafts and deleting without Discord like PHP', async 
   ]);
 });
 
-test('roadmap: milestones and tasks like PHP', async () => {
+test('roadmap: milestones and tasks like PHP', { skip: PHP_SKIP }, async () => {
   const tasks = 'Design the page\r\n- [x] Done thing\n* [ ] open\n\u{2022} [X] bullet done\n[] empty box\nPolish \u{105} task\n\u{C5}ngstr\u{F6}m\nnormal\x0Bvt\n   \n'
     + 'x'.repeat(250) + '\n\u{2028}sep\n\t[x]\ttabbed\n';
   await same([
@@ -290,7 +331,7 @@ test('roadmap: milestones and tasks like PHP', async () => {
   ]);
 });
 
-test('reading updates, pages and permalinks like PHP', async () => {
+test('reading updates, pages and permalinks like PHP', { skip: PHP_SKIP }, async () => {
   const ids = [...Array(50).keys()];
   await same([
     ...ids.map((id) => call('oys_update_page_of', id)),
@@ -300,7 +341,7 @@ test('reading updates, pages and permalinks like PHP', async () => {
   ], { fixture: bigFixture });
 });
 
-test('Discord settings: validation, storage and odd stored values like PHP', async () => {
+test('Discord settings: validation, storage and odd stored values like PHP', { skip: PHP_SKIP }, async () => {
   await same([
     post('discord_save', { mode: 'webhook', webhook_url: 'https://discord.com/channels/123456789012345678/123456789012345678' }),
     call('oys_discord_settings'),
@@ -340,7 +381,7 @@ test('Discord settings: validation, storage and odd stored values like PHP', asy
   ]);
 });
 
-test('Discord webhook: announce, sync and remove send the same requests as PHP', async () => {
+test('Discord webhook: announce, sync and remove send the same requests as PHP', { skip: PHP_SKIP }, async () => {
   const { log } = await same([
     post('discord_test'),
     post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), username: 'OnYourSite Updates', avatar_url: 'https://x.y/logo.png', mention: '@everyone', invite_url: 'discord.gg/abc', auto_post: '1' }),
@@ -368,7 +409,7 @@ test('Discord webhook: announce, sync and remove send the same requests as PHP',
   assert.ok(log.length >= 10, 'the flow talked to Discord');
 });
 
-test('Discord webhook: deleted posts, other webhooks and failures like PHP', async () => {
+test('Discord webhook: deleted posts, other webhooks and failures like PHP', { skip: PHP_SKIP }, async () => {
   await same([
     post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), mention: '1301234567890123457', auto_post: '1' }),
     post('update_save', { id: '4', title: 'On Discord', publish: '1' }),
@@ -418,7 +459,7 @@ test('Discord webhook: deleted posts, other webhooks and failures like PHP', asy
   ]);
 });
 
-test('Discord bot: announce, sync, remove and its errors like PHP', async () => {
+test('Discord bot: announce, sync, remove and its errors like PHP', { skip: PHP_SKIP }, async () => {
   await same([
     post('discord_save', { mode: 'bot', bot_token: GOOD_TOKEN, channel_id: CHANNEL, mention: '<@&1301234567890123457>', username: 'not used for bots', avatar_url: 'https://x.y/a.png', auto_post: '1' }),
     post('update_save', { title: 'Bot news', body: 'Hello **bot**', publish: '1', announce_field: '1', post_discord: '1' }),
@@ -441,7 +482,7 @@ test('Discord bot: announce, sync, remove and its errors like PHP', async () => 
   ]);
 });
 
-test('Discord: a stored message ID with a line break is never sent, like curl in PHP', async () => {
+test('Discord: a stored message ID with a line break is never sent, like curl in PHP', { skip: PHP_SKIP }, async () => {
   // /^\d{5,25}$/ lässt in PHP ein \n am Ende durch; curl lehnt die Adresse dann ab – nichts wird geändert oder gelöscht
   await same([
     post('discord_save', { mode: 'webhook', webhook_url: hook('123456'), auto_post: '1' }),
@@ -454,7 +495,7 @@ test('Discord: a stored message ID with a line break is never sent, like curl in
   ]);
 });
 
-test('Discord unreachable: the same message (curl wording) as PHP', async () => {
+test('Discord unreachable: the same message (curl wording) as PHP', { skip: PHP_SKIP }, async () => {
   const closed = `http://127.0.0.1:${await freePort()}/api`;
   await same([
     post('discord_save', { mode: 'webhook', webhook_url: hook('123456', closed), auto_post: '1' }),
@@ -468,7 +509,7 @@ test('Discord unreachable: the same message (curl wording) as PHP', async () => 
 // Zufällige Folgen von Admin-Aktionen mit Grenzwerten in allen Feldern (leer, Leerraum, Zahlen als Text, Arrays,
 // Unicode, Daten, feindliche Adressen, Discord-Einstellungen, erzwungene Fehler bei Discord) – Ergebnis, Tabellen und
 // Aufrufe bei Discord wie in PHP
-test('random admin action sequences behave like PHP', async () => {
+test('random admin action sequences behave like PHP', { skip: PHP_SKIP }, async () => {
   const rnd = random(20261102);
   const pick = <T>(list: readonly T[]): T => list[rnd(list.length)];
   const texts = ['', ' ', '0', '1', 'yes', 'abc', '  padded  ', '\u{E4}\u{F6}\u{FC}', '\u{1F41D} bee', '<b>&"\'', 'a\r\nb\r\n\r\n\r\nc', '\u{202E}rtl\u{2066}',
@@ -541,7 +582,7 @@ async function sessionCtx(url: string, csrf: string): Promise<Ctx> {
   return new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080', cookie: 'PHPSESSID=' + id }, peer: '127.0.0.1' });
 }
 
-test('admin view: the HTML of admin_updates.php for every state', async () => {
+test('admin view: the HTML of admin_updates.php for every state', { skip: PHP_SKIP }, async () => {
   const csrf = 'c'.repeat(64);
   const variants: Array<{ get: Record<string, string>; setup: Step[] }> = [
     { get: {}, setup: [] },
@@ -561,7 +602,7 @@ test('admin view: the HTML of admin_updates.php for every state', async () => {
       await loadFixture(env, fixture());
       await runSteps(side, v.setup, apiBase);
       if (side === 'php') {
-        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${phpFile('views/admin_updates.php')}'; return ob_get_clean();`,
           { get: v.get, csrf })) as string;
       } else {
         const query = new URLSearchParams(v.get).toString();
@@ -574,7 +615,7 @@ test('admin view: the HTML of admin_updates.php for every state', async () => {
   }
 });
 
-test('public pages: /updates, the feed and permalinks render the same HTML as PHP', async () => {
+test('public pages: /updates, the feed and permalinks render the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   const user = { id: 5, email: 'mia@test.de', full_name: 'Mia', is_admin: 0 };
   const cases: Array<{ url: string; user: unknown; fixture: () => Record<string, Array<Record<string, unknown>>>; setup?: Step[] }> = [
     { url: '/updates', user: null, fixture },
@@ -599,7 +640,7 @@ test('public pages: /updates, the feed and permalinks render the same HTML as PH
       await runSteps(side, c.setup ?? [], apiBase);
       const get = Object.fromEntries(new URLSearchParams(c.url.split('?')[1] ?? ''));
       if (side === 'php') {
-        html.php = (await env.php(`$user_data = $in['user']; $_GET = $in['get']; ob_start(); require '${ROOT_DIR}/views/updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$user_data = $in['user']; $_GET = $in['get']; ob_start(); require '${phpFile('views/updates.php')}'; return ob_get_clean();`,
           { user: c.user, get: c.url.includes('page[]') ? { page: ['3'] } : get })) as string;
       } else {
         const ctx = new Ctx({ method: 'GET', url: c.url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
@@ -614,7 +655,7 @@ test('public pages: /updates, the feed and permalinks render the same HTML as PH
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, f());
       if (side === 'php') {
-        xml.php = (await env.php(`ob_start(); require '${ROOT_DIR}/views/updates_feed.php'; return ob_get_clean();`)) as string;
+        xml.php = (await env.php(`ob_start(); require '${phpFile('views/updates_feed.php')}'; return ob_get_clean();`)) as string;
       } else {
         const ctx = new Ctx({ method: 'GET', url: '/updates/feed.xml', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
         await updatesFeed(ctx);
@@ -677,7 +718,7 @@ function randomData(rnd: (n: number) => number, discord = false): Record<string,
   return { milestones, milestone_tasks: tasks, updates };
 }
 
-test('random data: every page of /updates and the feed render the same HTML as PHP', async () => {
+test('random data: every page of /updates and the feed render the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   const rnd = random(77001);
   for (let round = 0; round < 6; round++) {
     const rows = randomData(rnd);
@@ -691,8 +732,8 @@ test('random data: every page of /updates and the feed render the same HTML as P
         await loadFixture(env, data());
         const feed = url.endsWith('.xml');
         if (side === 'php') {
-          out.php = (await env.php(feed ? `ob_start(); require '${ROOT_DIR}/views/updates_feed.php'; return ob_get_clean();`
-            : `$user_data = null; $_GET = $in; ob_start(); require '${ROOT_DIR}/views/updates.php'; return ob_get_clean();`,
+          out.php = (await env.php(feed ? `ob_start(); require '${phpFile('views/updates_feed.php')}'; return ob_get_clean();`
+            : `$user_data = null; $_GET = $in; ob_start(); require '${phpFile('views/updates.php')}'; return ob_get_clean();`,
           Object.fromEntries(new URLSearchParams(url.split('?')[1] ?? '')))) as string;
         } else {
           const ctx = new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
@@ -708,7 +749,7 @@ test('random data: every page of /updates and the feed render the same HTML as P
 
 // Die Admin-Ansicht auf zufälligen Daten: Formulare zum Bearbeiten, Vorbefüllen aus einem Meilenstein, alle Spalten und
 // alle Discord-Zustände (nicht verbunden, Webhook, Bot, Bot ohne Kanal) – wie admin_updates.php
-test('random data: the admin view renders the same HTML as PHP', async () => {
+test('random data: the admin view renders the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   const rnd = random(99017);
   const csrf = 'd'.repeat(64);
   const discordSetups: Step[][] = [
@@ -731,7 +772,7 @@ test('random data: the admin view renders the same HTML as PHP', async () => {
       await loadFixture(env, structuredClone(rows));
       await runSteps(side, setup, apiBase);
       if (side === 'php') {
-        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${phpFile('views/admin_updates.php')}'; return ob_get_clean();`,
           { get, csrf })) as string;
       } else {
         const query = Object.entries(get).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');

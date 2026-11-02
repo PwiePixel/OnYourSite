@@ -5,8 +5,24 @@ import { mbSubstr, phpTrim } from './php.js';
 
 const URL_FUNCTIONS = ['url', 'image', 'image-set', '-webkit-image-set', 'cross-fade', '-webkit-cross-fade', 'src'];
 // \s von PCRE ohne /u: nur ASCII-Leerraum (JS-\s würde auch das Byte 0xA0 erfassen)
-const WS = ' \\t\\n\\x0B\\f\\r';
-const URL_ARG = new RegExp(`\\([${WS}]*([^${WS}"')][^)]*?)[${WS}]*(?:\\)|$)`, 'y');
+const isWs = (c: number): boolean => c === 0x20 || (c >= 0x09 && c <= 0x0d);
+
+// url(…) ohne Anführungszeichen ab der „(“ an Stelle i – dieselben Treffer wie das PHP-Muster
+// /\G\(\s*([^\s"')][^)]*?)\s*(?:\)|\z)/: Wert vom ersten Zeichen ohne Leerraum bis vor den Leerraum vor der ersten „)“
+// (ohne „)“: bis zum Ende des Texts). Als regulärer Ausdruck brauchte V8 für eine lange Leerraum-Folge im Wert
+// quadratische Zeit (20 000 Leerzeichen: eine Sekunde – bei jedem Speichern und bei jedem Aufruf der Seite, denn das
+// CSS wird auch bei der Ausgabe geprüft). Ergebnis: [ganzer Treffer, Wert] oder null.
+export function urlArg(css: string, i: number): [string, string] | null {
+  const len = css.length;
+  let a = i + 1;
+  while (a < len && isWs(css.charCodeAt(a))) a++;
+  if (a >= len || css[a] === '"' || css[a] === "'" || css[a] === ')') return null;
+  let r = css.indexOf(')', a + 1);
+  if (r < 0) r = len;
+  let e = r;
+  while (e > a + 1 && isWs(css.charCodeAt(e - 1))) e--;
+  return [css.slice(i, r < len ? r + 1 : len), css.slice(a, e)];
+}
 const HEX = /[0-9a-fA-F]/;
 const ALNUM = /^[a-zA-Z0-9]$/;
 
@@ -109,8 +125,7 @@ export function cleanCss(input: unknown): string {
       const name = word.toLowerCase();
       word = '';
       if (name === 'url') {
-        URL_ARG.lastIndex = i;
-        const m = URL_ARG.exec(css);
+        const m = urlArg(css, i);
         if (m) {
           // url(ohne Anführungszeichen) – auch ohne schließende Klammer am Ende
           out += cssExternal(cssUnescape(binToText(m[1]))) ? '("")' : m[0];

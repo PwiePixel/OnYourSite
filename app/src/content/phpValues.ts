@@ -35,7 +35,7 @@ export function phpNumber(v: unknown): number {
 }
 
 // (string) einer Kommazahl (z. B. das Ergebnis von round()): auch ganzzahlige Werte mit 14 Stellen (1.0E+14), -0 bleibt "-0"
-export const phpFloatStr = (v: number): string => (Object.is(v, -0) ? '-0' : phpFloatToString(v));
+export const phpFloatStr = (v: number): string => phpFloatToString(v);
 
 // ---------------------------------------------------------------- json_encode() mit Kommazahlen wie PHP
 

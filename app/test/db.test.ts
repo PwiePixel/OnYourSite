@@ -1,9 +1,11 @@
-// Datenbank-Regeln gegen PDO: geänderte Zeilen, Typen, Zeitzone je Verbindung, Sperren, Socket für 'localhost'
+// Datenbank-Regeln gegen PDO: geänderte Zeilen, Typen, Zeitzone je Verbindung, Sperren, Socket für 'localhost' (der
+// Vergleich mit PDO braucht die PHP-Version, siehe support/phpRef.ts)
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool, exec, one, q, value, withNamedLock, withConnection, transaction, outsidePinned, LockBusyError, DbUnavailableError, tzOffset } from '../src/db.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const withDb = (patch: Record<string, unknown>) => setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), ...patch } as ConfigData });
@@ -15,33 +17,39 @@ after(async () => {
 
 // Dieselben Anweisungen in PHP (PDO wie db.php) – rowCount() nach jeder
 function phpRowCounts(statements: string[]): number[] {
-  const script = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
+  const script = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
     $pdo = new PDO('mysql:host=' . oys_config('db.host') . ';dbname=' . oys_config('db.name') . ';charset=utf8mb4', oys_config('db.user'), oys_config('db.pass'),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $out = []; foreach (json_decode(stream_get_contents(STDIN), true) as $sql) { $out[] = $pdo->exec($sql); } echo json_encode($out);`;
-  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(statements), cwd: ROOT_DIR }).toString());
+  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(statements), cwd: phpRoot() }).toString());
 }
 
-test('affected rows count only changed rows, like PDO rowCount()', async () => {
-  const steps = [
-    'CREATE TEMPORARY TABLE oys_t (id INT PRIMARY KEY, v INT)',
-    'INSERT INTO oys_t VALUES (1, 1), (2, 2), (3, 3)',
-    'UPDATE oys_t SET v = 1 WHERE id = 1',
-    'UPDATE oys_t SET v = 5 WHERE id IN (1, 2)',
-    'UPDATE oys_t SET v = v WHERE id > 0',
-    'INSERT INTO oys_t VALUES (1, 9) ON DUPLICATE KEY UPDATE v = VALUES(v)',
-    'INSERT IGNORE INTO oys_t VALUES (1, 9)',
-    'DELETE FROM oys_t WHERE id = 3',
-  ];
-  const php = phpRowCounts(steps);
-  // Temporäre Tabellen gelten je Verbindung: alles auf einer Verbindung ausführen
-  const { withConnection } = await import('../src/db.js');
-  const node = await withConnection(async (db) => {
-    const out: number[] = [];
-    for (const sql of steps) out.push((await db.exec(sql)).affectedRows);
-    return out;
-  });
-  assert.deepEqual(node, php);
+const ROW_STEPS = [
+  'CREATE TEMPORARY TABLE oys_t (id INT PRIMARY KEY, v INT)',
+  'INSERT INTO oys_t VALUES (1, 1), (2, 2), (3, 3)',
+  'UPDATE oys_t SET v = 1 WHERE id = 1',
+  'UPDATE oys_t SET v = 5 WHERE id IN (1, 2)',
+  'UPDATE oys_t SET v = v WHERE id > 0',
+  'INSERT INTO oys_t VALUES (1, 9) ON DUPLICATE KEY UPDATE v = VALUES(v)',
+  'INSERT IGNORE INTO oys_t VALUES (1, 9)',
+  'DELETE FROM oys_t WHERE id = 3',
+];
+
+// Temporäre Tabellen gelten je Verbindung: alles auf einer Verbindung ausführen (und die Tabelle danach wieder weg,
+// die Verbindung bleibt im Pool)
+const nodeRowCounts = (): Promise<number[]> => withConnection(async (db) => {
+  const out: number[] = [];
+  for (const sql of ROW_STEPS) out.push((await db.exec(sql)).affectedRows);
+  await db.exec('DROP TEMPORARY TABLE oys_t');
+  return out;
+});
+
+test('affected rows count only changed rows (an unchanged UPDATE is 0, ON DUPLICATE KEY UPDATE 2)', async () => {
+  assert.deepEqual(await nodeRowCounts(), [0, 3, 0, 2, 0, 2, 0, 1]);
+});
+
+test('affected rows count only changed rows, like PDO rowCount()', { skip: PHP_SKIP }, async () => {
+  assert.deepEqual(await nodeRowCounts(), phpRowCounts(ROW_STEPS));
 });
 
 test('value types match PDO', async () => {
@@ -70,15 +78,18 @@ test('every query runs in the site time zone, also after the zone changes', asyn
   assert.equal(await value('SELECT @@session.time_zone'), tzOffset('Europe/Berlin'));
 });
 
+// Sperren gelten für den ganzen Datenbankserver: Namen je Arbeitsordner (aus der Datenbank der Einstellungen)
+const LOCK = String((BASE.db as ConfigData).name ?? 'oys_test') + '_lock';
+
 test('named locks: a busy lock fails or runs as asked', async () => {
   let inner: unknown = null;
-  await withNamedLock('oys_test_lock', 1, async () => {
+  await withNamedLock(LOCK, 1, async () => {
     // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
-    await outsidePinned(() => assert.rejects(withNamedLock('oys_test_lock', 0, async () => 'never', 'fail'), LockBusyError));
-    inner = await outsidePinned(() => withNamedLock('oys_test_lock', 0, async () => 'ran anyway', 'run'));
+    await outsidePinned(() => assert.rejects(withNamedLock(LOCK, 0, async () => 'never', 'fail'), LockBusyError));
+    inner = await outsidePinned(() => withNamedLock(LOCK, 0, async () => 'ran anyway', 'run'));
   });
   assert.equal(inner, 'ran anyway');
-  assert.equal(await withNamedLock('oys_test_lock', 1, async () => 'free again', 'fail'), 'free again');
+  assert.equal(await withNamedLock(LOCK, 1, async () => 'free again', 'fail'), 'free again');
 });
 
 test('queries inside a locked section reuse its connection – no deadlock when the pool is full', async () => {
@@ -86,7 +97,7 @@ test('queries inside a locked section reuse its connection – no deadlock when 
   await closePool();
   try {
     // 6 Abschnitte gleichzeitig bei nur 2 Verbindungen; jeder fragt innen über die Pool-Funktionen ab
-    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`oys_test_dl_${i}`, 5, async () => {
+    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`${LOCK}_${i}`, 5, async () => {
       const own = await value('SELECT CONNECTION_ID()');
       const again = await q('SELECT CONNECTION_ID() AS id');
       assert.equal(again[0].id, own, 'inner query runs on the section\'s connection');
