@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 06:28 (UTC+1).
+Last update: 2026-11-02 06:58 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -52,9 +52,9 @@ review get one shared security review at the end.
 | 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Built and reviewed (units still to be wired into install.sh) |
 | 8, 16 | HC-2, HC-3 | Ledger, entitlements, Premium status; catalogue, offers, purchases, refunds | Built and reviewed |
 | 7, 13, 14 | DP-2a, DP-3, DP-5 | Delivery model and bot API; bot 0.2.0; public suggestions page (+ 5b) | Built |
-| 20 | DP-2b | Admin UI for bot posting | Built; being merged into `feature/new-features` |
-| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built; being merged into `feature/new-features` |
-| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built; being merged into `feature/new-features` (branding step takes schema number 15) |
+| 20 | DP-2b | Admin UI for bot posting | Built |
+| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built |
+| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built |
 | 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Being built |
 | – | all others | | Open |
 
@@ -66,8 +66,8 @@ Next, as soon as their dependencies are in:
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
-10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages – new steps take the next
-free number when they are merged.
+10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy – new
+steps take the next free number when they are merged.
 
 Work in progress lives on branches of the current workspace and is pushed when it is merged into
 `feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
