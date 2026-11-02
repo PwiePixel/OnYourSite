@@ -108,7 +108,12 @@ export async function buildServer(opts: { dispatch?: (ctx: Ctx) => Promise<void>
         const value = headerValue(name, rawValue);
         if (value === null) continue;
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
-        else reply.header(name, value);
+        // Name so, wie der Code ihn schreibt (PHP: header('Location: …')) – Fastify schreibt ihn sonst klein. Apache reicht
+        // die Namen unverändert weiter. Content-Length braucht Fastify zusätzlich selbst (HEAD, Längenprüfung).
+        else {
+          reply.raw.setHeader(name, value);
+          if (name.toLowerCase() === 'content-length') reply.header(name, value);
+        }
       }
       // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher).
       // 204 ebenso – ohne Inhalt behält Fastify den Content-Type, den PHP auch hier mitsendet (/_/v, /_/c)

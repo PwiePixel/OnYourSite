@@ -332,6 +332,12 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
           if (n.status !== 403) mismatches.push({ method, path, h, expected: 403, node: n.status });
           continue;
         }
+        // Bekannt: der Ordner static/uploads/ selbst – Apache (Options -Indexes) antwortet 403, Node genauso (web/static.ts);
+        // php -S kommt bis oys_serve_upload('') und antwortet 404
+        if (path === '/static/uploads/') {
+          if (n.status !== 403) mismatches.push({ method, path, h, expected: 403, node: n.status });
+          continue;
+        }
         if (p.status !== n.status || JSON.stringify(ph) !== JSON.stringify(nh) || !p.body.equals(n.body)) {
           mismatches.push({ method, path: path.slice(0, 80), h, php: [p.status, ph, p.body.length], node: [n.status, nh, n.body.length] });
         }
