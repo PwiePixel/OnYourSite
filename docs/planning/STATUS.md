@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 14:08 (UTC+1).
+Last update: 2026-11-02 15:45 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -72,14 +72,14 @@ Next, as soon as their dependencies are in:
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records – new steps take the next free number when they are merged.
+records, 17 domain blocks – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
 1. **PR #15 and PR #14 are merged** (squash commits `2e6f6de` and `66207f6`). Deploy `main` with
    `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
 2. **New work starts from `main`**: one branch per roadmap item, merged as one squash commit after the tests pass
-   (never push to `main` directly). On `main` 1012 tests pass (`cd app && npx tsc --noEmit -p . && npm test`; with
+   (never push to `main` directly). On `main` 1012 tests pass (1022 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
    `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
@@ -91,8 +91,12 @@ records – new steps take the next free number when they are merged.
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
    blocked stays blocked for every account until an admin releases it. Both are built on the branch
-   `feature/owner-decisions` (pull request after #14). R3 and R4 confirm what is built (`code_more` at price 0,
-   the confirmation for honeycomb gifts above 1,000).
+   `feature/owner-decisions` (pull request after #14): R1 checks `isAdminSession()` for `/admin`, `/admin/api` and
+   "Log in as" itself, and logging in or registering drops the "Log in as" marker; R2 keeps blocked hostnames in
+   `custom_domain_blocks` (schema step 17), and PD-5 releases them with `releaseBlock()` (its actions go behind
+   `/admin`). Both had an independent review; R2's hostname spellings (case, trailing dot, ports, Unicode, punycode)
+   are covered by a test.
+   R3 and R4 confirm what is built (`code_more` at price 0, the confirmation for honeycomb gifts above 1,000).
 5. **Before the 3.x deploy:** `sudo bash server/install.sh --update` also updates the Discord bot to 0.3.1 – it
    reports which channels everyone can see; team alerts of the status page are only sent to a channel an admin saved
    in *Editor → Status → Alerts* that is not public (until then they are skipped, with the reason in the editor).
@@ -125,6 +129,10 @@ records – new steps take the next free number when they are merged.
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
      sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
      status addresses; edits of messages already posted still go out while the page is offline.
+   - R1: while an admin works as another admin account, that account's bell can still show team notifications that
+     link to `/admin` (they lead back to the editor – a dead end, not a way into admin rights); `editorData.user.admin`
+     in the editor bootstrap still reflects `is_admin` (nothing reads it yet – switch it to `isAdminSession` before
+     anything does); sessions that got the marker before this change keep it until logout or "Back to admin panel".
    - Dialogs: password-protected link URLs still sit in editor drafts (blanking them needs merge logic on restore);
      the privacy page should say that unsaved work is kept on the device.
    - Discord: optional hourly clean-up of old dead jobs (only for installs that ran 3.x before the fix); optional notice
