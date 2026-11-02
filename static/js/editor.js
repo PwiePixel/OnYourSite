@@ -1366,7 +1366,7 @@
       });
     }
     statusLoading.then(function () {
-      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: 'system', baseHost: E.baseHost, user: E.user || {} });
+      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: E.statusAdmin ? 'system' : 'user', baseHost: E.baseHost, user: E.user || {} });
     }, function () {
       statusLoading = null;
       root.textContent = '';
@@ -3893,7 +3893,11 @@
     },
     honeycombs: function (arg) { openShop(arg); },
     // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
-    status: function () { if ($('#tab-status')) switchTab('status'); }
+    // Gerade freigeschaltet (Shop → „Open“): den Bereich gibt es erst nach dem Neuladen
+    status: function () {
+      if ($('#tab-status')) switchTab('status');
+      else reloadTo('/dashboard#status');
+    }
   };
   // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
   var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings', shop: 'honeycombs' };

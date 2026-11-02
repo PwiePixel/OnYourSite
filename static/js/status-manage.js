@@ -10,6 +10,8 @@
   var TABS = [['components', 'bx-list-ul', 'Components'], ['incidents', 'bx-error', 'Incidents'], ['alerts', 'bx-bell', 'Alerts'], ['settings', 'bx-cog', 'Settings']];
   var STATUS_TEXT = { operational: 'All systems operational', degraded: 'Degraded performance', partial: 'Partial outage', major: 'Major outage', maintenance: 'Maintenance in progress', unknown: 'No data yet' };
   var DOT = { up: 'ok', down: 'down', degraded: 'warn', unknown: 'none', paused: 'none', maintenance: 'maint' };
+  // Von Hand gesetzte Bestandteile: Farbe aus dem gewählten Zustand (Teilausfall orange)
+  var MANUAL_TONE = { operational: 'ok', degraded: 'warn', partial: 'part', major: 'down', maintenance: 'maint' };
   var TYPE_ICON = { http: 'bx-globe', heartbeat: 'bx-time-five', manual: 'bx-slider-alt', system: 'bx-server' };
   var INC_STATUS = [['investigating', 'Investigating'], ['identified', 'Identified'], ['monitoring', 'Monitoring'], ['resolved', 'Resolved']];
   var MAINT_STATUS = [['scheduled', 'Scheduled'], ['in_progress', 'In progress'], ['completed', 'Completed']];
@@ -93,13 +95,21 @@
   }
 
   function visible() { return S.root && !S.root.classList.contains('hidden'); }
+  // Eigene Statusseite eines Kontos (ST-4): ohne Alarme der Admins und Bot-Kanäle, mit Anlegen und Löschen
+  function userScope() { return S.opts && S.opts.scope === 'user'; }
 
   function loadAll() {
     if (S.loading) return;
     S.loading = true;
-    Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts')]).then(function (r) {
+    // Eigene Seite: erst fragen, ob es sie gibt (ohne Seite nur das Formular zum Anlegen, keine 404-Anfragen)
+    var first = userScope() ? api('status').then(function (st) {
+      if (!st.ok || !st.page) return [st];
+      return Promise.all([st, api('status-monitors'), api('status-incidents'), { ok: false }]);
+    }) : Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts')]);
+    first.then(function (r) {
       S.loading = false;
       if (!r[0].ok) { showError(r[0].error); return; }
+      if (!r[0].page) { S.state = r[0]; renderCreate(); return; }
       S.state = r[0];
       S.mons = r[1].ok ? r[1] : null;
       S.incs = r[2].ok ? r[2] : null;
@@ -109,12 +119,16 @@
   }
 
   function refreshState() {
+    if (!S.state || !S.state.page) return Promise.resolve();
     return api('status').then(function (r) { if (r.ok) { S.state = r; renderHead(); } });
   }
+  function hasPage() { return !!(S.state && S.state.page); }
   function refreshMonitors() {
+    if (!hasPage()) return Promise.resolve();
     return api('status-monitors').then(function (r) { if (r.ok) { S.mons = r; if (S.tab === 'components') renderBody(); } });
   }
   function refreshIncidents() {
+    if (!S.state || !S.state.page) return Promise.resolve();
     return api('status-incidents').then(function (r) { if (r.ok) { S.incs = r; if (S.tab === 'incidents') renderBody(); } });
   }
   function refreshAlerts() {
@@ -134,11 +148,56 @@
     S.root.innerHTML = '<div class="st-m"><div id="stmHead"></div><div class="chips st-m-tabs" role="tablist"></div><div id="stmBody"></div></div>';
     var tabs = $('.st-m-tabs', S.root);
     TABS.forEach(function (t) {
+      if (t[0] === 'alerts' && userScope()) return;
       var b = h('<button type="button" class="chip" role="tab" data-stm-tab="' + t[0] + '"><i class="bx ' + t[1] + '"></i> ' + esc(t[2]) + '</button>');
       tabs.appendChild(b);
     });
     renderHead();
     renderBody();
+  }
+
+  // Noch keine eigene Seite: Name und Adresse (eigene Subdomain) wählen
+  function renderCreate() {
+    var lim = (S.state && S.state.limits) || {};
+    S.root.innerHTML = '';
+    var box = h('<div class="st-m"><div class="panel st-m-create space-y-4 max-w-xl">' +
+      '<div><h2 class="section-title"><i class="bx bx-pulse"></i> Create your status page</h2>' +
+      '<p class="st-m-hint"></p></div>' +
+      '<div><label class="lbl" for="stmNewTitle">Name</label><input class="field" id="stmNewTitle" name="title" maxlength="120" placeholder="Acme status"></div>' +
+      '<div><label class="lbl" for="stmNewSlug">Address</label><div class="st-m-addr"><input class="field" id="stmNewSlug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" placeholder="acme-status"><span class="st-m-suffix"></span></div></div>' +
+      '<p class="st-m-err" hidden></p>' +
+      '<div><button type="button" class="btn-primary" data-stm="create-page"><i class="bx bx-plus"></i> Create status page</button></div></div></div>');
+    $('.st-m-hint', box).textContent = 'Your page runs at its own address. You can check up to ' + fmtNum(lim.checks || 0) + ' websites and report incidents and maintenance.';
+    $('.st-m-suffix', box).textContent = '.' + (S.opts.baseHost || '');
+    S.root.appendChild(box);
+  }
+
+  function createPage(btn) {
+    var title = $('#stmNewTitle', S.root).value.trim(), slug = $('#stmNewSlug', S.root).value.trim().toLowerCase();
+    var err = $('.st-m-err', S.root);
+    btn.disabled = true;
+    api('status-create', { title: title, slug: slug }).then(function (r) {
+      btn.disabled = false;
+      if (!r.ok) { err.hidden = false; err.textContent = r.error || 'Something went wrong. Please try again.'; return; }
+      toast('Your status page is live.');
+      S.tab = 'components';
+      loadAll();
+    });
+  }
+
+  function deletePage() {
+    var p = S.state.page;
+    UI.confirm({ title: 'Delete ' + p.title + '?', text: 'Its components, checks, incidents and history are removed. The address stays reserved for you for 90 days. This can’t be undone.', ok: 'Delete status page', tone: 'danger' }).then(function (yes) {
+      if (!yes) return;
+      api('status-page-delete', {}).then(function (r) {
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        toast('Status page deleted.');
+        S.state = r;
+        S.mons = null;
+        S.incs = null;
+        renderCreate();
+      });
+    });
   }
 
   function pill(status) {
@@ -267,13 +326,14 @@
   }
 
   function monitorRow(m) {
-    var dot = DOT[m.state.status] || 'none';
+    var dot = m.type === 'manual' ? (MANUAL_TONE[m.manualStatus] || 'none') : (DOT[m.state.status] || 'none');
     var menu = '<button type="button" class="icon-btn" data-stm="edit" title="Edit" aria-label="Edit"><i class="bx bx-pencil"></i></button>';
     if (m.type === 'http' || m.type === 'system') menu += '<button type="button" class="icon-btn" data-stm="run" title="Check now" aria-label="Check now"><i class="bx bx-refresh"></i></button>';
     if (m.type !== 'manual') menu += '<button type="button" class="icon-btn" data-stm="pause" title="' + (m.paused ? 'Resume' : 'Pause') + '" aria-label="' + (m.paused ? 'Resume' : 'Pause') + '"><i class="bx ' + (m.paused ? 'bx-play' : 'bx-pause') + '"></i></button>';
     if (m.type === 'heartbeat') menu += '<button type="button" class="icon-btn" data-stm="hb" title="Heartbeat URL" aria-label="Heartbeat URL"><i class="bx bx-link"></i></button>';
     if (m.type !== 'system') menu += '<button type="button" class="icon-btn danger" data-stm="del" title="Delete" aria-label="Delete"><i class="bx bx-trash"></i></button>';
-    var row = h('<div class="st-m-row" data-id="' + m.id + '">' +
+    // Zustandsfarbe der Zeile (Leiste links, Zustandsabzeichen) – derselbe Schlüssel wie der Punkt
+    var row = h('<div class="st-m-row st-m-r-' + dot + (m.paused ? ' st-m-r-paused' : '') + '" data-id="' + m.id + '">' +
       '<div class="st-m-main"><span class="st-m-drag" title="Drag to reorder"><i class="bx bx-grid-vertical"></i></span>' +
       '<span class="st-m-dot st-m-d-' + dot + '"></span>' +
       '<button type="button" class="st-m-name" data-stm="toggle"><i class="bx ' + (TYPE_ICON[m.type] || 'bx-pulse') + '"></i> <span></span></button>' +
@@ -736,7 +796,9 @@
       '<div class="field-row cols-2"><div><label class="lbl">Open an incident automatically</label><select class="field" name="auto_incident">' + options([['0', 'Off'], ['300', 'When a check is down for 5 min'], ['900', 'When a check is down for 15 min']], String(s.auto_incident)) + '</select></div>' +
       '<div><label class="lbl">Past incidents on the page (days)</label><input class="field" name="history_days" type="number" min="0" max="30" value="' + esc(s.history_days) + '"></div></div>' +
       '<div class="flex items-center gap-3 flex-wrap"><button type="button" class="btn-primary" data-stm="save-page"><i class="bx bx-save"></i> Save</button>' +
-      '<a class="btn-ghost" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> View page</a></div></div></div>');
+      '<a class="btn-ghost" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> View page</a></div></div>' +
+      (userScope() ? '<div class="panel st-m-danger"><div><b>Delete status page</b><p>Removes the page with all components and incidents.</p></div>' +
+        '<button type="button" class="btn-danger" data-stm="delete-page"><i class="bx bx-trash"></i> Delete</button></div>' : '') + '</div>');
     $('[name=title]', wrap).value = p.title;
     $('[name=description]', wrap).value = p.description;
     $('a.btn-ghost', wrap).href = p.online ? p.url : (p.preview || p.url);
@@ -762,6 +824,8 @@
     var m = row ? monitorById(Number(row.getAttribute('data-id'))) : null;
     var card = btn.closest('[data-inc]');
     var inc = card ? incidentById(Number(card.getAttribute('data-inc'))) : null;
+    if (act === 'create-page') return createPage(btn);
+    if (act === 'delete-page') return deletePage();
     if (act === 'add') return componentDialog(null);
     if (act === 'edit' && m) return componentDialog(m);
     if (act === 'toggle' && m) {

@@ -103,7 +103,8 @@ test('an admin working as another admin is that account without admin rights: /a
   const html = String((await get('/dashboard', await loginSession(ADMIN_B, { impersonatedBy: ADMIN_A }))).body);
   assert.ok(html.includes('action="/admin_return.php"'), 'the way back is shown');
   assert.ok(!html.includes('href="/admin"'), 'no link to the admin panel');
-  assert.ok(!html.includes('data-tab="status"'), 'no Status tab');
+  // Kein Bereich für OnYourSites eigene Seite; die eigene Statusseite des Kontos (für Admins dabei, ST-4) darf es geben
+  assert.ok(html.includes('"statusAdmin":false'), 'no Status tab for OnYourSite’s own page');
 });
 
 test('in the admin’s own session the admin panel, its forms, /admin/api and the system status page work as before', async () => {

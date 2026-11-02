@@ -4,6 +4,8 @@
 // Shops; die Form des Ergebnisses bleibt gleich.
 import type { Db } from '../db.js';
 import { statusSettings, type StatusSettings } from './settings.js';
+import { has } from '../honeycombs/entitlements.js';
+import { STATUS_FEATURE_KEY } from './shop.js';
 
 export type StatusPlan = 'none' | 'free' | 'addons' | 'premium' | 'system';
 
@@ -37,12 +39,26 @@ export function noLimits(s: StatusSettings): StatusLimits {
   return { plan: 'none', checks: 0, components: 0, minInterval: s.free.min_interval, channels: 0, subscribers: 0, broadcastsDay: 0, until: null };
 }
 
-// userId null = OnYourSites eigene Seite (status_pages.user_id ist dort NULL)
+// Freigeschaltet (status_page): die kostenlosen Grenzen der Einstellungen; Bestandteile höchstens components_max
+export function freeLimits(s: StatusSettings): StatusLimits {
+  return {
+    plan: 'free',
+    checks: s.free.checks,
+    components: s.components_max,
+    minInterval: s.free.min_interval,
+    channels: s.free.channels,
+    subscribers: s.free.subscribers,
+    broadcastsDay: s.free.broadcasts_day,
+    until: null,
+  };
+}
+
+// userId null = OnYourSites eigene Seite (status_pages.user_id ist dort NULL). Seiten von Nutzern: Plan 'none' ohne
+// die Freischaltung `status_page` (Q7 = a), sonst die kostenlosen Grenzen (Zusatzpakete und Premium kommen mit ST-7)
 export async function statusLimits(userId: number | null, db?: Db): Promise<StatusLimits> {
   const s = await statusSettings(db);
   if (userId === null) return systemLimits(s);
-  // Seiten von Nutzern gibt es erst mit der Freischaltung (ST-4)
-  return noLimits(s);
+  return (await has(userId, STATUS_FEATURE_KEY, db)) ? freeLimits(s) : noLimits(s);
 }
 
 // ---------------------------------------------------------------- welche Prüfungen laufen dürfen

@@ -17,7 +17,7 @@ import { bellMarkup } from '../views/partials/ui.js';
 import { currentPage, flash, isStaff } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
-import { statusAdmin } from '../status/editorApi.js';
+import { statusAdmin, statusUnlocked } from '../status/editorApi.js';
 import { editorDomainFlags, pagesWithDomain } from '../domains/editor.js';
 import { codeSummary } from '../code/editorApi.js';
 
@@ -77,6 +77,8 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)
   const premiumNow = await premiumState(userId);
   const isStatusAdmin = statusAdmin(ctx, user);
+  // Eigene Statusseite (ST-4): mit der Freischaltung status_page (im Admin-Modus die des Nutzers)
+  const isStatusUser = !isStatusAdmin && (await statusUnlocked(userId));
   // Eigene Domains (PD-4): Schalter für den Abschnitt und Seiten mit Domain in irgendeinem Zustand (ohne Einrichtung
   // keine Abfrage)
   const domainFlags = await editorDomainFlags();
@@ -152,7 +154,9 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     // OnYourSites Statusseite: der Bereich „Status“ nur für Admins (nicht im Admin-Modus); Skript und Stil lädt der
     // Editor erst beim ersten Öffnen
     statusAdmin: isStatusAdmin,
-    ...(isStatusAdmin ? { statusManage: { js: asset('/static/js/status-manage.js'), css: asset('/static/css/status-manage.css') } } : {}),
+    ...(isStatusAdmin || isStatusUser ? { statusManage: { js: asset('/static/js/status-manage.js'), css: asset('/static/css/status-manage.css') } } : {}),
+    // Freigeschaltete Nutzer verwalten ihre eigene Statusseite (scope user)
+    statusUser: isStatusUser,
   };
   const flashSuccess = ctx.session?.take('success') ?? null;
   const flashError = ctx.session?.take('error') ?? null;
@@ -168,5 +172,6 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     balance: honeycombs.balance,
     bellHtml: await bellMarkup(ctx),
     statusAdmin: isStatusAdmin,
+    statusUser: isStatusUser,
   }));
 }
