@@ -16,6 +16,10 @@ import { feature, featureReady, features, type Feature, type ItemRow } from './f
 import { MAX_OPEN_OFFERS, type OfferRow } from './offers.js';
 import { addDays, nowStr } from './clock.js';
 import { HC_TABS, hcTab, switchOnProblem, type HcTab } from './admin.js';
+import { LIFECYCLE_READY } from './features.js';
+import { isActive, type EntRow } from './entitlements.js';
+import { refundableValue, type PurchaseRow } from './shop.js';
+import { premiumReady } from './premium.js';
 
 const IN = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
 const LBL = 'block text-sm font-medium text-gray-300 mb-1.5';
@@ -31,6 +35,7 @@ const TAB_LABELS: Readonly<Record<HcTab, [string, string]>> = {
   offers: ['Offers', 'bx-gift'],
   rules: ['Earning rules', 'bx-slider-alt'],
   users: ['Users', 'bx-group'],
+  purchases: ['Purchases', 'bx-receipt'],
 };
 
 // $userName: Name, sonst E-Mail (null und '' zählen als leer)
@@ -118,7 +123,8 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   else if (tab === 'catalogue') o += await catalogue(csrf, now);
   else if (tab === 'offers') o += await offers(csrf, now);
   else if (tab === 'rules') o += await rules(csrf);
-  else o += await users(csrf, allUsers);
+  else if (tab === 'purchases') o += await purchasesTab(ctx, csrf, now);
+  else o += await users(ctx, csrf, allUsers, now);
   o += '            </div>\n';
   return o;
 }
@@ -390,14 +396,54 @@ async function rules(csrf: string): Promise<string> {
 
 // ---------------------------------------------------------------- Nutzer: Honigwaben vergeben, Kontostände (wie bisher)
 
-async function users(csrf: string, allUsers: Row[]): Promise<string> {
+// Suchtext (?hc_q=, höchstens 100 Zeichen) und Seite (?hc_p=, 50 je Seite)
+const PER_PAGE = 50;
+function searchText(v: unknown): string {
+  return typeof v === 'string' ? v.trim().slice(0, 100) : '';
+}
+function pageNo(v: unknown): number {
+  return typeof v === 'string' && /^[1-9][0-9]{0,5}$/.test(v) ? Number(v) : 1;
+}
+// ?hc_user=<id> → Konto-ID (sonst 0)
+function detailUser(v: unknown): number {
+  return typeof v === 'string' && /^[1-9][0-9]{0,9}$/.test(v) && Number(v) <= 2147483647 ? Number(v) : 0;
+}
+
+// Stand einer Berechtigung als Text: für immer, bis Datum, Anzahl, beendet
+function entState(r: EntRow, now: string): string {
+  if (!isActive(r, now)) return 'Ended';
+  const f = feature(r.feature);
+  const count = f && f.kind !== 'timed' && f.kind !== 'permanent' ? intval(r.quantity) + ' · ' : '';
+  if (intval(r.permanent) === 1) return count + 'For good';
+  return count + 'Until ' + date('M j, Y', stamp(r.expires_at));
+}
+
+async function users(ctx: Ctx, csrf: string, allUsers: Row[], now: string): Promise<string> {
   const balances = new Map<number, Row>();
   for (const row of await q('SELECT user_id, SUM(amount) AS balance, SUM(GREATEST(amount, 0)) AS earned, SUM(GREATEST(-amount, 0)) AS spent FROM honeycomb_ledger GROUP BY user_id')) {
     balances.set(intval(row.user_id), row);
   }
   const balanceOf = (u: Row): number => intval(balances.get(intval(u.id))?.balance ?? 0);
-  const hcUsers = [...allUsers].sort((a, b) => Math.sign(balanceOf(b) - balanceOf(a)) || Math.sign(intval(b.id) - intval(a.id)));
+  // Suche auf dem Server: Name, E-Mail, Benutzername (ohne Groß/klein)
+  const query = searchText(ctx.get.hc_q);
+  const needle = strtolower(query);
+  const found = [...allUsers].filter((u) => needle === '' || strtolower(phpStr(userName(u)) + ' ' + phpStr(u.email) + ' ' + phpStr(u.username)).includes(needle))
+    .sort((a, b) => Math.sign(balanceOf(b) - balanceOf(a)) || Math.sign(intval(b.id) - intval(a.id)));
+  const pages = Math.max(1, Math.ceil(found.length / PER_PAGE));
+  const pageNow = Math.min(pageNo(ctx.get.hc_p), pages);
+  const hcUsers = found.slice((pageNow - 1) * PER_PAGE, pageNow * PER_PAGE);
+  // Premium je Konto (aktiv): für immer, bis Datum, vom Team
+  const premium = new Map<number, string>();
+  for (const r of await q<EntRow>("SELECT * FROM hc_entitlements WHERE feature = 'premium'")) {
+    if (!isActive(r, now)) continue;
+    const label = intval(r.permanent) === 1 ? 'for good' : 'until ' + date('M j', stamp(r.expires_at));
+    premium.set(intval(r.user_id), label + (r.source === 'admin' ? ' · admin' : ''));
+  }
+  const frozen = new Set<number>();
+  for (const r of await q('SELECT user_id FROM hc_accounts WHERE frozen_at IS NOT NULL')) frozen.add(intval(r.user_id));
   let o = '';
+  const uidDetail = detailUser(ctx.get.hc_user);
+  if (uidDetail > 0) o += await userDetails(csrf, uidDetail, now);
   o += "                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                    <div class=\"flex items-center gap-3 mb-5 border-b border-bordercolor pb-4\">\n                        <i class='bx bx-hive text-2xl text-yellow-400'></i>\n                        <h2 class=\"text-base font-semibold text-white\">Give honeycombs</h2>\n                    </div>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-4\" id=\"hcGrantForm\">\n                        ";
   o += csrf;
   o += "                        <input type=\"hidden\" name=\"hc_action\" value=\"grant\">\n                        <input type=\"hidden\" name=\"grant_ref\" value=\"";
@@ -407,7 +453,7 @@ async function users(csrf: string, allUsers: Row[]): Promise<string> {
     o += '                                <option value="' + intval(u.id) + '">' + e(userName(u)) + ' · ' + e(u.email) + ' (' + intval(balances.get(intval(u.id))?.balance ?? 0) + ')</option>\n';
   }
   o += "                            </select>\n                        </div>\n                        <div class=\"grid grid-cols-1 sm:grid-cols-3 gap-4\">\n                            <div>\n                                <label class=\"" + LBL + "\" for=\"hcAmount\">Amount</label>\n                                <input id=\"hcAmount\" type=\"number\" name=\"amount\" required min=\"-100000\" max=\"100000\" step=\"1\" placeholder=\"50\" class=\"" + IN + "\">\n                            </div>\n                            <div class=\"sm:col-span-2\">\n                                <label class=\"" + LBL + "\" for=\"hcNote\">Note <span class=\"text-gray-500 font-normal\">(the user sees it)</span></label>\n                                <input id=\"hcNote\" type=\"text\" name=\"note\" maxlength=\"150\" placeholder=\"e.g. Thanks for your feedback!\" class=\"" + IN + "\">\n                            </div>\n                        </div>\n                        <p class=\"text-xs text-gray-500\">A negative amount takes honeycombs away (e.g. −20). The balance can’t go below 0.</p>\n                        <button type=\"submit\" class=\"" + SUBMIT + "\"><i class='bx bx-gift'></i> Send</button>\n                    </form>\n                </div>\n\n";
-  o += "                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>\n                        <input type=\"search\" id=\"hcFilter\" placeholder=\"Search users …\" class=\"" + IN + " sm:!w-64\">\n                    </div>\n                    <div class=\"overflow-x-auto\">\n                        <table class=\"w-full text-sm text-left\">\n                            <thead class=\"text-xs text-gray-500 uppercase bg-inputbg\">\n                                <tr><th class=\"px-5 py-3 font-medium\">User</th><th class=\"px-4 py-3 font-medium text-right\">Balance</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Earned</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Spent</th><th class=\"px-5 py-3\"></th></tr>\n                            </thead>\n                            <tbody class=\"divide-y divide-bordercolor\" id=\"hcRows\">\n";
+  o += "                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>\n                        <form action=\"/admin#honeycombs\" method=\"GET\" class=\"m-0 flex gap-2\" role=\"search\"><input type=\"hidden\" name=\"hc_tab\" value=\"users\"><input type=\"search\" id=\"hcFilter\" name=\"hc_q\" maxlength=\"100\" value=\"" + e(query) + "\" placeholder=\"Search users …\" class=\"" + IN + " sm:!w-64\"><button type=\"submit\" class=\"" + BTN + "\"><i class='bx bx-search'></i> Search</button></form>\n                    </div>\n                    <div class=\"overflow-x-auto\">\n                        <table class=\"w-full text-sm text-left\">\n                            <thead class=\"text-xs text-gray-500 uppercase bg-inputbg\">\n                                <tr><th class=\"px-5 py-3 font-medium\">User</th><th class=\"px-4 py-3 font-medium text-right\">Balance</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Earned</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Spent</th><th class=\"px-4 py-3 font-medium hidden sm:table-cell\">Premium</th><th class=\"px-5 py-3\"></th></tr>\n                            </thead>\n                            <tbody class=\"divide-y divide-bordercolor\" id=\"hcRows\">\n";
   for (const u of hcUsers) {
     const uid = intval(u.id);
     const b = balances.get(uid) ?? null;
@@ -416,10 +462,229 @@ async function users(csrf: string, allUsers: Row[]): Promise<string> {
       + '                                    <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">' + numberFormat(intval(b?.balance ?? 0)) + " <i class='bx bx-hive text-yellow-400'></i></td>\n"
       + '                                    <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">' + numberFormat(intval(b?.earned ?? 0)) + '</td>\n'
       + '                                    <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">' + numberFormat(intval(b?.spent ?? 0)) + '</td>\n'
-      + '                                    <td class="px-5 py-3 text-right"><button type="button" class="' + BTN + '" data-hc-give="' + uid + "\"><i class='bx bx-gift'></i> Give</button></td>\n"
+      + '                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">' + e(premium.get(uid) ?? '–') + (frozen.has(uid) ? ` <span class="${BADGE} bg-sky-500/15 text-sky-400">Frozen</span>` : '') + '</td>\n'
+      + '                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="' + BTN + '" data-hc-give="' + uid + "\"><i class='bx bx-gift'></i> Give</button> <a href=\"/admin?hc_tab=users&amp;hc_user=" + uid + "#honeycombs\" class=\"" + BTN + "\"><i class='bx bx-detail'></i> Details</a></td>\n"
       + '                                </tr>\n';
   }
-  o += "                            </tbody>\n                        </table>\n                    </div>\n                </div>\n";
+  o += "                            </tbody>\n                        </table>\n                    </div>\n";
+  if (pages > 1) {
+    const link = (n: number): string => '/admin?hc_tab=users' + (query !== '' ? '&amp;hc_q=' + encodeURIComponent(query) : '') + '&amp;hc_p=' + n + '#honeycombs';
+    o += `                    <div class="flex items-center justify-between gap-3 p-4 border-t border-bordercolor text-xs text-gray-500" id="hcPager"><span>Page ${pageNow} of ${pages} · ${numberFormat(found.length)} users</span><span class="flex gap-1.5">`
+      + (pageNow > 1 ? `<a href="${link(pageNow - 1)}" class="${BTN}">Previous</a>` : '') + (pageNow < pages ? `<a href="${link(pageNow + 1)}" class="${BTN}">Next</a>` : '') + '</span></div>\n';
+  }
+  o += "                </div>\n";
   o += "                <script>\n                    // „Give“ in der Liste wählt den Nutzer oben aus; Suche filtert die Liste\n                    document.querySelectorAll('[data-hc-give]').forEach(b => b.addEventListener('click', () => {\n                        document.getElementById('hcUser').value = b.dataset.hcGive;\n                        document.getElementById('hcGrantForm').scrollIntoView({ behavior: 'smooth', block: 'center' });\n                        setTimeout(() => document.getElementById('hcAmount').focus(), 300);\n                    }));\n                    document.getElementById('hcFilter').addEventListener('input', e => {\n                        const q = e.target.value.trim().toLowerCase();\n                        document.querySelectorAll('#hcRows tr').forEach(tr => { tr.hidden = q !== '' && !tr.dataset.search.includes(q); });\n                    });\n                </script>\n";
+  return o;
+}
+
+// ---------------------------------------------------------------- Erstatten (Details eines Nutzers und Käufe)
+
+// Formular „Refund“ eines Kaufs: Betrag (Vorgabe: der erstattbare Wert), wegnehmen oder behalten (vorgewählt nur bei
+// voller Erstattung), Notiz; mit Bestätigungsdialog
+async function refundForm(csrf: string, p: PurchaseRow, name: string, now: string): Promise<string> {
+  const uid = intval(p.user_id);
+  const f = feature(p.feature);
+  const title = itemTitle(p);
+  const price = intval(p.price);
+  const ent = await one<EntRow>('SELECT * FROM hc_entitlements WHERE user_id = ? AND feature = ? AND lot = ?', [uid, p.feature, intval(p.lot)]);
+  const quantityNow = ent && isActive(ent, now) ? intval(ent.quantity) : 0;
+  const kind = f?.kind ?? (p.days !== null ? 'timed' : 'permanent');
+  const r = refundableValue({ kind, price, units: intval(p.units), periodStart: p.period_start, periodEnd: p.period_end }, quantityNow, now);
+  const full = r.value === price;
+  const hidden = (n: string, v: string | number): string => `<input type="hidden" name="${n}" value="${e(String(v))}">`;
+  return `                                    <form action="/admin" method="POST" class="mt-2 grid grid-cols-1 sm:grid-cols-5 gap-2 items-end" data-hc-refund="${e(title)}" data-hc-refund-name="${e(name)}"${confirmAttrs({ title: 'Refund “' + title + '” to ' + name + '?', text: 'The amount you entered goes back to the balance. This can’t be undone.', ok: 'Refund', tone: 'danger' })}>`
+    + csrf.trim() + hidden('user_id', uid) + confirmField() + hidden('hc_action', 'refund') + hidden('purchase_id', intval(p.id)) + '\n'
+    + `                                        <div><label class="${SMALL}">Amount <span class="text-gray-500 font-normal">(max ${numberFormat(r.value)} – the unused part)</span></label><input type="number" name="amount" min="0" max="${r.value}" step="1" value="${r.value}" class="${IN}"></div>\n`
+    + `                                        <div class="sm:col-span-2"><label class="${SMALL}">What was bought</label><select name="remove" class="${IN}"><option value="1"${full ? ' selected' : ''}>Also remove what was bought</option><option value="0"${full ? '' : ' selected'}>Keep what was bought</option></select></div>\n`
+    + `                                        <div><label class="${SMALL}">Note</label><input type="text" name="note" maxlength="150" class="${IN}"></div>\n`
+    + `                                        <div><button type="submit" class="${BTN} hover:text-red-400"><i class='bx bx-undo'></i> Refund</button></div>\n`
+    + '                                    </form>';
+}
+
+// Rückfrage mit dem eingegebenen Betrag (OYSUI.beforeSubmit); die Attribute des Formulars gelten, falls das Skript fehlt.
+// Namen und Titel kommen aus data-Attributen und werden als Text gezeigt.
+const REFUND_SCRIPT = "                <script>\n"
+  + "                    // Erstatten: der Dialog nennt den Betrag und ob auch weggenommen wird\n"
+  + "                    document.addEventListener('DOMContentLoaded', () => {\n"
+  + "                        if (!window.OYSUI) return;\n"
+  + "                        document.querySelectorAll('form[data-hc-refund]').forEach((f) => OYSUI.beforeSubmit(f, (form) => {\n"
+  + "                            const n = Math.max(0, parseInt(form.amount.value, 10) || 0);\n"
+  + "                            const what = '“' + form.dataset.hcRefund + '”';\n"
+  + "                            return { title: 'Refund ' + n + ' honeycombs to ' + form.dataset.hcRefundName + '?',\n"
+  + "                                text: (form.remove.value === '1' ? what + ' is removed too.' : what + ' stays.') + ' This can’t be undone.', ok: 'Refund', tone: 'danger' };\n"
+  + "                        }));\n"
+  + "                    });\n"
+  + "                </script>\n";
+
+// ---------------------------------------------------------------- Käufe (HC-6a)
+
+// Filter: Option (?hc_item=), Nutzer (?hc_q=), Zeitraum (?hc_from=/?hc_to=, YYYY-MM-DD), Stand (?hc_status=open|refunded)
+async function purchasesTab(ctx: Ctx, csrf: string, now: string): Promise<string> {
+  const itemKey = typeof ctx.get.hc_item === 'string' && /^[a-z][a-z0-9_]{1,39}$/.test(ctx.get.hc_item) ? ctx.get.hc_item : '';
+  const query = searchText(ctx.get.hc_q);
+  const day = (v: unknown): string => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '');
+  const from = day(ctx.get.hc_from);
+  const to = day(ctx.get.hc_to);
+  const status = ctx.get.hc_status === 'open' || ctx.get.hc_status === 'refunded' ? ctx.get.hc_status : '';
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (itemKey !== '') { where.push('p.item_key = ?'); params.push(itemKey); }
+  if (query !== '') {
+    const like = '%' + query.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+    where.push('(u.full_name LIKE ? OR u.email LIKE ? OR u.username LIKE ?)');
+    params.push(like, like, like);
+  }
+  if (from !== '') { where.push('p.created_at >= ?'); params.push(from + ' 00:00:00'); }
+  if (to !== '') { where.push('p.created_at <= ?'); params.push(to + ' 23:59:59'); }
+  if (status === 'open') where.push('p.refunded_at IS NULL');
+  if (status === 'refunded') where.push('p.refunded_at IS NOT NULL');
+  const cond = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const total = intval(await value(`SELECT COUNT(*) FROM hc_purchases p JOIN users u ON u.id = p.user_id ${cond}`, params));
+  const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+  const pageNow = Math.min(pageNo(ctx.get.hc_p), pages);
+  const list = await q<PurchaseRow>(`SELECT p.*, u.full_name, u.email, o.label AS offer_label FROM hc_purchases p JOIN users u ON u.id = p.user_id
+      LEFT JOIN hc_offers o ON o.id = p.offer_id ${cond} ORDER BY p.id DESC LIMIT ${PER_PAGE} OFFSET ${(pageNow - 1) * PER_PAGE}`, params);
+  const items = await q('SELECT item_key, feature, days, units FROM hc_items ORDER BY feature, position, id');
+  let o = `                <div class="${CARD} overflow-hidden" id="hcPurchases">\n` + cardHead('bx-receipt', 'Purchases')
+    + `                    <form action="/admin#honeycombs" method="GET" class="p-5 sm:p-6 border-b border-bordercolor grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">`
+    + '<input type="hidden" name="hc_tab" value="purchases">\n'
+    + `                        <div><label class="${SMALL}" for="hcPItem">Option</label><select id="hcPItem" name="hc_item" class="${IN}"><option value="">All</option>`
+    + items.map((i) => `<option value="${e(i.item_key)}"${i.item_key === itemKey ? ' selected' : ''}>${e(itemTitle(i as unknown as ItemRow))}</option>`).join('') + '</select></div>\n'
+    + `                        <div><label class="${SMALL}" for="hcPUser">User</label><input id="hcPUser" type="search" name="hc_q" maxlength="100" value="${e(query)}" placeholder="Name or email" class="${IN}"></div>\n`
+    + `                        <div><label class="${SMALL}" for="hcPFrom">From</label><input id="hcPFrom" type="date" name="hc_from" value="${e(from)}" class="${IN}"></div>\n`
+    + `                        <div><label class="${SMALL}" for="hcPTo">To</label><input id="hcPTo" type="date" name="hc_to" value="${e(to)}" class="${IN}"></div>\n`
+    + `                        <div class="flex gap-2"><select name="hc_status" aria-label="Status" class="${IN}"><option value="">All</option><option value="open"${status === 'open' ? ' selected' : ''}>Not refunded</option><option value="refunded"${status === 'refunded' ? ' selected' : ''}>Refunded</option></select>`
+    + `<button type="submit" class="${BTN}"><i class='bx bx-filter-alt'></i> Filter</button></div>\n`
+    + '                    </form>\n';
+  if (!list.length) {
+    o += '                    <p class="p-5 sm:p-6 text-sm text-gray-500">No purchases found.</p>\n';
+  } else {
+    o += '                    <ul class="divide-y divide-bordercolor text-sm px-5 sm:px-6" id="hcPurchaseRows">\n';
+    for (const p of list) {
+      const name = phpStr(userName(p));
+      const price = intval(p.price);
+      const period = p.period_start !== null && p.period_end !== null ? ' · ' + date('M j', stamp(p.period_start)) + ' – ' + date('M j, Y', stamp(p.period_end)) : '';
+      o += `                        <li class="py-3" data-purchase="${intval(p.id)}"><div class="flex flex-wrap items-center justify-between gap-2"><span><a href="/admin?hc_tab=users&amp;hc_user=${intval(p.user_id)}#honeycombs" class="text-white hover:underline">${e(name)}</a> · <span class="text-gray-300">${e(itemTitle(p))}</span>`
+        + `<span class="block text-xs text-gray-500">${e(when(p.created_at))} · ${numberFormat(price)}${intval(p.list_price) !== price ? ' (list ' + numberFormat(intval(p.list_price)) + ')' : ''} honeycombs${p.offer_label ? ' · ' + e(p.offer_label) : ''}${e(period)}</span></span>`;
+      if (p.refunded_at !== null) {
+        o += `<span class="${BADGE} bg-white/5 text-gray-400">Refunded +${numberFormat(intval(p.refund_amount))}</span></div></li>\n`;
+        continue;
+      }
+      o += '</div>\n' + (await refundForm(csrf, p, name, now)) + '</li>\n';
+    }
+    o += '                    </ul>\n';
+  }
+  if (pages > 1) {
+    const qs = (n: number): string => '/admin?hc_tab=purchases' + (itemKey ? '&amp;hc_item=' + itemKey : '') + (query ? '&amp;hc_q=' + encodeURIComponent(query) : '')
+      + (from ? '&amp;hc_from=' + from : '') + (to ? '&amp;hc_to=' + to : '') + (status ? '&amp;hc_status=' + status : '') + '&amp;hc_p=' + n + '#honeycombs';
+    o += `                    <div class="flex items-center justify-between gap-3 p-4 border-t border-bordercolor text-xs text-gray-500"><span>Page ${pageNow} of ${pages} · ${numberFormat(total)} purchases</span><span class="flex gap-1.5">`
+      + (pageNow > 1 ? `<a href="${qs(pageNow - 1)}" class="${BTN}">Previous</a>` : '') + (pageNow < pages ? `<a href="${qs(pageNow + 1)}" class="${BTN}">Next</a>` : '') + '</span></div>\n';
+  }
+  o += '                </div>\n' + REFUND_SCRIPT;
+  return o;
+}
+
+// ---------------------------------------------------------------- Details eines Nutzers (HC-6a)
+
+// Kontostand, Freischaltungen (mit „Give unlock“ und „Remove“), Käufe (mit „Refund“), Buchungen und Protokoll
+async function userDetails(csrf: string, uid: number, now: string): Promise<string> {
+  const user = await one('SELECT id, full_name, email, username FROM users WHERE id = ?', [uid]);
+  if (!user) return `                <div class="${CARD} p-5 sm:p-6 text-sm text-gray-400" id="hcUserDetails">This user no longer exists.</div>\n`;
+  const name = phpStr(userName(user));
+  const balance = intval(await value('SELECT COALESCE(SUM(amount), 0) FROM honeycomb_ledger WHERE user_id = ?', [uid]));
+  const acc = await one('SELECT frozen_at, frozen_reason FROM hc_accounts WHERE user_id = ?', [uid]);
+  const hidden = (n: string, v: string | number): string => `<input type="hidden" name="${n}" value="${e(String(v))}">`;
+  const base = csrf.trim() + hidden('user_id', uid);
+  let o = `                <div class="${CARD} overflow-hidden" id="hcUserDetails">\n`
+    + cardHead('bx-user', name, `<a href="/admin?hc_tab=users#honeycombs" class="${BTN}"><i class='bx bx-x'></i> Close</a>`)
+    + `                    <div class="p-5 sm:p-6 space-y-6">\n`
+    + `                        <p class="text-sm text-gray-400"><span class="break-all">${e(user.email)}</span> · #${uid} · Balance <span class="font-bold text-white">${numberFormat(balance)}</span> <i class='bx bx-hive text-yellow-400'></i>`
+    + (acc && acc.frozen_at !== null ? ` <span class="${BADGE} bg-sky-500/15 text-sky-400">Frozen</span>` : '') + '</p>\n';
+
+  // Freischaltungen
+  const ents = await q<EntRow>('SELECT * FROM hc_entitlements WHERE user_id = ? ORDER BY feature, lot', [uid]);
+  o += `                        <div><h3 class="text-sm font-semibold text-white mb-2">Unlocks</h3>\n`;
+  if (!ents.length) {
+    o += '                            <p class="text-sm text-gray-500" id="hcUserUnlocks">No unlocks yet.</p>\n';
+  } else {
+    o += '                            <div class="overflow-x-auto"><table class="w-full text-sm text-left" id="hcUserUnlocks"><thead class="text-xs text-gray-500 uppercase bg-inputbg"><tr><th class="px-4 py-2 font-medium">Feature</th><th class="px-4 py-2 font-medium">State</th><th class="px-4 py-2 font-medium hidden sm:table-cell">From</th><th class="px-4 py-2"></th></tr></thead><tbody class="divide-y divide-bordercolor">\n';
+    for (const r of ents) {
+      const f = feature(r.feature);
+      const title = (f ? f.title : r.feature) + (intval(r.lot) > 0 ? ' · pack ' + (intval(r.lot) + 1) : '');
+      const active = isActive(r, now);
+      o += `                                <tr data-ent="${e(r.feature)}:${intval(r.lot)}"><td class="px-4 py-2 text-white">${e(title)}</td><td class="px-4 py-2 text-gray-300 whitespace-nowrap">${e(entState(r, now))}</td>`
+        + `<td class="px-4 py-2 text-xs text-gray-500 hidden sm:table-cell">${e(ucfirst(phpStr(r.source)))}</td><td class="px-4 py-2 text-right">`;
+      if (active && (r.feature !== 'premium' || premiumReady())) {
+        o += `<form action="/admin" method="POST" class="m-0"${confirmAttrs({ title: 'Remove ' + title + ' from ' + name + '?', text: 'It ends right away. No honeycombs go back – use “Refund” on a purchase for that.', ok: 'Remove', tone: 'danger' })}>`
+          + base + confirmField() + hidden('hc_action', 'feature_revoke') + hidden('feature', r.feature) + hidden('lot', intval(r.lot)) + hidden('form_ref', randomHex(8))
+          + `<button type="submit" class="${BTN} hover:text-red-400"><i class='bx bx-minus-circle'></i> Remove</button></form>`;
+      }
+      o += '</td></tr>\n';
+    }
+    o += '                            </tbody></table></div>\n';
+  }
+  // Freischaltung schenken
+  const givable = features().filter((f) => featureReady(f) && (f.key !== 'premium' || premiumReady()));
+  if (givable.length) {
+    o += `                            <form action="/admin" method="POST" class="mt-3 grid grid-cols-1 sm:grid-cols-6 gap-3 items-end" id="hcGiveUnlock">` + base + hidden('hc_action', 'feature_grant') + hidden('form_ref', randomHex(8)) + '\n'
+      + `                                <div class="sm:col-span-2"><label class="${SMALL}" for="hcGiveFeature">Give unlock</label><select id="hcGiveFeature" name="feature" class="${IN}">`
+      + givable.map((f) => `<option value="${e(f.key)}" data-kind="${e(f.kind)}">${e(f.title)}</option>`).join('') + '</select></div>\n'
+      + `                                <div><label class="${SMALL}" for="hcGiveMode">How</label><select id="hcGiveMode" name="mode" class="${IN}"><option value="permanent">For good</option>`
+      + `<option value="days"${LIFECYCLE_READY ? '' : ' disabled title="Time-limited grants come with the end-of-period handling."'}>Days</option><option value="units">Number</option></select></div>\n`
+      + `                                <div><label class="${SMALL}" for="hcGiveDays">Days / number</label><input id="hcGiveDays" type="number" name="days" min="1" max="3650" step="1" placeholder="30" class="${IN}">`
+      + `<input type="hidden" name="units" value=""></div>\n`
+      + `                                <div><label class="${SMALL}" for="hcGiveNote">Note</label><input id="hcGiveNote" type="text" name="note" maxlength="150" class="${IN}"></div>\n`
+      + `                                <div><button type="submit" class="${BTN}"><i class='bx bx-gift'></i> Give</button></div>\n`
+      + '                            </form>\n'
+      + "                            <script>\n                                // Anzahl statt Tagen: dasselbe Feld, beim Absenden als units\n                                (function () {\n"
+      + "                                    const form = document.getElementById('hcGiveUnlock');\n"
+      + "                                    form.addEventListener('submit', () => { if (form.mode.value === 'units') { form.units.value = form.days.value; } });\n"
+      + '                                })();\n                            </script>\n';
+  }
+  o += '                        </div>\n';
+
+  // Käufe mit Erstattung
+  const purchases = await q<PurchaseRow>('SELECT * FROM hc_purchases WHERE user_id = ? ORDER BY id DESC LIMIT 50', [uid]);
+  o += `                        <div><h3 class="text-sm font-semibold text-white mb-2">Purchases</h3>\n`;
+  if (!purchases.length) {
+    o += '                            <p class="text-sm text-gray-500" id="hcUserPurchases">No purchases yet.</p>\n';
+  } else {
+    o += '                            <ul class="divide-y divide-bordercolor text-sm" id="hcUserPurchases">\n';
+    for (const p of purchases) {
+      const title = itemTitle(p);
+      const price = intval(p.price);
+      const period = p.period_start !== null && p.period_end !== null ? ' · ' + date('M j', stamp(p.period_start)) + ' – ' + date('M j, Y', stamp(p.period_end)) : '';
+      o += `                                <li class="py-3" data-purchase="${intval(p.id)}"><div class="flex flex-wrap items-center justify-between gap-2"><span><span class="text-white">${e(title)}</span>`
+        + `<span class="block text-xs text-gray-500">${e(when(p.created_at))} · ${numberFormat(price)}${intval(p.list_price) !== price ? ' (list ' + numberFormat(intval(p.list_price)) + ')' : ''} honeycombs${e(period)}</span></span>`;
+      if (p.refunded_at !== null) {
+        o += `<span class="${BADGE} bg-white/5 text-gray-400">Refunded +${numberFormat(intval(p.refund_amount))}</span></div></li>\n`;
+        continue;
+      }
+      o += '</div>\n' + (await refundForm(csrf, p, name, now)) + '</li>\n';
+    }
+    o += '                            </ul>\n';
+  }
+  o += '                        </div>\n';
+
+  // Buchungen und Protokoll
+  const ledger = await q('SELECT * FROM honeycomb_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 50', [uid]);
+  o += `                        <div><h3 class="text-sm font-semibold text-white mb-2">History</h3>\n`;
+  if (!ledger.length) {
+    o += '                            <p class="text-sm text-gray-500">No entries yet.</p>\n';
+  } else {
+    o += '                            <ul class="divide-y divide-bordercolor text-sm" id="hcUserLedger">\n';
+    for (const l of ledger) {
+      o += `                                <li class="py-2 flex items-center justify-between gap-3"><span class="min-w-0"><span class="text-gray-300">${e(hcDescribe(l))}</span><span class="block text-xs text-gray-500">${e(when(l.created_at))}</span></span>${amountHtml(intval(l.amount))}</li>\n`;
+    }
+    o += '                            </ul>\n';
+  }
+  o += '                        </div>\n';
+  const audits = await q('SELECT a.*, u.full_name, u.email FROM hc_audit a LEFT JOIN users u ON u.id = a.admin_id WHERE a.user_id = ? ORDER BY a.id DESC LIMIT 20', [uid]);
+  if (audits.length) {
+    o += `                        <div><h3 class="text-sm font-semibold text-white mb-2">Team actions</h3><ul class="text-xs text-gray-400 space-y-1" id="hcUserAudit">\n`;
+    for (const a of audits) o += `                            <li>${e(when(a.created_at))} · ${e(a.full_name || a.email ? userName(a) : '#' + intval(a.admin_id))} · ${e(a.action)} · ${e(a.target)}</li>\n`;
+    o += '                        </ul></div>\n';
+  }
+  o += '                    </div>\n                </div>\n' + REFUND_SCRIPT;
   return o;
 }

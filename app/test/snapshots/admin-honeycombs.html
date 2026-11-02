@@ -6,6 +6,7 @@
                     <a href="/admin?hc_tab=offers#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-gift'></i> Offers <span class="text-gray-500">0</span></a>
                     <a href="/admin?hc_tab=rules#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-slider-alt'></i> Earning rules</a>
                     <a href="/admin?hc_tab=users#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !bg-white/10 !text-white" aria-current="page"><i class='bx bx-group'></i> Users</a>
+                    <a href="/admin?hc_tab=purchases#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-receipt'></i> Purchases</a>
                 </nav>
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
                     <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
@@ -44,12 +45,12 @@
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
                     <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
                         <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>
-                        <input type="search" id="hcFilter" placeholder="Search users …" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm sm:!w-64">
+                        <form action="/admin#honeycombs" method="GET" class="m-0 flex gap-2" role="search"><input type="hidden" name="hc_tab" value="users"><input type="search" id="hcFilter" name="hc_q" maxlength="100" value="" placeholder="Search users …" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm sm:!w-64"><button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-search'></i> Search</button></form>
                     </div>
                     <div class="overflow-x-auto">
                         <table class="w-full text-sm text-left">
                             <thead class="text-xs text-gray-500 uppercase bg-inputbg">
-                                <tr><th class="px-5 py-3 font-medium">User</th><th class="px-4 py-3 font-medium text-right">Balance</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Earned</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Spent</th><th class="px-5 py-3"></th></tr>
+                                <tr><th class="px-5 py-3 font-medium">User</th><th class="px-4 py-3 font-medium text-right">Balance</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Earned</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Spent</th><th class="px-4 py-3 font-medium hidden sm:table-cell">Premium</th><th class="px-5 py-3"></th></tr>
                             </thead>
                             <tbody class="divide-y divide-bordercolor" id="hcRows">
                                 <tr data-search="pixel admin admin@test.de pixel">
@@ -57,35 +58,40 @@
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">500 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">500</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
-                                    <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="3"><i class='bx bx-gift'></i> Give</button></td>
+                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">–</td>
+                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="3"><i class='bx bx-gift'></i> Give</button> <a href="/admin?hc_tab=users&amp;hc_user=3#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-detail'></i> Details</a></td>
                                 </tr>
                                 <tr data-search="mia müller mia@test.de mia">
                                     <td class="px-5 py-3"><span class="text-white">Mia Müller</span><span class="block text-xs text-gray-500 break-all">mia@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">50 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">150</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">100</td>
-                                    <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="5"><i class='bx bx-gift'></i> Give</button></td>
+                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">–</td>
+                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="5"><i class='bx bx-gift'></i> Give</button> <a href="/admin?hc_tab=users&amp;hc_user=5#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-detail'></i> Details</a></td>
                                 </tr>
                                 <tr data-search="lea@test.de lea@test.de lea">
                                     <td class="px-5 py-3"><span class="text-white">lea@test.de</span><span class="block text-xs text-gray-500 break-all">lea@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">5 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">5</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
-                                    <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="7"><i class='bx bx-gift'></i> Give</button></td>
+                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">–</td>
+                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="7"><i class='bx bx-gift'></i> Give</button> <a href="/admin?hc_tab=users&amp;hc_user=7#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-detail'></i> Details</a></td>
                                 </tr>
                                 <tr data-search="o&#039;brien &lt;b&gt;&amp; “co” quote@test.de quote">
                                     <td class="px-5 py-3"><span class="text-white">O&#039;Brien &lt;b&gt;&amp; “Co”</span><span class="block text-xs text-gray-500 break-all">Quote@Test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">0 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
-                                    <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="10"><i class='bx bx-gift'></i> Give</button></td>
+                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">–</td>
+                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="10"><i class='bx bx-gift'></i> Give</button> <a href="/admin?hc_tab=users&amp;hc_user=10#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-detail'></i> Details</a></td>
                                 </tr>
                                 <tr data-search="tom@test.de tom@test.de tom">
                                     <td class="px-5 py-3"><span class="text-white">tom@test.de</span><span class="block text-xs text-gray-500 break-all">tom@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">0 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
-                                    <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="6"><i class='bx bx-gift'></i> Give</button></td>
+                                    <td class="px-4 py-3 text-gray-400 hidden sm:table-cell whitespace-nowrap">–</td>
+                                    <td class="px-5 py-3 text-right whitespace-nowrap"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="6"><i class='bx bx-gift'></i> Give</button> <a href="/admin?hc_tab=users&amp;hc_user=6#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-detail'></i> Details</a></td>
                                 </tr>
                             </tbody>
                         </table>

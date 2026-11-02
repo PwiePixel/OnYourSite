@@ -11,16 +11,23 @@ import { ensureCatalogue, optionTitle } from './catalogue.js';
 import { cancelOffer, createOffer, formDateTime } from './offers.js';
 import { hcSettingsFrom, type HcSettings } from './honeycombs.js';
 import { PhpNumber, phpInt, phpJsonDecode } from './util.js';
+import { cleanText } from '../helpers.js';
 import { audit, type AuditDetails } from './audit.js';
+import { grantFeature, revokeFeature } from './grants.js';
+import { refund } from './shop.js';
+import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export type AdminResult = { ok: string } | { error: string };
 
-// Unterbereiche (die übrigen – purchases, ledger, codes – kommen mit HC-6a/6b/HC-9)
-export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users'] as const;
+// Unterbereiche (die übrigen – ledger, codes – kommen mit HC-6b/HC-9)
+export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases'] as const;
 export type HcTab = (typeof HC_TABS)[number];
 const ACTION_TAB: Readonly<Record<string, HcTab>> = {
   settings: 'rules', item_save: 'catalogue', item_add: 'catalogue', offer_create: 'offers', offer_cancel: 'offers', grant: 'users',
+  feature_grant: 'users', feature_revoke: 'users', refund: 'users',
 };
+// Aktionen aus den Details eines Nutzers: zurück zu diesen Details
+const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund']);
 
 // ?hc_tab=… → Unterbereich (Unbekanntes: Übersicht)
 export function hcTab(v: unknown): HcTab {
@@ -31,7 +38,8 @@ export function hcTab(v: unknown): HcTab {
 export function hcBackUrl(post: PhpArray): string {
   const action = typeof post.hc_action === 'string' ? post.hc_action : '';
   const tab = Object.hasOwn(ACTION_TAB, action) ? ACTION_TAB[action] : 'overview';
-  return '/admin' + (tab === 'overview' ? '' : '?hc_tab=' + tab) + '#honeycombs';
+  const uid = USER_ACTIONS.has(action) && typeof post.user_id === 'string' && /^[1-9][0-9]{0,9}$/.test(post.user_id) ? Number(post.user_id) : 0;
+  return '/admin' + (tab === 'overview' ? '' : '?hc_tab=' + tab) + (uid > 0 && uid <= 2147483647 ? '&hc_user=' + uid : '') + '#honeycombs';
 }
 
 const BAD = 'Not all of the data arrived. Please try again.';
@@ -211,6 +219,62 @@ async function offerCancel(post: PhpArray, adminId: number): Promise<AdminResult
   return cancelOffer(adminId, id);
 }
 
+// ---------------------------------------------------------------- Nutzer: Freischaltungen und Erstattungen (HC-6a)
+
+// Formulare, die etwas wegnehmen oder Honigwaben bewegen, kommen nur mit bestätigtem Dialog an (_confirmed=1). Der
+// Verteiler lehnt _confirmed ≠ 1 schon ab; hier fehlt das Feld zusätzlich nicht (ein selbst gebautes Formular ohne
+// Feld bleibt wirkungslos).
+const confirmed = (post: PhpArray): boolean => post._confirmed === '1';
+
+async function featureGrantAction(post: PhpArray, adminId: number): Promise<AdminResult> {
+  const f = textFields(post, ['user_id', 'feature', 'mode', 'days', 'units', 'lot', 'note', 'form_ref']);
+  if (!f) return { error: BAD };
+  const uid = wholeNumber(f.user_id, 1, 2147483647);
+  if (uid === null) return { error: 'Please choose a user.' };
+  if (!FEATURE_KEY.test(f.feature)) return { error: 'This feature can’t be given yet.' };
+  const lot = wholeNumber(f.lot, 0, 9, 0);
+  if (lot === null) return { error: 'This pack doesn’t exist.' };
+  const note = cleanText(f.note, 150);
+  if (f.mode === 'permanent') return grantFeature(adminId, uid, f.feature, { permanent: true, lot, formRef: f.form_ref }, note);
+  if (f.mode === 'days') {
+    const days = wholeNumber(f.days, 1, 3650);
+    if (days === null) return { error: 'Enter 1 to 3,650 days.' };
+    return grantFeature(adminId, uid, f.feature, { days, lot, formRef: f.form_ref }, note);
+  }
+  if (f.mode === 'units') {
+    const units = wholeNumber(f.units, 1, 10);
+    if (units === null) return { error: 'Enter a number from 1 to 10.' };
+    return grantFeature(adminId, uid, f.feature, { units, lot, formRef: f.form_ref }, note);
+  }
+  return { error: 'Please choose how long.' };
+}
+
+async function featureRevokeAction(post: PhpArray, adminId: number): Promise<AdminResult> {
+  if (!confirmed(post)) return { error: UNCONFIRMED_MESSAGE };
+  const f = textFields(post, ['user_id', 'feature', 'lot', 'note', 'form_ref']);
+  if (!f) return { error: BAD };
+  const uid = wholeNumber(f.user_id, 1, 2147483647);
+  if (uid === null) return { error: 'Please choose a user.' };
+  if (!FEATURE_KEY.test(f.feature)) return { error: 'This feature doesn’t exist.' };
+  const lot = f.lot === '' ? null : wholeNumber(f.lot, 0, 9);
+  if (f.lot !== '' && lot === null) return { error: 'This pack doesn’t exist.' };
+  return revokeFeature(adminId, uid, f.feature, lot, cleanText(f.note, 150), f.form_ref);
+}
+
+async function refundAction(post: PhpArray, adminId: number): Promise<AdminResult> {
+  if (!confirmed(post)) return { error: UNCONFIRMED_MESSAGE };
+  const f = textFields(post, ['purchase_id', 'amount', 'remove', 'note']);
+  if (!f) return { error: BAD };
+  const id = wholeNumber(f.purchase_id, 1, 2147483647);
+  if (id === null) return { error: 'Purchase not found.' };
+  // Leer = der erstattbare Wert; sonst 0 … der erstattbare Wert (prüft refund())
+  const amount = f.amount.trim() === '' ? null : wholeNumber(f.amount, 0, MAX_PRICE);
+  if (f.amount.trim() !== '' && amount === null) return { error: 'Enter the refund as a whole number of honeycombs.' };
+  // Wegnehmen oder nicht ist eine ausdrückliche Wahl
+  if (f.remove !== '1' && f.remove !== '0') return { error: 'Please choose whether to remove what was bought.' };
+  return refund(adminId, id, amount, f.remove === '1', cleanText(f.note, 150));
+}
+
 // Aktionen des Shops (null: keine davon – dann prüft der Aufrufer die übrigen)
 export async function adminShopHandle(post: PhpArray, adminId: number): Promise<AdminResult | null> {
   switch (post.hc_action) {
@@ -224,6 +288,12 @@ export async function adminShopHandle(post: PhpArray, adminId: number): Promise<
       return offerCreate(post, adminId);
     case 'offer_cancel':
       return offerCancel(post, adminId);
+    case 'feature_grant':
+      return featureGrantAction(post, adminId);
+    case 'feature_revoke':
+      return featureRevokeAction(post, adminId);
+    case 'refund':
+      return refundAction(post, adminId);
   }
   return null;
 }

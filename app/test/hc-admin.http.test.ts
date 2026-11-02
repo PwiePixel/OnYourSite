@@ -76,8 +76,8 @@ after(async () => {
 });
 
 test('sub-tabs: the tab from ?hc_tab, unknown values show the overview, and every action goes back to its tab', async () => {
-  assert.deepEqual(['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'x', '', undefined, ['users']].map(hcTab),
-    ['overview', 'catalogue', 'offers', 'rules', 'users', 'overview', 'overview', 'overview', 'overview', 'overview']);
+  assert.deepEqual(['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'x', '', undefined, ['users']].map(hcTab),
+    ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'overview', 'overview', 'overview', 'overview', 'overview']);
   assert.deepEqual(['settings', 'item_save', 'item_add', 'offer_create', 'offer_cancel', 'grant', 'code_block', 'nope'].map((a) => hcBackUrl({ hc_action: a })), [
     '/admin?hc_tab=rules#honeycombs', '/admin?hc_tab=catalogue#honeycombs', '/admin?hc_tab=catalogue#honeycombs', '/admin?hc_tab=offers#honeycombs',
     '/admin?hc_tab=offers#honeycombs', '/admin?hc_tab=users#honeycombs', '/admin#honeycombs', '/admin#honeycombs',

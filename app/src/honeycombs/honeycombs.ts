@@ -5,6 +5,7 @@
 import type { Db, Row } from '../db.js';
 import { date, field, intval, numberFormat, phpStr, ucfirst, type PhpArray } from '../php.js';
 import { cleanText } from '../helpers.js';
+import { notify } from '../notify/notify.js';
 import { phpJson } from '../html.js';
 import { randomHex } from '../crypto.js';
 import { PhpNumber, jsonInt, jsonIsNumeric, phpInt, phpJsonDecode, poolDb } from './util.js';
@@ -263,7 +264,10 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
         if (amount < 0 && (await hcBalance(userId, sql)) + amount < 0) {
           return 'That would take the balance below 0 (current: ' + (await hcBalance(userId, sql)) + ').';
         }
-        return (await credit(sql, userId, amount, 'admin', ref, note, adminId)) !== null ? true : 'This was already booked – the form was sent twice.';
+        if ((await credit(sql, userId, amount, 'admin', ref, note, adminId)) === null) return 'This was already booked – the form was sent twice.';
+        // Glocke nur, wenn gebucht wurde – in derselben Transaktion, also genau einmal
+        await notify(userId, 'honeycombs', (amount > 0 ? '+' + amount + ' honeycombs from the team' : '−' + -amount + ' honeycombs (correction by the team)'), note, '/dashboard#honeycombs', { db: sql });
+        return true;
       });
       if (booked !== true) return { error: booked };
       const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
