@@ -15,6 +15,10 @@ export interface UpdatesPageData {
   // Titel der öffentlichen Meilensteine (für die Chips mit Link zur Roadmap)
   milestoneTitles: Map<number, string>;
   invite: string;
+  // Die Vorschlagsseite ist an (Pille in der Unternavigation)
+  suggestions?: boolean;
+  // OnYourSites Statusseite (online): „Status“ in Navigation und Fußzeile
+  statusUrl?: string;
 }
 
 export const UPDATES_DESCRIPTION = 'Every change to OnYourSite, newest first.';
@@ -121,6 +125,8 @@ export function updatesView(d: UpdatesPageData): string {
     loggedIn: d.loggedIn,
     invite: d.invite,
     headScript: FORWARD_SCRIPT,
+    suggestions: d.suggestions === true,
+    statusUrl: d.statusUrl,
   }, {
     badge: 'Changelog',
     headline: 'What’s new at <span class="text-transparent bg-clip-text [-webkit-text-fill-color:transparent] box-decoration-clone bg-gradient-to-r from-brand-400 to-purple-400">OnYourSite</span>',

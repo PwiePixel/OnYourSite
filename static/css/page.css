@@ -201,7 +201,8 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 
 .oys-foot { margin-top: auto; padding-top: 40px; text-align: center; font-size: .78em; }
 .oys-foot a { display: inline-block; padding: 10px 14px; text-decoration: none; color: var(--muted); opacity: .75; transition: opacity .2s; }
-.oys-foot a:hover { opacity: 1; }
+/* Die Deckkraft steht fest im Element (Premium: der Hinweis bleibt sichtbar) – beim Darüberfahren unterstreichen */
+.oys-foot a:hover { text-decoration: underline; }
 
 /* ---------- Links: Grundform (Knöpfe) ---------- */
 .oys-links { display: flex; flex-direction: column; gap: 12px; }
@@ -493,6 +494,12 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 
 .oys-lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .92); display: grid; place-items: center; padding: 20px; cursor: zoom-out; animation: oys-fade .2s; }
 .oys-lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; }
+.oys-lightbox-close {
+  position: absolute; top: calc(14px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); width: 42px; height: 42px;
+  border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer;
+}
+.oys-lightbox-close:hover { background: rgba(255, 255, 255, .22); }
+.oys-lightbox-close .oys-ico { width: 22px; height: 22px; }
 
 /* ---------- Video & Musik (2-Klick) ---------- */
 .oys-embed { border-radius: var(--card-radius); overflow: hidden; background: var(--card-bg); border: var(--card-border); box-shadow: var(--card-shadow); }

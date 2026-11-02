@@ -14,8 +14,10 @@ import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
+import { hcBackUrl } from '../honeycombs/admin.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
 import { adminCodePagesView } from '../code/adminView.js';
+import { adminStatusView } from '../status/adminView.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
 import { resetPassword, toggleAdmin } from './users.js';
@@ -24,6 +26,7 @@ import { emailTemplates, ensureEmailDir, saveSmtp, sendNewsletter, smtpConfig } 
 import { adminView, CutOffPage, type AdminViewData } from './views/admin.js';
 import { adminStorageData, adminStorageView } from './views/storage.js';
 import { adminBackUrl, refuseUnconfirmed } from './confirm.js';
+import { bellMarkup } from '../views/partials/ui.js';
 
 export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   const session = await Session.start(ctx);
@@ -67,7 +70,8 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     if (legacy) await codeAction(ctx, session, legacy);
     const result = await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
-    ctx.redirect('/admin#honeycombs');
+    // Zurück zum Unterbereich der Aktion (z. B. /admin?hc_tab=offers#honeycombs)
+    ctx.redirect(hcBackUrl(post));
   }
 
   // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
@@ -230,6 +234,8 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     communityHtml: await adminCommunityView(ctx),
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
     codePagesHtml: await adminCodePagesView(ctx, allUsers),
+    statusHtml: await adminStatusView(ctx),
+    bellHtml: await bellMarkup(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };
 }

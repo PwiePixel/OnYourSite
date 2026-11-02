@@ -2,12 +2,14 @@
 // Verbindung zur Webseite (/_/bot/…). Jede Anfrage ist mit BOT_SECRET signiert:
 // HMAC-SHA256 über "Zeitstempel \n METHODE \n Pfad?Query \n Inhalt" – das Geheimnis selbst wird nie gesendet.
 const crypto = require('crypto');
+const { version } = require('../package.json');
 
 class SiteClient {
-  constructor(baseUrl, secret, { timeoutMs = 10000 } = {}) {
+  constructor(baseUrl, secret, { timeoutMs = 10000, log = () => {} } = {}) {
     this.base = new URL(baseUrl);
     this.secret = secret;
     this.timeoutMs = timeoutMs;
+    this.log = log;
   }
 
   sign(timestamp, method, uri, body) {
@@ -21,7 +23,7 @@ class SiteClient {
     const timestamp = String(Math.floor(Date.now() / 1000));
     const headers = {
       Accept: 'application/json',
-      'User-Agent': 'OnYourSite-Bot/0.1',
+      'User-Agent': `OnYourSite-Bot/${version}`,
       'X-OYS-Timestamp': timestamp,
       'X-OYS-Signature': this.sign(timestamp, method, uri, body),
     };
@@ -35,6 +37,8 @@ class SiteClient {
       try { json = await res.json(); } catch (e) { /* keine JSON-Antwort */ }
       if (!json || typeof json !== 'object') json = { ok: false, error: `The website answered with HTTP ${res.status}.` };
       json.httpStatus = res.status;
+      // Zu groß (die Webseite nimmt höchstens 64 KiB): eigens melden – ein falsches Geheimnis wäre 401
+      if (res.status === 413) this.log(`The website refused ${method} ${route}: the request was too big.`);
       return json;
     } catch (err) {
       return { ok: false, httpStatus: 0, error: err.name === 'AbortError' ? 'The website did not answer in time.' : 'The website could not be reached.' };

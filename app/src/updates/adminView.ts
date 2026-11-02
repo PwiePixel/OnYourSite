@@ -9,9 +9,14 @@ import { date, intval, phpLtrim, phpStr, phpTruthy, strtotime } from '../php.js'
 import {
   MILESTONE_STATUSES, UPDATE_CATEGORIES, milestoneGet, milestones, updateGet, updatesList, type Milestone, type Update,
 } from './updates.js';
-import { discordConfigured, discordSettings, type DiscordSettings } from './discord.js';
+import type { DiscordSettings } from '../discord/settings.js';
 import { discordTabData, discordTabView } from '../discord/adminView.js';
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
+import { anyDestination, delivery, destinations, isOnDiscord, postsOf, type Delivery, type PostRow } from '../discord/posts.js';
+import { chipActionsHtml, chipHtml, chipOf, openJobsOf, type Chip } from '../discord/chips.js';
+import { report as botReport } from '../discord/botReport.js';
+import { placeOf } from '../discord/botCard.js';
+import { parseWebhookLink } from '../discord/webhook.js';
 
 export interface AdminUpdatesData {
   // oys_csrf_field() – überall dasselbe Feld
@@ -25,6 +30,13 @@ export interface AdminUpdatesData {
   editMilestone: Milestone | null;
   // Reiter Discord (fertiges HTML aus discord/adminView.ts)
   discordTab: string;
+  // Ein Chip je Beitrag eines Updates (Bot, Webhook, alter Token) mit Retry/Forget
+  chips?: Map<number, Chip[]>;
+  // Wo ein Update in Discord steht (für „On Discord (…)“), und wohin ein neues ginge (Ziele, die an sind)
+  postedWhere?: Map<number, string[]>;
+  activeWhere?: string[];
+  // Etwas ist eingerichtet (Bot, Webhook, alter Token), aber kein Ziel ist an
+  discordOff?: boolean;
 }
 
 // Formularwerte: ein vorhandenes Update oder die Vorgaben (auf Wunsch aus einem Meilenstein vorbefüllt)
@@ -41,22 +53,58 @@ interface UpdateForm {
   discord_announce: unknown;
 }
 
+// Steht ein Update in Discord? Die Vorlage fragt wie früher discord_message_id ab – der Wert kommt jetzt aus den
+// Beiträgen (update_discord_posts), nicht mehr aus der alten Spalte
+function withPosts(u: Update, posts: Map<number, PostRow[]>): Update {
+  const rows = posts.get(u.id);
+  const first = rows?.find((r) => r.state !== 'failed');
+  return { ...u, discord_message_id: isOnDiscord(rows) ? first?.message_id ?? first?.state ?? '' : '' };
+}
+
 // Daten wie am Anfang von admin_updates.php: ?edit_update=, ?new_update_for= und ?edit_milestone= aus der Adresse
 export async function adminUpdatesView(ctx: Ctx): Promise<string> {
-  const settings = await discordSettings();
+  const d = await delivery();
   const csrf = (await csrfField(ctx)).value;
   const get = ctx.get;
+  const all = await updatesList(false, 300);
+  const edit = get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null;
+  const posts = await postsOf([...all.map((u) => u.id), ...(edit ? [edit.id] : [])]);
+  const rep = d.botInstalled ? await botReport() : null;
+  const rows = [...posts.values()].flat();
+  const jobs = await openJobsOf(rows.map((r) => r.id));
+  const chips = new Map<number, Chip[]>();
+  const postedWhere = new Map<number, string[]>();
+  for (const row of rows) {
+    chips.set(row.update_id, [...(chips.get(row.update_id) ?? []), chipOf(row, jobs.get(row.id), d.botInstalled)]);
+    if (row.state !== 'failed') postedWhere.set(row.update_id, [...(postedWhere.get(row.update_id) ?? []), whereText(row.via, row.via === 'bot' ? placeOf(rep, row.channel_id ?? '')?.name ?? '' : '')]);
+  }
   return adminUpdatesTemplate({
-    discordSettings: settings,
-    discordReady: discordConfigured(settings),
-    allUpdates: await updatesList(false, 300),
+    discordSettings: d.s,
+    discordReady: anyDestination(d),
+    allUpdates: all.map((u) => withPosts(u, posts)),
     allMilestones: await milestones(false),
-    editUpdate: get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null,
+    editUpdate: edit ? withPosts(edit, posts) : null,
     prefillMs: get.new_update_for !== undefined ? await milestoneGet(intval(get.new_update_for)) : null,
     editMilestone: get.edit_milestone !== undefined ? await milestoneGet(intval(get.edit_milestone)) : null,
     csrf,
     discordTab: discordTabView(await discordTabData(ctx, csrf)),
+    chips,
+    postedWhere,
+    activeWhere: destinations(d).map((x) => whereText(x.via, x.via === 'bot' ? d.bot?.name ?? '' : '')),
+    discordOff: !anyDestination(d) && somethingSetUp(d),
   });
+}
+
+// Ziel in Worten: „bot in #updates“, „webhook“, „old bot token“
+function whereText(via: PostRow['via'], channel: string): string {
+  if (via === 'bot') return channel !== '' ? 'bot in #' + channel : 'bot';
+  return via === 'webhook' ? 'webhook' : 'old bot token';
+}
+
+// Ist überhaupt etwas eingerichtet? (Bot installiert, Webhook gespeichert oder alter Token) – dann heißt „kein Ziel“
+// „ausgeschaltet“, nicht „noch nicht verbunden“
+function somethingSetUp(d: Delivery): boolean {
+  return d.botInstalled || parseWebhookLink(d.s.webhook.url) !== null || d.s.bot_token !== '';
 }
 
 export function adminUpdatesTemplate(d: AdminUpdatesData): string {
@@ -153,15 +201,21 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += "> Publish</label>\n                                <label class=\"flex items-center gap-2 cursor-pointer\"><input type=\"radio\" name=\"publish\" value=\"\"";
   o += editUpdate && !uf.is_published ? ' checked' : '';
   o += " class=\"accent-brand-500\"> Save as draft</label>\n                            </div>\n                            <div class=\"sm:pt-4 text-sm\">\n                                ";
-  if (!discordReady) {
+  const where = editUpdate ? d.postedWhere?.get(editUpdate.id) ?? [] : [];
+  if (!discordReady && d.discordOff) {
+    // Eingerichtet, aber kein Ziel an (z. B. Bot ausgeschaltet): sagen, dass gerade nichts angekündigt wird
+    o += "                                <span class=\"text-gray-500 flex items-center gap-1.5\" data-discord-off><i class='bx bxl-discord-alt text-lg'></i> Updates aren’t announced on Discord right now – no destination is on. <a href=\"#discord\" class=\"text-brand-400 hover:text-white\">Discord settings</a></span>\n                                ";
+  } else if (!discordReady) {
     o += "                                <span class=\"text-gray-500 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> Connect Discord under <a href=\"#discord\" onclick=\"switchAdminTab('discord')\" class=\"text-brand-400 hover:text-white\">Discord</a> to announce updates.</span>\n                                ";
   } else if (uf.discord_message_id !== '') {
-    o += "                                <span class=\"text-emerald-400 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> Already on Discord – changes are synced, drafts are removed there.</span>\n                                ";
+    o += "                                <span class=\"text-emerald-400 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> " + (where.length ? 'On Discord (' + e(where.join(', ')) + ')' : 'Already on Discord') + " – changes are synced, drafts are removed there.</span>\n                                ";
   } else {
     o += "                                <input type=\"hidden\" name=\"announce_field\" value=\"1\">\n                                <label class=\"flex items-center gap-2 cursor-pointer text-gray-300\"><input type=\"checkbox\" name=\"post_discord\" value=\"1\" class=\"accent-[#5865F2]\"";
     o += announceChecked ? ' checked' : '';
     o += "> <i class='bx bxl-discord-alt text-lg text-[#5865F2]'></i> ";
     o += announceNow ? 'Post it to Discord now' : 'Announce on Discord when published';
+    // Wohin angekündigt wird (die Ziele, die an sind)
+    o += d.activeWhere && d.activeWhere.length ? '<span class="text-gray-500" data-discord-where> (' + e(d.activeWhere.join(', ')) + ')</span>' : '';
     o += "</label>\n                                ";
   }
   o += "                            </div>\n                        </div>\n                        <div class=\"flex flex-wrap justify-end gap-3\">\n                            ";
@@ -194,7 +248,11 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
     o += "22\">";
     o += e(cat.label);
     o += "</span>\n                                    ";
-    if (u.discord_message_id !== '') {
+    // Ein Chip je Ziel (ersetzt das frühere „On Discord“)
+    const uChips = d.chips?.get(u.id) ?? [];
+    if (uChips.length) {
+      o += '<span class="contents" data-discord-chips="' + u.id + '">' + uChips.map((c) => chipHtml(c, u.title)).join('') + '</span>';
+    } else if (!d.chips && u.discord_message_id !== '') {
       o += "<span class=\"text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[#5865F2]/20 text-[#8b93ff] flex items-center gap-1\"><i class='bx bxl-discord-alt'></i> On Discord</span>";
     }
     o += "                                </div>\n                                <p class=\"mt-1.5 text-white font-medium truncate\">";
@@ -243,6 +301,11 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
       o += "\">\n                                    <button type=\"submit\" class=\"";
       o += btn;
       o += " text-[#8b93ff]\"><i class='bx bxl-discord-alt'></i> Remove from Discord</button></form>\n                                ";
+    }
+    // Retry und Forget je Beitrag, der sich noch ändern kann (die übrigen ändern sich nur durch eine Aktion hier)
+    const actionable = uChips.filter((c) => c.retry || c.forget || c.state !== 'posted' || c.error !== '' || c.busy);
+    if (actionable.length) {
+      o += '<div class="contents" data-discord-actions="' + u.id + '">' + actionable.map((c) => chipActionsHtml(c, csrf, 'updates', uChips.length > 1)).join('') + '</div>';
     }
     o += "                                <form action=\"/admin\" method=\"POST\" class=\"m-0\"";
     o += confirmAttrs({ title: 'Delete this update?', text: u.discord_message_id !== '' ? 'Its Discord post is deleted too.' : undefined, ok: 'Delete', tone: 'danger' });

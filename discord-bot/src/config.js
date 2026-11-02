@@ -36,6 +36,12 @@ function readConfig() {
     tagDeclinedId: id('TAG_DECLINED_ID'),
     supportChannelId: id('SUPPORT_CHANNEL_ID'),
     supportCategoryId: id('SUPPORT_CATEGORY_ID'),
+    // Kanal für Updates der Webseite (optional; der Installer legt #updates an)
+    updatesChannelId: id('UPDATES_CHANNEL_ID'),
+    // Vorschläge für die Statusseite: #status (Vorfälle, öffentlich) und #alerts (Meldungen ans Team, privat) – die
+    // Webseite nimmt sie, solange der Admin dort nichts anderes wählt
+    statusChannelId: id('STATUS_CHANNEL_ID'),
+    alertsChannelId: id('ALERTS_CHANNEL_ID'),
     siteUrl: String(env.SITE_URL || '').trim().replace(/\/+$/, ''),
     botSecret: String(env.BOT_SECRET || '').trim(),
     pollSeconds: Math.max(5, Math.min(300, parseInt(env.POLL_SECONDS || '10', 10) || 10)),
@@ -50,7 +56,7 @@ function readConfig() {
   if (!/^https:\/\/[^/]+/.test(cfg.siteUrl) && !/^http:\/\/(localhost|127\.0\.0\.1|[a-z0-9.-]+\.test)(:\d+)?$/.test(cfg.siteUrl)) {
     problems.push('SITE_URL must be the address of the website, starting with https://');
   }
-  if (cfg.botSecret.length < 32) problems.push('BOT_SECRET must be at least 32 characters – the same value as bot_secret in config.php.');
+  if (cfg.botSecret.length < 32) problems.push('BOT_SECRET must be at least 32 characters – the same value as bot_secret in config.json of the website.');
   return { cfg, problems };
 }
 

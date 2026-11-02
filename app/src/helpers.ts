@@ -3,12 +3,13 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { configString } from './config.js';
 import { ROOT_DIR } from './config.js';
-import { one } from './db.js';
+import { one, type Db } from './db.js';
 import { md5Hex } from './crypto.js';
+import { addressNameProblem, addressTaken, type AddressKind } from './content/addresses.js';
 import { strtolower, phpStr, phpTruthy, rawurlencode, strtotime, date, time, phpLtrim } from './php.js';
 import * as compat from './compat/core.js';
 import type { Ctx } from './web/ctx.js';
-import { reservedSlugs as domainReservedSlugs } from './domains/config.js';
+import { domainsAvailable, reservedSlugs as domainReservedSlugs } from './domains/config.js';
 
 // ---------------------------------------------------------------- Domains & Adressen
 
@@ -23,8 +24,15 @@ export interface PageLike { slug: unknown; address_mode?: unknown; custom_domain
 
 // Eigene Domain (Premium): Ursprung https://<domain> – Schema wie die Seite, in lokalen Tests mit custom_domains.url_port
 export const customOrigin = (host: string): string => scheme() + '://' + host + configString('custom_domains.url_port', '');
-const customUrl = (p: PageLike): string | null => {
+// Live-Domain einer Seite als Hauptadresse – nur, solange eigene Domains eingerichtet sind. Fehlen die Werte in
+// config.json (z. B. nach einer Wiederherstellung ohne --domains), beantwortet der Router die Domain nicht: dann bleibt
+// die OnYourSite-Adresse die Hauptadresse, statt auf eine Domain zu zeigen, die hier niemand bedient.
+export const liveDomain = (p: PageLike): string => {
   const h = phpStr(p.custom_domain ?? '');
+  return h !== '' && domainsAvailable() ? h : '';
+};
+const customUrl = (p: PageLike): string | null => {
+  const h = liveDomain(p);
   return h !== '' ? customOrigin(h) : null;
 };
 
@@ -53,7 +61,7 @@ export function pageUrl(p: PageLike, sub = ''): string {
 export const pageDisplayUrl = (p: PageLike): string => pageUrl(p).replace(/^https?:\/\//, '');
 export const pageOrigin = (p: PageLike): string => customUrl(p) ?? (phpStr(p.address_mode) === 'path' ? mainUrl('') : pageUrls(p).subdomain);
 export function onPageHost(ctx: Ctx, p: PageLike): boolean {
-  const custom = phpStr(p.custom_domain ?? '');
+  const custom = liveDomain(p);
   if (custom !== '') return ctx.host === custom;
   if (phpStr(p.address_mode) === 'path') return isMainHost(ctx.host);
   return ctx.host === strtolower(phpStr(p.slug)) + '.' + baseHost();
@@ -84,21 +92,40 @@ export const isForbiddenSubdomain = (s: string): boolean => forbidden(s);
 
 const RESERVED = ['login', 'logout', 'register', 'dashboard', 'admin', 'challenge', 'imprint', 'privacy', 'terms', 'api', 'static', 'track-click', 'kalender',
   'cron', 'lib', 'email', 'install', 'phpmailer', 'robots', 'sitemap', 'favicon', 'index', 'config', 'go', 'demo', 'impressum', 'datenschutz', 'agb', 'updates',
-  'roadmap', 'changelog', 'news', 'feed'];
+  'roadmap', 'changelog', 'news', 'feed', 'suggestions',
+  // Statusseiten: status.<domain> ist OnYourSites eigene Statusseite, health.<domain> das Ziel der eigenen Prüfung
+  'status', 'health'];
 export const reservedPaths = (): string[] => RESERVED;
 
-// oys_slug_problem(): Meldung oder null
-export async function slugProblem(slug: string, exceptPageId: number | null = null, exceptCodeId: number | null = null): Promise<string | null> {
+// Wer fragt (slugProblem): userId darf seine eigenen reservierten Adressen wieder nehmen, exceptStatusId ist die eigene
+// Statusseite, kind die Art der neuen Seite (Namensregeln), db die feste Verbindung einer laufenden Transaktion
+export interface SlugOptions {
+  userId?: number | null;
+  exceptStatusId?: number | null;
+  kind?: AddressKind;
+  db?: Db;
+}
+
+// oys_slug_problem(): Meldung oder null. Vergeben ist eine Adresse laut Liste aller Adressen (content/addresses.ts –
+// auch reservierte zählen, außer den eigenen) und, als Rückhalt gegen Handarbeit in der Datenbank, wie bisher laut
+// Link- und Code-Seiten. Ohne userId (404-Seite, Registrierung) zählt jede Reservierung als vergeben.
+export async function slugProblem(slug: string, exceptPageId: number | null = null, exceptCodeId: number | null = null,
+  opts: SlugOptions = {}): Promise<string | null> {
   if (slug === '') return 'Please enter an address.';
   const len = Buffer.byteLength(slug, 'utf8');
   if (len < 2 || len > 30) return 'The address must be 2–30 characters long.';
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug) || slug.includes('--')) return 'Only a–z, 0–9 and single hyphens are allowed (not at the start or end).';
   if (isForbiddenSubdomain(slug)) return `The address “${slug}” is reserved or not allowed.`;
   if (RESERVED.includes(slug)) return `The address “${slug}” is reserved.`;
+  const named = addressNameProblem(slug, opts.kind ?? 'page');
+  if (named !== null) return named;
   // Namen der eigenen Domains aus der Einrichtung (CNAME-Ziel, Rückfall-Ursprung) gehören nie einer Seite
   if (domainReservedSlugs(baseHost()).includes(slug)) return `The address “${slug}” is reserved.`;
-  if (await one('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptPageId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
-  if (await one('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptCodeId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
+  const sql: Pick<Db, 'one'> = opts.db ?? { one };
+  const taken = `Sorry, the address “${slug}” is already taken.`;
+  if (await addressTaken(slug, { pageId: exceptPageId, codeId: exceptCodeId, statusId: opts.exceptStatusId ?? null, userId: opts.userId ?? null }, sql)) return taken;
+  if (await sql.one('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptPageId ?? 0])) return taken;
+  if (await sql.one('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptCodeId ?? 0])) return taken;
   return null;
 }
 

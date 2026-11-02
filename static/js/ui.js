@@ -667,14 +667,15 @@
   function draftNote() { return !!G && srcs.some(function (s) { return !!s.keepsDraft; }); }
   function sessionDialog(kind, data) {
     if (sess.open || findToast(function (x) { return x.o.id === 'oys-session'; })) return;
-    var drafts = draftNote(), c;
+    // drafts: eine Seite mit Entwürfen (der Editor) · kept: es gibt Ungespeichertes, und es liegt als Entwurf im Browser
+    var drafts = draftNote(), kept = drafts && isDirty() && draftsKept(), c;
     if (kind === 'login') {
       c = { title: 'You’re logged out', ok: 'Log in', note: 'You’re logged out.',
-        text: 'Log in again to continue.' + (drafts ? ' Your unsaved changes are kept in this browser and offered again after you log in.' : ''),
+        text: 'Log in again to continue.' + (kept ? ' Your unsaved changes are kept in this browser and offered again after you log in.' : ''),
         go: function () { go('/login', true, false); } };
     } else if (kind === 'expired') {
       c = { title: 'Your session has expired', ok: 'Reload', note: 'Your session has expired.',
-        text: drafts ? 'Reload the editor to continue. Your unsaved changes are kept in this browser.' : 'Reload the page to continue.',
+        text: drafts ? 'Reload the editor to continue.' + (kept ? ' Your unsaved changes are kept in this browser.' : '') : 'Reload the page to continue.',
         go: function () { go(null, true, true); } };
     } else {
       var t = data && typeof data.error === 'string' && data.error ? data.error : 'This page was changed elsewhere. Reload it to continue.';
@@ -731,35 +732,52 @@
     if ((f.type === 'checkbox' || f.type === 'radio') && f.closest('label')) return f.closest('label');
     return f;
   }
+  // Optionsgruppe (Optionsfelder mit gleichem Namen im selben Formular): eine gemeinsame Meldung nach der letzten Option
+  function radioGroup(f) {
+    if (!f || f.type !== 'radio' || !f.name) return null;
+    var list = f.form ? f.form.elements : d.querySelectorAll('input[type=radio]'), out = [];
+    for (var i = 0; i < list.length; i++) if (list[i].type === 'radio' && list[i].name === f.name && list[i].form === f.form) out.push(list[i]);
+    return out.length > 1 ? out : null;
+  }
   function showFieldError(f, s) {
-    var id = f.getAttribute('data-ui-err'), p = id ? d.getElementById(id) : null, a = anchorOf(f);
+    var list = radioGroup(f) || [f], p = null, i;
+    for (i = 0; i < list.length && !p; i++) { var id = list[i].getAttribute('data-ui-err'); p = id ? d.getElementById(id) : null; }
+    var a = anchorOf(list[list.length - 1]);
     if (!p) {
       p = el('p', 'ui-field-err');
       p.id = 'ui-e' + (++uid);
-      f.setAttribute('data-ui-err', p.id);
       a.insertAdjacentElement('afterend', p);
-      var db = f.getAttribute('aria-describedby');
-      f.setAttribute('aria-describedby', db ? db + ' ' + p.id : p.id);
     }
     p.textContent = '';
     p.appendChild(icon('err'));
     p.appendChild(el('span', null, s));
-    f.setAttribute('aria-invalid', 'true');
-    if (a !== f && a.hasAttribute('data-field')) a.setAttribute('data-invalid', '');
-    f.__oysChecked = true;
+    for (i = 0; i < list.length; i++) {
+      var m = list[i];
+      if (m.getAttribute('data-ui-err') !== p.id) {
+        m.setAttribute('data-ui-err', p.id);
+        var db = m.getAttribute('aria-describedby');
+        m.setAttribute('aria-describedby', db ? db + ' ' + p.id : p.id);
+      }
+      m.setAttribute('aria-invalid', 'true');
+      m.__oysChecked = true;
+    }
+    if (a.hasAttribute('data-field')) a.setAttribute('data-invalid', '');
   }
   function clearFieldError(f) {
-    var id = f.getAttribute('data-ui-err');
-    if (id) {
-      var p = d.getElementById(id);
-      if (p) p.remove();
-      f.removeAttribute('data-ui-err');
-      var db = (f.getAttribute('aria-describedby') || '').split(' ').filter(function (x) { return x && x !== id; }).join(' ');
-      if (db) f.setAttribute('aria-describedby', db); else f.removeAttribute('aria-describedby');
+    var list = radioGroup(f) || [f];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i], id = m.getAttribute('data-ui-err');
+      if (id) {
+        var p = d.getElementById(id);
+        if (p) p.remove();
+        m.removeAttribute('data-ui-err');
+        var db = (m.getAttribute('aria-describedby') || '').split(' ').filter(function (x) { return x && x !== id; }).join(' ');
+        if (db) m.setAttribute('aria-describedby', db); else m.removeAttribute('aria-describedby');
+      }
+      m.removeAttribute('aria-invalid');
+      var w = m.closest('[data-field]');
+      if (w) w.removeAttribute('data-invalid');
     }
-    f.removeAttribute('aria-invalid');
-    var w = f.closest('[data-field]');
-    if (w) w.removeAttribute('data-invalid');
   }
   function rendered(f) { return !!f.getClientRects().length; }
   function labelOf(f) {
@@ -839,6 +857,18 @@
   }
   d.addEventListener('input', recheck, true);
   d.addEventListener('change', recheck, true);
+  // Zurücksetzen (z. B. ein Fenster, das für die nächste Zeile wieder öffnet): Meldungen und eigene Prüfungen weg
+  d.addEventListener('reset', function (ev) {
+    var form = ev.target;
+    if (!form || form.tagName !== 'FORM') return;
+    for (var i = 0; i < form.elements.length; i++) {
+      var f = form.elements[i];
+      if (!f.validity) continue;
+      clearFieldError(f);
+      f.__oysChecked = false;
+      if (f.setCustomValidity && (f.__oysShort || f.hasAttribute('data-match'))) { f.__oysShort = false; f.setCustomValidity(''); }
+    }
+  }, true);
 
   function validate(form) {
     if (!form || !form.elements) return true;
@@ -899,7 +929,17 @@
       h.setAttribute('data-ui-tmp', '');
       form.appendChild(h);
     }
-    HTMLFormElement.prototype.submit.call(form);
+    // Ziel, Methode, Kodierung und Fenster des Knopfs (formaction …) gelten wie beim Klick: kurz an das Formular,
+    // submit() liest sie sofort, danach wieder wie vorher
+    var saved = [], ATTRS = [['formaction', 'action'], ['formmethod', 'method'], ['formenctype', 'enctype'], ['formtarget', 'target']];
+    for (var i = 0; b && i < ATTRS.length; i++) {
+      if (!b.hasAttribute(ATTRS[i][0])) continue;
+      saved.push([ATTRS[i][1], form.getAttribute(ATTRS[i][1])]);
+      form.setAttribute(ATTRS[i][1], b.getAttribute(ATTRS[i][0]));
+    }
+    try { HTMLFormElement.prototype.submit.call(form); } finally {
+      for (var j = 0; j < saved.length; j++) { if (saved[j][1] === null) form.removeAttribute(saved[j][0]); else form.setAttribute(saved[j][0], saved[j][1]); }
+    }
     setTimeout(function () { lockForm(form); }, 0);
   }
   function attrOptions(n) {
@@ -1032,7 +1072,8 @@
       var url;
       try { url = new URL(a.href, location.href); } catch (e) { return; }
       if (url.protocol !== 'http:' && url.protocol !== 'https:') { bypass(); return; }
-      if (url.origin === location.origin && url.pathname === location.pathname && url.search === location.search && url.hash) return;
+      // Anker auf derselben Seite verlassen sie nicht – auch ein leerer (href="#": url.hash ist dann '', href endet auf #)
+      if (url.origin === location.origin && url.pathname === location.pathname && url.search === location.search && url.href.indexOf('#') >= 0) return;
       if (!isDirty()) return;
       ev.preventDefault();
       guardConfirm().then(function (ok) { if (ok) { bypass(); location.href = url.href; } });
@@ -1066,12 +1107,18 @@
   }
 
   var normalize = {
-    trim: function (s) { return String(s === undefined || s === null ? '' : s).replace(/^\s+|\s+$/g, ''); },
+    // String#trim nimmt dieselben Zeichen weg wie \s, aber ohne das quadratische Zurückgehen von /\s+$/ bei langen
+    // Eingaben (eingefügter Text in einem Feld zum Bestätigen würde den Tab sonst sekundenlang einfrieren)
+    trim: function (s) { return String(s === undefined || s === null ? '' : s).trim(); },
     lower: function (s) { return normalize.trim(s).toLowerCase(); },
     slug: function (s) { return normalize.trim(s).toLowerCase().replace(/[^a-z0-9-]/g, ''); },
-    // Domain: Schema, Pfad und Anmeldedaten weg, Unicode → Punycode (xn--…), wie gespeichert
+    // Domain: Schema, Pfad und Anmeldedaten weg, Unicode → Punycode (xn--…), wie gespeichert. Den Pfad schneidet eine
+    // Suche nach dem ersten / ? # \ ab (/[\/?#\\].*$/ ginge bei langen Eingaben quadratisch zurück)
     host: function (s) {
-      s = normalize.trim(s).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[\/?#\\].*$/, '').replace(/^[^@]*@/, '');
+      s = normalize.trim(s).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+      var cutAt = s.search(/[\/?#\\]/);
+      if (cutAt >= 0) s = s.slice(0, cutAt);
+      s = s.replace(/^[^@]*@/, '');
       if (!s) return '';
       try { s = new URL('http://' + s).hostname; } catch (e) { s = s.toLowerCase(); }
       return s.replace(/\.$/, '');

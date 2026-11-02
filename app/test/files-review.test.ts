@@ -1,5 +1,6 @@
 // Zweitprüfung des Datei-Pakets: Fälle, die die ersten Vergleiche nicht abgedeckt haben – jeweils gegen die echte
-// PHP-Funktion (Spam-Filter mit Schrift-Erweiterungen, EXIF-Ausrichtung wie exif_read_data(), …).
+// PHP-Funktion der PHP-Version (support/phpRef.ts; Spam-Filter mit Schrift-Erweiterungen, EXIF-Ausrichtung wie
+// exif_read_data(), …).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -9,7 +10,7 @@ import { join } from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { crc32, deflateSync, inflateSync } from 'node:zlib';
-import { ROOT_DIR, loadConfig, setConfigForTests } from '../src/config.js';
+import { loadConfig, setConfigForTests } from '../src/config.js';
 import { looksLikeSpam } from '../src/helpers.js';
 import { PCRE_CYRILLIC_HAN, PCRE_LETTER } from '../src/compat/pcre14.js';
 import sharp from 'sharp';
@@ -20,16 +21,17 @@ import { buildServer } from '../src/server.js';
 import { closePool } from '../src/db.js';
 import { startPhpServer } from './filesHarness.js';
 import { rng } from './modelHarness.js';
+import { PHP_SKIP, fromPhpTree, phpFile, phpRef } from './support/phpRef.js';
 
 // PHP-Code mit $in (JSON von stdin) ausführen, Ergebnis als JSON
 function php(code: string, input: unknown, libs: string[] = []): unknown {
-  const script = libs.map((f) => `require '${ROOT_DIR}/${f}';`).join('') + `$in = json_decode(stream_get_contents(STDIN), true); echo json_encode((function ($in) { ${code} })($in));`;
+  const script = libs.map((f) => `require '${phpFile(f)}';`).join('') + `$in = json_decode(stream_get_contents(STDIN), true); echo json_encode((function ($in) { ${code} })($in));`;
   return JSON.parse(execFileSync('php', ['-d', 'display_errors=stderr', '-d', 'memory_limit=1G', '-r', script], { input: JSON.stringify(input), maxBuffer: 1 << 28 }).toString());
 }
 
 // ---------------------------------------------------------------- oys_looks_like_spam()
 
-test('the fixed PCRE classes of the spam check match PHP for every code point', () => {
+test('the fixed PCRE classes of the spam check match PHP for every code point', { skip: PHP_SKIP }, () => {
   // Je Codepoint (ohne Surrogate) „1“ oder „0“: \p{L} und [\p{Cyrillic}\p{Han}] mit /u
   const phpBits = php(`$o = ['', ''];
     for ($cp = 0; $cp <= 0x10FFFF; $cp++) { if ($cp >= 0xD800 && $cp <= 0xDFFF) continue; $c = mb_chr($cp, 'UTF-8');
@@ -44,7 +46,7 @@ test('the fixed PCRE classes of the spam check match PHP for every code point', 
   });
 });
 
-test('spam check counts Cyrillic and Han like PCRE2 (script extensions)', () => {
+test('spam check counts Cyrillic and Han like PCRE2 (script extensions)', { skip: PHP_SKIP }, () => {
   const r = rng(424242);
   // Zeichen, bei denen Schrift (sc) und Schrift-Erweiterung (scx) auseinandergehen: CJK-Satzzeichen, Kana-Längenstrich,
   // Wiederholungszeichen, kyrillische Kombinationszeichen
@@ -190,7 +192,7 @@ function exifJpeg(r: ReturnType<typeof rng>): Buffer {
   return file;
 }
 
-test('the EXIF orientation is read like exif_read_data() (header scan, formats, sub-IFDs, broken files)', () => {
+test('the EXIF orientation is read like exif_read_data() (header scan, formats, sub-IFDs, broken files)', { skip: PHP_SKIP }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-exif-'));
   try {
     const r = rng(20261102);
@@ -215,7 +217,7 @@ test('the EXIF orientation is read like exif_read_data() (header scan, formats, 
 // JPEG mit einem Scan, in dessen Bilddaten Marker stehen (wie nach Bitfehlern): libjpeg liest sie in GD am Ende mit
 // jpeg_finish_decompress() – ein ungültiger dort lässt imagecreatefromjpeg() scheitern, und PHP speichert das Original.
 // Die Restart-Bilder (test/fixtures/files) stammen aus einem anderen Encoder, denn sharp schreibt keine Restart-Marker.
-test('JPEG files that GD cannot finish reading stay unconverted like in PHP (markers in the image data, restarts)', async () => {
+test('JPEG files that GD cannot finish reading stay unconverted like in PHP (markers in the image data, restarts)', { skip: PHP_SKIP }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-gdjpeg-'));
   try {
     const r = rng(77001);
@@ -269,7 +271,7 @@ test('JPEG files that GD cannot finish reading stay unconverted like in PHP (mar
     }
     const out = join(dir, 'out');
     mkdirSync(out);
-    const phpOk = php(`require '${ROOT_DIR}/lib/uploads.php'; $o = []; foreach ($in as $i => $f) $o[] = @oys_process_image($f, 'jpg', 640, '${out}/php' . $i . '.webp'); return $o;`, files) as boolean[];
+    const phpOk = php(`require '${phpFile('lib/uploads.php')}'; $o = []; foreach ($in as $i => $f) $o[] = @oys_process_image($f, 'jpg', 640, '${out}/php' . $i . '.webp'); return $o;`, files) as boolean[];
     const mismatches: unknown[] = [];
     for (let i = 0; i < files.length; i++) {
       const ok = await processImage(readFileSync(files[i]), 'jpg', 640, join(out, `node${i}.webp`));
@@ -290,7 +292,7 @@ test('JPEG files that GD cannot finish reading stay unconverted like in PHP (mar
 // solche Dateien unverändert, PHP wandelt sie um.
 const KNOWN_WEBP = new Set(['webp-meta-short', 'webp-meta-riffsmall']);
 
-test('PNG and WebP files are converted or kept like GD (damaged zlib data, chunks, filters, sizes)', async () => {
+test('PNG and WebP files are converted or kept like GD (damaged zlib data, chunks, filters, sizes)', { skip: PHP_SKIP }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-gdimg-'));
   try {
     const r = rng(5150);
@@ -413,7 +415,7 @@ test('PNG and WebP files are converted or kept like GD (damaged zlib data, chunk
     const out = join(dir, 'out');
     mkdirSync(out);
     // PHP: false = kein Bild für getimagesize() (das lehnt der Upload vorher ab), sonst das Ergebnis von oys_process_image()
-    const phpOut = php(`require '${ROOT_DIR}/lib/uploads.php'; $o = []; foreach ($in as $i => [$f, $ext]) {
+    const phpOut = php(`require '${phpFile('lib/uploads.php')}'; $o = []; foreach ($in as $i => [$f, $ext]) {
       $o[] = @getimagesize('${dir}/' . $f) ? @oys_process_image('${dir}/' . $f, $ext, 640, '${out}/php' . $i . '.webp') : null; } return $o;`, cases) as Array<boolean | null>;
     const mismatches: unknown[] = [];
     for (let i = 0; i < cases.length; i++) {
@@ -434,7 +436,7 @@ test('PNG and WebP files are converted or kept like GD (damaged zlib data, chunk
 // rename() über zwei Dateisysteme kopiert in PHP, übernimmt Besitzer und Rechte und löscht dann das Original – ob das
 // Löschen klappt, prüft PHP nicht (die Datei zählt als verschoben). Der alte Ordner verweigert hier das Löschen
 // (chattr +a), das Ziel liegt in /dev/shm (anderes Dateisystem).
-test('moving uploads to another file system counts files like PHP when the old folder refuses deletion', (t) => {
+test('moving uploads to another file system counts files like PHP when the old folder refuses deletion', { skip: PHP_SKIP }, (t) => {
   const base = mkdtempSync(join(tmpdir(), 'oys-xdev-'));
   const targets: string[] = [];
   const locked: string[] = [];
@@ -446,7 +448,7 @@ test('moving uploads to another file system counts files like PHP when the old f
       const from = join(code, 'static/uploads');
       mkdirSync(join(code, 'lib'), { recursive: true });
       mkdirSync(from, { recursive: true });
-      writeFileSync(join(code, 'lib/storage.php'), readFileSync(join(ROOT_DIR, 'lib/storage.php')));
+      writeFileSync(join(code, 'lib/storage.php'), readFileSync(phpRef('lib/storage.php')));
       for (const n of ['avatar_5_1730000000_a1b2c3d4.webp', 'file_5_1730000000_a1b2c3d4.pdf', 'music_6_1730000000_a1b2c3d4.mp3']) writeFileSync(join(from, n), n);
       const target = mkdtempSync('/dev/shm/oys-xdev-');
       targets.push(target);
@@ -488,17 +490,19 @@ test('moving uploads to another file system counts files like PHP when the old f
 
 // ---------------------------------------------------------------- oys_uploads_dir() und oys_serve_upload(): Randfälle
 
-test('the upload folder setting is read with PHP (string) casts', () => {
+test('the upload folder setting is read with PHP (string) casts', { skip: PHP_SKIP }, () => {
   const BASE = loadConfig();
   const values: unknown[] = [true, false, 0, '0', '  /srv/up/  ', [], { a: 1 }, 1.5, null, '/', '../oys-uploads', 'C:\\up\\'];
   const mismatches: unknown[] = [];
   try {
     for (const v of values) {
       const ref = execFileSync('php', ['-r', `$c = json_decode($argv[1], true); function oys_config($k, $d = null) { global $c; return $c; }
-        require '${ROOT_DIR}/lib/storage.php'; echo json_encode(oys_uploads_dir(), JSON_UNESCAPED_SLASHES);`, JSON.stringify(v)], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+        require '${phpFile('lib/storage.php')}'; echo json_encode(oys_uploads_dir(), JSON_UNESCAPED_SLASHES);`, JSON.stringify(v)], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+      // Relative Angaben rechnet PHP vom eigenen Code-Ordner aus – umgeschrieben auf den dieses Repositorys
+      const phpDir = fromPhpTree(ref);
       setConfigForTests({ ...BASE, uploads_dir: v as never });
       const node = JSON.stringify(uploadsDir());
-      if (node !== ref) mismatches.push({ value: v, node, php: ref });
+      if (node !== phpDir) mismatches.push({ value: v, node, php: phpDir });
     }
   } finally {
     setConfigForTests(BASE);
@@ -506,7 +510,7 @@ test('the upload folder setting is read with PHP (string) casts', () => {
   assert.deepEqual(mismatches, []);
 });
 
-test('uploads with modification times before 1970 or after 2038 get the same ETag as in PHP', async () => {
+test('uploads with modification times before 1970 or after 2038 get the same ETag as in PHP', { skip: PHP_SKIP }, async () => {
   const BASE = loadConfig();
   const dir = mkdtempSync(join(tmpdir(), 'oys-mtime-'));
   const times: Record<string, number> = { 'old.txt': -100000, 'epoch.txt': 0, 'second.txt': -1, 'future.txt': 4102444800 };
@@ -541,7 +545,7 @@ test('uploads with modification times before 1970 or after 2038 get the same ETa
 
 // ---------------------------------------------------------------- finfo_file(): Audio, wie es Programme wirklich schreiben
 
-test('finfo MIME types match PHP for RF64 WAV files (as ffmpeg and recorders write them)', () => {
+test('finfo MIME types match PHP for RF64 WAV files (as ffmpeg and recorders write them)', { skip: PHP_SKIP }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-rf64-'));
   try {
     const fmt = Buffer.from([0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x44, 0xac, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0]);

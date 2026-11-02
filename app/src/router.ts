@@ -1,6 +1,6 @@
 // Verteilung der Anfragen – dieselbe Reihenfolge wie index.php (und davor die Regeln aus .htaccess)
 import type { Ctx } from './web/ctx.js';
-import { isDenied, serveStatic } from './web/static.js';
+import { apacheError, apachePath, apacheRequestUri, isDenied, serveStatic } from './web/static.js';
 import { configString } from './config.js';
 import { strtolower, phpTrim } from './php.js';
 import { serveUpload } from './content/storage.js';
@@ -11,6 +11,9 @@ import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
+import { DbUnavailableError, dbReachable } from './db.js';
+import { statusHealth, statusHeartbeat } from './status/endpoints.js';
+import { statusDbDownHost } from './status/routes.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -31,19 +34,21 @@ export function isMainHost(host: string): boolean {
 }
 
 // Eigene Seiten der Hauptdomain, deren Namen der Profil-Pfad sonst einer Profilseite gäbe
-const OWN_PAGES = new Set(['updates', 'roadmap']);
-const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap']);
+const OWN_PAGES = new Set(['updates', 'roadmap', 'suggestions']);
+const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap', '/suggestions']);
 
 export async function dispatch(ctx: Ctx): Promise<void> {
-  // .htaccess: immer https (auch hinter dem Tunnel: dort steht das Protokoll des Besuchers in X-Forwarded-Proto)
+  // Apache prüft die Adresse vor allem anderen: kaputte %-Folge oder /../ über die Wurzel hinaus 400, kodierter
+  // Schrägstrich (%2F) oder Nullbyte 404 – mit seiner eigenen Fehlerseite
+  const target = apachePath(ctx.rawUrl);
+  if ('status' in target) apacheError(ctx, target.status);
+  // Interne Ordner und Zugangsdaten (<FilesMatch>/<DirectoryMatch> von install.sh und .htaccess): 403, geprüft wird
+  // wie bei Apache der bereinigte Pfad – und zwar vor der https-Weiterleitung der .htaccess
+  if (isDenied(target.path)) apacheError(ctx, 403);
+  // .htaccess: immer https (auch hinter dem Tunnel: dort steht das Protokoll des Besuchers in X-Forwarded-Proto).
+  // %{REQUEST_URI} ist bei Apache der bereinigte Pfad; die Anfrage-Parameter bleiben unverändert.
   if (scheme() === 'https' && String(ctx.headers['x-forwarded-proto'] ?? '') === 'http') {
-    ctx.redirect('https://' + ctx.hostHeader + ctx.path + (ctx.queryString !== '' ? '?' + ctx.queryString : ''), 301);
-  }
-  // .htaccess: interne Ordner und Zugangsdaten
-  if (isDenied(ctx.path)) {
-    ctx.status = 403;
-    ctx.write('Forbidden');
-    ctx.halt();
+    apacheError(ctx, 301, 'https://' + ctx.hostHeader + apacheRequestUri(ctx, target.path));
   }
   // Eigene Domains (Premium): nur wenn eingerichtet (sonst keine einzige Abfrage). Steht vor den Uploads, damit fremde
   // Dateien nie unter einer Kunden-Domain erscheinen; die Sperrliste davor gilt auch hier.
@@ -56,8 +61,22 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   }
   // Vorhandene Dateien (bisher Apache)
   if (await serveStatic(ctx)) ctx.halt();
-  // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt)
-  await ensureSchemaOnce();
+  // Statusseiten: Gesundheit der Seite – antwortet auch ohne Datenbank (503 als JSON), daher vor dem Schema
+  if (ctx.path === '/_/health') return statusHealth(ctx);
+  // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt). Wie db.php bei jeder Anfrage: ohne
+  // Datenbank die 503-Seite, auch für Seiten, die sonst keine Abfrage bräuchten
+  // Nur für die eigenen Adressen: ein fremder Host (eigene Domains nicht eingerichtet) bekommt die 404-Seite ohne jede
+  // Abfrage (premium-domains PD-2)
+  if (isMainHost(ctx.host) || ctx.host.endsWith('.' + baseHost())) {
+    try {
+      await ensureSchemaOnce();
+      await dbReachable();
+    } catch (err) {
+      // Statusseiten: ohne Datenbank ihre letzte Ausgabe bzw. die Notfall-Seite statt der allgemeinen 503-Seite
+      if (err instanceof DbUnavailableError && !isMainHost(ctx.host)) statusDbDownHost(ctx, ctx.host.slice(0, ctx.host.length - baseHost().length - 1));
+      throw err;
+    }
+  }
   // Frühere PHP-Einstiege unter derselben Adresse
   if (ctx.path === '/api.php') return api(ctx);
   if (ctx.path === '/admin_impersonate.php') return adminImpersonate(ctx);
@@ -70,6 +89,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // 1. Öffentliche Endpunkte ohne Cookies (auf jeder Adresse gleich)
   if (path.startsWith('/_/')) {
     ctx.header('X-Robots-Tag', 'noindex');
+    // Statusseiten: Heartbeats (Token in der Adresse)
+    if (path.startsWith('/_/hb/')) return statusHeartbeat(ctx);
     return publicRoutes(ctx);
   }
   // Alte Klick-Zählung
@@ -77,7 +98,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
   // 2. Hauptdomain: App und Profile im Pfad-Modus
   if (isMainHost(host)) {
-    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path)) return appRoutes(ctx);
+    // /admin/api/…: JSON des Admin-Bereichs (admin/api.ts)
+    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
     // Die eigenen Seiten in jeder anderen Schreibweise (Schrägstrich am Ende, Groß-/Kleinschreibung): zur richtigen
     // Adresse – sonst landete z. B. /updates/ oder /Updates bei einer Profilseite mit diesem Namen. Nur eine Stunde im
@@ -102,5 +124,5 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
 // Seiten der App auf der Hauptdomain (wie oben in dispatch) – auf eigenen Domains antworten sie nie
 function isAppPath(path: string): boolean {
-  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path);
+  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path);
 }

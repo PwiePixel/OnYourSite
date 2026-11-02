@@ -2,18 +2,20 @@
 // Eigenes CSS (oys_clean_css, oys_css_unescape, oys_css_external) steht in src/css.ts.
 import { unlinkSync } from 'node:fs';
 import type { ResultSetHeader } from 'mysql2/promise';
-import { q, one, exec, value, transaction, type Db, type Param, type Row } from '../db.js';
+import { q, one, exec, transaction, type Db, type Param, type Row } from '../db.js';
 import { cleanCss } from '../css.js';
 import { cleanText, cleanUrl, pageUrl, pageUrls, type PageLike } from '../helpers.js';
 import { safeEqual } from '../crypto.js';
 import { phpJson } from '../html.js';
 import { ctypeDigit, date, intval, mbSubstr, phpStr, phpTruthy, strtolower } from '../php.js';
 import { codeUsedUploads } from '../code/sites.js';
+import { claimAddress, releaseAddress } from './addresses.js';
 import { isFile, uploadsDir } from './storage.js';
 import { DEFAULT_THEME, fontChoices, layoutKey, themeKey } from './themes.js';
 import { IMAGE_EXTS, blockNormalize, bookingIsInternal, bookingPointsTo, calendarKey, pick, scheduleActive, validUpload } from './blocks.js';
 import { ogSupported, ogUrl } from './share.js';
 import { hostnameForPage } from '../domains/store.js';
+import { footerHidden } from './branding.js';
 import { arrayKey, arrayReplace, isArr, jsonDecode, own, phpArray, toObject, values, type PhpArr } from './util.js';
 
 // Einstellungen nach oys_settings_normalize(): feste Schlüssel in fester Reihenfolge
@@ -32,6 +34,8 @@ export interface Settings {
   hide_branding: boolean;
   notify_email: boolean;
   share_button: boolean;
+  // Bestandsschutz: blendete den Hinweis schon vor Premium aus (nur gespeichert, solange hide_branding an ist)
+  branding_legacy?: boolean;
 }
 
 // Einstellungen aus der Datenbank (oys_page_settings): Werte wie gespeichert, ohne Typprüfung, alte Zusatz-Schlüssel hinten
@@ -118,8 +122,9 @@ export function pageSettings(page: { settings?: unknown }): PageSettings {
   return settings;
 }
 
-// oys_settings_normalize(): Einstellungen aus dem Editor prüfen
-export function settingsNormalize(input: unknown, userId: number, premium: boolean, old: unknown): Settings {
+// oys_settings_normalize(): Einstellungen aus dem Editor prüfen. canEditBranding: Premium des Besitzers oder das Team
+// (isStaff) – nur dann ist der Schalter für den Hinweis frei; old = bisher gespeicherte Einstellungen.
+export function settingsNormalize(input: unknown, userId: number, canEditBranding: boolean, old: unknown): Settings {
   const inp: PhpArr = isArr(input) ? input : [];
   const s = defaultSettings();
   // ?? wie in PHP: nur null und „nicht gesetzt“ zählen als leer
@@ -160,10 +165,13 @@ export function settingsNormalize(input: unknown, userId: number, premium: boole
   };
 
   s.custom_css = cleanCss(get(inp, 'custom_css', ''));
-  // Branding ausblenden ist nur mit Premium möglich – sonst alten Wert behalten
-  s.hide_branding = premium ? phpTruthy(own(inp, 'hide_branding')) : phpTruthy(own(old, 'hide_branding'));
+  // Branding: Premium (oder das Team) schaltet frei; mit Bestandsschutz nur noch ausschalten; sonst bleibt der alte Wert
+  const legacy = phpTruthy(own(old, 'branding_legacy')) && phpTruthy(own(old, 'hide_branding'));
+  s.hide_branding = canEditBranding || legacy ? phpTruthy(own(inp, 'hide_branding')) : phpTruthy(own(old, 'hide_branding'));
   s.notify_email = !isSet(inp, 'notify_email') || phpTruthy(own(inp, 'notify_email'));
   s.share_button = !isSet(inp, 'share_button') || phpTruthy(own(inp, 'share_button'));
+  // Der Bestandsschutz fällt weg, sobald der Schalter aus ist – danach braucht es Premium (nie aus der Eingabe)
+  if (legacy && s.hide_branding) s.branding_legacy = true;
   return s;
 }
 
@@ -175,6 +183,10 @@ export function settingsNormalize(input: unknown, userId: number, premium: boole
 export const loadPage = (id: number): Promise<Row | null> => one('SELECT * FROM pages WHERE id = ?', [id]);
 // oys_load_page_by_slug()
 export const loadPageBySlug = (slug: string): Promise<Row | null> => one('SELECT * FROM pages WHERE slug = ? LIMIT 1', [slug]);
+// Zeigt der Seitenplatz seine Link-Seite? Sonst zeigt er eine Code-Seite (pages.code_site_id), und die Link-Seite ist
+// geparkt: gespeichert, aber für Besucher nicht vorhanden (keine Aufrufe, Klicks, Nachrichten, Vorschaubilder …)
+export const isShownLinkPage = (page: Row | null | undefined): boolean =>
+  !!page && (page.code_site_id === null || page.code_site_id === undefined);
 // oys_user_pages(): Reihenfolge wie im Editor
 export const userPages = (userId: number): Promise<Row[]> => q('SELECT * FROM pages WHERE user_id = ? ORDER BY position ASC, id ASC', [userId]);
 
@@ -218,8 +230,9 @@ export function blockForEditor(b: Block): EditorBlock {
   };
 }
 
-// oys_page_for_editor()
-export function pageForEditor(page: Row): EditorPage {
+// oys_page_for_editor(); ownerPremium: Premium des Besitzers (für das wirksame Zeichen auf dem Vorschaubild)
+export function pageForEditor(page: Row, ownerPremium: boolean): EditorPage {
+  const settings = pageSettings(page);
   return {
     id: intval(page.id),
     slug: page.slug ?? null,
@@ -231,10 +244,10 @@ export function pageForEditor(page: Row): EditorPage {
     theme: themeKey(page.theme),
     layout: layoutKey(page.layout),
     address_mode: page.address_mode === 'path' ? 'path' : 'subdomain',
-    settings: pageSettings(page),
+    settings,
     urls: pageUrls(page as unknown as PageLike),
     url: pageUrl(page as unknown as PageLike),
-    og: ogSupported() ? ogUrl(page) : '',
+    og: ogSupported() ? ogUrl(page, footerHidden(settings, ownerPremium)) : '',
   };
 }
 
@@ -242,15 +255,19 @@ export function pageForEditor(page: Row): EditorPage {
 // Anlegen
 // ---------------------------------------------------------------
 
-// oys_create_page(): neue Seite samt Startinhalt; gibt die neue ID zurück
-export async function createPage(userId: number, slug: string, title: string): Promise<number> {
-  const position = intval(await value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
+// oys_create_page(): neue Seite samt Startinhalt; gibt die neue ID zurück. Belegt ihre Adresse in der Liste aller
+// Adressen (content/addresses.ts) in derselben Transaktion – ist sie vergeben, wird nichts angelegt (AddressTakenError
+// bzw. ER_DUP_ENTRY auf uq_slug). Mit db läuft alles auf dieser Verbindung in der Transaktion des Aufrufers.
+export async function createPage(userId: number, slug: string, title: string, db?: Db): Promise<number> {
+  if (!db) return transaction((_conn, sql) => createPage(userId, slug, title, sql));
+  const position = intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
   const now = date('Y-m-d H:i:s');
-  const { insertId } = await exec(
+  const { insertId } = await db.exec(
     "INSERT INTO pages (user_id, slug, position, title, subtitle, bio, theme, layout, address_mode, settings, created_at, updated_at)\n        VALUES (?, ?, ?, ?, '', '', ?, 'buttons', 'subdomain', ?, ?, ?)",
     [userId, slug, position, mbSubstr(title, 0, 120), DEFAULT_THEME, phpJson(defaultSettings(), { unescapedUnicode: true }), now, now],
   );
   const pageId = intval(insertId);
+  await claimAddress(db, slug, 'page', pageId, userId);
 
   // Startinhalt, damit niemand vor einer leeren Seite sitzt
   const starter: Array<[string, unknown]> = [
@@ -258,7 +275,7 @@ export async function createPage(userId: number, slug: string, title: string): P
     ['link', { title: 'My first link', url: '', subtitle: '', icon: '', thumb: '', featured: false }],
   ];
   for (const [i, [type, data]] of starter.entries()) {
-    await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, ?, 1, ?, ?)',
+    await db.exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, ?, 1, ?, ?)',
       [pageId, type, i, phpJson(data, { unescapedUnicode: true }), now]);
   }
   return pageId;
@@ -276,8 +293,9 @@ export interface SaveResult {
   warnings: string[];
 }
 
-// oys_save_page(): Seite und Blöcke in einer Transaktion speichern, danach ungenutzte Dateien löschen
-export async function savePage(page: Row, input: PhpArr, userId: number, premium: boolean): Promise<SaveResult> {
+// oys_save_page(): Seite und Blöcke in einer Transaktion speichern, danach ungenutzte Dateien löschen.
+// canEditBranding wie bei settingsNormalize()
+export async function savePage(page: Row, input: PhpArr, userId: number, canEditBranding: boolean): Promise<SaveResult> {
   const pIn = own(input, 'page');
   const p: PhpArr = isArr(pIn) ? pIn : [];
   const pageId = page.id as Param;
@@ -292,7 +310,7 @@ export async function savePage(page: Row, input: PhpArr, userId: number, premium
     ['bg_image', validUpload(own(p, 'bg_image') ?? '', userId, IMAGE_EXTS)],
     ['theme', themeKey(own(p, 'theme') ?? DEFAULT_THEME)],
     ['layout', layoutKey(own(p, 'layout') ?? 'buttons')],
-    ['settings', phpJson(settingsNormalize(own(p, 'settings') ?? [], userId, premium, oldSettings), { unescapedUnicode: true })],
+    ['settings', phpJson(settingsNormalize(own(p, 'settings') ?? [], userId, canEditBranding, oldSettings), { unescapedUnicode: true })],
     ['updated_at', date('Y-m-d H:i:s')],
   ];
 
@@ -462,6 +480,9 @@ export async function deletePage(page: Row, db?: Db): Promise<unknown[]> {
     await sql.exec('DELETE FROM page_blocks WHERE page_id = ?', [id]);
     await sql.exec('DELETE FROM messages WHERE page_id = ?', [id]);
     await sql.exec('DELETE FROM pages WHERE id = ?', [id]);
+    // Die Adresse bleibt für den Besitzer reserviert (wenn sie lange genug benutzt wurde)
+    await releaseAddress(sql, phpStr(page.slug), page.user_id === null || page.user_id === undefined ? null : intval(page.user_id), 'owner',
+      { kind: 'page', refId: id });
   };
   if (db) {
     await rows(db);

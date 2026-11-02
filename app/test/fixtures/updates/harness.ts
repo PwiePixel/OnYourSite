@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, configString, loadConfig, setConfigForTests, type ConfigData } from '../../../src/config.js';
+import { configString, loadConfig, setConfigForTests, type ConfigData } from '../../../src/config.js';
 import { closePool } from '../../../src/db.js';
 import { decryptData } from '../../../src/crypto.js';
 import { ensureSchema } from '../../../src/schema.js';
 import { strtotime, time } from '../../../src/php.js';
+import { phpFile, phpRef, phpRoot } from '../../support/phpRef.js';
 
 export const BASE_CONFIG = loadConfig();
 
@@ -25,9 +26,10 @@ export interface TestEnv {
   close(): Promise<void>;
 }
 
-// Eigene Datenbank (Node legt das Schema an) und ein PHP-Bootstrap, das dieselbe Datenbank und Discord-Adresse nutzt.
-// config.php von PHP liest seinen Pfad relativ zu lib/ – darum liegen Kopien von lib/config.php und security.php in
-// einem eigenen Ordner neben einer config.php, die nur Datenbank und discord_api_base ersetzt.
+// Eigene Datenbank (Node legt das Schema an) und ein PHP-Bootstrap (PHP-Version, siehe support/phpRef.ts), das dieselbe
+// Datenbank und Discord-Adresse nutzt. config.php von PHP liest seinen Pfad relativ zu lib/ – darum liegen Kopien von
+// lib/config.php und security.php in einem eigenen Ordner neben einer config.php, die nur Datenbank und
+// discord_api_base ersetzt. Der Ordner entsteht erst beim ersten PHP-Aufruf (ohne OYS_PHP_REF nie).
 export async function createTestEnv(db: string, apiBase: string): Promise<TestEnv> {
   const admin = await mysql.createConnection({
     host: configString('db.host', 'localhost'), user: configString('db.user', ''), password: configString('db.pass', ''),
@@ -39,29 +41,34 @@ export async function createTestEnv(db: string, apiBase: string): Promise<TestEn
   await closePool();
   await ensureSchema();
 
-  const dir = mkdtempSync(join(tmpdir(), 'oys-updates-php-'));
-  mkdirSync(join(dir, 'lib'));
-  copyFileSync(join(ROOT_DIR, 'lib/config.php'), join(dir, 'lib/config.php'));
-  copyFileSync(join(ROOT_DIR, 'security.php'), join(dir, 'security.php'));
-  writeFileSync(join(dir, 'config.php'), `<?php
-$c = require ${JSON.stringify(join(ROOT_DIR, 'config.php'))};
+  let dir = '';
+  const boot = (): string => {
+    if (!dir) {
+      dir = mkdtempSync(join(tmpdir(), 'oys-updates-php-'));
+      mkdirSync(join(dir, 'lib'));
+      copyFileSync(phpRef('lib/config.php'), join(dir, 'lib/config.php'));
+      copyFileSync(phpRef('security.php'), join(dir, 'security.php'));
+      writeFileSync(join(dir, 'config.php'), `<?php
+$c = require ${JSON.stringify(phpFile('config.php'))};
 $c['db']['name'] = getenv('OYS_TEST_DB');
 $c['discord_api_base'] = getenv('OYS_TEST_DISCORD');
 return $c;
 `);
-  const boot = `require '${dir}/lib/config.php'; require '${dir}/security.php';
+    }
+    return `require '${dir}/lib/config.php'; require '${dir}/security.php';
     date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
-    require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/updates.php';
+    require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/updates.php')}';
     $pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . oys_config('db.name', '') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
     $pdo->exec("SET time_zone = '" . date('P') . "'");`;
+  };
 
   return {
     db,
     apiBase,
     admin,
     async php(code: string, input: unknown = null, base: string = apiBase): Promise<unknown> {
-      const script = boot + ` $in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) use ($pdo) { ${code} })($in);
+      const script = boot() + ` $in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) use ($pdo) { ${code} })($in);
         echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);`;
       const out = await runPhp(['-d', 'display_errors=stderr', '-r', script], JSON.stringify(input), { ...process.env, OYS_TEST_DB: db, OYS_TEST_DISCORD: base });
       return JSON.parse(out);
@@ -71,7 +78,7 @@ return $c;
       setConfigForTests(BASE_CONFIG);
       await admin.query(`DROP DATABASE IF EXISTS \`${db}\``);
       await admin.end();
-      rmSync(dir, { recursive: true, force: true });
+      if (dir) rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -79,7 +86,7 @@ return $c;
 // php -r … mit Eingabe auf STDIN, ohne die Ereignisschleife anzuhalten
 function runPhp(args: string[], input: string, env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('php', args, { cwd: ROOT_DIR, env });
+    const child = spawn('php', args, { cwd: phpRoot(), env });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on('data', (c: Buffer) => out.push(c));
@@ -99,7 +106,7 @@ export const TABLES = ['updates', 'milestones', 'milestone_tasks'] as const;
 export async function loadFixture(env: TestEnv, rows: Record<string, Array<Record<string, unknown>>>, meta: Record<string, string | null> = {}): Promise<void> {
   const c = env.admin;
   await c.query(`USE \`${env.db}\``);
-  for (const t of [...TABLES, 'oys_sessions']) await c.query(`TRUNCATE TABLE \`${t}\``);
+  for (const t of [...TABLES, 'oys_sessions', 'update_discord_posts', 'community_outbox']) await c.query(`TRUNCATE TABLE \`${t}\``);
   await c.query("DELETE FROM oys_meta WHERE meta_key <> 'schema_version'");
   for (const [table, list] of Object.entries(rows)) {
     for (const row of list) {

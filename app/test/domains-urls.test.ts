@@ -3,17 +3,21 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
-import { addressUrl, onPageHost, pageDisplayUrl, pageOrigin, pageUrl, pageUrls } from '../src/helpers.js';
+import { addressUrl, liveDomain, onPageHost, pageDisplayUrl, pageOrigin, pageUrl, pageUrls } from '../src/helpers.js';
 import { ogHash } from '../src/content/share.js';
 import { bookingIsInternal, bookingPointsTo } from '../src/content/blocks.js';
 import { makeTestCtx } from '../src/web/ctx.js';
 
 const BASE = loadConfig();
 const withConfig = (extra: ConfigData): void => setConfigForTests({ ...BASE, base_domain: 'oys.test:8080', scheme: 'http', ...extra });
+// Eigene Domains eingerichtet (wie nach install.sh --domains), mit Test-Port in den Adressen
+const SETUP: ConfigData = {
+  cloudflare: { zone_id: 'f'.repeat(32) }, custom_domains: { cname_target: 'edge.oys.test', fallback_origin: 'origin.oys.test', url_port: ':8080' },
+};
 after(() => setConfigForTests(BASE));
 
 test('URL helpers: without a live domain nothing changes; with one it is the primary address', () => {
-  withConfig({ custom_domains: { url_port: ':8080' } });
+  withConfig(SETUP);
   const mia = { slug: 'mia', address_mode: 'subdomain' };
   for (const p of [mia, { ...mia, custom_domain: null }, { ...mia, custom_domain: '' }]) {
     assert.deepEqual(Object.keys(pageUrls(p)), ['subdomain', 'path']);
@@ -38,13 +42,24 @@ test('URL helpers: without a live domain nothing changes; with one it is the pri
   assert.equal(onPageHost(makeTestCtx({ url: '/', host: 'links.example.com' }), live), true);
   assert.equal(onPageHost(makeTestCtx({ url: '/', host: 'mia.oys.test:8080' }), live), false);
   // Ohne Test-Port: https://<domain>
-  setConfigForTests({ ...BASE, base_domain: 'on-your.site', scheme: 'https' });
+  setConfigForTests({
+    ...BASE, base_domain: 'on-your.site', scheme: 'https',
+    cloudflare: { zone_id: 'f'.repeat(32) }, custom_domains: { cname_target: 'edge.on-your.site', fallback_origin: 'origin.on-your.site' },
+  });
   assert.equal(pageUrl(live), 'https://links.example.com');
   assert.equal(pageUrl(mia), 'https://mia.on-your.site');
+  // Ohne Einrichtung bedient der Router keine eigene Domain – dann ist sie auch keine Adresse der Seite
+  withConfig({ custom_domains: { url_port: ':8080' } });
+  assert.equal(liveDomain(live), '');
+  assert.deepEqual(pageUrls(live), { subdomain: 'http://mia.oys.test:8080', path: 'http://oys.test:8080/mia' });
+  assert.equal(pageUrl(live, 'kalender'), 'http://mia.oys.test:8080/kalender');
+  assert.equal(pageOrigin(live), 'http://mia.oys.test:8080');
+  assert.equal(onPageHost(makeTestCtx({ url: '/', host: 'mia.oys.test:8080' }), live), true);
+  assert.equal(onPageHost(makeTestCtx({ url: '/', host: 'links.example.com' }), live), false);
 });
 
 test('booking blocks: the page’s own domain counts as its address only when it is passed in', () => {
-  withConfig({ custom_domains: { url_port: ':8080' } });
+  withConfig(SETUP);
   const page = { slug: 'mia', address_mode: 'subdomain' };
   const block = { url: 'http://Links.Example.com:8080/kalender/' };
   assert.equal(bookingIsInternal(block, page), false);
@@ -63,13 +78,17 @@ test('booking blocks: the page’s own domain counts as its address only when it
 test('the preview card hash stays the same without a domain and changes with one', () => {
   withConfig({});
   const page = { id: 2, slug: 'mia', address_mode: 'subdomain', title: 'Mia', subtitle: 'Design', bio: 'Hi', avatar: 'avatar_5_1_ab.webp', theme: 'aurora', settings: '{"accent":"#ff0055"}' };
-  const plain = ogHash(page);
+  const plain = ogHash(page, false);
   assert.match(plain, /^[0-9a-f]{12}$/);
   // Festgehaltene Werte (vor dieser Änderung berechnet): bereits geteilte Karten behalten ihre Adresse
   assert.equal(plain, 'cd6001bd20f1');
-  assert.equal(ogHash({ ...page, custom_domain: null }), plain);
-  assert.equal(ogHash({ ...page, custom_domain: '' }), plain);
-  const withDomain = ogHash({ ...page, custom_domain: 'links.example.com' });
+  assert.equal(ogHash({ ...page, custom_domain: null }, false), plain);
+  assert.equal(ogHash({ ...page, custom_domain: '' }, false), plain);
+  // Ohne Einrichtung zählt eine gespeicherte Domain nicht (die Karte zeigt dann die OnYourSite-Adresse)
+  assert.equal(ogHash({ ...page, custom_domain: 'links.example.com' }, false), plain);
+  withConfig(SETUP);
+  assert.equal(ogHash(page, false), plain);
+  const withDomain = ogHash({ ...page, custom_domain: 'links.example.com' }, false);
   assert.notEqual(withDomain, plain);
-  assert.notEqual(ogHash({ ...page, custom_domain: 'www.example.com' }), withDomain);
+  assert.notEqual(ogHash({ ...page, custom_domain: 'www.example.com' }, false), withDomain);
 });

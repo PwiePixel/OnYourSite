@@ -1,7 +1,12 @@
 /* OnYourSite – Editor
-   Zustand im Browser, Live-Vorschau über den echten Seiten-Renderer (1:1 wie die öffentliche Seite). */
+   Zustand im Browser, Live-Vorschau über den echten Seiten-Renderer (1:1 wie die öffentliche Seite).
+   Dialoge, Hinweise und die Wache gegen das Verlassen kommen aus static/js/ui.js (window.OYSUI, Vertrag ui.d.ts). */
 (function () {
   'use strict';
+
+  // Ohne die Dialog-Bibliothek wird nicht bearbeitet: ein Hinweis in der Seite statt halber Funktionen
+  var UI = window.OYSUI;
+  if (!UI) { editorUnavailable(); return; }
 
   var E = window.OYS_EDITOR || {};
   var state = {
@@ -16,6 +21,8 @@
   var openBlocks = {};
   var extrasTab = {};
   var activeTab = 'content';
+  // Umbenennungen beim Speichern (alte ID → neue ID): Dialoge suchen ihren Block danach wieder über die ID
+  var renamed = {};
 
   // ================================================================
   // Helfer
@@ -52,30 +59,44 @@
   }
   function uploadUrl(f) { return f ? '/static/uploads/' + encodeURIComponent(f) : ''; }
 
-  function toast(msg, type) {
-    var icon = type === 'err' ? 'bx-error-circle' : type === 'info' ? 'bx-info-circle' : type === 'hc' ? 'bx-hive' : 'bx-check-circle';
-    var el = h('<div class="toast ' + (type || 'ok') + '"><i class="bx ' + icon + '"></i><span>' + esc(msg) + '</span></div>');
-    $('#toasts').appendChild(el);
-    setTimeout(function () { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 300); }, type === 'err' ? 5200 : 3000);
+  // Hinweise zeichnet ui.js (Warteschlange, Schließen, Live-Region) – die Aufrufe im Editor bleiben, wie sie sind
+  function toast(msg, type) { return UI.toast(msg, type); }
+
+  // Eine Anfrage für alles (JSON, Formular mit Datei, HTML der Vorschau): CSRF-Kopf, Antwort über UI.handle()
+  // (Sitzungsdialog bei 401/419/409 mit reload, notices), ohne Verbindung ein Fehlertext statt einer Ausnahme.
+  // o.json: Daten (POST als JSON) · o.form: FormData (POST) · o.text: HTML erwartet (Fehler kommen trotzdem als JSON)
+  function request(url, o) {
+    o = o || {};
+    var opts = { credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } };
+    if (o.json !== undefined) {
+      opts.method = 'POST';
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(o.json);
+    } else if (o.form) {
+      opts.method = 'POST';
+      opts.body = o.form;
+    }
+    return fetch(url, opts).then(function (r) {
+      var isJson = /application\/json/i.test(r.headers.get('Content-Type') || '');
+      if (o.text && !isJson) return r.text();
+      return r.json().catch(function () { return null; }).then(function (data) {
+        if (!data || typeof data !== 'object') data = { ok: false, error: 'Unexpected response from the server.' };
+        return UI.handle(r.status, data);
+      });
+    }, function () {
+      return o.text ? '' : { ok: false, error: o.offline || 'No connection to the server.' };
+    });
   }
 
   function api(action, body, asText) {
-    var opts = { credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } };
-    var url = '/dashboard/api/' + action;
+    var url = '/dashboard/api/' + action, json;
     if (body !== undefined) {
-      opts.method = 'POST';
-      opts.headers['Content-Type'] = 'application/json';
       if (state.page && body && typeof body === 'object' && !body.page && body.page_id === undefined) body.page_id = state.page.id;
-      opts.body = JSON.stringify(body);
+      json = body;
     } else if (state.page) {
       url += (url.indexOf('?') === -1 ? '?' : '&') + 'page=' + state.page.id;
     }
-    return fetch(url, opts).then(function (r) {
-      if (asText) return r.text();
-      return r.json().catch(function () { return { ok: false, error: 'Unexpected response from the server.' }; });
-    }).catch(function () {
-      return asText ? '' : { ok: false, error: 'No connection to the server.' };
-    });
+    return request(url, { json: json, text: !!asText });
   }
   function apiGet(action) { return api(action); }
 
@@ -118,9 +139,7 @@
     fd.append('kind', kind);
     fd.append('file', file);
     if (state.page) fd.append('page_id', state.page.id);
-    return fetch('/dashboard/api/upload', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } })
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, error: 'Upload failed (connection error).' }; });
+    return request('/dashboard/api/upload', { form: fd, offline: 'Upload failed (connection error).' });
   }
 
   function pickFile(accept, multiple) {
@@ -313,6 +332,7 @@
     dirty = true;
     version++;
     setSaveState('dirty');
+    draft.later();
     if (!opts || opts.preview !== false) preview.schedule(opts && opts.fast ? 120 : 380);
     if (activeTab === 'design') refreshMinisSoon();
   }
@@ -378,6 +398,8 @@
       }
       var map = res.idmap || {};
       Object.keys(map).forEach(function (oldId) {
+        // Für Dialoge, die während des Speicherns offen waren: neue Blöcke heißen jetzt anders
+        renamed[oldId] = map[oldId];
         if (openBlocks[oldId]) { openBlocks[map[oldId]] = true; delete openBlocks[oldId]; }
         if (extrasTab[oldId]) { extrasTab[map[oldId]] = extrasTab[oldId]; delete extrasTab[oldId]; }
       });
@@ -395,23 +417,34 @@
         setSaveState('dirty');
       }
       state.blocks.forEach(function (b) { if (b.password) { b.password = ''; b.has_password = true; } });
+      draft.pageSaved(res.page, res.blocks);
       updatePageInfo();
       renderBlocks();
       preview.refresh();
       toast('Changes saved – your page is up to date.');
       (res.warnings || []).forEach(function (w) { toast(w, 'info'); });
+      // Eigenes CSS spricht den Hinweis an, der ohne Premium sichtbar bleibt
+      showCssWarning(res.cssWarning);
+      if (cssWarning) toast(cssWarning, 'info');
     });
   }
 
   $('#saveBtn').addEventListener('click', save);
 
-  var leaving = false; // nach „Trotzdem wechseln?“ nicht ein zweites Mal fragen
-  window.addEventListener('beforeunload', function (ev) {
-    if (!leaving && (dirty || codeUnsaved())) { ev.preventDefault(); ev.returnValue = ''; }
+  // Wache gegen das Verlassen mit ungespeicherten Änderungen (Links, Formulare, Seitenwechsel im Code). Ungespeichertes
+  // liegt als Entwurf im Browser – dann fragt der Browser beim Schließen des Tabs nicht mehr (D19), nur wenn das
+  // Sichern scheitert. „Leave without saving“ löscht den Entwurf.
+  var guard = window.OYSUI.guard({
+    isDirty: function () { return dirty || codeUnsaved(); },
+    onDiscard: function () { draft.discard(); },
+    keepsDraft: function () { return draft.flush(); }
   });
+
   document.addEventListener('keydown', function (ev) {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); save(); }
-    if (ev.key === 'Escape') { closeModal(); closeDropdowns(); }
+    // Strg+S speichert nie die Seite des Browsers; unter einem offenen Dialog wird nicht gespeichert
+    if ((ev.ctrlKey || ev.metaKey) && ev.key && ev.key.toLowerCase() === 's') { ev.preventDefault(); if (!UI.isOpen()) save(); return; }
+    // Escape schließt Fenster über ui.js (oberste Ebene); hier nur die Menüs
+    if (ev.key === 'Escape' && !UI.isOpen()) closeDropdowns();
   });
 
   // ================================================================
@@ -440,8 +473,9 @@
       body.entrance = opts.entrance ? 'show' : 'skip';
       api('preview', body, true).then(function (html) {
         if (id !== seq || !html) return;
-        if (html.charAt(0) === '{') {
-          try { var err = JSON.parse(html); toast(err.error || 'Preview failed.', 'err'); } catch (e) { /* egal */ }
+        // Fehler kommen als JSON (über UI.handle(): bei abgelaufener Sitzung der Dialog statt vieler Hinweise)
+        if (typeof html !== 'string') {
+          toast(html.error || 'Preview failed.', 'err');
           if (live) live.classList.remove('busy');
           return;
         }
@@ -572,11 +606,27 @@
     }).join('');
   }
 
+  function pageById(id) {
+    for (var i = 0; i < state.pages.length; i++) if (state.pages[i].id === id) return state.pages[i];
+    return null;
+  }
+
+  // Editor neu laden – auch wenn das Ziel nur im Anker von der aktuellen Adresse abweicht (das lädt sonst nicht neu)
+  function reloadTo(url) {
+    var u = new URL(url, location.href);
+    if (u.pathname !== location.pathname || u.search !== location.search) return guard.navigate(u.href, { force: true });
+    if (history.replaceState) history.replaceState(null, '', u.hash || location.pathname + location.search);
+    return guard.reload({ force: true });
+  }
+
   function goToPage(id) {
     if (state.page && id === state.page.id) return;
-    if ((dirty || codeUnsaved()) && !confirm('You have unsaved changes. Switch pages anyway?')) return;
-    leaving = true;
-    location.href = '/dashboard?page=' + id + location.hash;
+    guard.confirm({ title: 'Switch pages?', text: 'You have unsaved changes. They’re lost if you switch now.', ok: 'Switch without saving', cancel: 'Stay', tone: 'danger' })
+      .then(function (ok) {
+        // Nach dem Dialog: das Ziel gibt es noch und es ist nicht die aktuelle Seite
+        if (!ok || !pageById(id) || (state.page && id === state.page.id)) return;
+        guard.navigate('/dashboard?page=' + id + location.hash, { force: true });
+      });
   }
 
   function renderPageMenu() {
@@ -590,7 +640,7 @@
         (cur ? '<i class="bx bx-check text-brand-400 text-lg"></i>' : '') + '</button>';
     });
     html += '<div class="dd-sep"></div>';
-    if (state.pages.length < max || E.premium) {
+    if (state.pages.length < max || E.pagesUnlimited) {
       html += '<button type="button" class="dd-item" data-action="new-page"><span class="ps-avatar"><i class="bx bx-plus"></i></span><span>Create a new page<small>With its own address and stats</small></span></button>';
     } else {
       html += '<div class="px-3 py-2 text-xs text-gray-500">Up to ' + max + ' pages per account.</div>';
@@ -598,7 +648,11 @@
     $('#pageMenu').innerHTML = html;
   }
 
-  function closeDropdowns() { $$('.dropdown').forEach(function (d) { d.classList.add('hidden'); }); }
+  // Alle Menüs zu; die Glocke über bell.js, damit aria-expanded stimmt und der Fokus nicht in einer versteckten Liste bleibt
+  function closeDropdowns() {
+    if (bell) bell.close();
+    $$('.dropdown').forEach(function (d) { d.classList.add('hidden'); });
+  }
 
   document.addEventListener('click', function (ev) {
     var t = ev.target;
@@ -609,13 +663,8 @@
       if (wasHidden) { renderPageMenu(); menu.classList.remove('hidden'); }
       return;
     }
-    if (t.closest('#bellBtn')) {
-      var bm = $('#bellMenu');
-      var hid = bm.classList.contains('hidden');
-      closeDropdowns();
-      if (hid) { bm.classList.remove('hidden'); loadNotifications(true); }
-      return;
-    }
+    // Die Glocke (bell.js) öffnet und schließt ihre Liste selbst
+    if (t.closest('[data-bell]')) return;
     var pageBtn = t.closest('[data-page]');
     if (pageBtn) { closeDropdowns(); goToPage(Number(pageBtn.dataset.page)); return; }
     var act = t.closest('[data-action]');
@@ -628,62 +677,55 @@
       case 'new-page': closeDropdowns(); openNewPageModal(); break;
       case 'add-block': openAddBlockModal(); break;
       case 'quick-add': quickAdd(); break;
-      case 'notif-read':
-        api('notifications-read', {}).then(function () { loadNotifications(true); });
-        break;
-      case 'open-messages': closeDropdowns(); switchTab('messages'); break;
       case 'share': openShareModal(); break;
-      case 'honeycombs': openHoneycombs(); break;
-      case 'open-code': closeModal(); switchTab('code'); break;
+      case 'honeycombs': openShop(el && el.dataset ? el.dataset.feature : ''); break;
     }
   }
 
-  // Glocke
-  var lastUnread = -1;
-  function loadNotifications(render) {
-    apiGet('notifications').then(function (res) {
-      if (!res || !res.ok) return;
-      var badge = $('#bellBadge');
-      badge.hidden = !res.unread;
-      badge.textContent = res.unread > 9 ? '9+' : res.unread;
-      if (lastUnread >= 0 && res.unread > lastUnread) {
-        var bell = $('#bellBtn i');
-        bell.classList.remove('bell-ring'); void bell.offsetWidth; bell.classList.add('bell-ring');
-        toast('New notification: ' + (res.items[0] ? res.items[0].title : ''), 'info');
+  // Glocke (static/js/bell.js): fragt selbst ab – jede Minute, sofort beim Zurückkehren in den Tab, auch ohne Seite.
+  // Ihre Ziele öffnen über OYSUI.openLink() die Bereiche hier (DEEP_LINKS); neue Nachrichten laden den offenen Eingang neu.
+  var bell = null;
+  function startBell() {
+    if (!window.OYSBell) return;
+    bell = window.OYSBell.mount($('[data-bell]'), {
+      onOpen: closeDropdowns,
+      onAnswer: function (res) {
+        var nb = $('#navMsgBadge');
+        nb.hidden = !res.messages_unread;
+        nb.textContent = res.messages_unread;
+      },
+      onNew: function (list) {
+        if (activeTab === 'messages' && list.some(function (n) { return n.type === 'message' || n.type === 'booking'; })) loadMessages();
       }
-      lastUnread = res.unread;
-      var nb = $('#navMsgBadge');
-      nb.hidden = !res.messages_unread;
-      nb.textContent = res.messages_unread;
-      if (!render) return;
-      var html = '<div class="dd-head">Notifications' + (res.unread ? '<button type="button" data-action="notif-read">Mark all as read</button>' : '') + '</div>';
-      if (!res.items.length) {
-        html += '<div class="empty-state" style="padding:24px 10px"><i class="bx bx-bell-off"></i>Nothing new yet.</div>';
-      } else {
-        html += '<div class="max-h-96 overflow-y-auto custom-scrollbar">' + res.items.map(function (n) {
-          var ic = n.type === 'booking' ? 'bx-calendar-check' : n.type === 'message' ? 'bx-envelope' : 'bx-bell';
-          return '<button type="button" class="notif w-full text-left' + (n.read ? '' : ' unread') + '" data-action="open-messages"><span class="ni"><i class="bx ' + ic + '"></i></span><span class="min-w-0"><b>' + esc(n.title) + '</b>' + (n.body ? '<p>' + esc(n.body) + '</p>' : '') + '<small>' + esc(n.ago) + '</small></span></button>';
-        }).join('') + '</div>';
-      }
-      $('#bellMenu').innerHTML = html;
     });
   }
+  function refreshBell() { if (bell) bell.poll(); }
 
   // ================================================================
   // Modal
   // ================================================================
+  // Das Fenster des Editors (#modal) ist eine Ebene von ui.js: Fokus bleibt darin, Escape und die Zurück-Geste
+  // schließen es, der Hintergrund ist inert, und beim Schließen kehrt der Fokus zum Auslöser zurück
+  var modalLayer = null;
   function openModal(title, bodyHtml, footHtml, onMount) {
     var box = $('#modalBox');
     shareOpen = null;
     box.classList.remove('wide');
-    box.innerHTML = '<div class="modal-head"><h3>' + esc(title) + '</h3><button type="button" class="icon-btn" data-close><i class="bx bx-x"></i></button></div>' +
+    box.innerHTML = '<div class="modal-head"><h3 id="modalTitle">' + esc(title) + '</h3><button type="button" class="icon-btn" data-close aria-label="Close"><i class="bx bx-x"></i></button></div>' +
       '<div class="modal-body">' + bodyHtml + '</div>' + (footHtml ? '<div class="modal-foot">' + footHtml + '</div>' : '');
     $('#modal').classList.remove('hidden');
+    if (!modalLayer) modalLayer = UI.layer($('#modal'), { labelledBy: 'modalTitle', onEscape: closeModal });
     if (onMount) onMount(box);
     var first = $('input, textarea', box);
     if (first) setTimeout(function () { first.focus(); }, 40);
   }
-  function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; $('#modalBox').classList.remove('wide'); shareOpen = null; }
+  function closeModal() {
+    $('#modal').classList.add('hidden');
+    $('#modalBox').innerHTML = '';
+    $('#modalBox').classList.remove('wide');
+    shareOpen = null;
+    if (modalLayer) { var l = modalLayer; modalLayer = null; l.release(); }
+  }
   $('#modal').addEventListener('click', function (ev) {
     // Beim Zuschneiden endet ein Ziehen manchmal neben dem Fenster – das soll es nicht schließen
     if ((ev.target.id === 'modal' && Date.now() - cropGuard > 400) || ev.target.closest('[data-close]')) closeModal();
@@ -691,7 +733,7 @@
 
   function openNewPageModal() {
     var max = E.maxPages || 3;
-    if (state.pages.length >= max && !E.premium) { toast('You already have ' + max + ' pages.', 'err'); return; }
+    if (state.pages.length >= max && !E.pagesUnlimited) { toast('You already have ' + max + ' pages.', 'err'); return; }
     openModal('Create a new page',
       '<p class="text-sm text-gray-400 mb-4">Each page has its own address, its own theme and its own stats – for example, one for you and one for your project.</p>' +
       '<label class="lbl">Address</label>' +
@@ -705,13 +747,27 @@
         slug.addEventListener('input', function () { slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, ''); });
         var go = function () {
           var btn = $('#npCreate', box);
-          btn.disabled = true;
-          api('page-create', { slug: slug.value, title: $('#npTitle', box).value, page_id: 0 }).then(function (res) {
-            btn.disabled = false;
-            if (res && res.ok) { dirty = false; location.href = '/dashboard?page=' + res.id; return; }
-            var err = $('#npErr', box);
-            err.textContent = (res && res.error) || 'That didn’t work.';
-            err.classList.remove('hidden');
+          if (btn.disabled) return;
+          // Ungespeichertes gibt es auf der neuen Seite nicht: vorher fragen (eine inzwischen fertige Speicherung → keine Frage)
+          var ask = guard.isDirty()
+            ? UI.confirm({ title: 'Create the page without saving?', text: 'You have unsaved changes on this page. They’re lost if you continue.', ok: 'Create without saving', tone: 'danger' })
+            : Promise.resolve(true);
+          ask.then(function (ok) {
+            if (!ok || !box.contains(btn) || btn.disabled) return;
+            btn.disabled = true;
+            api('page-create', { slug: slug.value, title: $('#npTitle', box).value, page_id: 0 }).then(function (res) {
+              btn.disabled = false;
+              if (res && res.ok) {
+                // Die ungespeicherten Änderungen wurden verworfen: ihr Entwurf geht mit
+                draft.discard();
+                guard.navigate('/dashboard?page=' + res.id, { force: true });
+                return;
+              }
+              var err = $('#npErr', box);
+              if (!err) return;
+              err.textContent = (res && res.error) || 'That didn’t work.';
+              err.classList.remove('hidden');
+            });
           });
         };
         $('#npCreate', box).addEventListener('click', go);
@@ -1004,10 +1060,12 @@
   // ================================================================
   // Tabs
   // ================================================================
-  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', settings: 'Settings' };
+  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', status: 'Status', honeycombs: 'Honeycombs', settings: 'Settings' };
   function switchTab(name) {
-    if (!TAB_TITLES[name]) name = 'content';
+    // Den Bereich „Status“ gibt es nur für Admins: ohne seinen Container bleibt alles beim Inhalt
+    if (!TAB_TITLES[name] || !$('#tab-' + name)) name = 'content';
     var wasCode = activeTab === 'code';
+    var wasStatus = activeTab === 'status';
     activeTab = name;
     $$('.tab-content').forEach(function (t) { t.classList.add('hidden'); });
     $('#tab-' + name).classList.remove('hidden');
@@ -1016,8 +1074,10 @@
     if (history.replaceState) history.replaceState(null, '', '#' + name);
     $('#editorScroll').scrollTop = 0;
     document.body.classList.toggle('code-mode', name === 'code');
-    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code';
-    if (wasCode !== (name === 'code')) fitPhone();
+    // Statusseite: ohne Vorschau des Profils und ohne den Speichern-Knopf (der Bereich speichert jede Änderung selbst)
+    document.body.classList.toggle('status-mode', name === 'status');
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status' || name === 'honeycombs';
+    if (wasCode !== (name === 'code') || wasStatus !== (name === 'status')) fitPhone();
     paintSave(name === 'code' ? code.state : pageSaveState);
     if (name === 'code') loadCode();
     if (wasCode && name !== 'code' && state.page) {
@@ -1025,13 +1085,52 @@
       $('#pvLiveLabel').textContent = 'Live preview';
       preview.refreshIfStale();
     }
+    // Nachrichten und Termine gehören zum Konto: auch ohne Seite (ebenso die Honigwaben)
+    if (name === 'messages') loadMessages();
+    if (name === 'status') loadStatus();
+    if (name === 'honeycombs') loadShop();
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
-    if (name === 'messages') loadMessages();
     if (name === 'settings') renderSettings();
   }
   $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
+  // Telefone: „OnYourSite status“ in den Einstellungen öffnet den Bereich
+  document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('[data-open-status]')) switchTab('status');
+  });
+
+  // ================================================================
+  // OnYourSites eigene Statusseite (nur Admins): static/js/status-manage.js, erst beim ersten Öffnen geladen
+  // ================================================================
+  var statusLoading = null;
+  function loadStatus() {
+    var root = $('#tab-status');
+    if (!root || !E.statusManage) return;
+    if (!statusLoading) {
+      statusLoading = new Promise(function (resolve, reject) {
+        var css = document.createElement('link');
+        css.rel = 'stylesheet';
+        css.href = E.statusManage.css;
+        document.head.appendChild(css);
+        var js = document.createElement('script');
+        js.src = E.statusManage.js;
+        js.onload = resolve;
+        js.onerror = reject;
+        document.head.appendChild(js);
+      });
+    }
+    statusLoading.then(function () {
+      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: 'system', baseHost: E.baseHost, user: E.user || {} });
+    }, function () {
+      statusLoading = null;
+      root.textContent = '';
+      var box = document.createElement('div');
+      box.className = 'panel max-w-3xl mx-auto';
+      box.textContent = 'The status page manager couldn’t load. Please reload the page.';
+      root.appendChild(box);
+    });
+  }
   $('#tab-design').addEventListener('click', function (ev) { onDesignClick(ev); });
 
   // ================================================================
@@ -1143,21 +1242,37 @@
     var url = normalizeUrl(input.value);
     if (!url) { input.focus(); return; }
     var embed = detectEmbed(url);
-    var b;
-    if (embed && /youtube\.com\/watch|youtu\.be\/|twitch\.tv\/(videos|[a-z0-9_]+\/clip)|open\.spotify\.com\/(intl-[a-z-]+\/)?(track|album|playlist|episode|show)/i.test(url) &&
-        confirm('This looks like ' + TYPES[embed].name + '. Embed it right on your page? (Cancel = add it as a normal link)')) {
-      b = newBlock(embed, { url: url, provider: embed });
-    } else {
-      var br = detectBrand(url);
-      var title = br ? brand(br).name : prettyUrl(url).split('/')[0];
-      b = newBlock('link', { url: url, title: title });
-    }
-    state.blocks.push(b);
-    input.value = '';
-    openBlocks[b.id] = true;
-    renderBlocks();
-    markDirty({ fast: true });
-    scrollToBlock(b.id);
+    var canEmbed = embed && /youtube\.com\/watch|youtu\.be\/|twitch\.tv\/(videos|[a-z0-9_]+\/clip)|open\.spotify\.com\/(intl-[a-z-]+\/)?(track|album|playlist|episode|show)/i.test(url);
+    // Zwei Wege statt OK/Abbrechen: ✕ und Escape fügen nichts hinzu, die Adresse bleibt im Feld
+    var ask = canEmbed
+      ? UI.choice({
+        title: 'Embed this ' + TYPES[embed].name + ' link?',
+        text: 'Show it right on your page, or add it as a normal link button.',
+        options: [{ value: 'link', text: 'Add as link' }, { value: 'embed', text: 'Embed it', primary: true }],
+        fallbackFocus: function () { return $('#quickUrl'); }
+      })
+      : Promise.resolve('link');
+    ask.then(function (how) {
+      var field = $('#quickUrl');
+      if (how === null) { if (field) field.focus(); return; }
+      // Nach dem Dialog: es gibt noch eine Seite; der Block kommt in die aktuelle Liste
+      if (!state.page) return;
+      var b;
+      if (how === 'embed') {
+        b = newBlock(embed, { url: url, provider: embed });
+      } else {
+        var br = detectBrand(url);
+        var title = br ? brand(br).name : prettyUrl(url).split('/')[0];
+        b = newBlock('link', { url: url, title: title });
+      }
+      state.blocks.push(b);
+      // Das Feld nur leeren, wenn darin noch dieselbe Adresse steht
+      if (field && normalizeUrl(field.value) === url) field.value = '';
+      openBlocks[b.id] = true;
+      renderBlocks();
+      markDirty({ fast: true });
+      scrollToBlock(b.id);
+    });
   }
 
   function scrollToBlock(id) {
@@ -1573,10 +1688,25 @@
     }
     if (action === 'visible') { b.visible = !b.visible; rerenderBlock(b); markDirty({ fast: true }); return; }
     if (action === 'del') {
-      if (!confirm('Delete this block?')) return;
-      state.blocks = state.blocks.filter(function (x) { return x !== b; });
-      renderBlocks();
-      markDirty({ fast: true });
+      var delId = b.id;
+      UI.confirm({
+        title: 'Delete this block?', text: 'It’s removed from your page when you save.', ok: 'Delete', tone: 'danger',
+        // Der Knopf ist nach dem Löschen weg: Fokus auf den nächsten Block oder „Add block“
+        fallbackFocus: function () { return $('#blockList .blk-head [data-blk="toggle"]') || $('[data-action="add-block"]'); }
+      }).then(function (yes) {
+        if (!yes) return;
+        // Während des Dialogs kann eine Speicherung die Blöcke ersetzt haben: über die ID neu suchen
+        var cur = findBlock(renamed[delId] || delId);
+        if (!cur) return;
+        var idx = state.blocks.indexOf(cur);
+        state.blocks = state.blocks.filter(function (x) { return String(x.id) !== String(cur.id); });
+        renderBlocks();
+        markDirty({ fast: true });
+        // Der Knopf ist mit dem Block verschwunden: Fokus auf den Block an seiner Stelle (sonst „Add block“)
+        var heads = $$('#blockList .blk-head [data-blk="toggle"]');
+        var next = heads[Math.min(idx, heads.length - 1)] || $('[data-action="add-block"]');
+        if (next) next.focus({ preventScroll: true });
+      });
       return;
     }
     if (action === 'dup') {
@@ -2044,20 +2174,27 @@
   // ================================================================
   // Tab: Nachrichten
   // ================================================================
-  function loadMessages() {
+  // refocus: nach dem Löschen – der Knopf verschwand mit der Zeile, der Fokus bleibt in der Liste
+  function loadMessages(refocus) {
     var root = $('#tab-messages');
     if (!root.innerHTML) root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading messages…</div>';
     apiGet('messages').then(function (res) {
       if (!res || !res.ok) { root.innerHTML = '<div class="empty-state">Couldn’t load messages.</div>'; return; }
       renderMessages(res);
-      loadNotifications(false);
+      refreshBell();
+      var a = document.activeElement;
+      if (refocus === true && (!a || a === document.body || !a.isConnected)) {
+        var n = $('#tab-messages [data-msg-act], #tab-messages [data-booking-del]') || $('#mainNav [data-tab="messages"]');
+        if (n) n.focus({ preventScroll: true });
+      }
     });
   }
 
   function renderMessages(res) {
     var root = $('#tab-messages');
     var unread = res.messages.filter(function (m) { return !m.read; }).length;
-    var hasContact = state.blocks.some(function (b) { return b.type === 'contact'; });
+    // Ohne Seite gibt es nichts, wohin ein Kontaktformular käme
+    var hasContact = !state.page || state.blocks.some(function (b) { return b.type === 'contact'; });
     root.innerHTML =
       '<h2 class="section-title">Messages <small>' + (unread ? plural(unread, 'unread', 'unread') : 'All read') + '</small></h2>' +
       (!hasContact ? '<div class="panel mb-4 flex flex-wrap items-center gap-3 justify-between"><span class="text-sm text-gray-400"><i class="bx bx-info-circle text-brand-400"></i> Add a <b class="text-white">contact form</b> to your page so visitors can message you.</span><button type="button" class="btn-secondary" id="addContact"><i class="bx bx-plus"></i> Contact form</button></div>' : '') +
@@ -2090,20 +2227,44 @@
       btn.addEventListener('click', function () {
         var id = Number(btn.closest('[data-msg]').dataset.msg);
         var act = btn.dataset.msgAct;
-        if (act === 'delete' && !confirm('Delete this message?')) return;
-        api('message', { id: id, action: act }).then(function () { loadMessages(); });
+        if (act !== 'delete') { api('message', { id: id, action: act }).then(function () { loadMessages(); }); return; }
+        var m = res.messages.filter(function (x) { return x.id === id; })[0] || {};
+        // Löschen läuft im Dialog; der Server löscht nach ID und Konto (mehrfach unschädlich)
+        UI.confirm({
+          title: 'Delete this message?', text: 'The message from ' + (m.name || 'this visitor') + ' is deleted for good.', ok: 'Delete', tone: 'danger',
+          fallbackFocus: function () { return $('#tab-messages [data-msg-act]') || $('#mainNav [data-tab="messages"]'); },
+          onConfirm: function () {
+            return api('message', { id: id, action: 'delete' }).then(function (r) {
+              if (!r || !r.ok) return (r && r.error) || 'Something went wrong. Please try again.';
+              toast('Message deleted.');
+              loadMessages(true);
+            });
+          }
+        });
       });
     });
     $$('[data-booking-del]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        if (!confirm('Delete this booking request?')) return;
-        api('booking-delete', { id: Number(btn.dataset.bookingDel) }).then(function () { loadMessages(); });
+        var id = Number(btn.dataset.bookingDel);
+        var bk = res.bookings.filter(function (x) { return x.id === id; })[0] || {};
+        UI.confirm({
+          title: 'Delete this booking request?', text: [bk.date, bk.time].filter(Boolean).join(' · ') + ' from ' + (bk.name || 'this visitor') + ' is deleted for good.',
+          ok: 'Delete', tone: 'danger',
+          fallbackFocus: function () { return $('#tab-messages [data-booking-del]') || $('#mainNav [data-tab="messages"]'); },
+          onConfirm: function () {
+            return api('booking-delete', { id: id }).then(function (r) {
+              if (!r || !r.ok) return (r && r.error) || 'Something went wrong. Please try again.';
+              toast('Booking request deleted.');
+              loadMessages(true);
+            });
+          }
+        });
       });
     });
   }
 
   // ================================================================
-  // Honigwaben: Kontostand oben, Fenster mit „So verdienst du mehr“ und Verlauf
+  // Honigwaben: Kontostand oben – der Knopf öffnet den Bereich „Honeycombs“
   // ================================================================
   var hc = E.honeycombs || { balance: 0, earned: [], history: [], rules: {} };
   function setBalance(n, pop) {
@@ -2112,41 +2273,328 @@
     if (pop) { var b = $('#hcBtn'); b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
   }
 
-  function hcBody() {
-    var r = hc.rules || {};
-    var rules = [
-      { icon: 'bx-calendar-check', title: 'Be active', text: 'Open your editor – once a day', amount: r.daily, done: hc.today, doneText: 'Collected today – come back tomorrow' },
-      { icon: 'bx-user-check', title: 'Complete your profile', text: 'A profile picture, a bio and at least 3 links', amount: r.profile, done: hc.profile, doneText: 'Done – thanks!' },
-      { icon: 'bx-trending-up', title: 'Get visitors', text: 'For every ' + fmtNum(r.views_step) + ' views of your pages – one reward a day (' + hc.viewRewards + ' of ' + hc.maxViewRewards + ' collected)', amount: r.views, done: hc.viewRewards >= hc.maxViewRewards, doneText: 'All ' + hc.maxViewRewards + ' rewards collected' },
-      { icon: 'bx-gift', title: 'Gifts from the team', text: 'For great pages, events and helping others', amount: null }
-    ].filter(function (x) { return x.amount === null || x.amount > 0; });
-    var html = '<div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(hc.balance) + '</b><small>honeycombs</small></div></div>' +
-      '<h4 class="hc-h">How to earn them</h4><div class="hc-rules">' + rules.map(function (x) {
-        return '<div class="hc-rule' + (x.done ? ' done' : '') + '"><span class="ri"><i class="bx ' + (x.done ? 'bx-check' : x.icon) + '"></i></span>' +
-          '<span class="min-w-0"><b>' + esc(x.title) + '</b><small>' + esc(x.done ? x.doneText : x.text) + '</small></span>' +
-          (x.amount ? '<span class="amt">+' + fmtNum(x.amount) + '</span>' : '') + '</div>';
-      }).join('') + '</div>' +
-      '<h4 class="hc-h">What you can unlock</h4>' +
-      '<div class="hc-rule"><span class="ri"><i class="bx bx-code-alt"></i></span><span class="min-w-0"><b>Your own code page</b><small>Host a website you build yourself with HTML, CSS and JavaScript</small></span>' +
-        '<button type="button" class="btn-secondary" data-action="open-code">' + (hc.codeUnlocked ? 'Open' : fmtNum(r.code_page) + ' <i class="bx bx-hive hc-icon"></i>') + '</button></div>' +
-      '<h4 class="hc-h">History</h4>';
-    if (!hc.history || !hc.history.length) return html + '<p class="hint">Nothing yet – your first honeycombs are on their way.</p>';
-    return html + '<div>' + hc.history.map(function (x) {
+  // ================================================================
+  // Tab: Honeycombs – Shop, eigene Freischaltungen, Verdienen und Verlauf (Stand vom Server: /dashboard/api/shop)
+  // ================================================================
+  // st: Stand vom Server · sel: gewählte Option je Funktion · focus: Ziel nach dem Laden (Funktion, earn, history)
+  var shop = { st: null, loading: false, focus: '', sel: {}, hist: null, next: null, histLoading: false };
+  var BX_ICON = /^bx[sl]?-[a-z0-9-]+$/;
+  function bxIcon(name, fallback) { return BX_ICON.test(name || '') ? name : fallback; }
+  function lcFirst(s) { return s.charAt(0).toLowerCase() + s.slice(1); }
+
+  // Bereich öffnen und zu einer Karte (Funktion), „earn“ oder „history“ springen – auch aus anderen Bereichen
+  // (Pill oben, /dashboard#honeycombs/<ziel>, „Get Premium“)
+  function openShop(target) {
+    closeDropdowns();
+    shop.focus = /^[a-z0-9_-]{1,40}$/.test(target || '') ? target : '';
+    if (activeTab !== 'honeycombs') switchTab('honeycombs');
+    else if (shop.st && !shop.loading) shopFocus();
+  }
+
+  // Bei jedem Öffnen neu laden (Preise und Angebote ändern sich); der alte Stand bleibt sichtbar, bis der neue da ist
+  function loadShop() {
+    var root = $('#tab-honeycombs');
+    if (!root || shop.loading) return;
+    shop.loading = true;
+    if (!shop.st) root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading…</div>';
+    var hist = apiGet('hc-history');
+    apiGet('shop').then(function (res) {
+      return hist.then(function (h) {
+        shop.loading = false;
+        if (!res || !res.ok || !res.shop) {
+          shop.st = null;
+          shop.focus = '';
+          root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your honeycombs – please reload.</div>';
+          return;
+        }
+        shop.st = res.shop;
+        if (h && h.ok) { shop.hist = h.items; shop.next = h.next; }
+        setBalance(res.shop.balance);
+        if (activeTab !== 'honeycombs') return;
+        renderShop();
+        shopFocus();
+      });
+    });
+  }
+
+  function shopFocus() {
+    var t = shop.focus;
+    shop.focus = '';
+    if (!t) return;
+    var el = t === 'earn' ? $('#shopEarn') : t === 'history' ? $('#shopHistory') : $('#shop-' + t);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (el.classList.contains('shop-card')) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+  }
+
+  function shopCard(feature) {
+    var list = shop.st ? shop.st.features : [];
+    for (var i = 0; i < list.length; i++) if (list[i].feature === feature) return list[i];
+    return null;
+  }
+  // Gewählte Option einer Karte: die zuletzt gewählte, sonst die erste, die dieses Konto kaufen kann
+  function shopSel(c) {
+    var o = null;
+    c.options.forEach(function (x) { if (x.item === shop.sel[c.feature]) o = x; });
+    if (!o) o = c.options.filter(function (x) { return !x.note; })[0] || c.options[0];
+    shop.sel[c.feature] = o.item;
+    return o;
+  }
+
+  function shopBanner(kind, icon, text) {
+    return '<div class="shop-banner ' + kind + '"><i class="bx ' + icon + '"></i><span>' + esc(text) + '</span></div>';
+  }
+
+  function renderShop() {
+    var st = shop.st, root = $('#tab-honeycombs'), html = '';
+    if (st.readOnly) html += shopBanner('info', 'bx-mask', 'Admin mode – you can look around, but buying is turned off. Use the admin area to give honeycombs or unlocks.');
+    if (st.frozen) {
+      html += shopBanner('warn', 'bx-pause-circle', 'Your honeycombs are on hold' + (st.frozenReason ? ': ' + st.frozenReason.replace(/[.\s]+$/, '') : '') +
+        '. Earning and buying are paused – your unlocks keep working.');
+    }
+    html += '<div class="panel shop-wallet"><div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.balance) + '</b><small>honeycombs</small></div></div>' +
+      '<div class="shop-wallet-actions"><button type="button" class="btn-ghost" data-shop-go="earn"><i class="bx bx-trending-up"></i> How to earn</button>' +
+      '<button type="button" class="btn-ghost" data-shop-go="history"><i class="bx bx-history"></i> History</button></div></div>';
+    html += '<h2 class="section-title mt-8">Unlock</h2>' + (st.features.length
+      ? '<div class="shop-grid">' + st.features.map(shopCardHtml).join('') + '</div>'
+      : '<div class="panel empty-state"><i class="bx bx-store-alt"></i>Nothing to unlock right now – check back soon.</div>');
+    html += '<h2 class="section-title mt-8">Your unlocks</h2>' + (st.owned.length
+      ? '<div class="panel"><div class="hc-rules">' + st.owned.map(ownedHtml).join('') + '</div></div>'
+      : '<div class="panel"><p class="hint m-0">Nothing unlocked yet. Pick something above.</p></div>');
+    html += '<h2 class="section-title mt-8" id="shopEarn">Earn honeycombs</h2><div class="hc-rules">' + st.earn.rules.map(earnHtml).join('') + '</div>';
+    html += '<h2 class="section-title mt-8" id="shopHistory">History</h2><div class="panel" id="shopHist">' + histHtml() + '</div>';
+    root.innerHTML = html;
+  }
+
+  function shopCardHtml(c) {
+    var o = shopSel(c);
+    var html = '<div class="panel shop-card" id="shop-' + esc(c.feature) + '" data-feature="' + esc(c.feature) + '">' +
+      '<div class="shop-card-head"><span class="code-mini-ico"><i class="bx ' + esc(bxIcon(c.icon, 'bx-hive')) + '"></i></span>' +
+      '<div class="min-w-0"><h3>' + esc(c.title) + '</h3><p>' + esc(c.description) + '</p></div></div>';
+    if (c.perks.length) html += '<ul class="shop-perks">' + c.perks.map(function (p) { return '<li><i class="bx bx-check"></i><span>' + esc(p) + '</span></li>'; }).join('') + '</ul>';
+    if (c.options.length > 1) {
+      html += '<div class="chips">' + c.options.map(function (x) {
+        return '<button type="button" class="chip' + (x.item === o.item ? ' on' : '') + '" data-shop-opt="' + esc(x.item) + '">' + esc(x.label) + '</button>';
+      }).join('') + '</div>';
+    }
+    return html + shopPriceHtml(o) + '<div class="shop-foot">' + shopActionHtml(c, o) + '</div></div>';
+  }
+
+  function shopPriceHtml(o) {
+    var html = '<div class="shop-price"><i class="bx bx-hive hc-icon"></i><b>' + (o.price === 0 ? 'Free' : fmtNum(o.price)) + '</b>' +
+      (o.offer && o.listPrice > o.price ? '<s>' + fmtNum(o.listPrice) + '</s>' : '') + '</div>';
+    var badges = '';
+    if (o.offer) {
+      badges += '<span class="bdg hc"><i class="bx bx-purchase-tag"></i> ' + esc(o.offer.label) + ' · ' +
+        (o.offer.percentOff ? '−' + o.offer.percentOff + ' % · ' : '') + 'ends ' + esc(fmtDate(o.offer.endsAt)) + '</span>';
+    }
+    if (o.availableUntil) badges += '<span class="bdg amber"><i class="bx bx-time-five"></i> Limited · until ' + esc(fmtDate(o.availableUntil)) + '</span>';
+    return html + (badges ? '<div class="shop-badges">' + badges + '</div>' : '');
+  }
+
+  function shopNote(text, icon) {
+    return text ? '<p class="shop-note"><i class="bx ' + (icon || 'bx-lock-alt') + '"></i><span>' + esc(text) + '</span></p>' : '';
+  }
+
+  // Knopf oder Grund unter dem Preis (der Server prüft beim Kauf trotzdem alles noch einmal)
+  function shopActionHtml(c, o) {
+    var st = shop.st;
+    if (c.state === 'owned') {
+      return '<span class="bdg green"><i class="bx bx-check"></i> Owned</span>' +
+        (c.href && c.href.indexOf('#honeycombs') !== 0 ? '<button type="button" class="btn-secondary" data-shop-open="' + esc(c.feature) + '">Open</button>' : '') +
+        shopNote(c.note, 'bx-check-circle');
+    }
+    if (c.state === 'included') return '<span class="bdg green"><i class="bx bx-check"></i> Included</span>' + shopNote(c.note, 'bx-check-circle');
+    if (c.state === 'max' || c.state === 'locked') return shopNote(c.note);
+    if (o.note) return shopNote(o.note);
+    var packs = c.stack > 1 && c.lotsActive ? '<span class="bdg">' + c.lotsActive + ' of ' + c.stack + ' packs</span>' : '';
+    if (!o.affordable) {
+      return packs + '<button type="button" class="btn-primary" disabled><i class="bx bx-lock-alt"></i> ' + fmtNum(o.price - st.balance) + ' more needed</button>' +
+        '<button type="button" class="shop-link" data-shop-go="earn">How to earn honeycombs</button>';
+    }
+    var off = st.readOnly ? 'Buying is turned off in admin mode.' : st.frozen ? 'Your honeycombs are on hold.' : '';
+    return packs + '<button type="button" class="btn-primary" data-shop-buy="' + esc(c.feature) + '"' + (off ? ' disabled title="' + esc(off) + '"' : '') + '>' +
+      '<i class="bx bx-lock-open-alt"></i> ' + esc(buyLabel(c, o.price)) + '</button>';
+  }
+  function buyLabel(c, price) {
+    if (price === 0) return 'Get it free';
+    return (c.kind === 'timed' && c.activeUntil && c.stack === 1 ? 'Extend for ' : 'Buy for ') + fmtNum(price);
+  }
+
+  function ownedHtml(u) {
+    var status, cls = '', btn = '', c = shopCard(u.feature);
+    if (u.active && u.permanent) {
+      status = u.kind === 'count' || u.kind === 'consumable' ? 'You have ' + fmtNum(u.quantity) : 'Unlocked for good';
+    } else if (u.active) {
+      status = (c && c.stack > 1 ? 'Pack ' + (u.lot + 1) + ' · until ' : 'Active until ') + fmtDate(u.expiresAt, true);
+      if (u.endsInDays !== null && u.endsInDays <= 3) {
+        status = u.endsInDays <= 0 ? 'Ends today' : 'Ends in ' + plural(u.endsInDays, 'day', 'days');
+        cls = ' soon';
+      }
+    } else {
+      status = 'Ended on ' + fmtDate(u.expiresAt) + ' – paused, your content is kept';
+      cls = ' ended';
+      if (c) btn = '<button type="button" class="btn-secondary" data-shop-renew="' + esc(u.feature) + '">Renew</button>';
+    }
+    if (u.source === 'admin') status += ' · from the team';
+    return '<div class="hc-rule' + cls + '"><span class="ri"><i class="bx ' + esc(bxIcon(u.icon, 'bx-hive')) + '"></i></span>' +
+      '<span class="min-w-0"><b>' + esc(u.title) + '</b><small>' + esc(status) + '</small></span>' + btn + '</div>';
+  }
+
+  function earnHtml(r) {
+    var p = r.progress && r.progress.goal > 0 ? r.progress : null;
+    var text = r.done ? r.doneText : r.text + (p ? ' (' + fmtNum(p.value) + ' of ' + fmtNum(p.goal) + ' collected)' : '');
+    return '<div class="hc-rule' + (r.done ? ' done' : '') + '"><span class="ri"><i class="bx ' + esc(r.done ? 'bx-check' : bxIcon(r.icon, 'bx-hive')) + '"></i></span>' +
+      '<div class="min-w-0 flex-1"><b>' + esc(r.title) + '</b><small>' + esc(text) + '</small>' +
+      (p && !r.done ? '<div class="hc-bar mt-2"><span style="width:' + Math.min(100, Math.round(p.value / p.goal * 100)) + '%"></span></div>' : '') + '</div>' +
+      (r.amount ? '<span class="amt">+' + fmtNum(r.amount) + '</span>' : '') + '</div>';
+  }
+
+  function histHtml() {
+    if (!shop.hist || !shop.hist.length) return '<p class="hint m-0">Nothing yet – your first honeycombs are on their way.</p>';
+    return shop.hist.map(function (x) {
       var cls = x.amount > 0 ? 'plus' : x.amount < 0 ? 'minus' : 'zero';
       return '<div class="hc-hist-row"><span class="min-w-0">' + esc(x.text) + '<small>' + esc(fmtDate(x.at, true)) + '</small></span>' +
         '<span class="amt ' + cls + '">' + (x.amount > 0 ? '+' + fmtNum(x.amount) : x.amount < 0 ? '−' + fmtNum(-x.amount) : 'free') + '</span></div>';
-    }).join('') + '</div>';
+    }).join('') + (shop.next ? '<button type="button" class="btn-ghost w-full justify-center mt-2" data-shop-more>Show more</button>' : '');
   }
 
-  function openHoneycombs() {
-    closeDropdowns();
-    openModal('Your honeycombs', '<div id="hcModal">' + hcBody() + '</div>');
-    api('honeycombs').then(function (res) {
-      if (!res || !res.ok) return;
-      hc = res.honeycombs;
-      setBalance(hc.balance);
-      var box = $('#hcModal');
-      if (box) box.innerHTML = hcBody();
+  function moreHistory(btn) {
+    if (shop.histLoading || !shop.next) return;
+    shop.histLoading = true;
+    btn.disabled = true;
+    apiGet('hc-history?before=' + encodeURIComponent(shop.next)).then(function (h) {
+      shop.histLoading = false;
+      if (!h || !h.ok) { btn.disabled = false; toast((h && h.error) || 'Couldn’t load more – please try again.', 'err'); return; }
+      shop.hist = (shop.hist || []).concat(h.items);
+      shop.next = h.next;
+      var box = $('#shopHist');
+      if (box) box.innerHTML = histHtml();
+    });
+  }
+
+  // Regeln zum Ankreuzen im Kaufdialog (Funktionen mit needsTerms)
+  function shopTermsHtml(feature, checked) {
+    var text = feature === 'code_page'
+      ? 'I’ve read the <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener">rules for code pages</a>. My page won’t sell anything or make money – it’s only there to inform or to promote something.'
+      : 'I’ve read and accept the <a href="/terms" target="_blank" rel="noopener">rules</a> for this.';
+    return '<label class="code-terms"><input type="checkbox" name="terms"' + (checked ? ' checked' : '') + '><span>' + text + '</span></label>';
+  }
+
+  // Ende eines Zeitraums für den Text im Dialog (der Server rechnet beim Kauf genau so: ab dem laufenden Ende, sonst ab jetzt)
+  function periodEnd(c, o, mode) {
+    var from = new Date();
+    if (c.activeUntil && (c.stack === 1 || mode === 'extend')) {
+      var p = String(c.activeUntil).split(/\D/), until = new Date(+p[0], p[1] - 1, +p[2], +p[3] || 0, +p[4] || 0);
+      if (until > from) from = until;
+    }
+    from.setDate(from.getDate() + (o.days || 0));
+    return from.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function shopDialogTitle(c, o) {
+    if (c.kind === 'permanent') return /^more /i.test(c.title) ? 'Unlock ' + lcFirst(c.title) + '?' : 'Unlock your ' + lcFirst(c.title) + '?';
+    if (c.kind === 'timed') return c.title + ' for ' + o.label + '?';
+    return 'Get ' + c.title + ' (' + o.label + ')?';
+  }
+
+  // Kaufdialog: Kennung beim Öffnen (Doppelklick und erneutes Senden buchen einmal), der gezeigte Preis geht mit.
+  // Neuer Preis vom Server: der Dialog bleibt offen, zeigt ihn und kauft mit derselben Kennung zum neuen Preis.
+  function openPurchase(feature) {
+    var st = shop.st, c = shopCard(feature);
+    if (!st || !c || st.readOnly || st.frozen) return;
+    var o = shopSel(c), rid = purchaseId(), price = o.price, terms = false;
+    var mode = c.stack > 1 ? (c.lotsActive < c.stack ? 'stack' : 'extend') : '';
+    function content(body) {
+      var left = st.balance - price, line;
+      if (c.kind === 'permanent') line = 'You unlock it once and keep it for good.';
+      else if (c.kind === 'timed') line = c.title + ' runs until ' + periodEnd(c, o, mode) + '.';
+      else line = 'You get ' + o.label + '.';
+      var html = '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b>' + fmtNum(price) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
+        '<p class="text-sm text-gray-400">' + esc(line) + ' ' + esc(left >= 0 ? 'Afterwards you have ' + fmtNum(left) + ' honeycombs left.' : 'You need ' + fmtNum(-left) + ' more honeycombs.') + '</p>';
+      if (c.perks.length) html += '<ul class="shop-perks mt-3">' + c.perks.map(function (p) { return '<li><i class="bx bx-check"></i><span>' + esc(p) + '</span></li>'; }).join('') + '</ul>';
+      if (c.stack > 1) {
+        html += '<div class="shop-mode mt-4">' +
+          '<label class="code-terms"><input type="radio" name="mode" value="stack"' + (mode === 'stack' ? ' checked' : '') + (c.lotsActive >= c.stack ? ' disabled' : '') + '><span>Add a pack</span></label>' +
+          '<label class="code-terms"><input type="radio" name="mode" value="extend"' + (mode === 'extend' ? ' checked' : '') + (c.lotsActive ? '' : ' disabled') + '><span>Extend the pack that ends first</span></label></div>';
+      }
+      if (c.needsTerms) html += '<div class="mt-4">' + shopTermsHtml(c.feature, terms) + '</div>';
+      body.innerHTML = html;
+    }
+    UI.confirm({
+      title: shopDialogTitle(c, o),
+      tone: 'hc',
+      icon: 'bx-hive',
+      ok: buyLabel(c, price),
+      content: content,
+      canConfirm: function (v) { return (!c.needsTerms || v.terms === true) && st.balance >= price; },
+      fallbackFocus: function () { return $('#shop-' + c.feature + ' [data-shop-buy]') || $('#mainNav [data-tab="honeycombs"]'); },
+      onConfirm: function (v, ctl) {
+        terms = v.terms === true;
+        if (v.mode === 'stack' || v.mode === 'extend') mode = v.mode;
+        return api('shop-buy', { item: o.item, request_id: rid, expected_price: price, terms: terms, mode: mode || undefined }).then(function (res) {
+          if (res && res.code === 'price_changed' && typeof res.price === 'number') {
+            var was = price;
+            price = res.price;
+            ctl.update({ ok: buyLabel(c, price), content: content });
+            return 'The price changed – this now costs ' + fmtNum(price) + ' honeycombs (it was ' + fmtNum(was) + ').';
+          }
+          if (!res || !res.ok) return (res && res.error) || 'Something went wrong. Please try again.';
+          afterPurchase(res, c);
+        });
+      }
+    });
+  }
+
+  // Nach dem Kauf: neuer Stand, Kontostand oben, Verlauf neu; den Code-Tab beim nächsten Öffnen frisch laden (ohne
+  // ungespeicherte Dateien zu verwerfen – die gibt es nur, wenn schon eine Code-Seite besteht)
+  function afterPurchase(res, c) {
+    shop.st = res.shop;
+    setBalance(res.shop.balance, true);
+    if (c.feature === 'code_page') hc.codeUnlocked = true;
+    if (code.st) {
+      if (!code.st.site) { code.st = null; $('#tab-code').innerHTML = ''; } else code.st.balance = res.shop.balance;
+    }
+    if (activeTab === 'honeycombs') renderShop();
+    apiGet('hc-history').then(function (h) {
+      if (!h || !h.ok) return;
+      shop.hist = h.items;
+      shop.next = h.next;
+      var box = $('#shopHist');
+      if (box) box.innerHTML = histHtml();
+    });
+  }
+
+  function renewFeature(feature) {
+    var c = shopCard(feature);
+    if (!c) return;
+    var o = shopSel(c);
+    if (c.state === 'buy' && !o.note && o.affordable && !shop.st.readOnly && !shop.st.frozen) { openPurchase(feature); return; }
+    shop.focus = feature;
+    shopFocus();
+  }
+
+  var shopRoot = $('#tab-honeycombs');
+  if (shopRoot) {
+    shopRoot.addEventListener('click', function (ev) {
+      var t = ev.target, el;
+      if ((el = t.closest('[data-shop-opt]'))) {
+        var card = el.closest('.shop-card'), c = card && shopCard(card.dataset.feature);
+        if (!c) return;
+        shop.sel[c.feature] = el.dataset.shopOpt;
+        card.replaceWith(h(shopCardHtml(c)));
+        var again = $('#shop-' + c.feature + ' [data-shop-opt="' + el.dataset.shopOpt + '"]');
+        if (again) again.focus();
+        return;
+      }
+      if ((el = t.closest('[data-shop-buy]'))) { openPurchase(el.dataset.shopBuy); return; }
+      if ((el = t.closest('[data-shop-renew]'))) { renewFeature(el.dataset.shopRenew); return; }
+      if ((el = t.closest('[data-shop-go]'))) { shop.focus = el.dataset.shopGo; shopFocus(); return; }
+      if ((el = t.closest('[data-shop-open]'))) {
+        var oc = shopCard(el.dataset.shopOpen);
+        if (oc && oc.href) deepLink(oc.href);
+        return;
+      }
+      if ((el = t.closest('[data-shop-more]'))) moreHistory(el);
     });
   }
 
@@ -2213,6 +2661,7 @@
       if (!res || !res.ok) { root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your code page – please reload.</div>'; return; }
       setCodeState(res);
       renderCode();
+      draft.offerCode();
     });
   }
 
@@ -2268,17 +2717,30 @@
         '<div class="hc-bar"><span style="width:' + pct + '%"></span></div>' +
         '<button type="button" class="btn-primary w-full justify-center mt-4" data-code="unlock"' + (enough ? '' : ' disabled') + '><i class="bx bx-lock-open-alt"></i> ' +
           (enough ? 'Unlock for ' + fmtNum(st.cost) + ' honeycombs' : fmtNum(st.cost - st.balance) + ' more honeycombs needed') + '</button>' +
-        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>' +
+        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs" data-feature="earn"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>' +
       '</div>' +
       '<p class="hint mt-6">Code pages are for personal, informational and promotional pages – no shops and no selling. <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener" class="text-brand-400 hover:text-white">Rules for code pages</a></p>' +
     '</div>';
   }
 
+  // Kennung eines Kaufs (32 hex), erzeugt beim Öffnen des Dialogs: Doppelklick oder erneutes Senden bucht nur einmal
+  function purchaseId() {
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    return Array.prototype.map.call(b, function (x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+  }
+
   function openUnlockModal() {
-    var st = code.st;
+    var st = code.st, rid = purchaseId(), price = st.cost;
+    // Was nach dem Kauf übrig bleibt – oder wie viele fehlen, falls der Preis im offenen Dialog über den Kontostand steigt
+    function leftHtml() {
+      return 'You unlock it once and keep it for good. ' + (st.balance >= price
+        ? 'Afterwards you have <span id="codeAfter">' + fmtNum(st.balance - price) + '</span> honeycombs left.'
+        : 'You need ' + fmtNum(price - st.balance) + ' more honeycombs.');
+    }
     openModal('Unlock your code page',
-      '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.cost) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
-      '<p class="text-sm text-gray-400 mb-4">You unlock it once and keep it for good. Afterwards you have ' + fmtNum(st.balance - st.cost) + ' honeycombs left.</p>' +
+      '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b id="codePrice">' + fmtNum(price) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
+      '<p class="text-sm text-gray-400 mb-4" id="codeLeft">' + leftHtml() + '</p>' +
       (st.terms ? '' : codeTermsHtml()) +
       '<p class="text-sm text-red-400 mt-3 hidden" id="codeErr"></p>',
       '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="codeUnlockGo"><i class="bx bx-lock-open-alt"></i> Unlock</button>',
@@ -2287,14 +2749,27 @@
           var btn = this, terms = $('#codeTerms', box);
           if (terms && !terms.checked) { codeErr(box, 'Please accept the rules for code pages first.'); return; }
           btn.disabled = true;
-          api('code-unlock', { terms: true }).then(function (res) {
+          api('code-unlock', { terms: true, request_id: rid, expected_price: price }).then(function (res) {
             btn.disabled = false;
+            // Neuer Preis (Angebot begonnen oder vorbei, Preis geändert): Dialog bleibt offen, gleiche Kennung, neuer Preis
+            if (res && res.code === 'price_changed' && typeof res.price === 'number') {
+              price = res.price;
+              $('#codePrice', box).textContent = fmtNum(price);
+              $('#codeLeft', box).innerHTML = leftHtml();
+              // Jetzt zu teuer: kein Kauf aus diesem Dialog (wie der Knopf im Code-Tab, „… more honeycombs needed“)
+              btn.disabled = st.balance < price;
+              codeErr(box, res.error);
+              apiGet('code').then(function (fresh) { if (fresh && fresh.ok) { setCodeState(fresh); renderCode(); } });
+              return;
+            }
             if (!res || !res.ok) { codeErr(box, (res && res.error) || 'That didn’t work.'); return; }
             closeModal();
             setCodeState(res);
             setBalance(res.balance, true);
             renderCode();
-            toast('Code page unlocked – ' + fmtNum(st.cost) + ' honeycombs spent.', 'hc');
+            // Abgebucht wurde, was der Hinweis des Servers sagt (schon freigeschaltet oder kostenlos: nichts)
+            var spent = res.notices && res.notices[0] && res.notices[0].amount < 0 ? -res.notices[0].amount : 0;
+            toast(spent ? 'Code page unlocked – ' + fmtNum(spent) + ' honeycombs spent.' : 'Code page unlocked.', 'hc');
           });
         });
       });
@@ -2449,6 +2924,7 @@
   function codeChanged() {
     setCodeSaveState(codeUnsaved() ? 'dirty' : '');
     renderCodeFilesSoon();
+    draft.later();
   }
 
   function openCodeFile(p) {
@@ -2498,12 +2974,16 @@
   }
 
   function deleteCodeFile() {
-    var p = code.cur;
-    if (p === 'index.html' || !confirm('Delete ' + p + '? It’s removed from your page when you save.')) return;
-    delete code.files[p];
-    delete code.docs[p];
-    openCodeFile('index.html');
-    codeChanged();
+    var p = code.cur, siteId = code.st && code.st.site ? code.st.site.id : 0;
+    if (p === 'index.html') return;
+    UI.confirm({ title: 'Delete ' + p + '?', text: 'It’s removed from your code page when you save.', ok: 'Delete file', tone: 'danger' }).then(function (yes) {
+      // Nach dem Dialog: dieselbe Code-Seite, die Datei gibt es noch
+      if (!yes || !code.st || !code.st.site || code.st.site.id !== siteId || !has(code.files, p) || p === 'index.html') return;
+      delete code.files[p];
+      delete code.docs[p];
+      if (code.cur === p) openCodeFile('index.html'); else renderCodeFiles();
+      codeChanged();
+    });
   }
 
   function insertCodeImage() {
@@ -2543,6 +3023,7 @@
       setCodeSaveState(codeUnsaved() ? 'dirty' : 'saved');
       renderCodeFiles();
       codePreview(true);
+      draft.codeSaved();
       toast('Saved – your code page is up to date.');
     });
   }
@@ -2578,13 +3059,18 @@
         });
         break;
       case 'address':
-        var slug = $('#codeSlugEdit').value;
+        var slug = $('#codeSlugEdit').value, siteId = code.st.site.id;
         if (slug === code.st.site.slug) return;
-        if (!confirm('Move your code page to ' + slug + '.' + E.baseHost + '? The old address stops working right away.')) return;
-        codeSettings('code-address', { slug: slug }, function (res) {
-          $('#codeSlugEdit').value = res.site.slug;
-          codePreview(true);
-          toast('Your code page is now at ' + prettyUrl(res.site.url) + '.');
+        UI.confirm({ title: 'Move your code page?', text: 'New address: ' + slug + '.' + E.baseHost + '. The old address stops working right away.', ok: 'Move', tone: 'warn' }).then(function (yes) {
+          // Nach dem Dialog: dieselbe Code-Seite, im Feld steht noch die bestätigte Adresse, und sie ist neu
+          var field = $('#codeSlugEdit');
+          if (!yes || !code.st || !code.st.site || code.st.site.id !== siteId || !field || field.value !== slug || slug === code.st.site.slug) return;
+          codeSettings('code-address', { slug: slug }, function (res) {
+            var f = $('#codeSlugEdit');
+            if (f) f.value = res.site.slug;
+            codePreview(true);
+            toast('Your code page is now at ' + prettyUrl(res.site.url) + '.');
+          });
         });
         break;
     }
@@ -2622,10 +3108,12 @@
     var url = codeUrl(), big = $('#bigPreviewFrame');
     if (!url) return;
     big.removeAttribute('srcdoc');
-    big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+    // Ohne allow-modals: Browser-Popups aus dem Code des Nutzers (alert, confirm, prompt) öffnen im Editor keine
+    // Fenster – sie erschienen sonst über on-your.site/dashboard. Auf der Live-Seite dürfen sie (D18).
+    big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
     big.src = codePreviewSrc();
     $('#bigPreviewUrl').textContent = prettyUrl(url);
-    $('#bigPreview').classList.remove('hidden');
+    openBig();
   }
 
   // ================================================================
@@ -2691,6 +3179,39 @@
     }
   });
 
+  // Schalter „Made with OnYourSite“ (Premium): frei mit Premium oder als Team, mit Bestandsschutz nur zum Ausschalten.
+  // Der gespeicherte Wert bleibt auch ohne Premium erhalten – er wirkt dann nur nicht.
+  var cssWarning = '';
+  function cssWarningHtml() {
+    return cssWarning ? '<p class="hint text-amber-400" id="cssWarning"><i class="bx bx-error"></i> ' + esc(cssWarning) + '</p>' : '';
+  }
+  // Nach dem Speichern: Hinweis unter dem CSS-Feld setzen oder entfernen (ohne die Einstellungen neu zu zeichnen)
+  function showCssWarning(text) {
+    cssWarning = text || '';
+    var old = $('#cssWarning');
+    if (old) old.remove();
+    var area = $('[data-bind="page.settings.custom_css"]');
+    if (cssWarning && area) area.insertAdjacentHTML('afterend', cssWarningHtml());
+  }
+  // Standard-Titel für Suchmaschinen: mit Premium und ausgeblendetem Branding ohne „| OnYourSite“
+  function seoTitleDefault(p, hidden) {
+    return 'Default: ' + (p.title || p.slug) + (hidden && E.premium ? '' : ' | OnYourSite');
+  }
+  function brandingSwitch(s) {
+    var legacy = !!(s.branding_legacy && s.hide_branding);
+    var free = E.premium || E.staff || legacy;
+    // Bestandsschutz ohne Premium blendet nur den Hinweis aus (Titel und Vorschaubild-Zeichen nicht)
+    var hint = !E.premium && legacy ? 'Removes the note at the bottom of your page.'
+      : 'Removes the note at the bottom of your page, “| OnYourSite” from the default page title and the OnYourSite mark on your preview image.';
+    var note = '';
+    if (!E.premium && legacy) note = '<p class="hint">Kept from before Premium existed. If you turn it off, you’ll need Premium to turn it back on.</p>';
+    else if (!E.premium && s.hide_branding && !E.staff) note = '<p class="hint text-amber-400">' + (E.premiumUntil ? 'Premium ended – the note is shown again. Renew Premium to hide it.' : 'The note is still shown – hiding it is part of Premium.') + '</p>';
+    else if (!E.premium && E.staff) note = '<p class="hint text-amber-400">Only takes effect while this account has Premium.</p>';
+    else if (!E.premium) hint += ' Included in Premium.';
+    return '<div class="flex items-center justify-between gap-4"><div><div class="text-sm text-white font-medium flex items-center gap-2">Hide “Made with OnYourSite” ' + (E.premium || E.staff ? '' : '<span class="premium-pill"><i class="bx bxs-lock"></i> Premium</span>') + '</div><p class="hint" style="margin-top:2px">' + hint + '</p>' + note + '</div>' +
+      '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (free ? '' : ' disabled') + '><span class="track"></span></label></div>';
+  }
+
   function renderSettings() {
     var root = $('#settingsDynamic');
     var p = state.page, s = p.settings;
@@ -2713,10 +3234,10 @@
           (cur ? '' : '<button type="button" class="btn-secondary" data-page="' + pg.id + '">Edit</button>') +
           (state.pages.length > 1 ? '<button type="button" class="icon-btn danger" data-del-page="' + pg.id + '" data-slug="' + esc(pg.slug) + '" title="Delete page"><i class="bx bx-trash"></i></button>' : '') + '</div>';
       }).join('') +
-      (state.pages.length < max || E.premium ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>' +
+      (state.pages.length < max || E.pagesUnlimited ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Search engines (SEO) <small>Applied when you save</small></h2><div class="panel space-y-4">' +
-      '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="Default: ' + esc((p.title || p.slug) + ' | OnYourSite') + '"></div>' +
+      '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="' + esc(seoTitleDefault(p, s.hide_branding)) + '"></div>' +
       '<div><label class="lbl">Description</label><textarea class="field" rows="2" data-bind="page.settings.seo.description" maxlength="300" placeholder="Default: your bio"></textarea></div>' +
       '<div><label class="lbl">Keywords</label><input class="field" data-bind="page.settings.seo.keywords" maxlength="255" placeholder="separated, by, commas"></div></div></section>' +
 
@@ -2730,9 +3251,9 @@
       '<button type="button" class="btn-secondary" id="weeklyTest"><i class="bx bx-send"></i> Send test report</button></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Branding & custom CSS</h2><div class="panel space-y-5">' +
-      '<div class="flex items-center justify-between gap-4"><div><div class="text-sm text-white font-medium flex items-center gap-2">Hide “Made with OnYourSite” ' + (E.premium ? '' : '<span class="premium-pill"><i class="bx bxs-lock"></i> Premium</span>') + '</div><p class="hint" style="margin-top:2px">Removes the note at the bottom of your page.</p></div>' +
-      '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (E.premium ? '' : ' disabled') + '><span class="track"></span></label></div>' +
+      brandingSwitch(s) +
       '<div><label class="lbl">Custom CSS <small>(for pros)</small></label><textarea class="field css-editor" rows="6" data-bind="page.settings.custom_css" placeholder="/* e.g. .oys-name { letter-spacing: .1em; } */"></textarea>' +
+      cssWarningHtml() +
       '<p class="hint">All elements have classes like <code>.oys-name</code>, <code>.oys-link</code>, <code>.oys-socials</code>. URLs pointing to other servers (<code>url(https://…)</code>, <code>@import</code>) are removed for privacy reasons – upload images here in the editor instead.</p></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Integrations</h2><div class="panel space-y-3">' +
@@ -2765,7 +3286,7 @@
         state.page.address_mode = res.page.address_mode;
         state.page.urls = res.page.urls;
         state.page.url = res.page.url;
-        if (changed) E.slugDaysLeft = E.premium ? 0 : 30;
+        if (changed) E.slugDaysLeft = E.staff ? 0 : 30;
         updatePageInfo();
         renderSettings();
         toast('Address saved: ' + prettyUrl(res.page.url));
@@ -2773,15 +3294,31 @@
     });
     $$('[data-del-page]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var s2 = btn.dataset.slug;
-        var typed = prompt('Delete page “' + s2 + '” with all its blocks, stats and messages?\nType the address to confirm: ' + s2);
-        if (typed === null) return;
-        api('page-delete', { id: Number(btn.dataset.delPage), confirm: typed.trim() }).then(function (res) {
-          if (!res || !res.ok) { toast((res && res.error) || 'Something went wrong.', 'err'); return; }
-          dirty = false;
-          location.href = '/dashboard#settings';
+        var s2 = btn.dataset.slug, delId = Number(btn.dataset.delPage), deleted = false;
+        // Bestätigen durch Tippen der Adresse; der Server prüft sie noch einmal. Fehler bleiben im Dialog.
+        UI.prompt({
+          title: 'Delete page “' + s2 + '”?',
+          text: 'All its blocks, stats and messages are deleted. This can’t be undone.',
+          match: s2, normalize: 'slug', transform: 'slug', ok: 'Delete page', tone: 'danger',
+          fallbackFocus: function () { return $('#settingsDynamic [data-del-page]') || $('#mainNav [data-tab="settings"]'); },
+          onConfirm: function (typed) {
+            return api('page-delete', { id: delId, confirm: typed }).then(function (res) {
+              if (!res || !res.ok) return (res && res.error) || 'Something went wrong. Please try again.';
+              deleted = true;
+              draft.dropPage(delId);
+            });
+          }
+        }).then(function () {
+          // Entwürfe anderer Seiten bleiben und werden nach dem Neuladen angeboten
+          if (deleted) reloadTo('/dashboard#settings');
         });
       });
+    });
+    // Der Standard-Titel folgt dem Schalter für das Branding
+    var brandingBox = $('[data-bind="page.settings.hide_branding"]', root);
+    if (brandingBox) brandingBox.addEventListener('change', function () {
+      var seoTitle = $('[data-bind="page.settings.seo.title"]', root);
+      if (seoTitle) seoTitle.placeholder = seoTitleDefault(state.page, brandingBox.checked);
     });
     $('#weeklyToggle').addEventListener('change', function (ev) {
       var on = ev.target.checked;
@@ -2819,14 +3356,26 @@
   // ================================================================
   $('#pvReload').addEventListener('click', function () { if (activeTab === 'code') codePreview(true); else preview.refresh(); });
   $('#pvEntrance').addEventListener('click', function () { preview.refresh({ entrance: true, top: true }); });
+  // Große Ansicht und Handy-Vorschau sind Ebenen von ui.js: Escape und die Zurück-Geste schließen sie
+  var bigLayer = null, mobileLayer = null;
+  function openBig() {
+    $('#bigPreview').classList.remove('hidden');
+    if (!bigLayer) bigLayer = UI.layer($('#bigPreview'), { onEscape: closeBig });
+  }
+  function closeBig() {
+    $('#bigPreview').classList.add('hidden');
+    $('#bigPreviewFrame').srcdoc = '';
+    if (bigLayer) { var l = bigLayer; bigLayer = null; l.release(); }
+  }
   $('#pvBig').addEventListener('click', function () {
     if (activeTab === 'code') { openCodeBig(); return; }
     $('#bigPreviewFrame').removeAttribute('sandbox');
-    $('#bigPreview').classList.remove('hidden');
+    openBig();
     $('#bigPreviewFrame').srcdoc = preview.html();
   });
-  $('#bigPreviewClose').addEventListener('click', function () { $('#bigPreview').classList.add('hidden'); $('#bigPreviewFrame').srcdoc = ''; });
-  $('#bigPreview').addEventListener('click', function (ev) { if (ev.target.id === 'bigPreview') $('#bigPreviewClose').click(); });
+  $('#bigPreviewClose').setAttribute('aria-label', 'Close');
+  $('#bigPreviewClose').addEventListener('click', closeBig);
+  $('#bigPreview').addEventListener('click', function (ev) { if (ev.target.id === 'bigPreview') closeBig(); });
 
   // Auf kleinen Bildschirmen: Vorschau als Vollbild
   var pane = $('#previewPane');
@@ -2834,14 +3383,267 @@
   $('#mobilePreviewBtn').addEventListener('click', function () {
     $('#mobilePreviewHolder').appendChild(pane);
     $('#mobilePreview').classList.remove('hidden');
+    if (!mobileLayer) mobileLayer = UI.layer($('#mobilePreview'), { onEscape: closeMobilePreview });
     setTimeout(function () { fitPhone(); preview.refreshIfStale(); }, 30);
   });
   // Auf dem Handy sitzt „Preview“ in der Leiste unten
   $('#navPreviewBtn').addEventListener('click', function () { $('#mobilePreviewBtn').click(); });
-  $('#mobilePreviewClose').addEventListener('click', function () {
+  function closeMobilePreview() {
     $('#mobilePreview').classList.add('hidden');
     paneHome.appendChild(pane);
+    if (mobileLayer) { var l = mobileLayer; mobileLayer = null; l.release(); }
+  }
+  $('#mobilePreviewClose').setAttribute('aria-label', 'Close');
+  $('#mobilePreviewClose').addEventListener('click', closeMobilePreview);
+
+  // ================================================================
+  // Ziele im Editor (/dashboard#<ziel>[/<argument>]) – aus der Glocke, aus Hinweisen und beim Laden
+  // ================================================================
+  // Weitere Ziele tragen die Funktionen hier ein (z. B. honeycombs/<feature>, settings/domain, status/system)
+  var DEEP_LINKS = {
+    content: function () { switchTab('content'); },
+    design: function () { if (state.page) switchTab('design'); },
+    stats: function () { if (state.page) switchTab('stats'); },
+    messages: function () { switchTab('messages'); },
+    code: function () { switchTab('code'); },
+    settings: function () { if (state.page) switchTab('settings'); },
+    honeycombs: function (arg) { openShop(arg); },
+    // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
+    status: function () { if ($('#tab-status')) switchTab('status'); }
+  };
+  // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
+  var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings', shop: 'honeycombs' };
+  function deepLink(hash) {
+    var m = /^#?([a-z]+)(?:\/([a-z0-9_-]+))?$/.exec(hash || '');
+    if (!m) return false;
+    var target = OLD_TARGETS[m[1]] || m[1];
+    if (!has(DEEP_LINKS, target)) return false;
+    closeDropdowns();
+    DEEP_LINKS[target](m[2] || '');
+    return true;
+  }
+  // Ein Ziel ohne ?page= meint diesen Editor; mit ?page= nur, wenn es die offene Seite ist (sonst neu laden über die Wache)
+  UI.onLink(function (url) {
+    if (url.pathname !== '/dashboard') return false;
+    var pm = /^\?page=(\d+)$/.exec(url.search);
+    if (url.search && !(pm && state.page && Number(pm[1]) === state.page.id)) return false;
+    if (!url.hash) return false;
+    return deepLink(url.hash);
   });
+
+  // ================================================================
+  // Entwürfe: ungespeicherte Arbeit bleibt im Browser (Absturz, geschlossener Tab, abgelaufene Sitzung)
+  // ================================================================
+  // oys.draft.<Konto>.<Seite> = {v: 1, at, base, page} (payload() ohne Passwörter) und oys.draft.<Konto>.code.<Code-Seite>
+  // = {v: 1, at, base, site, files, deleted} (nur geänderte und gelöschte Dateien). base: Prüfsumme des Stands vom
+  // Server, auf dem die Änderungen aufbauen. Nach 7 Tagen weg; nie an den Server geschickt; je Konto getrennt.
+  var draft = (function () {
+    var uid = E.user && /^\d+$/.test(String(E.user.id)) ? String(E.user.id) : '';
+    var PREFIX = 'oys.draft.', MAX_AGE = 7 * 864e5;
+    var timer = null, pageKept = true, codeKept = true, discarded = false, pageGone = false;
+    // Stand vom Server, auf dem die Änderungen der Seite aufbauen (bei der Code-Seite ist das code.saved)
+    var pageBase = '';
+
+    function store() { try { return window.localStorage || null; } catch (e) { return null; } }
+    function get(key) {
+      var s = store();
+      if (!s) return null;
+      try { var v = JSON.parse(s.getItem(key) || 'null'); return v && typeof v === 'object' && v.v === 1 ? v : null; } catch (e) { return null; }
+    }
+    function put(key, value) {
+      var s = store();
+      if (!s) return false;
+      try { s.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
+    }
+    function drop(key) { var s = store(); if (s) { try { s.removeItem(key); } catch (e) { /* egal */ } } }
+    function keys() {
+      var s = store(), out = [];
+      if (!s) return out;
+      try { for (var i = 0; i < s.length; i++) { var k = s.key(i); if (k && k.indexOf(PREFIX) === 0) out.push(k); } } catch (e) { /* egal */ }
+      return out;
+    }
+    function pageKey(id) { return PREFIX + uid + '.' + id; }
+    function codeKey(id) { return PREFIX + uid + '.code.' + id; }
+
+    // Kurze Prüfsumme (FNV-1a, 32 Bit) über den bearbeitbaren Inhalt
+    function hash(s) {
+      var h = 0x811c9dc5;
+      for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return ('0000000' + h.toString(16)).slice(-8);
+    }
+    function contentOf(page, blocks) {
+      return JSON.stringify({
+        page: { title: page.title, subtitle: page.subtitle, bio: page.bio, avatar: page.avatar, bg_image: page.bg_image, theme: page.theme, layout: page.layout, settings: page.settings },
+        blocks: blocks.map(function (b) { return { id: b.id, type: b.type, visible: b.visible, data: b.data, schedule: b.schedule, protection: b.protection, has_password: !!b.has_password, effect: b.effect }; })
+      });
+    }
+    function pageHash(page, blocks) { return hash(contentOf(page, blocks)); }
+    function codeHash(files) {
+      var ks = Object.keys(files || {}).sort(), parts = [];
+      ks.forEach(function (k) { parts.push(k, files[k]); });
+      return hash(JSON.stringify(parts));
+    }
+    function codeSiteId() { return code.st && code.st.site ? code.st.site.id : 0; }
+
+    // Seite: payload() ohne Passwörter (geschützte Links fragen beim Speichern wieder danach).
+    // 'ok' gesichert (oder nichts zu sichern) · 'squeezed' erst nach dem Löschen der Code-Entwürfe · 'fail'
+    function writePage() {
+      if (!state.page || pageGone) return 'ok';
+      if (!dirty) { drop(pageKey(state.page.id)); return 'ok'; }
+      var p = payload();
+      p.blocks.forEach(function (b) { b.password = ''; });
+      var value = { v: 1, at: Date.now(), base: pageBase, page: p };
+      if (put(pageKey(state.page.id), value)) return 'ok';
+      // Speicher voll: zuerst die Code-Entwürfe dieses Kontos opfern, dann aufgeben
+      keys().forEach(function (k) { if (k.indexOf(PREFIX + uid + '.code.') === 0) drop(k); });
+      return put(pageKey(state.page.id), value) ? 'squeezed' : 'fail';
+    }
+    function writeCode() {
+      var id = codeSiteId();
+      if (!id) return true;
+      if (!codeUnsaved()) { drop(codeKey(id)); return true; }
+      var files = {}, deleted = [];
+      Object.keys(code.files).forEach(function (p) { if (code.files[p] !== code.saved[p]) files[p] = code.files[p]; });
+      Object.keys(code.saved).forEach(function (p) { if (!has(code.files, p)) deleted.push(p); });
+      return put(codeKey(id), { v: 1, at: Date.now(), base: codeHash(code.saved), site: id, files: files, deleted: deleted });
+    }
+    function write() {
+      clearTimeout(timer);
+      timer = null;
+      if (!uid || discarded) return;
+      var r = writePage();
+      pageKept = r !== 'fail';
+      codeKept = r === 'ok' ? writeCode() : !codeUnsaved();
+    }
+
+    // Nach jeder Änderung (gebündelt, 800 ms nach der letzten)
+    function later() {
+      if (!uid) return;
+      discarded = false;
+      pageKept = codeKept = false;
+      clearTimeout(timer);
+      timer = setTimeout(write, 800);
+    }
+    // Sofort sichern (Tab wird verlassen oder versteckt). true: alles Ungespeicherte liegt im Browser – dann ist
+    // das Fenster des Browsers beim Schließen nicht nötig (D19)
+    function flush() {
+      if (!uid || discarded) return false;
+      if (timer || !pageKept || !codeKept) write();
+      return pageKept && codeKept;
+    }
+    // „Leave without saving“ und Ähnliches: die Entwürfe dieser Seite und der Code-Seite verwerfen
+    function discard() {
+      clearTimeout(timer);
+      timer = null;
+      discarded = true;
+      if (!uid) return;
+      if (state.page) drop(pageKey(state.page.id));
+      if (codeSiteId()) drop(codeKey(codeSiteId()));
+    }
+    function dropPage(id) {
+      if (!uid) return;
+      drop(pageKey(id));
+      if (state.page && state.page.id === id) pageGone = true;
+    }
+    // Gespeichert: neuer Stand vom Server; was danach noch ungespeichert ist, kommt wieder in den Entwurf
+    function pageSaved(page, blocks) {
+      pageBase = pageHash(page, blocks.map(function (b) { return normBlock(clone(b)); }));
+      if (!uid || !state.page) return;
+      if (!dirty) { drop(pageKey(state.page.id)); pageKept = true; } else later();
+    }
+    function codeSaved() {
+      if (!uid || !codeSiteId()) return;
+      if (!codeUnsaved()) { drop(codeKey(codeSiteId())); codeKept = true; } else later();
+    }
+
+    function when(at) {
+      var d = new Date(at), now = new Date();
+      var hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      return d.toDateString() === now.toDateString() ? hm : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + hm;
+    }
+    // 'restore' · 'discard' · null (✕, Escape: der Entwurf bleibt bis zur nächsten Änderung)
+    function askRestore(at, changedSince) {
+      return UI.choice({
+        title: 'Restore unsaved changes?',
+        text: 'You have changes from ' + when(at) + ' that weren’t saved.' + (changedSince ? ' This page was saved again after that – restoring replaces that version when you save.' : ''),
+        options: [{ value: 'discard', text: 'Discard' }, { value: 'restore', text: 'Restore', primary: true }]
+      });
+    }
+
+    // Beim Laden: alte Entwürfe weg, den der offenen Seite anbieten, andere Seiten als Hinweis mit „Open“
+    function start() {
+      var now = Date.now();
+      keys().forEach(function (k) {
+        var d = get(k);
+        if (!d || typeof d.at !== 'number' || now - d.at > MAX_AGE || d.at > now + 864e5) drop(k);
+      });
+      if (state.page) pageBase = pageHash(state.page, state.blocks);
+      if (!uid) return;
+      var mine = PREFIX + uid + '.';
+      keys().forEach(function (k) {
+        var rest = k.slice(mine.length);
+        if (k.indexOf(mine) !== 0 || !/^\d+$/.test(rest)) return;
+        var id = Number(rest), p = pageById(id);
+        // Entwürfe gelöschter (oder fremder) Seiten verwerfen
+        if (!p) { drop(k); return; }
+        if (state.page && id === state.page.id) return;
+        toast({ id: 'oys-draft-' + id, text: 'Unsaved changes on “' + (p.title || p.slug) + '”.', tone: 'info', duration: 0,
+          action: { label: 'Open', link: '/dashboard?page=' + id } });
+      });
+      if (!state.page) return;
+      var d = get(pageKey(state.page.id));
+      if (!d || !d.page || !d.page.page || !Array.isArray(d.page.blocks)) return;
+      var pageId = state.page.id;
+      askRestore(d.at, d.base !== pageBase).then(function (how) {
+        if (!state.page || state.page.id !== pageId || !how) return;
+        if (how === 'discard') { drop(pageKey(pageId)); return; }
+        applyPage(d.page);
+      });
+    }
+    // Entwurf übernehmen: Inhalt ersetzen, als ungespeichert markieren – gespeichert wird erst mit „Save“
+    function applyPage(p) {
+      var src = p.page || {}, clicks = {};
+      // Klicks der gespeicherten Blöcke weiter anzeigen
+      state.blocks.forEach(function (b) { clicks[b.id] = b.clicks; });
+      ['title', 'subtitle', 'bio', 'avatar', 'bg_image', 'theme', 'layout'].forEach(function (k) { if (typeof src[k] === 'string') state.page[k] = src[k]; });
+      if (src.settings && typeof src.settings === 'object' && !Array.isArray(src.settings)) state.page.settings = Object.assign({}, state.page.settings, src.settings);
+      state.blocks = p.blocks.filter(function (b) { return b && typeof b === 'object' && typeof b.type === 'string'; }).map(function (b) {
+        var nb = normBlock({ id: b.id, type: b.type, visible: b.visible !== false, data: b.data, schedule: b.schedule, protection: b.protection, effect: b.effect, has_password: !!b.has_password, clicks: clicks[b.id] || 0 });
+        var m = /^n(\d+)$/.exec(String(nb.id));
+        if (m) newCounter = Math.max(newCounter, Number(m[1]));
+        return nb;
+      });
+      updatePageInfo();
+      renderInhalte();
+      renderCurrentTab();
+      markDirty({ fast: true });
+      toast('Unsaved changes restored – save to keep them.', 'info');
+    }
+    // Code-Tab geladen: Entwurf der Code-Seite anbieten (nicht, solange sie gesperrt ist)
+    function offerCode() {
+      var id = codeSiteId();
+      if (!uid || !id || code.st.site.blocked) return;
+      var d = get(codeKey(id));
+      if (!d || !d.files || typeof d.files !== 'object' || !Array.isArray(d.deleted)) return;
+      askRestore(d.at, d.base !== codeHash(code.saved)).then(function (how) {
+        if (codeSiteId() !== id || !how) return;
+        if (how === 'discard') { drop(codeKey(id)); return; }
+        Object.keys(d.files).forEach(function (p) { if (typeof d.files[p] === 'string' && codeCheckPath(p).path === p) code.files[p] = d.files[p]; });
+        d.deleted.forEach(function (p) { if (p !== 'index.html') delete code.files[p]; });
+        code.docs = {};
+        if (!has(code.files, code.cur)) code.cur = 'index.html';
+        if (activeTab === 'code') renderCode();
+        codeChanged();
+        toast('Unsaved changes restored – save to keep them.', 'info');
+      });
+    }
+
+    // Tab wird verlassen oder versteckt: sofort sichern
+    window.addEventListener('pagehide', function () { flush(); });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
+
+    return { later: later, flush: flush, discard: discard, dropPage: dropPage, pageSaved: pageSaved, codeSaved: codeSaved, start: start, offerCode: offerCode };
+  })();
 
   // ================================================================
   // Start
@@ -2850,26 +3652,38 @@
     if (window.OYS_FLASH.success) toast(window.OYS_FLASH.success);
     if (window.OYS_FLASH.error) toast(window.OYS_FLASH.error, 'err');
   }
-  (hc.earned || []).forEach(function (x, i) {
-    setTimeout(function () {
-      toast('+' + fmtNum(x.amount) + ' honeycombs ' + x.text, 'hc');
-      if (i === 0) setBalance(hc.balance, true);
-    }, 700 + i * 700);
-  });
+  // Beim Öffnen verdiente Honigwaben (notices vom Server): gelbe Hinweise, 700 ms versetzt, nichts geht verloren
+  if (E.notices && E.notices.length) {
+    UI.notices(E.notices, { label: 'History', link: '/dashboard#honeycombs/history' });
+    setBalance(hc.balance, true);
+  }
 
+  // Ohne Verbindung: ein Hinweis, der bleibt, bis sie wieder da ist
+  var offlineNote = null;
+  function wentOffline() {
+    if (!offlineNote) offlineNote = UI.toast({ id: 'oys-offline', text: 'You’re offline. Keep this tab open and save again when you’re back online.', tone: 'warn', duration: 0, icon: 'bx-wifi-off' });
+  }
+  window.addEventListener('offline', wentOffline);
+  window.addEventListener('online', function () {
+    if (!offlineNote) return;
+    offlineNote.close();
+    offlineNote = null;
+    UI.toast('Back online.', 'info');
+  });
+  if (navigator.onLine === false) wentOffline();
+
+  // Anker beim Laden (switchTab schreibt ihn gleich um)
+  var startHash = location.hash;
   if (state.page) {
     updatePageInfo();
     setGlow(state.page.theme);
     renderInhalte();
-    var initial = (location.hash || '#content').slice(1);
-    // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
-    initial = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' }[initial] || initial;
+    var initial = (startHash || '#content').slice(1).split('/')[0];
+    initial = OLD_TARGETS[initial] || initial;
     switchTab(TAB_TITLES[initial] ? initial : 'content');
     fitPhone();
     preview.refresh();
     $('#pvEntrance').hidden = !state.page.settings.entrance.enabled;
-    loadNotifications(false);
-    setInterval(function () { if (!document.hidden) loadNotifications(!$('#bellMenu').classList.contains('hidden')); }, 60000);
   } else {
     $('#saveBtn').disabled = true;
     $('#mobilePreviewBtn').classList.add('hidden');
@@ -2877,6 +3691,34 @@
     $('#viewPageLink').classList.add('hidden');
     $('#shareBtn').classList.add('hidden');
     $('#psLabel').textContent = 'No page yet';
-    if (location.hash === '#code') switchTab('code');
+    if (startHash === '#code') switchTab('code');
+    else if (/^#messages\b/.test(startHash)) switchTab('messages');
+    else if (/^#status\b/.test(startHash) && $('#tab-status')) switchTab('status');
+  }
+  draft.start();
+  startBell();
+  // Ziele, die kein Tab sind, öffnen beim Laden ebenso – und Honeycombs auch mit Ziel (#honeycombs/premium, ohne Seite)
+  var startTarget = startHash.slice(1).split('/')[0];
+  startTarget = OLD_TARGETS[startTarget] || startTarget;
+  if (startTarget && (!TAB_TITLES[startTarget] || startTarget === 'honeycombs')) deepLink(startHash);
+
+  // ui.js fehlt (blockiert oder nicht geladen): Hinweis statt eines halb funktionierenden Editors
+  function editorUnavailable() {
+    var main = document.getElementById('editorScroll');
+    if (!main) return;
+    var box = document.createElement('div');
+    box.id = 'editorOff';
+    box.className = 'max-w-lg mx-auto mt-10 bg-card border border-bordercolor rounded-2xl p-8 text-center';
+    box.setAttribute('role', 'alert');
+    box.innerHTML = '<div class="w-14 h-14 mx-auto rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center text-3xl mb-4"><i class="bx bx-error-circle"></i></div>' +
+      '<p class="text-white font-semibold mb-6">The editor couldn’t load completely. Please reload the page.</p>' +
+      '<a class="btn-primary mx-auto justify-center" style="width:max-content"><i class="bx bx-refresh"></i> Reload</a>';
+    // Neu laden = dieselbe Adresse ohne Anker aufrufen
+    box.querySelector('a').href = location.pathname + location.search;
+    main.insertBefore(box, main.firstChild);
+    var nb = document.getElementById('noPageBox');
+    if (nb) nb.hidden = true;
+    var save = document.getElementById('saveBtn');
+    if (save) save.disabled = true;
   }
 })();

@@ -1,10 +1,10 @@
-// Code-Seiten gegen PHP (lib/codesites.php): Dateinamen, Startdateien, Hinweis-Seite und Plakette, Vorschau-Schlüssel,
-// Anlegen, Speichern mit allen Grenzen, Löschen. Die Aufrufe mit Datenbank laufen wie in honeycombs.test.ts doppelt.
+// Code-Seiten gegen PHP (lib/codesites.php der PHP-Version, siehe support/phpRef.ts): Dateinamen, Startdateien,
+// Hinweis-Seite und Plakette, Vorschau-Schlüssel, Anlegen, Speichern mit allen Grenzen, Löschen. Die Aufrufe mit
+// Datenbank laufen wie in honeycombs.test.ts doppelt.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection } from 'mysql2/promise';
-import { ROOT_DIR, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { time } from '../src/php.js';
 import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX, CODE_TYPES, codePreviewToken, codePreviewValid, codeStarterFiles, codeValidPath,
@@ -12,17 +12,16 @@ import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
-import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import { phpBoot, adminConnection, codeCounters, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
+import { PHP_SKIP, phpRoot } from './support/phpRef.js';
 
-// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
-const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
-const DB = { php: SOURCE + '_codephp', node: SOURCE + '_codenode' };
+const DB = { php: testDbName('hcu_code_php'), node: testDbName('hcu_code_node') };
 let admin: Connection;
 
 // Reine Funktion mit JSON-Ein- und Ausgabe in PHP aufrufen
 function php(code: string, input: unknown): unknown {
-  return JSON.parse(execFileSync('php', ['-r', `${PHP_BOOT} $in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in); echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`],
-    { input: JSON.stringify(input), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR, maxBuffer: 256 * 1024 * 1024 }).toString());
+  return JSON.parse(execFileSync('php', ['-r', `${phpBoot()} $in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in); echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`],
+    { input: JSON.stringify(input), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot(), maxBuffer: 256 * 1024 * 1024 }).toString());
 }
 
 function fixture(): Array<[string, unknown[]]> {
@@ -59,14 +58,29 @@ after(async () => {
   await closePool();
 });
 
+// Das Startskript neuer Code-Seiten schreibt den Gruß in die Seite statt alert() (custom-dialogs CD-4): im Vergleich
+// mit PHP steht dafür das Skript von PHP, alles andere bleibt Byte für Byte gleich
+const NODE_STARTER_SCRIPT = codeStarterFiles('')['script.js'];
+const PHP_STARTER_SCRIPT = "document.getElementById('hello').addEventListener('click', () => {\n  alert('Hello from your own website!');\n});\n";
+function asPhpStarter(v: unknown): unknown {
+  if (typeof v === 'string') return v === NODE_STARTER_SCRIPT ? PHP_STARTER_SCRIPT : v;
+  if (Array.isArray(v)) return v.map(asPhpStarter);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, asPhpStarter(x)]));
+  return v;
+}
+
 async function same(ops: Op[], label: string): Promise<unknown[]> {
   const p = await phpRun(DB.php, ops);
-  const n = await nodeRun(DB.node, ops);
+  const n = (await nodeRun(DB.node, ops)).map(asPhpStarter);
   if (process.env.HC_DEBUG) ops.forEach((op, i) => console.log(label, i, JSON.stringify(op).slice(0, 90), '→', JSON.stringify(normalize(p[i])).slice(0, 160)));
-  const diffs = ops.map((op, i) => ({ i, op: JSON.stringify(op).slice(0, 200), php: normalize(p[i]), node: normalize(n[i]) }))
+  // Zähler der Code-Seiten (file_count, bytes) führt nur Node – in zurückgegebenen Zeilen zählen sie nicht mit
+  const noCounters = (v: unknown): unknown => JSON.parse(JSON.stringify(v ?? null, (k, x) => (k === 'file_count' || k === 'bytes' ? undefined : x)));
+  const diffs = ops.map((op, i) => ({ i, op: JSON.stringify(op).slice(0, 200), php: normalize(noCounters(p[i])), node: normalize(noCounters(n[i])) }))
     .filter((d) => JSON.stringify(d.php) !== JSON.stringify(d.node));
   assert.deepEqual(diffs, [], `${label}: results differ`);
-  assert.deepEqual(await dump(admin, DB.node), await dump(admin, DB.php), `${label}: tables differ`);
+  assert.deepEqual(asPhpStarter(await dump(admin, DB.node)), await dump(admin, DB.php), `${label}: tables differ`);
+  // Node führt die Zähler für Dateien und Größe mit (die Fixture legt Dateien direkt an: nur Seiten, die Node schrieb)
+  assert.deepEqual((await codeCounters(admin, DB.node)).filter((r) => Number((r as { id: number }).id) > 2), [], `${label}: counters`);
   return p;
 }
 
@@ -96,7 +110,7 @@ const PATHS = ['', '/', 'index.html', 'INDEX.HTML', ' index.html ', '/index.html
   'x'.repeat(115) + '.html', 'x'.repeat(116) + '.html', 'x'.repeat(117) + '.html', ' '.repeat(10) + 'a.css', '/ /a.css', 'a/ /b.css', 'a.css/ ', 'a.css /', '\ta.css',
   'constructor.html', 'x.constructor', 'x.__proto__', 'x.toString', 'x.hasOwnProperty', 'a/b.c/d.html', 'a.b/c', 'a.html/', 'a.html//', 'A/B/C.CSS', '%2e.html', 'a%2Fb.html'];
 
-test('valid_path: fixed hostile paths and random input match PHP', () => {
+test('valid_path: fixed hostile paths and random input match PHP', { skip: PHP_SKIP }, () => {
   const random = fuzz(['a', 'B', '0', '.', '/', '\\', ' ', '-', '_', '\n', '\t', 'ä', '%', '..', 'html', 'css', 'HTML', 'json', 'x', '\0', '🐝', 'İ'], 4000, 12);
   // Aufgebaute Pfade (Ordner/Name.Endung) mit gelegentlichen Störungen – damit beide Ergebnisse oft vorkommen
   const seg = fuzz(['a', 'b-c', 'x_y', 'Index', 'é', '0', 'A.B', '', ' ', '.'], 3000, 2, 3);
@@ -110,20 +124,27 @@ test('valid_path: fixed hostile paths and random input match PHP', () => {
   assert.ok(theirs.filter((x) => x !== null).length > 200, 'enough valid paths in the sample');
 });
 
-test('pathinfo extension matches PHP', () => {
+test('pathinfo extension matches PHP', { skip: PHP_SKIP }, () => {
   const all = [...PATHS, ...fuzz(['a', '.', '/', '\\', ' ', 'x', 'ä', '\n', '..', '//'], 3000, 8, 5)];
   const theirs = php('return array_map(function ($p) { return pathinfo($p, PATHINFO_EXTENSION); }, $in);', all);
   assert.deepEqual(all.map(pathExtension), theirs);
 });
 
-test('constants match PHP', () => {
+test('constants match PHP', { skip: PHP_SKIP }, () => {
   const theirs = php('return [OYS_CODE_MAX_FILES, OYS_CODE_MAX_FILE_BYTES, OYS_CODE_MAX_TOTAL_BYTES, array_keys(OYS_CODE_TYPES), array_values(OYS_CODE_TYPES), OYS_CODE_SANDBOX];', null);
   assert.deepEqual([CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, [...CODE_TYPES.keys()], [...CODE_TYPES.values()], CODE_SANDBOX], theirs);
 });
 
-test('starter files, badge and notice are byte-identical', () => {
+test('starter files, badge and notice are byte-identical', { skip: PHP_SKIP }, () => {
   const titles = ['', 'My site', '<b>"Bold" & \'quoted\'</b>', 'Grüße – 🐝 “Co”', '0', 'x'.repeat(130), '&amp;', ' '];
-  assert.deepEqual(titles.map(codeStarterFiles), php('return array_map("oys_code_starter_files", $in);', titles));
+  // Startseite und Stil wie in PHP; das Skript schreibt den Gruß in die Seite statt alert() (custom-dialogs CD-4)
+  const withoutScript = (f: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'script.js'));
+  assert.deepEqual(titles.map((t) => withoutScript(codeStarterFiles(t))),
+    (php('return array_map("oys_code_starter_files", $in);', titles) as Array<Record<string, string>>).map(withoutScript));
+  for (const t of titles) assert.deepEqual(Object.keys(codeStarterFiles(t)), ['index.html', 'style.css', 'script.js']);
+  const script = codeStarterFiles('My site')['script.js'];
+  assert.doesNotMatch(script, /\b(alert|confirm|prompt)\s*\(/);
+  assert.ok(script.includes("note.textContent = 'Hello from your own website!';") && script.includes("document.getElementById('hello')"));
   const html = ['', 'no body', '</body>', '<html><body>x</body></html>', '</BODY>', '</Body>', '</body >', '</body', 'a</body>b</body>c', '</body></BODY>tail',
     'İİİ</body>', 'ẞ</BODY>ß', '🐝</body>🐝', '<!-- </body> --></body>', '</bodyx>', '</BoDy>\n', 'x'.repeat(10000) + '</body>'];
   assert.deepEqual(html.map((h) => codeAddBadge(h, {})), php('return array_map(function ($h) { return oys_code_add_badge($h, []); }, $in);', html));
@@ -133,7 +154,18 @@ test('starter files, badge and notice are byte-identical', () => {
   assert.equal(ctx.header('Content-Type'), 'text/html; charset=utf-8');
 });
 
-test('preview token: fixed times match PHP; validation window', () => {
+test('preview token: the validation window is 12 hours back and 60 seconds ahead', () => {
+  // Weit weg von den Grenzen geprüft, damit die laufende Sekunde nichts ändert
+  const now = time();
+  const site = { id: 2, slug: 'tomcode' };
+  assert.equal(codePreviewValid(site, codePreviewToken(site, now - 43190)), true);
+  assert.equal(codePreviewValid(site, codePreviewToken(site, now - 43210)), false);
+  assert.equal(codePreviewValid(site, codePreviewToken(site, now + 50)), true);
+  assert.equal(codePreviewValid(site, codePreviewToken(site, now + 70)), false);
+  assert.equal(codePreviewValid(site, codePreviewToken({ id: 1, slug: 'miacode' }, now - 100)), false);
+});
+
+test('preview token: fixed times match PHP; validation window', { skip: PHP_SKIP }, () => {
   const sites = [{ id: 1, slug: 'miacode' }, { id: 2, slug: 'tomcode' }, { id: '7', slug: 'Ab-c' }];
   const times = [1700000000, 123456789, 99999999999, 0, 1];
   const mine = sites.flatMap((s) => times.map((t) => codePreviewToken(s, t)));
@@ -146,24 +178,19 @@ test('preview token: fixed times match PHP; validation window', () => {
     codePreviewToken(sites[0], now - 100), ok + '\n', ok + 'x', ok.toUpperCase(), ' ' + ok, '', '123-abc', ok.replace(/^\d+/, (d) => String(Number(d) + 1)),
     '12345678-' + ok.split('-')[1], '123456789012-' + ok.split('-')[1], ok.slice(0, -1), codePreviewToken(site, now - 100).replace(/-/, '_')];
   assert.deepEqual(tokens.map((tk) => codePreviewValid(site, tk)), php('return array_map(function ($t) use ($in) { return oys_code_preview_valid($in[0], $t); }, $in[1]);', [site, tokens]));
-  // Grenzen (nur Node, die Zeit läuft sonst zwischen den Prozessen weiter): 12 Stunden zurück, 60 Sekunden voraus
-  assert.equal(codePreviewValid(site, codePreviewToken(site, now - 43190)), true);
-  assert.equal(codePreviewValid(site, codePreviewToken(site, now - 43210)), false);
-  assert.equal(codePreviewValid(site, codePreviewToken(site, now + 50)), true);
-  assert.equal(codePreviewValid(site, codePreviewToken(site, now + 70)), false);
 });
 
-test('lookups, editor data and used uploads', async () => {
+test('lookups, editor data and used uploads', { skip: PHP_SKIP }, async () => {
   await same([['code_site', 5], ['code_site', 9], ['code_site_by_id', 1], ['code_site_by_id', 999], ['code_site_by_slug', 'miacode'], ['code_site_by_slug', 'MIACODE'],
     ['code_site_by_slug', 'miacode '], ['code_site_by_slug', 'nope'], ['code_url', 1], ['code_url', 2], ['code_unlocked', 5], ['code_unlocked', 8], ['code_unlocked', 9],
     ['code_files', 1], ['code_files', 2], ['code_files', 999], ['code_for_editor', 1], ['code_for_editor', 2], ['code_used_uploads', 5], ['code_used_uploads', 6],
     ['code_used_uploads', 999], ['preview_token', 1, 1700000000],
     ['code_state', 5], ['code_state', 6], ['code_state', 9], ['code_state', 999], ['sql', "UPDATE users SET code_terms_at = '2026-10-10 10:00:00' WHERE id = 5"],
-    ['sql', "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', '{\"code_page\":\"250\"}')"], ['code_state', 5],
+    ['set_code_price', 250], ['code_state', 5],
     ['sql', "DELETE FROM oys_meta WHERE meta_key = 'honeycombs'"]], 'lookups');
 });
 
-test('create: slug rules, title cleaning and starter files', async () => {
+test('create: slug rules, title cleaning and starter files', { skip: PHP_SKIP }, async () => {
   const p = await same([
     ['code_create', 5, 'newslug', 'x'], ['code_create', 9, '', 'T'], ['code_create', 9, 'a', 'T'], ['code_create', 9, 'a'.repeat(31), 'T'], ['code_create', 9, 'ä', 'T'],
     ['code_create', 9, '-ab', 'T'], ['code_create', 9, 'ab-', 'T'], ['code_create', 9, 'a--b', 'T'], ['code_create', 9, 'Ab', 'T'], ['code_create', 9, 'a_b', 'T'],
@@ -179,7 +206,7 @@ test('create: slug rules, title cleaning and starter files', async () => {
   assert.equal(errors[0], 'Please enter an address.');
 });
 
-test('save and write: names, types, sizes, counts, index.html, deletions and order', async () => {
+test('save and write: names, types, sizes, counts, index.html, deletions and order', { skip: PHP_SKIP }, async () => {
   const big = (n: number, ch = 'a') => ch.repeat(n);
   const files = (n: number, size = 1, prefix = 'f') => Object.fromEntries(Array.from({ length: n }, (_v, i) => [`${prefix}${i}.txt`, big(size)]));
   const onlyIndex: Op = ['sql', "DELETE FROM code_files WHERE site_id = 3 AND path <> 'index.html'"];
@@ -208,7 +235,7 @@ test('save and write: names, types, sizes, counts, index.html, deletions and ord
   assert.equal(p[3], '“bad path.html” isn’t an allowed file name. Use lowercase letters, numbers, - and _, and one of: html, htm, css, js, mjs, json, txt, md, svg, xml, webmanifest.');
 });
 
-test('delete user: site, files and honeycombs', async () => {
+test('delete user: site, files and honeycombs', { skip: PHP_SKIP }, async () => {
   await same([['code_delete_user', 9], ['code_delete_user', 999], ['code_delete_user', 6], ['code_site', 9], ['code_files', 3], ['balance', 9]], 'delete');
 });
 
@@ -233,72 +260,96 @@ function phpUsedUploads(contents: string[], userId: number): string[][] {
     return $out;`, contents) as string[][];
 }
 
-test('used uploads: random and hostile code files match PHP and stay fast', () => {
-  const names = ['img_5_1700000000_abcdef12.png', 'aimg_5_1700000000_abcdef12.pngabc_5_1700000000_abcdef12.css', 'x_5_123456789_abcdef01.pngab_5_123456789_abcdef01.png',
+const USED_NAMES = ['img_5_1700000000_abcdef12.png', 'aimg_5_1700000000_abcdef12.pngabc_5_1700000000_abcdef12.css', 'x_5_123456789_abcdef01.pngab_5_123456789_abcdef01.png',
     'A_5_1700000000_abcdef12.png', 'é_5_1700000000_abcdef12.png', 'ab__5_1700000000_abcdef12.png', 'a_55_1700000000_abcdef12.png', 'a_5_12345678_abcdef12.png',
     'a_5_12345678901_abcdef12.webp', 'a_5_123456789012_abcdef12.png', 'a_5_1700000000_abcdef1.png', 'a_5_1700000000_ABCDEF12.png', 'a_5_1700000000_abcdef12.p',
     'a_5_1700000000_abcdef12.jpeg12', 'bg_5_1700000000_abcdef12.webp" static/uploads/bg_5_1700000000_abcdef12.webp', 'static/uploads/a%20b.png static/uploads/%C3%A4.png',
-    'xstatic/uploads/a.b-c_d%25.mp3?x static/uploads/ static/uploadsx', 'a_5_1700000000_abcdef12.png_5_1700000000_abcdef12.png', ''];
+  'xstatic/uploads/a.b-c_d%25.mp3?x static/uploads/ static/uploadsx', 'a_5_1700000000_abcdef12.png_5_1700000000_abcdef12.png', ''];
+// Zufällige Inhalte und feindliche: lange Buchstabenfolgen ohne Treffer (in V8 als ein Ausdruck quadratisch), viele kurze Folgen
+function usedSamples(): string[] {
   const tokens = ['a', 'bc', 'xyz', 'Q', '_', '5', '55', '_5_', '_55_', '123456789', '1234567890', '12345678901', '123456789012', 'abcdef01', 'ABCDEF01', 'abcdef0',
     'abcdef012', '.', '.png', '.webp', '.pngab', '.p', '.jpeg1', 'é', '🐝', ' ', '/', 'static/uploads/', 'static/uploads', '%20', '%C3%A4', '-', '\n'];
   const random = fuzz(tokens, 3000, 14, 21);
-  // Lange Buchstabenfolgen ohne Treffer (in V8 als ein Ausdruck quadratisch) und viele kurze Folgen
   const hostile = ['a'.repeat(262144), 'a'.repeat(200000) + '_5_1700000000_abcdef12.png', ('a'.repeat(5000) + '_5_1.').repeat(50),
     'ab_'.repeat(87000), ('img_5_1700000000_abcdef12.png ' + 'z'.repeat(3000)).repeat(80), 'static/uploads/' + 'a'.repeat(262000)];
-  const all = [...names, ...random, ...hostile];
-  const theirs = phpUsedUploads(all, 5);
+  return [...USED_NAMES, ...random, ...hostile];
+}
+
+test('used uploads: random and hostile code files stay fast', () => {
+  const all = usedSamples();
   const started = Date.now();
   const mine = all.map((c) => [...usedUploadsIn([c], 5)]);
   const ms = Date.now() - started;
-  const mismatches = all.map((c, i) => ({ c: c.slice(0, 120), mine: mine[i], php: theirs[i] })).filter((d) => JSON.stringify(d.mine) !== JSON.stringify(d.php));
-  assert.deepEqual(mismatches, []);
-  assert.ok(theirs.filter((x) => x.length).length > 100, 'enough contents with names in the sample');
-  // Mehrere Dateien zusammen wie oys_code_used_uploads() (Reihenfolge der Namen wie die Schlüssel in PHP)
-  assert.deepEqual([...usedUploadsIn(names, 5)], [...new Set(theirs.slice(0, names.length).flat())]);
+  assert.ok(mine.filter((x) => x.length).length > 100, 'enough contents with names in the sample');
+  assert.deepEqual(mine[0], ['img_5_1700000000_abcdef12.png']);
   assert.ok(ms < 3000, `usedUploadsIn took ${ms} ms`);
 });
 
-test('save: waits for a save that is still running and checks the limits afterwards (PHP and Node)', async () => {
-  // Eine andere Verbindung hält die Zeile der Seite (wie ein zweiter Tab mitten im Speichern) und legt in der Zeit
-  // Dateien an. Das Speichern muss warten und danach mit dem neuen Stand rechnen – sonst wären 31 Dateien möglich.
-  const files = (prefix: string, n: number) => Object.fromEntries(Array.from({ length: n }, (_v, i) => [`${prefix}${i}.txt`, 'x']));
-  async function scenario(db: string, save: (batch: Record<string, string>) => Promise<unknown>): Promise<[unknown, number]> {
-    const holder = await adminConnection();
-    try {
-      await holder.query(`USE \`${db}\``);
-      const [rows] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
-      const have = Number((rows as Array<{ n: number }>)[0].n);
-      const k = Math.floor((CODE_MAX_FILES - have) / 2) + 1;
-      assert.ok(have + k <= CODE_MAX_FILES && have + 2 * k > CODE_MAX_FILES, `start with ${have} files`);
-      await holder.query('START TRANSACTION');
-      await holder.query('SELECT id FROM code_sites WHERE id = 1 FOR UPDATE');
-      let done = false;
-      const pending = save(files('mine', k)).finally(() => { done = true; });
-      await new Promise((r) => setTimeout(r, 700));
-      assert.equal(done, false, 'the save waits for the other one');
-      for (const [path] of Object.entries(files('other', k))) await holder.query("INSERT INTO code_files (site_id, path, content, updated_at) VALUES (1, ?, 'y', NOW())", [path]);
-      await holder.query('COMMIT');
-      const result = await pending;
-      const [after] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
-      return [result, Number((after as Array<{ n: number }>)[0].n)];
-    } finally {
-      await holder.query('ROLLBACK').catch(() => undefined);
-      await holder.end();
-    }
+test('used uploads: random and hostile code files match PHP', { skip: PHP_SKIP }, () => {
+  const all = usedSamples();
+  const theirs = phpUsedUploads(all, 5);
+  const mine = all.map((c) => [...usedUploadsIn([c], 5)]);
+  const mismatches = all.map((c, i) => ({ c: c.slice(0, 120), mine: mine[i], php: theirs[i] })).filter((d) => JSON.stringify(d.mine) !== JSON.stringify(d.php));
+  assert.deepEqual(mismatches, []);
+  // Mehrere Dateien zusammen wie oys_code_used_uploads() (Reihenfolge der Namen wie die Schlüssel in PHP)
+  assert.deepEqual([...usedUploadsIn(USED_NAMES, 5)], [...new Set(theirs.slice(0, USED_NAMES.length).flat())]);
+});
+
+// Eine andere Verbindung hält die Zeile der Seite (wie ein zweiter Tab mitten im Speichern) und legt in der Zeit
+// Dateien an. Das Speichern muss warten und danach mit dem neuen Stand rechnen – sonst wären 31 Dateien möglich.
+const waitFiles = (prefix: string, n: number) => Object.fromEntries(Array.from({ length: n }, (_v, i) => [`${prefix}${i}.txt`, 'x']));
+async function waitScenario(db: string, save: (batch: Record<string, string>) => Promise<unknown>, tag = ''): Promise<[unknown, number]> {
+  const holder = await adminConnection();
+  try {
+    await holder.query(`USE \`${db}\``);
+    const [rows] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
+    const have = Number((rows as Array<{ n: number }>)[0].n);
+    const k = Math.floor((CODE_MAX_FILES - have) / 2) + 1;
+    assert.ok(have + k <= CODE_MAX_FILES && have + 2 * k > CODE_MAX_FILES, `start with ${have} files`);
+    await holder.query('START TRANSACTION');
+    await holder.query('SELECT id FROM code_sites WHERE id = 1 FOR UPDATE');
+    let done = false;
+    const pending = save(waitFiles('mine' + tag, k)).finally(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(done, false, 'the save waits for the other one');
+    for (const [path] of Object.entries(waitFiles('other' + tag, k))) await holder.query("INSERT INTO code_files (site_id, path, content, updated_at) VALUES (1, ?, 'y', NOW())", [path]);
+    await holder.query('COMMIT');
+    const result = await pending;
+    const [after] = await holder.query('SELECT COUNT(*) AS n FROM code_files WHERE site_id = 1');
+    return [result, Number((after as Array<{ n: number }>)[0].n)];
+  } finally {
+    await holder.query('ROLLBACK').catch(() => undefined);
+    await holder.end();
   }
+}
+
+test('save: waits for a save that is still running and checks the limits afterwards (PHP and Node)', { skip: PHP_SKIP }, async () => {
   const phpSave = (batch: Record<string, string>) => new Promise<unknown>((resolve, reject) => {
-    const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_code_save($pdo, oys_code_site_by_id($pdo, 1), json_decode(stream_get_contents(STDIN), true), []), JSON_UNESCAPED_UNICODE);`],
-      { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(JSON.parse(out))));
+    const child = execFile('php', ['-r', `${phpBoot()} echo json_encode(oys_code_save($pdo, oys_code_site_by_id($pdo, 1), json_decode(stream_get_contents(STDIN), true), []), JSON_UNESCAPED_UNICODE);`],
+      { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(JSON.parse(out))));
     child.stdin?.end(JSON.stringify(batch));
   });
-  const php = await scenario(DB.php, phpSave);
+  const php = await waitScenario(DB.php, phpSave);
   await useDb(DB.node);
   try {
     const site = (await codeSiteById(1))!;
-    const node = await scenario(DB.node, (batch) => codeSave(site, batch, []));
+    const node = await waitScenario(DB.node, (batch) => codeSave(site, batch, []));
     assert.deepEqual(node, php);
     assert.deepEqual(php[0], 'A code page can have up to 30 files.');
     assert.equal((await codeFiles(1)).size, php[1]);
+  } finally {
+    await restoreDb();
+  }
+});
+
+test('save: waits for a save that is still running and checks the limits afterwards', async () => {
+  await useDb(DB.node);
+  try {
+    const site = (await codeSiteById(1))!;
+    // Eigene Dateinamen: mit PHP lief derselbe Ablauf schon einmal auf dieser Datenbank
+    const node = await waitScenario(DB.node, (batch) => codeSave(site, batch, []), '-n');
+    assert.equal(node[0], 'A code page can have up to 30 files.');
+    assert.equal((await codeFiles(1)).size, node[1]);
   } finally {
     await restoreDb();
   }

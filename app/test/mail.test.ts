@@ -1,7 +1,8 @@
 // mail.php (sendCustomEmail mit PHPMailer) gegen src/mail.ts (nodemailer). Beide schicken an einen kleinen SMTP-Server
 // dieses Tests (mit eigenem Zertifikat, STARTTLS bzw. TLS auf Port 465). Verglichen werden Rückgabewert, Protokoll,
 // Umschlag, Anmeldung, die wichtigen Kopfzeilen und die dekodierten HTML- und Text-Teile – für jede Vorlage in email/
-// und die Fehlerfälle. PHP läuft aus einer unveränderten Kopie von mail.php mit dem echten PHPMailer.
+// und die Fehlerfälle. PHP läuft aus einer unveränderten Kopie von mail.php mit dem echten PHPMailer (PHP-Version,
+// siehe support/phpRef.ts); ohne sie prüft ein eigener Test, ob Node jede Mail sendet bzw. ablehnt wie erwartet.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
@@ -14,6 +15,7 @@ import { e } from '../src/html.js';
 import { sendCustomEmail, setMailDirForTests, stripTags, PhpTypeError } from '../src/mail.js';
 import { SmtpSink, type SinkBehavior, type SinkSession } from './support/smtpSink.js';
 import { decodeWords, header, leaves, parseAddress, parseMessage } from './support/mime.js';
+import { PHP_SKIP, phpRef } from './support/phpRef.js';
 
 const SMTPS_HOST = '127.0.13.107';
 let dir = '';
@@ -64,9 +66,11 @@ before(async () => {
   // PHP: unveränderte Kopie von mail.php, der echte PHPMailer, ein eigener email/-Ordner (Node liest denselben)
   phpRoot = join(dir, 'php');
   mkdirSync(join(phpRoot, 'email'), { recursive: true });
-  copyFileSync(join(ROOT_DIR, 'mail.php'), join(phpRoot, 'mail.php'));
-  assert.equal(readFileSync(join(phpRoot, 'mail.php'), 'utf8'), readFileSync(join(ROOT_DIR, 'mail.php'), 'utf8'));
-  symlinkSync(join(ROOT_DIR, 'PHPMailer'), join(phpRoot, 'PHPMailer'));
+  setMailDirForTests(join(phpRoot, 'email'));
+  if (PHP_SKIP) return;
+  copyFileSync(phpRef('mail.php'), join(phpRoot, 'mail.php'));
+  assert.equal(readFileSync(join(phpRoot, 'mail.php'), 'utf8'), readFileSync(phpRef('mail.php'), 'utf8'));
+  symlinkSync(phpRef('PHPMailer'), join(phpRoot, 'PHPMailer'));
   writeFileSync(join(phpRoot, 'harness.php'), `<?php
     date_default_timezone_set('Europe/Berlin');
     mb_internal_encoding('UTF-8');
@@ -76,7 +80,6 @@ before(async () => {
     try { $r = sendCustomEmail(...$in['args']); } catch (Throwable $e) { $r = 'fatal: ' . get_class($e); }
     echo json_encode($r);
   `);
-  setMailDirForTests(join(phpRoot, 'email'));
 });
 
 after(async () => {
@@ -182,7 +185,8 @@ const smtpFor = (target: MailCase['target'], extra: Record<string, unknown> = {}
   ...extra,
 });
 
-async function compare(c: MailCase): Promise<{ php: unknown; node: unknown; sessions: number }> {
+// Vorlagen, smtp.json und Verhalten des SMTP-Servers für einen Fall; gibt den Server zurück
+function prepare(c: MailCase): SmtpSink {
   const emailDir = join(phpRoot, 'email');
   // Vorlagen wie im Projekt, dazu die des Falls
   for (const f of readdirSync(emailDir)) rmSync(join(emailDir, f));
@@ -194,6 +198,21 @@ async function compare(c: MailCase): Promise<{ php: unknown; node: unknown; sess
   const s = target === 'bad' ? badSink : target === 'smtps' ? smtpsSink! : sink;
   s.behavior = c.behavior ?? { startTls: target !== 'smtps' };
   s.sessions = [];
+  return s;
+}
+
+// Nur Node: senden bzw. ablehnen wie erwartet; was gesendet wurde, kam beim SMTP-Server an
+async function nodeSends(c: MailCase): Promise<unknown> {
+  const s = prepare(c);
+  s.side = 'node';
+  const node = await runNode(c.args);
+  if (c.expectSent !== undefined) assert.equal(node.result, c.expectSent, `${c.name}: sent`);
+  if (node.result === true) assert.ok(s.sessions.some((x) => x.data !== null), `${c.name}: delivered`);
+  return node.result;
+}
+
+async function compare(c: MailCase): Promise<{ php: unknown; node: unknown; sessions: number }> {
+  const s = prepare(c);
   s.side = 'php';
   const php = await runPhp(c.args);
   s.side = 'node';
@@ -327,7 +346,21 @@ const SMTPS_CASES = (): MailCase[] => [
   { name: 'ssl:// host prefix', target: 'smtps', smtp: smtpFor('smtps', { host: `ssl://${SMTPS_HOST}:465`, port: '587' }), args: ['mia@test.de', 'welcome', { full_name: 'Mia' }], expectSent: true },
 ];
 
-test('every template and setting sends the same mail as PHPMailer', async () => {
+test('every template and setting sends or refuses the mail as expected', async () => {
+  let sent = 0;
+  for (const c of CASES()) if ((await nodeSends(c)) === true) sent++;
+  assert.ok(sent >= 25, 'most cases deliver a message');
+});
+
+test('SMTPS on port 465 sends or refuses the mail as expected', async (t) => {
+  if (!smtpsSink) {
+    t.skip('port 465 is not available');
+    return;
+  }
+  for (const c of SMTPS_CASES()) await nodeSends(c);
+});
+
+test('every template and setting sends the same mail as PHPMailer', { skip: PHP_SKIP }, async () => {
   let sent = 0;
   for (const c of CASES()) {
     const r = await compare(c);
@@ -336,7 +369,7 @@ test('every template and setting sends the same mail as PHPMailer', async () => 
   assert.ok(sent >= 25, 'most cases deliver a message');
 });
 
-test('SMTPS on port 465 behaves like PHPMailer', async (t) => {
+test('SMTPS on port 465 behaves like PHPMailer', { skip: PHP_SKIP }, async (t) => {
   if (!smtpsSink) {
     t.skip('port 465 is not available');
     return;
@@ -344,7 +377,7 @@ test('SMTPS on port 465 behaves like PHPMailer', async (t) => {
   for (const c of SMTPS_CASES()) await compare(c);
 });
 
-test('strip_tags matches PHP', () => {
+test('strip_tags matches PHP', { skip: PHP_SKIP }, () => {
   let seed = 99;
   const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
   const parts = ['<', '>', '!', '?', '-', '--', '"', "'", '\\', '(', ')', 'x', 'm', 'l', 'xml', 'E', 'e', 'doctyp', 'DOCTYP', ' ', '\t', '\n', '\0', 'a', 'b',

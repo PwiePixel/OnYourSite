@@ -15,6 +15,15 @@ import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower } from '
 import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
 import { cleanCss } from './css.js';
+import { partitionClauseFor } from './status/partitions.js';
+import { decodeStored, discordSettingsFromV1, encodeSettings, normalizeV1 } from './discord/settings.js';
+import { legacyPostRow } from './discord/legacy.js';
+import { botSecret } from './community/community.js';
+import { baseAuthority } from './helpers.js';
+import { notify } from './notify/notify.js';
+import { cssHides } from './content/brandingCss.js';
+import { isArr, jsonDecode, own } from './content/util.js';
+import { configString } from './config.js';
 
 // Stand der portierten Seite (Release 3.0 migriert genau bis hier)
 export const V_PAGES = 1; // Profilseiten + Übernahme der alten Profile
@@ -25,6 +34,14 @@ export const V_SESSIONS = 5; // Sitzungen in der Datenbank (Node-Version)
 // Funktionen nach dem Umstieg (Nummer = Reihenfolge des Zusammenführens)
 export const V_NOTIFICATIONS_INDEX = 6; // Glocke: neueste zuerst und „gelesen bis“
 export const V_CUSTOM_DOMAINS = 7; // Eigene Domains (Premium): Domains, Verlauf, Hauptadresse der Seite
+export const V_SITE_ADDRESSES = 8; // Adressen aller Seiten in einer Tabelle, freigegebene bleiben reserviert
+export const V_CODE_SLOTS = 9; // Code-Seiten auch auf Seitenadressen (Plätze), Zähler, Moderation
+export const V_STATUS_TABLES = 10; // Statusseiten: Tabellen, eigene Seite von OnYourSite
+export const V_SHOP_CORE = 11; // Honigwaben: Konten, Berechtigungen, Premium-Status, Admin-Protokoll
+export const V_SHOP_CATALOGUE = 12; // Honigwaben: Katalog mit Preisen, Angebote, Käufe
+export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge des Bots mit ref und Pausen, Einstellungen v2
+export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
+export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -56,6 +73,14 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SESSIONS, name: 'sessions', run: createSessionTable },
   { version: V_NOTIFICATIONS_INDEX, name: 'notificationsIndex', run: notificationsIndex },
   { version: V_CUSTOM_DOMAINS, name: 'customDomains', run: customDomains },
+  { version: V_SITE_ADDRESSES, name: 'siteAddresses', run: siteAddresses },
+  { version: V_CODE_SLOTS, name: 'codeSlots', run: codeSlots },
+  { version: V_STATUS_TABLES, name: 'statusTables', run: statusTables },
+  { version: V_SHOP_CORE, name: 'shopCore', run: shopCore },
+  { version: V_SHOP_CATALOGUE, name: 'shopCatalogue', run: shopCatalogue },
+  { version: V_DISCORD_DELIVERY, name: 'discordDelivery', run: discordDelivery },
+  { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
+  { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -577,6 +602,615 @@ async function customDomains(conn: PoolConnection): Promise<void> {
   await addIndex(conn, 'pages', 'uq_custom_domain', 'UNIQUE KEY uq_custom_domain (custom_domain)');
 }
 
+// V_SITE_ADDRESSES (braucht V_PAGES und V_CODE_PAGES; status_pages aus V_STATUS_TABLES nur, wenn es die Tabelle schon
+// gibt): eine Zeile je Adresse – Link-Seite, Code-Seite, Statusseite oder reserviert (kind = 'held'). Der Primärschlüssel
+// hält jede Adresse über alle Arten eindeutig. Regeln und Schreibzugriffe stehen in content/addresses.ts.
+async function siteAddresses(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS site_addresses (
+        slug VARCHAR(63) NOT NULL PRIMARY KEY,
+        kind VARCHAR(8) NOT NULL,
+        ref_id INT NULL,
+        user_id INT NULL,
+        claimed_at DATETIME NOT NULL,
+        released_at DATETIME NULL,
+        hold_until DATETIME NULL,
+        KEY idx_ref (kind, ref_id),
+        KEY idx_user (user_id),
+        KEY idx_hold (kind, hold_until)
+    ) ${OPTS}`);
+  // Bestand übernehmen. Bei alten Doppelungen (Wettlauf vor dieser Version) gewinnt die Link-Seite – sie wird auch auf
+  // der Subdomain ausgeliefert. INSERT IGNORE: ein abgebrochener Schritt läuft einfach noch einmal.
+  await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'page', id, user_id, COALESCE(slug_changed_at, created_at, NOW()) FROM pages ORDER BY id`);
+  await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'code', id, user_id, COALESCE(created_at, NOW()) FROM code_sites WHERE slug IS NOT NULL AND slug <> '' ORDER BY id`);
+  // Statusseiten, falls ihr Schritt schon gelaufen ist (die Seite von OnYourSite hat kein Konto: user_id NULL)
+  if (await hasTable(conn, 'status_pages')) {
+    const cols = (await rows(conn, 'SHOW COLUMNS FROM status_pages')).map((c) => String(c.Field));
+    const since = cols.includes('created_at') ? 'COALESCE(created_at, NOW())' : 'NOW()';
+    await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'status', id, user_id, ${since} FROM status_pages WHERE slug IS NOT NULL AND slug <> '' ORDER BY id`);
+  }
+}
+
+// V_CODE_SLOTS (braucht V_CODE_PAGES und V_SITE_ADDRESSES): eine Code-Seite kann statt der Link-Seite auf einem der
+// Seitenplätze eines Kontos stehen (pages.code_site_id; die Link-Seite bleibt gespeichert) und hat dann keine eigene
+// Adresse (code_sites.slug NULL). Der einzige Schritt, der etwas entfernt: uq_user (eine Code-Seite je Konto) weicht
+// uq_own – höchstens EINE Code-Seite mit eigener Adresse je Konto, auch bei gleichzeitigen Anfragen. Dazu Zähler für
+// Dateien und Größe, die Sperre der Code-Funktion je Konto und das Protokoll der Team-Aktionen. Jede Anweisung ist
+// wiederholbar (ein abgebrochener Schritt läuft einfach noch einmal).
+async function codeSlots(conn: PoolConnection): Promise<void> {
+  // Mehrere Code-Seiten je Konto: erst den einfachen Index anlegen, dann den eindeutigen entfernen
+  await addIndex(conn, 'code_sites', 'idx_user', 'KEY idx_user (user_id)');
+  await dropIndex(conn, 'code_sites', 'uq_user');
+  // Eine Code-Seite auf einer Seitenadresse hat keine eigene Adresse (nur ändern, solange die Spalte NOT NULL ist)
+  if (await columnIsNotNull(conn, 'code_sites', 'slug')) await run(conn, 'ALTER TABLE code_sites MODIFY slug VARCHAR(63) NULL');
+  // Höchstens eine Code-Seite mit eigener Adresse je Konto – die Datenbank prüft das auch bei gleichzeitigen Anfragen
+  await addColumn(conn, 'code_sites', 'own_user_id', 'INT AS (IF(slug IS NULL, NULL, user_id)) PERSISTENT');
+  await addIndex(conn, 'code_sites', 'uq_own', 'UNIQUE KEY uq_own (own_user_id)');
+  // Anzahl und Größe der Dateien (Admin-Liste und Grenzen, ohne bei jedem Aufruf alle Dateien zu summieren)
+  await addColumn(conn, 'code_sites', 'file_count', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn(conn, 'code_sites', 'bytes', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await run(conn, `UPDATE code_sites s SET
+        s.file_count = (SELECT COUNT(*) FROM code_files f WHERE f.site_id = s.id),
+        s.bytes = (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id)`);
+  // Der Platz zeigt eine Code-Seite statt seiner Link-Seite (die Link-Seite bleibt gespeichert)
+  await addColumn(conn, 'pages', 'code_site_id', 'INT NULL');
+  await addIndex(conn, 'pages', 'uq_code_site', 'UNIQUE KEY uq_code_site (code_site_id)');
+  // Moderation: Code-Funktion für ein Konto abschalten, Protokoll der Team-Aktionen (user_id NULL bei Grenzen)
+  await addColumn(conn, 'users', 'code_banned_at', 'DATETIME NULL');
+  await addColumn(conn, 'users', 'code_ban_reason', 'VARCHAR(200) NULL');
+  await run(conn, `CREATE TABLE IF NOT EXISTS code_moderation (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        site_id INT NULL,
+        user_id INT NULL,
+        admin_id INT NOT NULL,
+        action VARCHAR(12) NOT NULL,
+        address VARCHAR(100) NOT NULL DEFAULT '',
+        reason VARCHAR(200) NOT NULL DEFAULT '',
+        created_at DATETIME NOT NULL,
+        KEY idx_user (user_id, id),
+        KEY idx_site (site_id, id)
+    ) ${OPTS}`);
+}
+
+// V_STATUS_TABLES (braucht nur die Tabellen aus V_PAGES und V_CODE_PAGES): Statusseiten – OnYourSites eigene Seite
+// und die der Nutzer mit Prüfungen, Vorfällen und Benachrichtigungen. Abonnenten und Rundmails kommen später mit einem
+// eigenen Schritt (V_STATUS_SUBSCRIBERS). Zeiten für Vergleiche und Dauern sind Unix-Sekunden (UTC), weil DATETIME hier
+// Ortszeit ist und in der Stunde der Zeitumstellung doppelt vorkommt; Tage sind DATE in der Zeitzone der Seite.
+async function statusTables(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_pages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NULL,                                  -- NULL = Seite von OnYourSite (is_system = 1)
+        is_system TINYINT(1) NOT NULL DEFAULT 0,
+        slug VARCHAR(63) NOT NULL,
+        title VARCHAR(120) NOT NULL DEFAULT '',
+        description VARCHAR(300) NOT NULL DEFAULT '',
+        theme VARCHAR(40) NOT NULL DEFAULT 'deep-dark',
+        settings MEDIUMTEXT NULL,                          -- JSON (status/settings.ts: statusPageSettings)
+        is_published TINYINT(1) NOT NULL DEFAULT 1,
+        is_blocked TINYINT(1) NOT NULL DEFAULT 0,
+        blocked_reason VARCHAR(200) NULL,
+        review_note VARCHAR(80) NULL,                      -- Name nennt eine Marke: noindex bis zur Freigabe
+        reviewed_at INT UNSIGNED NULL,                     -- Freigabe des Namens durch das Team
+        rev INT UNSIGNED NOT NULL DEFAULT 0,               -- steigt bei jeder Änderung (Zwischenspeicher der Seite)
+        changed_at INT UNSIGNED NOT NULL DEFAULT 0,        -- letzte Änderung (Unix-Zeit) für den Abgleich des Prüfdienstes
+        limit_paused SMALLINT UNSIGNED NOT NULL DEFAULT 0, -- Prüfungen über der Grenze beim letzten Abgleich (Hinweis einmal je Wechsel)
+        slug_changed_at INT UNSIGNED NULL,                 -- letzter Adresswechsel (Sperrfrist)
+        owner_seen_at DATE NULL,                           -- letzter Besuch des Besitzers im Editor (Inaktivität)
+        created_at DATETIME NULL,
+        updated_at DATETIME NULL,
+        UNIQUE KEY uq_slug (slug),
+        UNIQUE KEY uq_user (user_id),
+        KEY idx_changed (changed_at)
+    ) ${OPTS}`);
+
+  // Bestandteile einer Seite – mit automatischer Prüfung (http, heartbeat, system) oder von Hand (manual)
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_monitors (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        page_id INT NOT NULL,
+        user_id INT NULL,                                  -- Besitzer (doppelt gespeichert für Grenzen und Admin)
+        type VARCHAR(12) NOT NULL,                         -- http | heartbeat | manual | system
+        name VARCHAR(80) NOT NULL,
+        description VARCHAR(200) NOT NULL DEFAULT '',
+        group_name VARCHAR(60) NOT NULL DEFAULT '',
+        position SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        is_public TINYINT(1) NOT NULL DEFAULT 1,
+        target VARCHAR(500) NOT NULL DEFAULT '',           -- http: bereinigte Adresse · system: Name der Prüfung
+        target_host VARCHAR(253) NOT NULL DEFAULT '',      -- http: Host in ASCII, klein, ohne Punkt am Ende
+        target_domain VARCHAR(253) NOT NULL DEFAULT '',    -- http: registrierbare Domain (Public Suffix List)
+        config TEXT NULL,                                  -- JSON je Typ
+        interval_s SMALLINT UNSIGNED NOT NULL DEFAULT 300,
+        manual_status VARCHAR(12) NULL,                    -- manual: operational|degraded|partial|major|maintenance
+        manual_since INT UNSIGNED NULL,
+        hb_token_hash CHAR(64) NULL,                       -- sha256 des geheimen Heartbeat-Links
+        hb_token_enc VARCHAR(255) NULL,                    -- derselbe Link verschlüsselt (zum erneuten Anzeigen)
+        hb_last_ping_at INT UNSIGNED NULL,
+        hb_last_fail_at INT UNSIGNED NULL,
+        is_paused TINYINT(1) NOT NULL DEFAULT 0,
+        admin_paused TINYINT(1) NOT NULL DEFAULT 0,
+        admin_note VARCHAR(200) NULL,
+        auto_paused VARCHAR(12) NULL,                      -- vom Prüfdienst angehalten: private_ip | refused | robots
+        auto_paused_at INT UNSIGNED NULL,
+        changed_at INT UNSIGNED NOT NULL DEFAULT 0,        -- letzte Änderung (Unix-Zeit) für den Abgleich des Prüfdienstes
+        created_at DATETIME NULL,
+        updated_at DATETIME NULL,
+        KEY idx_page (page_id, position),
+        KEY idx_user (user_id),
+        KEY idx_host (target_host),
+        KEY idx_domain (target_domain),
+        KEY idx_changed (changed_at),
+        UNIQUE KEY uq_hb (hb_token_hash)
+    ) ${OPTS}`);
+
+  // Laufender Zustand je Prüfung – schreibt nur der Prüfdienst
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_state (
+        monitor_id INT NOT NULL PRIMARY KEY,
+        state VARCHAR(10) NOT NULL DEFAULT 'unknown',      -- unknown|up|degraded|down
+        since INT UNSIGNED NULL,
+        flapping TINYINT(1) NOT NULL DEFAULT 0,
+        fails TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        last_check_at INT UNSIGNED NULL,
+        last_ok_at INT UNSIGNED NULL,
+        last_ms INT UNSIGNED NULL,
+        last_code SMALLINT UNSIGNED NULL,
+        last_error VARCHAR(20) NULL,                       -- Fehlerschlüssel, nie Text der Gegenseite
+        cert_expires_at INT UNSIGNED NULL,
+        cert_warned TINYINT UNSIGNED NULL,                 -- zuletzt gemeldete Schwelle in Tagen (14 oder 3)
+        throttled_at INT UNSIGNED NULL,                    -- zuletzt wegen Grenzen je Website verschoben
+        refused_since INT UNSIGNED NULL,                   -- Beginn einer ununterbrochenen Folge von 403/429
+        updated_at INT UNSIGNED NOT NULL DEFAULT 0
+    ) ${OPTS}`);
+
+  // Einzelne Prüfungen (zwei Tage). Tagespartitionen nach UTC: alte Tage fallen als Ganzes weg (status/partitions.ts).
+  // Ohne Partitionierung (Erweiterung fehlt) löscht der Prüfdienst in Schritten nach dem Primärschlüssel.
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_checks (
+        monitor_id INT NOT NULL,
+        at INT UNSIGNED NOT NULL,
+        ok TINYINT(1) NOT NULL,
+        ms INT UNSIGNED NULL,
+        code SMALLINT UNSIGNED NULL,
+        error VARCHAR(20) NULL,
+        PRIMARY KEY (monitor_id, at)
+    ) ${OPTS} ${await partitionClause(conn)}`);
+
+  // Zustandswechsel je Prüfung (90 Tage) – Verlauf im Editor
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        monitor_id INT NOT NULL,
+        at INT UNSIGNED NOT NULL,
+        kind VARCHAR(10) NOT NULL,                         -- down|up|degraded|recovered|flapping|stable|paused|resumed
+        error VARCHAR(20) NULL,
+        code SMALLINT UNSIGNED NULL,
+        KEY idx_monitor (monitor_id, id),
+        KEY idx_at (at)
+    ) ${OPTS}`);
+
+  // Zusammenfassung je Stunde (14 Tage) – Antwortzeiten-Diagramme
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_hourly (
+        monitor_id INT NOT NULL,
+        hour INT UNSIGNED NOT NULL,                        -- Beginn der Stunde (Unix-Zeit, UTC)
+        checks SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        fails SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        ms_sum INT UNSIGNED NOT NULL DEFAULT 0,
+        ms_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        ms_min INT UNSIGNED NULL,
+        ms_max INT UNSIGNED NULL,
+        covered_s SMALLINT UNSIGNED NOT NULL DEFAULT 0,    -- Sekunden mit Daten
+        down_s SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        degraded_s SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        maint_s SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        PRIMARY KEY (monitor_id, hour)
+    ) ${OPTS}`);
+
+  // Zusammenfassung je Tag in der Zeitzone der Seite (120 Tage) – 90-Tage-Balken und Verfügbarkeit
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_daily (
+        monitor_id INT NOT NULL,
+        day DATE NOT NULL,
+        checks MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        fails MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        ms_sum BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        ms_count MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        ms_max INT UNSIGNED NULL,
+        covered_s MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        down_s MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        degraded_s MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        maint_s MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+        PRIMARY KEY (monitor_id, day)
+    ) ${OPTS}`);
+
+  // Vorfälle und geplante Wartungen mit ihrem Verlauf
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_incidents (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        page_id INT NOT NULL,
+        kind VARCHAR(12) NOT NULL DEFAULT 'incident',      -- incident | maintenance
+        title VARCHAR(160) NOT NULL,
+        status VARCHAR(16) NOT NULL,                       -- investigating|identified|monitoring|resolved · scheduled|in_progress|completed
+        impact VARCHAR(10) NOT NULL DEFAULT 'minor',       -- none|minor|major|critical (Wartung: maintenance)
+        is_auto TINYINT(1) NOT NULL DEFAULT 0,             -- vom Prüfdienst eröffnet
+        auto_edited TINYINT(1) NOT NULL DEFAULT 0,         -- Besitzer hat eingegriffen → nicht automatisch schließen
+        starts_at INT UNSIGNED NOT NULL,
+        ends_at INT UNSIGNED NULL,                         -- Wartung: geplantes Ende
+        resolved_at INT UNSIGNED NULL,
+        notify TINYINT(1) NOT NULL DEFAULT 1,
+        sub_mails TINYINT UNSIGNED NOT NULL DEFAULT 0,     -- schon verschickte Mails an Abonnenten (höchstens 10)
+        created_by INT NULL,
+        created_at DATETIME NULL,
+        updated_at DATETIME NULL,
+        KEY idx_page (page_id, resolved_at, starts_at),
+        KEY idx_open (kind, status, starts_at)
+    ) ${OPTS}`);
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_incident_monitors (
+        incident_id INT NOT NULL,
+        monitor_id INT NOT NULL,
+        effect VARCHAR(12) NOT NULL DEFAULT 'partial',     -- degraded|partial|major|maintenance
+        PRIMARY KEY (incident_id, monitor_id),
+        KEY idx_monitor (monitor_id)
+    ) ${OPTS}`);
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_incident_updates (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        incident_id INT NOT NULL,
+        status VARCHAR(16) NOT NULL,
+        body TEXT NOT NULL,                                -- einfaches Markdown (wie Updates)
+        is_auto TINYINT(1) NOT NULL DEFAULT 0,
+        created_by INT NULL,
+        created_at INT UNSIGNED NOT NULL,
+        edited_at INT UNSIGNED NULL,
+        KEY idx_incident (incident_id, id)
+    ) ${OPTS}`);
+  // Discord-Nachrichten eines Vorfalls – eine Zeile je Ziel (Bot-Kanal #status oder Webhook-Kanal), wird bei jedem
+  // Update bearbeitet
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_incident_posts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        incident_id INT NOT NULL,
+        target VARCHAR(40) NOT NULL,                       -- 'bot:<channel_id>' | 'channel:<status_channels.id>'
+        channel_id VARCHAR(22) NULL,
+        message_id VARCHAR(22) NULL,                       -- NULL, solange der erste Beitrag aussteht
+        state VARCHAR(12) NOT NULL DEFAULT 'queued',       -- queued | posted | failed
+        dirty TINYINT(1) NOT NULL DEFAULT 0,               -- geändert, während der erste Beitrag noch aussteht
+        error VARCHAR(160) NULL,
+        updated_at INT UNSIGNED NOT NULL,
+        UNIQUE KEY uq_target (incident_id, target)
+    ) ${OPTS}`);
+
+  // Wohin Benachrichtigungen gehen (zusätzlich zur E-Mail des Kontos): E-Mail, Discord-Webhook, eigener Bot (nur OnYourSite)
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_channels (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        page_id INT NOT NULL,
+        type VARCHAR(10) NOT NULL,                         -- email | discord | bot
+        target_enc TEXT NOT NULL,                          -- verschlüsselt: Adresse, Webhook-Link oder Bot-Kanal
+        target_hash CHAR(64) NOT NULL,                     -- hmac(Typ|Ziel): jedes Ziel nur einmal je Seite
+        label VARCHAR(120) NOT NULL DEFAULT '',            -- gekürzt zum Anzeigen
+        events VARCHAR(120) NOT NULL DEFAULT 'down,up,degraded,cert,heartbeat', -- Discord: zusätzlich 'incident'
+        verify_hash CHAR(64) NULL,                         -- sha256 des Bestätigungslinks, erst beim Versand erzeugt
+        verify_sent_at INT UNSIGNED NULL,
+        verified_at INT UNSIGNED NULL,
+        is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        fail_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        last_error VARCHAR(160) NULL,
+        last_sent_at INT UNSIGNED NULL,
+        created_at DATETIME NULL,
+        UNIQUE KEY uq_target (page_id, target_hash),
+        KEY idx_page (page_id)
+    ) ${OPTS}`);
+
+  // Ausgehende Nachrichten (Alarme, Bestätigungsmails, Bot) – mit Wiederholung und Verlauf (30 Tage).
+  // Die Nutzdaten enthalten nie Geheimnisse: Bestätigungslinks erzeugt erst der Versand.
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_outbox (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        page_id INT NOT NULL,
+        monitor_id INT NULL,
+        kind VARCHAR(20) NOT NULL,                         -- alert|channel_verify|inactive_warning|channel_broken|muted
+        class VARCHAR(8) NOT NULL DEFAULT 'owner',         -- Mail-Budget: system | confirm | owner
+        channel VARCHAR(20) NOT NULL,                      -- owner|admins|bell|bot|channel:<id>
+        event VARCHAR(16) NOT NULL DEFAULT '',             -- down|up|degraded|recovered|flapping|stable|cert|heartbeat|incident|test
+        payload TEXT NOT NULL,                             -- JSON mit allem, was die Nachricht braucht (ohne Geheimnisse)
+        state VARCHAR(10) NOT NULL DEFAULT 'pending',      -- pending|sent|failed|merged|skipped
+        attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        next_at INT UNSIGNED NOT NULL,
+        error VARCHAR(160) NULL,
+        created_at INT UNSIGNED NOT NULL,
+        sent_at INT UNSIGNED NULL,
+        KEY idx_due (state, next_at),
+        KEY idx_page (page_id, id)
+    ) ${OPTS}`);
+
+  // Regeln je Website (Admin): sperren oder mehr Prüfungen erlauben
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_host_rules (
+        host VARCHAR(253) NOT NULL PRIMARY KEY,            -- genauer Host oder „.example.com“ für die Domain und alle Subdomains
+        rule VARCHAR(8) NOT NULL,                          -- block | allow
+        max_monitors SMALLINT UNSIGNED NULL,
+        note VARCHAR(200) NOT NULL DEFAULT '',
+        created_by INT NULL,
+        created_at DATETIME NULL
+    ) ${OPTS}`);
+
+  // robots.txt je Host (höchstens einmal am Tag geholt) – nur Gruppen für „OnYourSite-Monitor“ zählen
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_host_meta (
+        host VARCHAR(253) NOT NULL PRIMARY KEY,
+        robots_at INT UNSIGNED NULL,
+        robots_rules TEXT NULL,                            -- JSON: [["allow"|"disallow", "/pfad"], …] der eigenen Gruppe
+        robots_error VARCHAR(20) NULL
+    ) ${OPTS}`);
+
+  // „Jetzt prüfen“: kleine Warteschlange statt eines vollständigen Neuladens im Prüfdienst
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_run_requests (
+        monitor_id INT NOT NULL PRIMARY KEY,
+        requested_at INT UNSIGNED NOT NULL
+    ) ${OPTS}`);
+
+  // Daten gelöschter Prüfungen und Seiten räumt der Prüfdienst in Teilen weg (statt im Web-Request)
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_purge (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        kind VARCHAR(8) NOT NULL,                          -- monitor | page
+        ref_id INT NOT NULL,
+        created_at INT UNSIGNED NOT NULL
+    ) ${OPTS}`);
+
+  // Alte Adresse nach einem Adresswechsel: 90 Tage Weiterleitung (die Adresse selbst hält site_addresses fest)
+  await run(conn, `CREATE TABLE IF NOT EXISTS status_slug_redirects (
+        slug VARCHAR(63) NOT NULL PRIMARY KEY,
+        page_id INT NOT NULL,
+        until INT UNSIGNED NOT NULL,
+        KEY idx_page (page_id)
+    ) ${OPTS}`);
+
+  await addColumn(conn, 'users', 'status_terms_at', 'DATETIME NULL');
+  await seedSystemStatusPage(conn);
+}
+
+// Tagespartitionen für status_checks, wenn MariaDB sie kann (Debian/Ubuntu: eingebaut) – sonst ''
+async function partitionClause(conn: PoolConnection): Promise<string> {
+  const r = await rows(conn, "SELECT PLUGIN_STATUS FROM information_schema.PLUGINS WHERE PLUGIN_NAME = 'partition'");
+  return r.length && r[0].PLUGIN_STATUS === 'ACTIVE' ? partitionClauseFor(Math.floor(Date.now() / 1000)) : '';
+}
+
+// Bestandteile von OnYourSites eigener Seite (Stand dieses Schritts): Schlüssel der Prüfung, Name, Gruppe, öffentlich,
+// Abstand, Einstellungen. Was ein Teil prüft und wann er zu sehen ist (z. B. erst mit Bot oder Mail-Server), entscheidet
+// der Prüfdienst (status/system.ts).
+const SYSTEM_COMPONENTS: Array<[string, string, string, number, number, Record<string, number>]> = [
+  ['web', 'Website', '', 1, 60, {}],
+  ['pages', 'Profile & code pages', '', 1, 60, {}],
+  ['domains', 'Custom domains', '', 1, 120, {}],
+  ['bot', 'Discord bot', '', 1, 60, {}],
+  ['mail', 'Email', '', 1, 600, {}],
+  ['db', 'Database', 'Infrastructure', 1, 60, {}],
+  ['tunnel', 'Cloudflare tunnel', 'Infrastructure', 1, 60, {}],
+  ['origin', 'Web server (internal)', 'Internal', 0, 60, {}],
+  ['disk', 'Disk space (internal)', 'Internal', 0, 60, {}],
+  ['job:backup', 'Nightly backup', 'Internal', 0, 60, { period: 86400, grace: 7200 }],
+  ['job:weekly', 'Weekly report', 'Internal', 0, 60, { period: 604800, grace: 21600 }],
+  ['job:runner', 'Background jobs', 'Internal', 0, 60, {}],
+  ['job:domains', 'Custom domain worker', 'Internal', 0, 60, {}],
+];
+
+// OnYourSites eigene Statusseite (status.<domain>) – einmalig. Die Adresse ist seit jeher als Subdomain verboten; liegt
+// trotzdem eine Seite darauf (Import), bleibt die Statusseite offline, bis das Team entscheidet. In das gemeinsame
+// Adressregister (site_addresses) kommt sie nur, wenn es die Tabelle schon gibt – sonst trägt sie dessen eigener
+// Schritt aus status_pages nach.
+// Seite und Bestandteile in EINER Transaktion: der Schritt überspringt die Seite, sobald es sie gibt – bräche er
+// dazwischen ab, fehlten die übrigen Bestandteile sonst für immer.
+async function seedSystemStatusPage(conn: PoolConnection): Promise<void> {
+  await conn.beginTransaction();
+  try {
+    await seedSystemStatusRows(conn);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback().catch(() => undefined);
+    throw err;
+  }
+}
+
+async function seedSystemStatusRows(conn: PoolConnection): Promise<void> {
+  if ((await rows(conn, 'SELECT id FROM status_pages WHERE is_system = 1 LIMIT 1')).length) return;
+  const clash = await rows(conn, "SELECT 'page' AS kind, id FROM pages WHERE slug IN ('status', 'health') UNION SELECT 'code', id FROM code_sites WHERE slug IN ('status', 'health')");
+  if (clash.length) {
+    console.error(`Status page: the address "status" or "health" is used by ${clash.map((c) => `${String(c.kind)} #${String(c.id)}`).join(', ')} – OnYourSite's status page stays offline until an admin decides.`);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const stamp = date('Y-m-d H:i:s');
+  const settings = '{"accent":"#6366f1","show_uptime":true,"history_days":14,"subscribe":true,"auto_incident":300,'
+    + '"alerts":{"owner":false,"admins":true,"events":["down","up","degraded","cert","heartbeat"]}}';
+  const page = await run(conn, `INSERT INTO status_pages (user_id, is_system, slug, title, description, theme, settings, is_published, changed_at, created_at, updated_at)
+    VALUES (NULL, 1, 'status', 'OnYourSite status', 'Live status of on-your.site, profile pages, code pages and our Discord bot.', 'deep-dark', ?, ?, ?, ?, ?)`,
+  [settings, clash.length ? 0 : 1, now, stamp, stamp]);
+  let position = 0;
+  for (const [key, name, group, isPublic, interval, config] of SYSTEM_COMPONENTS) {
+    await run(conn, `INSERT INTO status_monitors (page_id, user_id, type, name, group_name, position, is_public, target, config, interval_s, changed_at, created_at, updated_at)
+      VALUES (?, NULL, 'system', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [page.insertId, name, group, position++, isPublic, key, JSON.stringify(config), interval, now, stamp, stamp]);
+  }
+  if (await hasTable(conn, 'site_addresses')) {
+    // claimAddress(db, 'status', 'status', id, null) des Adressregisters: ohne Besitzer, ein vorhandener Eintrag bleibt
+    await run(conn, "INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at) VALUES ('status', 'status', ?, NULL, ?)", [page.insertId, stamp]);
+  }
+  await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('status_rev', '1')");
+}
+
+// V_SHOP_CORE (braucht die Tabellen aus V_PAGES und V_CODE_PAGES): Kern des Honigwaben-Shops. Das Buch bleibt die
+// einzige Quelle für Kontostände; dazu kommen je Konto eine Sperrzeile, die Berechtigungen (was ein Konto besitzt),
+// users.premium_until und das Protokoll der Admin-Aktionen. Bisherige Freischaltungen werden zu Berechtigungen.
+async function shopCore(conn: PoolConnection): Promise<void> {
+  // Wer eine Buchung ausgelöst hat (Admin-ID); NULL = Nutzer oder System
+  await addColumn(conn, 'honeycomb_ledger', 'actor_id', 'INT NULL');
+  await addIndex(conn, 'honeycomb_ledger', 'idx_reason_time', 'KEY idx_reason_time (reason, created_at)');
+  await addIndex(conn, 'honeycomb_ledger', 'idx_time', 'KEY idx_time (created_at)');
+  // Premium-Status für SQL-Verknüpfungen anderer Bereiche: NULL = keins, Datum = bis dahin,
+  // '9999-12-31 23:59:59' = dauerhaft (nie NULL für „dauerhaft“)
+  await addColumn(conn, 'users', 'premium_until', 'DATETIME NULL');
+  await addIndex(conn, 'users', 'idx_premium_until', 'KEY idx_premium_until (premium_until)');
+
+  // Eine Zeile je Konto: Sperrzeile für Buchungen, Sperre durch das Team, ausstehender Abgleich
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_accounts (
+        user_id INT NOT NULL PRIMARY KEY,
+        frozen_at DATETIME NULL,
+        frozen_reason VARCHAR(200) NULL,
+        reconcile_at DATETIME NULL,
+        reconcile_gen INT UNSIGNED NOT NULL DEFAULT 0,
+        reconcile_tries SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        reconcile_error VARCHAR(200) NOT NULL DEFAULT '',
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_reconcile (reconcile_at)
+    ) ${OPTS}`);
+  // Was ein Konto besitzt: je Funktion eine Zeile, bei stapelbaren Zeitpaketen eine je Paket (lot)
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_entitlements (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        lot TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        quantity INT UNSIGNED NOT NULL DEFAULT 1,
+        permanent TINYINT(1) NOT NULL DEFAULT 0,
+        expires_at DATETIME NULL,
+        source VARCHAR(10) NOT NULL DEFAULT 'purchase',
+        reminded TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        expiry_done_at DATETIME NULL,
+        note VARCHAR(200) NOT NULL DEFAULT '',
+        granted_by INT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_feature (user_id, feature, lot),
+        KEY idx_expiry (expires_at)
+    ) ${OPTS}`);
+  // Jede Admin-Aktion rund um Honigwaben – details nur mit IDs, Beträgen und Schlüsseln, nie Namen oder Notizen
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_audit (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        admin_id INT NOT NULL,
+        action VARCHAR(30) NOT NULL,
+        user_id INT NULL,
+        target VARCHAR(80) NOT NULL DEFAULT '',
+        details TEXT NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_time (created_at),
+        KEY idx_user (user_id, id)
+    ) ${OPTS}`);
+
+  const now = date('Y-m-d H:i:s');
+  await run(conn, 'INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) SELECT id, ?, ? FROM users', [now, now]);
+  // Alle bisherigen Freischaltungen (unlock/<Funktion>) werden dauerhafte Berechtigungen – Schlüssel genau in
+  // Kleinbuchstaben (BINARY: REGEXP folgt sonst der Sortierung und ignoriert Groß/klein)
+  await run(conn, `INSERT IGNORE INTO hc_entitlements (user_id, feature, lot, quantity, permanent, expires_at, source, note, created_at, updated_at)
+        SELECT l.user_id, l.ref, 0, 1, 1, NULL, IF(l.amount = 0, 'admin', 'legacy'), '', l.created_at, l.created_at
+        FROM honeycomb_ledger l WHERE l.reason = 'unlock' AND CAST(l.ref AS BINARY) REGEXP '^[a-z][a-z0-9_]{1,39}$'`);
+  // Sicherheitsnetz: wer schon eine Code-Seite hat, behält sie
+  await run(conn, `INSERT IGNORE INTO hc_entitlements (user_id, feature, lot, quantity, permanent, expires_at, source, note, created_at, updated_at)
+        SELECT s.user_id, 'code_page', 0, 1, 1, NULL, 'legacy', '', COALESCE(s.created_at, ?), ? FROM code_sites s`, [now, now]);
+  // Admin-Gutschriften: den Admin aus dem Bezug a<id>-<16 hex> übernehmen
+  await run(conn, `UPDATE honeycomb_ledger SET actor_id = CAST(SUBSTRING_INDEX(SUBSTRING(ref, 2), '-', 1) AS UNSIGNED)
+        WHERE reason = 'admin' AND actor_id IS NULL AND ref REGEXP '^a[0-9]{1,9}-[0-9a-f]{16}$'`);
+}
+
+// V_SHOP_CATALOGUE (braucht V_SHOP_CORE): Optionen mit Preisen (das Verhalten steht im Code der Bereiche), Rabatt-
+// aktionen und jeder Kauf. Die Standard-Optionen legt der Shop beim ersten Lesen des Katalogs an (seedItems), denn
+// welche es gibt, melden die Bereiche erst beim Start an.
+async function shopCatalogue(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        item_key VARCHAR(40) NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        days SMALLINT UNSIGNED NULL,
+        units SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+        price INT UNSIGNED NOT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 0,
+        position INT NOT NULL DEFAULT 0,
+        available_from DATETIME NULL,
+        available_until DATETIME NULL,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        min_active_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_item (item_key),
+        KEY idx_feature (feature, position)
+    ) ${OPTS}`);
+  // Rabattaktionen mit Start und Ende; uses sinkt bei Erstattungen nicht
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_offers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        label VARCHAR(60) NOT NULL,
+        scope VARCHAR(60) NOT NULL,
+        percent_off TINYINT UNSIGNED NULL,
+        fixed_price INT UNSIGNED NULL,
+        starts_at DATETIME NOT NULL,
+        ends_at DATETIME NOT NULL,
+        max_uses INT UNSIGNED NULL,
+        uses INT UNSIGNED NOT NULL DEFAULT 0,
+        per_user_max SMALLINT UNSIGNED NULL,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        min_active_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        cancelled_at DATETIME NULL,
+        form_ref CHAR(16) NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_form (created_by, form_ref),
+        KEY idx_window (ends_at, starts_at)
+    ) ${OPTS}`);
+  // Jeder Kauf, unveränderlich bis auf die Erstattung (und das Verschieben späterer Zeiträume bei einer Erstattung)
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_purchases (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        request_id VARCHAR(40) NOT NULL,
+        item_key VARCHAR(40) NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        lot TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        units SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+        days SMALLINT UNSIGNED NULL,
+        list_price INT UNSIGNED NOT NULL,
+        price INT UNSIGNED NOT NULL,
+        offer_id INT NULL,
+        ledger_id INT NOT NULL,
+        via VARCHAR(10) NOT NULL DEFAULT 'shop',
+        period_start DATETIME NULL,
+        period_end DATETIME NULL,
+        refunded_at DATETIME NULL,
+        refund_amount INT UNSIGNED NULL,
+        refund_units SMALLINT UNSIGNED NULL,
+        refund_cut_sec INT UNSIGNED NULL,
+        refund_removed TINYINT(1) NULL,
+        refunded_by INT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_request (user_id, request_id),
+        KEY idx_user (user_id, id),
+        KEY idx_lot (user_id, feature, lot, period_start),
+        KEY idx_item_time (item_key, created_at),
+        KEY idx_offer (offer_id, user_id),
+        KEY idx_time (created_at)
+    ) ${OPTS}`);
+}
+
+// V_BRANDING_LEGACY (braucht V_PAGES und V_SHOP_CORE: users.premium_until): Bestandsschutz (Q9). Wer „Made with
+// OnYourSite“ heute ohne Premium ausblendet – mit dem alten Schalter oder mit eigenem CSS, das ihn ausblendet –, behält
+// das: hide_branding und branding_legacy, bis der Besitzer den Schalter ausschaltet. Seiten von Admins und von
+// Besitzern mit Premium bleiben, wie sie sind (endet deren Premium, kommt der Hinweis zurück). Nur Daten, kein DDL.
+// Gelesen mit dem JSON-Decoder von PHP, geschrieben wie beim Speichern; jede Seite einzeln per Compare-and-set (eine
+// Seite, die gerade jemand speichert, wird neu gelesen).
+async function brandingLegacy(conn: PoolConnection): Promise<void> {
+  const now = date('Y-m-d H:i:s');
+  const base = strtolower(configString('base_domain', '')).split(':')[0];
+  let after = 0;
+  for (;;) {
+    const batch = await rows(conn, `SELECT p.id FROM pages p JOIN users u ON u.id = p.user_id
+        WHERE p.id > ? AND u.is_admin = 0 AND (u.premium_until IS NULL OR u.premium_until <= ?) ORDER BY p.id LIMIT 500`, [after, now]);
+    if (!batch.length) break;
+    for (const { id } of batch) {
+      after = intval(id);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await rows(conn, 'SELECT settings FROM pages WHERE id = ?', [after]);
+        if (!r.length) break;
+        const raw = phpStr(r[0].settings ?? '');
+        const settings = jsonDecode(raw);
+        // Nur Objekte haben Schlüssel (eine leere Liste [] hat nichts auszublenden)
+        if (!isArr(settings) || Array.isArray(settings) || phpTruthy(own(settings, 'branding_legacy'))) break;
+        const stored = phpTruthy(own(settings, 'hide_branding'));
+        if (!stored && !cssHides(cleanCss(phpStr(own(settings, 'custom_css') ?? '')), base)) break;
+        const s = settings as Record<string, unknown>;
+        if (!stored) s.hide_branding = true;
+        s.branding_legacy = true;
+        const res = await run(conn, 'UPDATE pages SET settings = ? WHERE id = ? AND BINARY settings = ?', [phpJson(s, { unescapedUnicode: true }), after, raw]);
+        if (res.affectedRows > 0) break;
+      }
+    }
+  }
+}
+
 type Seed = [string | null, string, string, string, string];
 const UPDATE_SEEDS: Seed[] = [
   ['2026-10-27 18:00:00', '2.0', 'new', 'OnYourSite 2.0 – rebuilt from the ground up',
@@ -706,5 +1340,109 @@ async function migrateLegacyUsers(conn: PoolConnection): Promise<void> {
       await conn.rollback().catch(() => undefined);
       console.error(`Migration for user #${phpStr(user.id)} failed: ${(err as Error).message}`);
     }
+  }
+}
+
+// V_DISCORD_DELIVERY (braucht V_UPDATES und V_COMMUNITY): je Update und Ziel eine Zeile für seinen Beitrag in Discord
+// (bot, webhook oder token = alter Bot-Token), Aufträge an den Bot mit ref (Reihenfolge), Pause nach Fehlern und
+// Abholzeit, die Discord-Einstellungen in Form v2 (ohne Kopie der alten Form) und die schon geposteten Updates als
+// Zeilen. updates.discord_message_id/discord_target bleiben stehen und werden nur hier gelesen.
+async function discordDelivery(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS update_discord_posts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        update_id INT NOT NULL,
+        via VARCHAR(10) NOT NULL,
+        target VARCHAR(80) NOT NULL,
+        kind VARCHAR(12) NOT NULL DEFAULT 'message',
+        channel_id VARCHAR(22) NULL,
+        message_id VARCHAR(22) NULL,
+        state VARCHAR(16) NOT NULL DEFAULT 'queued',
+        dirty TINYINT(1) NOT NULL DEFAULT 0,
+        legacy TINYINT(1) NOT NULL DEFAULT 0,
+        error VARCHAR(300) NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_update_via (update_id, via),
+        KEY idx_state (state, updated_at)
+    ) ${OPTS}`);
+  await addColumn(conn, 'community_outbox', 'ref', 'VARCHAR(40) NULL');
+  await addColumn(conn, 'community_outbox', 'next_try_at', 'DATETIME NULL');
+  await addColumn(conn, 'community_outbox', 'claimed_at', 'DATETIME NULL');
+  await addIndex(conn, 'community_outbox', 'idx_ref', 'KEY idx_ref (ref, done_at)');
+
+  // Einstellungen v1 → v2. Ein falscher Schlüssel oder kaputter Wert: nichts speichern (es gelten die Vorgaben).
+  const meta = await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'discord'");
+  let tokenStored = false;
+  if (meta.length) {
+    const data = decodeStored(phpStr(meta[0].meta_value));
+    if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+      if ((data as Record<string, unknown>).v === 2) {
+        tokenStored = phpStr((data as Record<string, unknown>).bot_token ?? '') !== '';
+      } else {
+        const v2 = discordSettingsFromV1(normalizeV1(data));
+        tokenStored = v2.bot_token !== '';
+        await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', ?)", [encodeSettings(v2)]);
+      }
+    }
+  }
+  await convertLegacyPosts(conn, { tokenStored, botInstalled: botSecret() !== '' });
+}
+
+// Schon gepostete Updates (Spalten in updates) als Zeilen – wiederholbar (INSERT IGNORE)
+export async function convertLegacyPosts(conn: PoolConnection, opts: { tokenStored: boolean; botInstalled: boolean }): Promise<number> {
+  const now = date('Y-m-d H:i:s');
+  let added = 0;
+  const posted = await rows(conn, "SELECT id, discord_message_id, discord_target FROM updates WHERE discord_message_id IS NOT NULL AND discord_message_id <> '' AND discord_target IS NOT NULL ORDER BY id");
+  for (const u of posted) {
+    const messageId = phpStr(u.discord_message_id);
+    const p = legacyPostRow(phpStr(u.discord_target), messageId, opts);
+    if (!p) continue;
+    const res = await run(conn, `INSERT IGNORE INTO update_discord_posts (update_id, via, target, kind, channel_id, message_id, state, legacy, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?)`, [u.id, p.via, p.target, p.kind, p.channel_id, messageId.slice(0, 22), p.legacy, now, now]);
+    added += res.affectedRows;
+  }
+  return added;
+}
+
+// V_PUBLIC_PAGES (braucht V_COMMUNITY und V_NOTIFICATIONS_INDEX): für die öffentliche Vorschlagsseite je Vorschlag, ob
+// das Team ihn zeigt oder verbirgt (web_state), ob der Bot dem Autor im Beitrag gesagt hat, dass er auf der Webseite
+// erscheinen kann (web_notice – bei allen bisherigen 0, so erscheint keiner von selbst), und ob der Beitrag in Discord
+// gelöscht ist (removed_at). Dazu wird „suggestions“ eine Adresse der Hauptseite (reserveSuggestions).
+async function publicPages(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'community_suggestions', 'web_state', "VARCHAR(8) NOT NULL DEFAULT 'auto'");
+  await addColumn(conn, 'community_suggestions', 'web_notice', 'TINYINT(1) NOT NULL DEFAULT 0');
+  await addColumn(conn, 'community_suggestions', 'removed_at', 'DATETIME NULL');
+  await addIndex(conn, 'community_suggestions', 'idx_web', 'KEY idx_web (removed_at, web_state, status, id)');
+  await reserveSuggestions(conn);
+}
+
+// {base}/suggestions gehört jetzt der Vorschlagsseite: Link-Seiten mit diesem Namen im Pfad-Modus ziehen auf ihre
+// Subdomain um; ihre Besitzer und die einer Code-Seite mit diesem Namen (deren Kurzlink {base}/suggestions endet)
+// bekommen vorher eine Nachricht. Alles in einer Transaktion; die Markierung reserved_suggestions lässt es nur einmal
+// laufen (auch wenn ein früherer Lauf nach den Spalten abbrach).
+export async function reserveSuggestions(conn: PoolConnection): Promise<void> {
+  await conn.beginTransaction();
+  try {
+    if ((await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'reserved_suggestions'")).length) {
+      await conn.commit();
+      return;
+    }
+    const base = baseAuthority();
+    for (const r of await rows(conn, "SELECT DISTINCT user_id FROM pages WHERE slug = 'suggestions' AND address_mode = 'path' ORDER BY user_id")) {
+      await notify(intval(r.user_id), 'system', 'Your page address changed',
+        `${base}/suggestions now opens OnYourSite’s suggestions page. Your page stays at suggestions.${base} – please update links and printed QR codes that use the old address.`,
+        '/dashboard', { db: conn });
+    }
+    for (const r of await rows(conn, "SELECT DISTINCT user_id FROM code_sites WHERE slug = 'suggestions' ORDER BY user_id")) {
+      await notify(intval(r.user_id), 'system', 'A short link to your code page changed',
+        `${base}/suggestions no longer forwards to your code page – it now opens OnYourSite’s suggestions page. Your code page stays at suggestions.${base}.`,
+        '/dashboard', { db: conn });
+    }
+    await run(conn, "UPDATE pages SET address_mode = 'subdomain' WHERE slug = 'suggestions' AND address_mode = 'path'");
+    await run(conn, "INSERT INTO oys_meta (meta_key, meta_value) VALUES ('reserved_suggestions', ?)", [date('Y-m-d H:i:s')]);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   }
 }

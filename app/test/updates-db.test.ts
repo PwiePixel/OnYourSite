@@ -2,12 +2,15 @@
 // Node – jeweils vom selben Ausgangsstand. Verglichen werden die Ergebnisse, alle Tabellen (Discord-Einstellungen
 // entschlüsselt), die Aufrufe bei der Discord-Attrappe (Methode, Pfad, Authorization, User-Agent, JSON) und das HTML
 // der Seiten. Die Attrappe startet der Test selbst; mit OYS_DISCORD_MOCK=http://127.0.0.1:PORT läuft er stattdessen
-// gegen eine schon laufende (z. B. discord_mock.py mit /__restart).
+// gegen eine schon laufende (z. B. discord_mock.py mit /__restart). Die PHP-Seite kommt aus der PHP-Version
+// (support/phpRef.ts); ohne OYS_PHP_REF prüft nur der erste Test die Node-Seite allein.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { ROOT_DIR, setConfigForTests, type ConfigData } from '../src/config.js';
-import { exec } from '../src/db.js';
+import type { RowDataPacket } from 'mysql2/promise';
+import { setConfigForTests, type ConfigData } from '../src/config.js';
+import { exec, withConnection } from '../src/db.js';
+import { convertLegacyPosts } from '../src/schema.js';
 import { date, time } from '../src/php.js';
 import { Ctx } from '../src/web/ctx.js';
 import { adminUpdatesHandle } from '../src/updates/admin.js';
@@ -19,6 +22,8 @@ import { startDiscordStandIn, GOOD_TOKEN, type StandIn } from './fixtures/update
 import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type TestEnv } from './fixtures/updates/harness.js';
 import { random } from './fixtures/updates/random.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { PHP_SKIP, phpFile } from './support/phpRef.js';
+import { withoutDiscordChips } from './support/discordParity.js';
 
 let env: TestEnv;
 let standIn: StandIn | null = null;
@@ -100,6 +105,43 @@ function bigFixture(): Record<string, Array<Record<string, unknown>>> {
   return f;
 }
 
+// Node liest Beiträge nur noch aus update_discord_posts: die Spalten des Ausgangsstands übernehmen, wie es der Schritt
+// V_DISCORD_DELIVERY tut. Beiträge des alten Tokens bleiben beim Token – ohne gespeicherten Token sind sie dann wie in
+// PHP „nicht verbunden“ bzw. „über ein anderes Ziel gepostet“.
+async function convertForNode(): Promise<void> {
+  await withConnection((_db, conn) => convertLegacyPosts(conn, { tokenStored: true, botInstalled: true }));
+}
+
+// Wo jedes Update in Discord steht – PHP: Spalten in updates, Node: update_discord_posts (je Update der Beitrag des
+// Webhooks vor dem des Tokens), als gespeichertes Ziel der alten Form
+async function discordState(side: 'php' | 'node'): Promise<string> {
+  if (side === 'php') {
+    const [rows] = await env.admin.query<RowDataPacket[]>(`SELECT id, discord_message_id AS m, discord_target AS t FROM \`${env.db}\`.updates WHERE discord_message_id IS NOT NULL ORDER BY id`);
+    return JSON.stringify(rows.map((r) => [r.id, r.m, r.t]));
+  }
+  const [rows] = await env.admin.query<RowDataPacket[]>(`SELECT p.update_id, p.message_id, p.via, p.target, p.kind, p.channel_id FROM \`${env.db}\`.update_discord_posts p
+    JOIN \`${env.db}\`.updates u ON u.id = p.update_id WHERE p.state = 'posted' ORDER BY p.update_id, FIELD(p.via, 'webhook', 'token', 'bot')`);
+  const seen = new Set<number>();
+  const out: unknown[] = [];
+  for (const r of rows) {
+    if (seen.has(r.update_id)) continue;
+    seen.add(r.update_id);
+    const target = r.via === 'webhook' ? r.target + (r.kind !== 'message' ? ':' + r.channel_id : '') : r.via === 'token' ? r.target : 'bot:' + r.channel_id;
+    out.push([r.update_id, r.message_id, target]);
+  }
+  return JSON.stringify(out);
+}
+
+// Die alten Spalten schreibt Node nicht mehr – im Vergleich der Tabellen zählen sie nicht (discordState vergleicht sie)
+function withoutDiscordColumns(snap: string): string {
+  const data = JSON.parse(snap) as { updates: Array<Record<string, unknown>> };
+  for (const u of data.updates) {
+    delete u.discord_message_id;
+    delete u.discord_target;
+  }
+  return JSON.stringify(data, null, 1);
+}
+
 async function runSteps(side: 'php' | 'node', steps: Step[], base: string): Promise<unknown[]> {
   if (side === 'php') {
     return (await env.php(`$out = [];
@@ -148,6 +190,7 @@ async function same(steps: Step[], opts: { fixture?: () => Record<string, Array<
   const runs: Record<string, { results: string; log: string; snap: string; raw: unknown[]; rawLog: unknown[] }> = {};
   for (const side of ['php', 'node'] as const) {
     await loadFixture(env, (opts.fixture ?? fixture)());
+    if (side === 'node') await convertForNode();
     await fetch(mockRoot + '/__restart');
     const from = time();
     const raw = await runSteps(side, steps, base);
@@ -156,7 +199,7 @@ async function same(steps: Step[], opts: { fixture?: () => Record<string, Array<
     runs[side] = {
       results: normalizeNow(JSON.stringify(raw, null, 1), from, to),
       log: normalizeNow(JSON.stringify(rawLog, null, 1), from, to),
-      snap: normalizeNow(await snapshot(env), from, to),
+      snap: normalizeNow(withoutDiscordColumns(await snapshot(env)) + '\n' + (await discordState(side)), from, to),
       raw,
       rawLog,
     };
@@ -194,7 +237,50 @@ after(async () => {
   await standIn?.close();
 });
 
-test('updates: saving, dates, versions and validation like PHP', async () => {
+// Nur Node, vom selben Ausgangsstand (Beiträge wie in same() nach update_discord_posts übernommen): Ergebnisse und
+// Aufrufe bei der Discord-Attrappe
+async function nodeOnly(steps: Step[]): Promise<{ results: unknown[]; log: Array<{ method: string; path: string; body: unknown }> }> {
+  await loadFixture(env, fixture());
+  await convertForNode();
+  await fetch(mockRoot + '/__restart');
+  const results = await runSteps('node', steps, apiBase);
+  return { results, log: (await (await fetch(mockRoot + '/__log')).json()) as Array<{ method: string; path: string; body: unknown }> };
+}
+
+test('updates, the roadmap and the Discord webhook work in Node on their own', async () => {
+  const { results, log } = await nodeOnly([
+    // Die Discord-Formulare prüft discord-admin.test.ts – hier nur der gespeicherte Webhook
+    discordSetup({ webhook_url: hook('123456'), username: 'OnYourSite Updates' }),
+    post('update_save', { title: 'New thing', body: '**x**', version: 'v2.5', category: 'new', publish: '1', announce_field: '1', post_discord: '1', date: TODAY, date_default: TODAY }),
+    post('update_save', { id: '9', title: 'New thing, edited', body: 'changed', publish: '1', announce_field: '1', date: TODAY, date_default: TODAY }),
+    call('oys_update_get', 9),
+    post('update_delete', { id: '9' }),
+    call('oys_update_get', 9),
+    post('milestone_save', { title: 'Next big thing', status: 'next', tasks: 'One\n[x] Two' }),
+    call('oys_milestones', false),
+  ]);
+  const r = results as Array<{ r: unknown }>;
+  assert.deepEqual(r[0], { r: null });
+  assert.deepEqual(r[1], { r: { tab: 'updates', ok: 'Update published. It was posted to Discord.' } });
+  assert.deepEqual(r[2], { r: { tab: 'updates', ok: 'Update published. The Discord post was updated too.' } });
+  // Wo der Beitrag steht, merkt sich Node in update_discord_posts (nicht mehr in updates): Bearbeiten und Löschen
+  // treffen dieselbe Nachricht (Aufrufe unten)
+  const saved = r[3].r as Fields;
+  assert.deepEqual([saved.title, saved.body, saved.is_published], ['New thing, edited', 'changed', true]);
+  assert.deepEqual(r.slice(4, 7), [{ r: { tab: 'updates', ok: 'Update deleted.' } }, { r: null }, { r: { tab: 'roadmap', ok: 'Milestone added.' } }]);
+  const added = (r[7].r as Array<{ title: string; tasks: Array<{ title: string; is_done: boolean }>; progress: unknown }>).find((m) => m.title === 'Next big thing');
+  assert.deepEqual(added?.tasks.map((t) => [t.title, t.is_done]), [['One', false], ['Two', true]]);
+  assert.deepEqual(added?.progress, { done: 1, total: 2, percent: 50 });
+  // Discord: neu, bearbeitet, gelöscht – über denselben Webhook, dieselbe Nachricht
+  const path = new URL(hook('123456')).pathname.replace('/api/', '/api/v10/');
+  assert.deepEqual(log.map((l) => [l.method, l.path]), [['POST', path + '?wait=true'], ['PATCH', path + '/messages/1300000000000000001'],
+    ['DELETE', path + '/messages/1300000000000000001']]);
+  const sent = log[0].body as { username?: string; embeds?: Array<{ title?: string }> };
+  assert.equal(sent.username, 'OnYourSite Updates');
+  assert.match(String(sent.embeds?.[0]?.title), /New thing/);
+});
+
+test('updates: saving, dates, versions and validation like PHP', { skip: PHP_SKIP }, async () => {
   const { results } = await same([
     post('update_save', { title: '' }),
     post('update_save', { id: '1', title: '   ' }),
@@ -226,7 +312,7 @@ test('updates: saving, dates, versions and validation like PHP', async () => {
   assert.deepEqual(results[15], { throw: 'TypeError' });
 });
 
-test('updates: publishing, drafts and deleting without Discord like PHP', async () => {
+test('updates: publishing, drafts and deleting without Discord like PHP', { skip: PHP_SKIP }, async () => {
   await same([
     post('update_publish', { id: '3', state: '1' }),
     post('update_publish', { id: '1', state: '' }),
@@ -247,7 +333,7 @@ test('updates: publishing, drafts and deleting without Discord like PHP', async 
   ]);
 });
 
-test('roadmap: milestones and tasks like PHP', async () => {
+test('roadmap: milestones and tasks like PHP', { skip: PHP_SKIP }, async () => {
   const tasks = 'Design the page\r\n- [x] Done thing\n* [ ] open\n\u{2022} [X] bullet done\n[] empty box\nPolish \u{105} task\n\u{C5}ngstr\u{F6}m\nnormal\x0Bvt\n   \n'
     + 'x'.repeat(250) + '\n\u{2028}sep\n\t[x]\ttabbed\n';
   await same([
@@ -299,7 +385,7 @@ test('roadmap: milestones and tasks like PHP', async () => {
   ]);
 });
 
-test('reading updates, pages and permalinks like PHP', async () => {
+test('reading updates, pages and permalinks like PHP', { skip: PHP_SKIP }, async () => {
   const ids = [...Array(50).keys()];
   await same([
     ...ids.map((id) => call('oys_update_page_of', id)),
@@ -309,7 +395,7 @@ test('reading updates, pages and permalinks like PHP', async () => {
   ], { fixture: bigFixture });
 });
 
-test('Discord webhook: announce, sync and remove send the same requests as PHP', async () => {
+test('Discord webhook: announce, sync and remove send the same requests as PHP', { skip: PHP_SKIP }, async () => {
   const { log } = await same([
     discordSetup({ webhook_url: hook('123456'), username: 'OnYourSite Updates', avatar_url: 'https://x.y/logo.png', mention: 'everyone', invite_url: 'https://discord.gg/abc' }),
     post('update_save', { title: 'New thing', body: '**x** and [docs](/updates#roadmap)\n- one', version: 'v2.5', category: 'new', publish: '1', announce_field: '1', post_discord: '1', date: TODAY, date_default: TODAY }),
@@ -338,7 +424,7 @@ test('Discord webhook: announce, sync and remove send the same requests as PHP',
 // Zufällige Folgen von Admin-Aktionen mit Grenzwerten in allen Feldern (leer, Leerraum, Zahlen als Text, Arrays,
 // Unicode, Daten, feindliche Adressen) mit einem Webhook – Ergebnis, Tabellen und Aufrufe bei Discord wie in PHP.
 // Discord-Formulare und Fehler von Discord sind seit der Reparatur bewusst anders (discord-admin.test.ts).
-test('random admin action sequences behave like PHP', async () => {
+test('random admin action sequences behave like PHP', { skip: PHP_SKIP }, async () => {
   const rnd = random(20261102);
   const pick = <T>(list: readonly T[]): T => list[rnd(list.length)];
   const texts = ['', ' ', '0', '1', 'yes', 'abc', '  padded  ', '\u{E4}\u{F6}\u{FC}', '\u{1F41D} bee', '<b>&"\'', 'a\r\nb\r\n\r\n\r\nc', '\u{202E}rtl\u{2066}',
@@ -386,9 +472,16 @@ test('random admin action sequences behave like PHP', async () => {
     }
     return post(action, f);
   };
+  // Beiträge des alten Tokens gibt es hier nicht: Node behandelt sie bewusst anders (sie bleiben beim Token bzw. gehen an
+  // den installierten Bot – discord-admin.test.ts), PHP vergisst sie neben einem Webhook
+  const webhookOnly = () => {
+    const f = fixture();
+    for (const u of f.updates) if (String(u.discord_target ?? '').startsWith('bot:')) Object.assign(u, { discord_message_id: null, discord_target: null });
+    return f;
+  };
   for (let run = 0; run < 4; run++) {
     const steps = [discordSetup({ webhook_url: hook('123456') }), ...Array.from({ length: 45 }, step)];
-    await same(steps);
+    await same(steps, { fixture: webhookOnly });
   }
 });
 
@@ -408,7 +501,7 @@ function beforeDiscordTab(html: string): string {
   return html.slice(0, html.indexOf(DISCORD_TAB)).replace('<a href="/updates#roadmap" target="_blank"', '<a href="/roadmap" target="_blank"');
 }
 
-test('admin view: the HTML of admin_updates.php for every state (Updates and Roadmap)', async () => {
+test('admin view: the HTML of admin_updates.php for every state (Updates and Roadmap)', { skip: PHP_SKIP }, async () => {
   const csrf = 'c'.repeat(64);
   const variants: Array<{ get: Record<string, string>; setup: Step[] }> = [
     { get: {}, setup: [] },
@@ -427,8 +520,9 @@ test('admin view: the HTML of admin_updates.php for every state (Updates and Roa
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, fixture());
       await runSteps(side, v.setup, apiBase);
+      if (side === 'node') await convertForNode();
       if (side === 'php') {
-        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${phpFile('views/admin_updates.php')}'; return ob_get_clean();`,
           { get: v.get, csrf })) as string;
       } else {
         const query = new URLSearchParams(v.get).toString();
@@ -437,7 +531,7 @@ test('admin view: the HTML of admin_updates.php for every state (Updates and Roa
         await ctx.session?.close();
       }
     }
-    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), JSON.stringify(v.get));
+    assert.equal(withoutDialogs(withoutDiscordChips(beforeDiscordTab(html.node))), withoutNativeConfirms(beforeDiscordTab(html.php)), JSON.stringify(v.get));
   }
 });
 
@@ -467,7 +561,7 @@ async function nodeRoadmap(user: unknown): Promise<string> {
   return String(ctx.body);
 }
 
-test('public pages: the changelog, the roadmap columns, the feed and permalinks render the same HTML as PHP', async () => {
+test('public pages: the changelog, the roadmap columns, the feed and permalinks render the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   const user = { id: 5, email: 'mia@test.de', full_name: 'Mia', is_admin: 0 };
   const cases: Array<{ url: string; user: unknown; fixture: () => Record<string, Array<Record<string, unknown>>>; setup?: Step[] }> = [
     { url: '/updates', user: null, fixture },
@@ -492,7 +586,7 @@ test('public pages: the changelog, the roadmap columns, the feed and permalinks 
       await runSteps(side, c.setup ?? [], apiBase);
       const get = Object.fromEntries(new URLSearchParams(c.url.split('?')[1] ?? ''));
       if (side === 'php') {
-        html.php = (await env.php(`$user_data = $in['user']; $_GET = $in['get']; ob_start(); require '${ROOT_DIR}/views/updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$user_data = $in['user']; $_GET = $in['get']; ob_start(); require '${phpFile('views/updates.php')}'; return ob_get_clean();`,
           { user: c.user, get: c.url.includes('page[]') ? { page: ['3'] } : get })) as string;
       } else {
         const ctx = new Ctx({ method: 'GET', url: c.url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
@@ -510,7 +604,7 @@ test('public pages: the changelog, the roadmap columns, the feed and permalinks 
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, f());
       if (side === 'php') {
-        xml.php = (await env.php(`ob_start(); require '${ROOT_DIR}/views/updates_feed.php'; return ob_get_clean();`)) as string;
+        xml.php = (await env.php(`ob_start(); require '${phpFile('views/updates_feed.php')}'; return ob_get_clean();`)) as string;
       } else {
         const ctx = new Ctx({ method: 'GET', url: '/updates/feed.xml', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
         await updatesFeed(ctx);
@@ -573,7 +667,7 @@ function randomData(rnd: (n: number) => number, discord = false): Record<string,
   return { milestones, milestone_tasks: tasks, updates };
 }
 
-test('random data: the changelog, the roadmap columns and the feed render the same HTML as PHP', async () => {
+test('random data: the changelog, the roadmap columns and the feed render the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   const rnd = random(77001);
   for (let round = 0; round < 6; round++) {
     const rows = randomData(rnd);
@@ -587,8 +681,8 @@ test('random data: the changelog, the roadmap columns and the feed render the sa
         await loadFixture(env, data());
         const feed = url.endsWith('.xml');
         if (side === 'php') {
-          out.php = (await env.php(feed ? `ob_start(); require '${ROOT_DIR}/views/updates_feed.php'; return ob_get_clean();`
-            : `$user_data = null; $_GET = $in; ob_start(); require '${ROOT_DIR}/views/updates.php'; return ob_get_clean();`,
+          out.php = (await env.php(feed ? `ob_start(); require '${phpFile('views/updates_feed.php')}'; return ob_get_clean();`
+            : `$user_data = null; $_GET = $in; ob_start(); require '${phpFile('views/updates.php')}'; return ob_get_clean();`,
           Object.fromEntries(new URLSearchParams(url.split('?')[1] ?? '')))) as string;
         } else {
           const ctx = new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
@@ -614,7 +708,7 @@ test('random data: the changelog, the roadmap columns and the feed render the sa
 
 // Die Admin-Ansicht auf zufälligen Daten: Formulare zum Bearbeiten, Vorbefüllen aus einem Meilenstein, alle Spalten und
 // alle Discord-Zustände (nicht verbunden, Webhook, Bot, Bot ohne Kanal) – wie admin_updates.php
-test('random data: the admin view renders the same HTML as PHP (Updates and Roadmap)', async () => {
+test('random data: the admin view renders the same HTML as PHP (Updates and Roadmap)', { skip: PHP_SKIP }, async () => {
   const rnd = random(99017);
   const csrf = 'd'.repeat(64);
   const discordSetups: Step[][] = [
@@ -636,8 +730,9 @@ test('random data: the admin view renders the same HTML as PHP (Updates and Road
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, structuredClone(rows));
       await runSteps(side, setup, apiBase);
+      if (side === 'node') await convertForNode();
       if (side === 'php') {
-        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
+        html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${phpFile('views/admin_updates.php')}'; return ob_get_clean();`,
           { get, csrf })) as string;
       } else {
         const query = Object.entries(get).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
@@ -646,6 +741,6 @@ test('random data: the admin view renders the same HTML as PHP (Updates and Road
         await ctx.session?.close();
       }
     }
-    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), `round ${round} ${JSON.stringify(get)}`);
+    assert.equal(withoutDialogs(withoutDiscordChips(beforeDiscordTab(html.node))), withoutNativeConfirms(beforeDiscordTab(html.php)), `round ${round} ${JSON.stringify(get)}`);
   }
 });

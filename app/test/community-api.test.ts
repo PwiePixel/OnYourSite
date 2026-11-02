@@ -1,20 +1,19 @@
 // Bot-Schnittstelle /_/bot/… über HTTP: PHP (index.php im eingebauten Server, aus einer unveränderten Kopie der
-// PHP-Dateien mit eigener Test-Datenbank) gegen den ganzen Node-Server (Fastify, ohne Netz). Verglichen werden Status,
-// die wichtigen Kopfzeilen, der Inhalt und die Community-Tabellen. Dazu: viele gleichzeitige Anfragen (Sperre und
-// Datenbank-Verbindungen) und Feldnamen wie __proto__ in Adresse und Formular.
+// PHP-Version mit eigener Test-Datenbank, siehe support/phpRef.ts) gegen den ganzen Node-Server (Fastify, ohne Netz).
+// Verglichen werden Status, die wichtigen Kopfzeilen, der Inhalt und die Community-Tabellen. Dazu: viele gleichzeitige
+// Anfragen (Sperre und Datenbank-Verbindungen) und Feldnamen wie __proto__ in Adresse und Formular.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import type { FastifyInstance } from 'fastify';
-import { ROOT_DIR, loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { decrypt } from '../src/crypto.js';
 import { parseStr, strtotime, time } from '../src/php.js';
@@ -26,6 +25,9 @@ import { communitySeal } from '../src/community/community.js';
 import { adminCommunityHandle } from '../src/community/admin.js';
 import { adminCommunityView } from '../src/community/adminView.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { withoutPublicPage, withoutWeb } from './support/suggestionsParity.js';
+import { PHP_SKIP, phpRef, phpTree as phpCodeTree, removePhpTree } from './support/phpRef.js';
+import { withoutBotExtra } from './support/discordParity.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung)
@@ -43,19 +45,14 @@ let started = 0;
 
 // ---------------------------------------------------------------- PHP
 
-// Unveränderte Kopie der PHP-Dateien; config.php lädt die echte und setzt die Test-Datenbank (configExtra: weitere
-// Änderungen an $c, z. B. ohne bot_secret)
-function phpTree(configExtra = ''): string {
-  const root = mkdtempSync(join(tmpdir(), 'oys-capi-'));
-  for (const dir of ['lib', 'views', 'PHPMailer', 'email']) cpSync(join(ROOT_DIR, dir), join(root, dir), { recursive: true });
-  for (const f of readdirSync(ROOT_DIR)) {
-    if (f.endsWith('.php') && f !== 'config.php' && f !== 'config.example.php') cpSync(join(ROOT_DIR, f), join(root, f));
-  }
+// Unveränderte Kopie der PHP-Version mit den Einstellungen der Tests (Test-Datenbank, ohne Fehleranzeige); config:
+// andere Einstellungen, z. B. ohne bot_secret
+const PHP_CONFIG: ConfigData = { ...TEST_CONFIG, debug: false };
+function phpTree(config = PHP_CONFIG): string {
+  const root = phpCodeTree(config);
   for (const file of ['index.php', 'lib/community.php', 'lib/routes_public.php', 'lib/helpers.php']) {
-    assert.equal(readFileSync(join(root, file), 'utf8'), readFileSync(join(ROOT_DIR, file), 'utf8'));
+    assert.equal(readFileSync(join(root, file), 'utf8'), readFileSync(phpRef(file), 'utf8'));
   }
-  mkdirSync(join(root, 'static', 'uploads'), { recursive: true });
-  writeFileSync(join(root, 'config.php'), `<?php $c = require ${JSON.stringify(join(ROOT_DIR, 'config.php'))}; $c['db']['name'] = ${JSON.stringify(DB)}; $c['debug'] = false; ${configExtra} return $c;\n`);
   // Wie der Router der Entwicklung: alles geht an index.php
   writeFileSync(join(root, 'router.php'), `<?php chdir(__DIR__); $_SERVER['SCRIPT_NAME'] = '/index.php'; require __DIR__ . '/index.php';\n`);
   // Einzelne Funktionen mit der Datenbank der Seite (lib/bootstrap.php) aufrufen
@@ -99,8 +96,8 @@ interface PhpServer {
 }
 
 // PHP-Server auf einer freien Adresse; mehrere Arbeitsprozesse, damit auch PHP gleichzeitige Anfragen gleichzeitig bearbeitet
-async function startPhp(configExtra = ''): Promise<PhpServer> {
-  const root = phpTree(configExtra);
+async function startPhp(config = PHP_CONFIG): Promise<PhpServer> {
+  const root = phpTree(config);
   const port = await freePort();
   const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', root, join(root, 'router.php')], {
     cwd: root, env: { ...process.env, PHP_CLI_SERVER_WORKERS: '4' }, stdio: 'ignore', detached: true,
@@ -116,7 +113,7 @@ function stopPhp(server: PhpServer | null): void {
   } catch {
     server.proc.kill('SIGTERM');
   }
-  rmSync(server.root, { recursive: true, force: true });
+  removePhpTree(server.root);
 }
 
 function runPhp(code: string, input: Record<string, unknown> = {}): Promise<any> {
@@ -202,7 +199,8 @@ async function sendNode(r: Req, secret = SECRET): Promise<Res> {
 
 // Zeitpunkte dieser Anfrage („jetzt“) und /ping-Uhrzeit vereinheitlichen
 function normalizeBody(text: string): string {
-  return text
+  // Der Vorschlag trägt in Node zusätzlich web (eigener Test in suggestions-db.test.ts)
+  return withoutWeb(text)
     .replace(/"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"/g, (m, v: string) => {
       const at = strtotime(v);
       return at !== false && at >= started - 5 && at <= time() + 5 ? '"NOW"' : m;
@@ -246,10 +244,16 @@ async function fixtures(): Promise<void> {
 }
 
 // Inhalt der Community-Tabellen: verschlüsselte Texte entschlüsselt, Zeitpunkte von „jetzt“ vereinheitlicht
+// Reihenfolge (ref), Pause und Abholzeit der Aufträge gibt es nur in Node (community-outbox.test.ts)
+const NODE_OUTBOX_COLUMNS = ['ref', 'next_try_at', 'claimed_at'];
+
 async function snapshot(): Promise<Record<string, unknown[]>> {
   const out: Record<string, unknown[]> = {};
   for (const t of ['community_suggestions', 'community_tickets', 'community_ticket_messages', 'community_outbox', 'oys_meta']) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${DB}\`.\`${t}\` ORDER BY 1`);
+    if (t === 'community_outbox') for (const row of rows) for (const k of NODE_OUTBOX_COLUMNS) delete row[k];
+    if (t === 'community_suggestions') for (const row of rows) for (const k of ['web_state', 'web_notice', 'removed_at']) delete row[k];
+    if (t === 'community_outbox') for (const row of rows) row.payload = withoutWeb(String(row.payload));
     out[t] = rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => {
       if (typeof v === 'string' && v.startsWith('ENC:')) return [k, 'DEC(' + JSON.stringify(decrypt(v)) + ')'];
       if (typeof v === 'string') v = v.replace(/\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/g, (m) => {
@@ -275,9 +279,11 @@ before(async () => {
   setConfigForTests(TEST_CONFIG);
   await closePool();
   await ensureSchema();
-  php = await startPhp();
-  phpRoot = php.root;
-  phpPort = php.port;
+  if (!PHP_SKIP) {
+    php = await startPhp();
+    phpRoot = php.root;
+    phpPort = php.port;
+  }
   app = await buildServer();
   await app.ready();
 });
@@ -301,12 +307,12 @@ const msg = (o: Record<string, unknown> = {}) => J({ message_id: '60000000000000
 const post = (path: string, body: string, extra: Partial<Req> = {}): Req => ({ method: 'POST', path, body, ...extra });
 const get = (path: string, extra: Partial<Req> = {}): Req => ({ method: 'GET', path, ...extra });
 
+// Bewusst anders als PHP (discord-pages §5.4): /ping nennt die Funktionen der Website, ein zu großer Inhalt ist 413
+// statt 401 – beides prüft der Test „ping and body size“ unten ohne PHP
 const CASES: Array<[string, Req]> = [
-  ['ping with query', get('/_/bot/ping?x=1&y=%C3%A4')],
   ['unsigned', get('/_/bot/ping', { sign: 'none' })],
   ['bad signature', get('/_/bot/outbox', { sign: 'bad' })],
   ['old timestamp', get('/_/bot/outbox', { sign: 'old' })],
-  ['body too big', post('/_/bot/outbox/2/done', J({ error: 'x'.repeat(65537) }))],
   ['invalid JSON', post('/_/bot/suggestions', '{"thread_id":')],
   ['JSON scalar', post('/_/bot/suggestions', '"text"')],
   ['JSON list', post('/_/bot/suggestions', '[1,2]')],
@@ -345,10 +351,21 @@ const CASES: Array<[string, Req]> = [
   ['outbox done', post('/_/bot/outbox/2/done', '{}')],
   ['outbox error', post('/_/bot/outbox/2/done', J({ error: 'Unknown action “x”.' }))],
   ['multipart body is not read', post('/_/bot/outbox/2/done', '--b\r\nContent-Disposition: form-data; name="error"\r\n\r\nx\r\n--b--\r\n', { type: 'multipart/form-data; boundary=b', signedBody: '' })],
+  // Ob php://input leer ist, entscheidet der Kern wie PHP (server.ts, web/multipart.ts): nur wenn PHP den Inhalt selbst liest
+  ['multipart without boundary is read', post('/_/bot/outbox/2/done', J({ error: 'no boundary' }), { type: 'multipart/form-data' })],
+  ['multipart with an unclosed quoted boundary is read', post('/_/bot/outbox/2/done', J({ error: 'unclosed' }), { type: 'multipart/form-data; boundary="b' })],
+  ['multipart boundary without = is read', post('/_/bot/outbox/2/done', J({ error: 'no equals' }), { type: 'multipart/form-data; boundary' })],
+  ['multipart with an empty boundary is not read', post('/_/bot/outbox/2/done', J({ error: 'empty' }), { type: 'multipart/form-data; boundary=', signedBody: '' })],
+  ['multipart type with a tab is no multipart', post('/_/bot/outbox/2/done', J({ error: 'tab' }), { type: 'multipart/form-data\t; boundary=b' })],
+  ['multipart in capitals is not read', post('/_/bot/outbox/2/done', J({ error: 'caps' }), { type: 'MULTIPART/FORM-DATA; BOUNDARY=b', signedBody: '' })],
+  ['multipart behind a comma is not read', post('/_/bot/outbox/2/done', J({ error: 'comma' }), { type: 'multipart/form-data, boundary=b', signedBody: '' })],
+  ['multipart signed over the body is refused', post('/_/bot/outbox/2/done', J({ error: 'signed' }), { type: 'multipart/form-data; boundary=b' })],
+  ['hostile multipart body is not read', post('/_/bot/outbox/2/done', ('--' + 'b'.repeat(300) + '\r\nContent-Disposition: form-data; name="a[]"\r\n\r\n' + '\n--'.repeat(50) + '\r\n').repeat(40),
+    { type: 'multipart/form-data; boundary=' + 'b'.repeat(300), signedBody: '' })],
   ['plain text body is read', post('/_/bot/outbox/2/done', J({ error: 'plain' }), { type: 'text/plain' })],
 ];
 
-test('every bot API route answers and writes like PHP', async () => {
+test('every bot API route answers and writes like PHP', { skip: PHP_SKIP }, async () => {
   for (const [name, req] of CASES) {
     await fixtures();
     const p = await sendPhp(req);
@@ -363,14 +380,52 @@ test('every bot API route answers and writes like PHP', async () => {
   }
 });
 
-test('without a usable bot secret the API does not exist, like in PHP', async () => {
-  // Kein Geheimnis und eines mit nur 31 Bytes (signiert wird trotzdem damit)
-  const variants: Array<[string, string, string | null]> = [['no secret', "unset($c['bot_secret']);", null], ['secret too short', "$c['bot_secret'] = str_repeat('s', 31);", 's'.repeat(31)]];
-  for (const [variant, extra, secret] of variants) {
-    const other = await startPhp(extra);
+test('ping lists the website’s features; a body over 64 KiB gets 413 before the signature is checked', async () => {
+  await fixtures();
+  const ping = await sendNode(get('/_/bot/ping?x=1&y=%C3%A4'));
+  assert.equal(ping.status, 200);
+  const body = JSON.parse(ping.body) as Record<string, unknown>;
+  assert.equal(body.site, 'http://oys.test:8080/');
+  assert.deepEqual((body.features as string[]).slice(0, 2), ['hello', 'updates.v1']);
+  for (const sign of ['ok', 'bad', 'none'] as const) {
+    const big = await sendNode(post('/_/bot/outbox/2/done', J({ error: 'x'.repeat(65537) }), { sign }));
+    assert.equal(big.status, 413, sign);
+    assert.deepEqual(JSON.parse(big.body), { ok: false, error: 'Request too large.' });
+  }
+  // Genau 64 KiB gehen noch durch (und werden geprüft)
+  const edge = await sendNode(post('/_/bot/outbox/2/done', '{"error":"' + 'y'.repeat(65536 - 12) + '"}', { sign: 'bad' }));
+  assert.equal(edge.status, 401);
+});
+
+// Kein Geheimnis und eines mit nur 31 Bytes (signiert wird trotzdem damit)
+const NO_SECRET: Array<[string, string | null]> = [['no secret', null], ['secret too short', 's'.repeat(31)]];
+const NO_SECRET_REQUESTS = (): Array<[string, Req]> => [['signed ping', get('/_/bot/ping')], ['unsigned suggestion', post('/_/bot/suggestions', sug(), { sign: 'none' })]];
+
+test('without a usable bot secret the API does not exist', async () => {
+  for (const [variant, secret] of NO_SECRET) {
     setConfigForTests({ ...TEST_CONFIG, bot_secret: secret });
     try {
-      for (const [name, req] of [['signed ping', get('/_/bot/ping')], ['unsigned suggestion', post('/_/bot/suggestions', sug(), { sign: 'none' })]] as Array<[string, Req]>) {
+      for (const [name, req] of NO_SECRET_REQUESTS()) {
+        await fixtures();
+        const before = await snapshot();
+        assert.equal((await sendNode(req, secret ?? 'x'.repeat(32))).status, 404, `${variant}, ${name}`);
+        assert.deepEqual(await snapshot(), before, `${variant}, ${name}: database`);
+      }
+    } finally {
+      setConfigForTests(TEST_CONFIG);
+    }
+  }
+});
+
+test('without a usable bot secret the API does not exist, like in PHP', { skip: PHP_SKIP }, async () => {
+  for (const [variant, secret] of NO_SECRET) {
+    // Ohne Geheimnis fehlt bot_secret in config.php ganz
+    const config: ConfigData = { ...PHP_CONFIG, bot_secret: secret ?? '' };
+    if (secret === null) delete config.bot_secret;
+    const other = await startPhp(config);
+    setConfigForTests({ ...TEST_CONFIG, bot_secret: secret });
+    try {
+      for (const [name, req] of NO_SECRET_REQUESTS()) {
         await fixtures();
         const p = await sendPhp(req, other.port, secret ?? 'x'.repeat(32));
         const phpDb = await snapshot();
@@ -407,11 +462,27 @@ async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<
   }
 }
 
-test('many tickets at once all get an answer, like in PHP', async () => {
-  // 14 Personen gleichzeitig (mehr als Verbindungen im Pool) und dieselbe Person sechsmal (Sperre gegen Doppelklicks)
+// 14 Personen gleichzeitig (mehr als Verbindungen im Pool) und dieselbe Person sechsmal (Sperre gegen Doppelklicks)
+function manyTickets(): Req[] {
   const reqs: Req[] = [];
   for (let i = 0; i < 14; i++) reqs.push(post('/_/bot/tickets', tkt({ user_id: '41000000000000' + String(1000 + i), user_name: 'U' + i, subject: 'S' + i, body: 'B' + i })));
   for (let i = 0; i < 6; i++) reqs.push(post('/_/bot/tickets', tkt({ user_id: '420000000000000001', subject: 'Twice', body: 'Again' })));
+  return reqs;
+}
+
+test('many tickets at once all get an answer and one person gets one ticket', async () => {
+  await fixtures();
+  const n = await withTimeout(Promise.all(manyTickets().map((r) => sendNode(r))), 30000, 'Node');
+  assert.deepEqual(n.slice(0, 14).map((r) => r.status), Array(14).fill(200));
+  assert.deepEqual(n.slice(14).map((r) => r.status).sort(), [200, 409, 409, 409, 409, 409]);
+  const [dups] = await admin.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${DB}\`.community_tickets WHERE user_id = '420000000000000001'`);
+  assert.equal(Number(dups[0].n), 1);
+  // Danach antwortet der Server weiter
+  assert.equal((await sendNode(get('/_/bot/ping'))).status, 200);
+});
+
+test('many tickets at once all get an answer, like in PHP', { skip: PHP_SKIP }, async () => {
+  const reqs = manyTickets();
   await fixtures();
   const p = await withTimeout(Promise.all(reqs.map((r) => sendPhp(r))), 30000, 'PHP');
   const phpRows = await ticketRows();
@@ -435,7 +506,25 @@ function adminCtx(query: string): Ctx {
   return ctx;
 }
 
-test('names like __proto__ in the address or a form stay ordinary keys, as in PHP', async () => {
+test('names like __proto__ in the address or a form stay ordinary keys', async () => {
+  const polluted = (): string[] => ['polluted', 'deep', 'community_action', 'ticket', 'suggestions'].filter((k) => k in ({} as object));
+  try {
+    await app.inject({ method: 'GET', url: '/_/bot/ping?__proto__[polluted]=1&a[__proto__][deep]=1', headers: { host: HOST } });
+    await app.inject({ method: 'POST', url: '/_/bot/ping', headers: { host: HOST, 'content-type': 'application/x-www-form-urlencoded' }, payload: '__proto__[community_action]=ticket_close&__proto__[id]=1' });
+    assert.equal(JSON.stringify(parseStr('__proto__[community_action]=ticket_close&id=1')), '{"__proto__":{"community_action":"ticket_close"},"id":"1"}');
+    await fixtures();
+    await adminCommunityHandle(parseStr('__proto__[community_action]=ticket_close&__proto__[id]=1&id=3'), 'Pixel Admin');
+    assert.doesNotMatch(await adminCommunityView(adminCtx('?__proto__[ticket]=1&__proto__[suggestions]=all')), /Close view/);
+    assert.deepEqual(polluted(), []);
+    // Das Ticket 3 ist noch offen: die Aktion stand nur unter __proto__
+    const [rows] = await admin.query<RowDataPacket[]>(`SELECT status FROM \`${DB}\`.community_tickets WHERE id = 3`);
+    assert.equal(rows[0].status, 'open');
+  } finally {
+    for (const k of polluted()) delete (Object.prototype as Record<string, unknown>)[k];
+  }
+});
+
+test('names like __proto__ in the address or a form stay ordinary keys, as in PHP', { skip: PHP_SKIP }, async () => {
   const polluted = (): string[] => ['polluted', 'deep', 'community_action', 'ticket', 'suggestions'].filter((k) => k in ({} as object));
   try {
     // Durch den ganzen Server: Adresse und Formular
@@ -455,7 +544,7 @@ test('names like __proto__ in the address or a form stay ordinary keys, as in PH
     assert.equal(await adminCommunityHandle(parseStr(body), 'Pixel Admin'), phpResult);
     const query = '?__proto__[ticket]=1&__proto__[suggestions]=all';
     const phpView = await runPhp(`$_SESSION = ['csrf' => $in['csrf']]; parse_str($in['q'], $_GET); ob_start(); include $root . '/views/admin_community.php'; return ob_get_clean();`, { q: query.slice(1), csrf: CSRF });
-    assert.equal(withoutDialogs(await adminCommunityView(adminCtx(query))), withoutNativeConfirms(phpView));
+    assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(await adminCommunityView(adminCtx(query))))), withoutNativeConfirms(phpView));
     assert.doesNotMatch(phpView, /Close view/);
   } finally {
     for (const k of polluted()) delete (Object.prototype as Record<string, unknown>)[k];

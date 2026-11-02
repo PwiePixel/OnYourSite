@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { configString, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, one, q } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 import { adminPage } from '../src/admin/page.js';
@@ -32,6 +33,8 @@ before(async () => {
   }
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
+  // Kopie auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert)
+  await ensureSchema();
   mkdirSync(mailDir, { recursive: true });
   setEmailDirForTests(mailDir);
 });
@@ -130,7 +133,7 @@ test('newsletter: failures count, an array as template name becomes "Array", tri
   calls = capture(false);
   ctx = await post({ send_newsletter: '1', template_file: { 0: 'welcome.json' }, audience: 'single', single_email: 'mia@test.de' });
   assert.equal(calls[0][1], 'Array');
-  assert.equal(ctx.session!.data.admin_error, 'Failed to send emails. Check your SMTP settings and PHPMailer installation.');
+  assert.equal(ctx.session!.data.admin_error, 'Failed to send emails. Check the mail server settings.');
   calls = capture(true);
   await assert.rejects(post({ send_newsletter: '1', template_file: 'x.json', audience: 'all', email_subject: { 0: 'x' } }), TypeError);
   await assert.rejects(post({ send_newsletter: '1', template_file: 'x.json', audience: 'all', single_email: { 0: 'x' } }), TypeError);

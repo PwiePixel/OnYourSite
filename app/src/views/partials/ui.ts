@@ -3,6 +3,7 @@
 import type { Ctx } from '../../web/ctx.js';
 import { e } from '../../html.js';
 import { asset } from '../../helpers.js';
+import { intval } from '../../php.js';
 import { csrfToken } from '../../web/security.js';
 
 export type UiSkin = 'app' | 'page';
@@ -79,9 +80,13 @@ export function flashMarkup(tone: 'ok' | 'err', text: unknown): string {
     + e(text) + "            </div>\n        ";
 }
 
-// Glocke für Kopfzeilen (wie im Editor, views/dashboard.php); data-csrf für „gelesen“ (static/js/bell.js liest es)
+// Glocke für Kopfzeilen (Editor und Admin, gleiches Markup); static/js/bell.js liest data-csrf (für „gelesen“), data-user
+// (Schlüssel im Browser: zuletzt gezeigter Eintrag dieses Kontos) und data-readonly (Admin im Nutzer-Modus: nur lesen)
 export async function bellMarkup(ctx: Ctx): Promise<string> {
-  return '<div class="relative" data-bell data-csrf="' + e(await csrfToken(ctx)) + '">\n'
+  const user = intval(ctx.session?.get('user_id') ?? 0);
+  const original = ctx.session?.get('original_admin_id');
+  const readonly = original !== undefined && original !== null;
+  return '<div class="relative" data-bell data-csrf="' + e(await csrfToken(ctx)) + '"' + (user > 0 ? ' data-user="' + user + '"' : '') + (readonly ? ' data-readonly' : '') + '>\n'
     + '    <button type="button" id="bellBtn" class="relative w-9 h-9 rounded-lg hover:bg-white/5 border border-transparent hover:border-bordercolor flex items-center justify-center text-gray-400 hover:text-white transition-colors" aria-label="Notifications" aria-expanded="false" aria-controls="bellMenu">\n'
     + "        <i class='bx bx-bell text-xl'></i><span id=\"bellBadge\" class=\"bell-badge\" hidden>0</span>\n"
     + '    </button>\n'

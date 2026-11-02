@@ -11,7 +11,7 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { loadConfig, setConfigForTests } from '../src/config.js';
 import { exec, one, q, transaction, value, type Db } from '../src/db.js';
 import { date, strtotime, time } from '../src/php.js';
-import { ensureSchema, V_CUSTOM_DOMAINS } from '../src/schema.js';
+import { ensureSchema, SCHEMA_VERSION, V_CUSTOM_DOMAINS } from '../src/schema.js';
 import { slugProblem } from '../src/helpers.js';
 import {
   AccountDeletionError, deleteAccount, registerUserDeletion, unregisterUserDeletionForTests, userDeletionHooks,
@@ -69,7 +69,7 @@ test('the step creates both tables and pages.custom_domain, and running it again
   await t.admin.query(`REPLACE INTO \`${t.name}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)`, [String(V_CUSTOM_DOMAINS - 1)]);
   await ensureSchema();
   assert.deepEqual(await Promise.all(tables.map(ddl)), first);
-  assert.equal(await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), String(V_CUSTOM_DOMAINS));
+  assert.equal(await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), String(SCHEMA_VERSION));
   // Bestehende Seiten bleiben ohne Domain
   assert.equal(Number(await value('SELECT COUNT(*) FROM pages WHERE custom_domain IS NOT NULL')), 0);
 });
@@ -126,6 +126,32 @@ test('compare-and-set: a stale version writes nothing; the live state sets and c
   assert.deepEqual(log.map((r) => [r.event, r.mail]), [['added', 0], ['active', 1]]);
   assert.equal(await removeDomain(POOL, id, 'test'), 'removing');
   await t.admin.query(`DELETE FROM \`${t.name}\`.custom_domains WHERE id = ?`, [id]);
+});
+
+test('a domain that moves to another page (transfer) takes its primary address along – the old page never keeps it', async () => {
+  // Live auf Leas Seite (4)
+  const d = await domainIn('active', 'moving.example.com', 4, 7);
+  assert.equal(await pageDomain(4), 'moving.example.com');
+  // Übernahme in den Zustand verifying (wie das Design sie vorsieht): beide Seiten ohne Hauptadresse
+  assert.equal(await transition(d, { state: 'verifying', set: { target_id: 3, user_id: 6 } }), true);
+  assert.equal(await pageDomain(4), null);
+  assert.equal(await pageDomain(3), null);
+  // Wieder live – jetzt auf Toms Seite (3), nie auf der alten
+  assert.equal(await transition(await fresh(d.id), { state: 'active' }), true);
+  assert.equal(await pageDomain(3), 'moving.example.com');
+  // Ziel wechseln, während die Domain live bleibt: die Hauptadresse wandert mit, die alte Seite leitet nicht weiter
+  assert.equal(await transition(await fresh(d.id), { set: { target_id: 4, user_id: 7 } }), true);
+  assert.equal(await pageDomain(3), null);
+  assert.equal(await pageDomain(4), 'moving.example.com');
+  assert.equal(await forwardingDomain((await one('SELECT * FROM pages WHERE id = 3'))!), null);
+  // Ziel und Zustand zugleich: nur das neue Ziel zählt
+  assert.equal(await transition(await fresh(d.id), { state: 'active', set: { target_id: 3, user_id: 6 } }), true);
+  assert.equal(await pageDomain(4), null);
+  assert.equal(await pageDomain(3), 'moving.example.com');
+  const row = await fresh(d.id);
+  assert.deepEqual([row.target_id, row.user_id, row.state], [3, 6, 'active']);
+  assert.equal(await removeDomain(POOL, d.id, 'test'), 'deleted');
+  assert.equal(await pageDomain(3), null);
 });
 
 test('hasDomain and hostnameForPage see a domain in every state (XD-02); removing it frees the page', async () => {

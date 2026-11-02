@@ -19,18 +19,60 @@ const LINK_BYTES = /\[([^\]\n]{1,200})\]\(((?:[^()\t\n\v\f\r \x01\x02]|\([^()\t\
 const BARE_URL = /\bhttps?:\/\/(?:[^\t\n\v\f\r <>"()\x01\x02]|\([^\t\n\v\f\r <>"()\x01\x02]*\))+(?<![.,;:!?\]"'*_~])/gi;
 const PLACEHOLDER = /\x01(\d+)\x02/g;
 
-// Hervorhebungen (oys_md_emphasis, oys_md_plain)
-const STRONG = /\*\*(?=[^\t\n\v\f\r ])([^\n]+?)(?<=[^\t\n\v\f\r ])\*\*/g;
-const DEL = /~~(?=[^\t\n\v\f\r ])([^\n]+?)(?<=[^\t\n\v\f\r ])~~/g;
-const EM_STAR = /(?<![A-Za-z0-9_*])\*(?=[^\t\n\v\f\r ])([^\n]+?)(?<=[^\t\n\v\f\r ])\*(?![A-Za-z0-9_*])/g;
-const EM_UNDERSCORE = /(?<![A-Za-z0-9_])_(?=[^\t\n\v\f\r ])([^\n]+?)(?<=[^\t\n\v\f\r ])_(?![A-Za-z0-9_])/g;
+// Hervorhebungen (oys_md_emphasis, oys_md_plain): die PHP-Muster
+//   /\*\*(?=\S)(.+?)(?<=\S)\*\*/  /~~(?=\S)(.+?)(?<=\S)~~/  /(\*\*|~~)(?=\S)(.+?)(?<=\S)\1/
+//   /(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?![\w*])/  /(?<![\w_])_(?=\S)(.+?)(?<=\S)_(?![\w_])/  (ohne /u: \w und \s ASCII, . ohne \n)
+// sucht emphasis() von Hand: Als regulärer Ausdruck lief V8 von jedem öffnenden Zeichen ohne passendes schließendes bis
+// zum Zeilenende (eine 30-KB-Zeile „**a **a …“: über eine Sekunde, auf /updates bei jedem Aufruf).
+const isMdSpace = (c: number): boolean => c === 0x20 || (c >= 0x09 && c <= 0x0d);
+const isWordChar = (c: number): boolean => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f;
+const isWordOrStar = (c: number): boolean => isWordChar(c) || c === 0x2a;
+
+// Paare aus einem der Trenner (bei mehreren: hinten derselbe wie vorn) in linearer Zeit, dieselben Treffer wie die Muster
+// oben: Vorn folgt kein Leerraum, hinten steht keiner davor, dazwischen mindestens ein Zeichen und kein \n; mit word dürfen
+// davor und danach keine solchen Zeichen stehen. Ein Treffer endet am ersten passenden Trenner der Zeile (wie .+?), danach
+// geht es dahinter weiter, ohne Treffer ein Zeichen weiter – wie preg_replace. wrap bekommt den Text dazwischen.
+export function emphasis(text: string, delims: readonly string[], word: ((c: number) => boolean) | null, wrap: (inner: string) => string): string {
+  if (!delims.some((d) => text.includes(d))) return text;
+  const len = text.length;
+  const firsts = delims.map((d) => d.charCodeAt(0));
+  // Erstes \n ab i
+  const nl = new Int32Array(len + 1);
+  nl[len] = len;
+  for (let i = len - 1; i >= 0; i--) nl[i] = text.charCodeAt(i) === 10 ? i : nl[i + 1];
+  // Je Trenner: erste Stelle ab q, an der er schließen kann
+  const close = delims.map((d, j) => {
+    const next = new Int32Array(len + 1);
+    next[len] = len;
+    for (let q = len - 1; q >= 0; q--) {
+      next[q] = q > 0 && text.charCodeAt(q) === firsts[j] && text.startsWith(d, q) && !isMdSpace(text.charCodeAt(q - 1))
+        && (word === null || q + d.length >= len || !word(text.charCodeAt(q + d.length))) ? q : next[q + 1];
+    }
+    return next;
+  });
+  let out = '';
+  let last = 0;
+  for (let p = 0; p < len; p++) {
+    const c = text.charCodeAt(p);
+    let k = 0;
+    while (k < delims.length && (c !== firsts[k] || !text.startsWith(delims[k], p))) k++;
+    if (k === delims.length || (word !== null && p > 0 && word(text.charCodeAt(p - 1)))) continue;
+    const s = p + delims[k].length;
+    if (s >= len || isMdSpace(text.charCodeAt(s))) continue;
+    const q = close[k][s + 1];
+    if (q >= nl[s]) continue;
+    out += text.slice(last, p) + wrap(text.slice(s, q));
+    last = q + delims[k].length;
+    p = last - 1;
+  }
+  return out + text.slice(last);
+}
 
 // Klartext (oys_md_plain)
 const PLAIN_CODE_BLOCK = /```[\s\S]*?```/g;
 const PLAIN_CODE = /`([^`\n]+)`/g;
 // ^ mit /m: Anfang oder nach \n (in JS träfe ^ mit /m auch nach \r und U+2028)
 const PLAIN_LINE_MARK = new RegExp(`(?<![^\\n])[ \\t]*(?:#{1,6}[ \\t]+|>[ \\t]?|[-*\\u{2022}][ \\t]+|[${UCP_DIGIT}]+[.)][ \\t]+)`, 'gu');
-const PLAIN_STRONG_DEL = /(\*\*|~~)(?=[^\t\n\v\f\r ])([^\n]+?)(?<=[^\t\n\v\f\r ])\1/g;
 const PLAIN_SPACES = new RegExp(`[${UCP_WS}]+`, 'gu');
 
 // Text ↔ UTF-8-Bytes (ein Zeichen je Byte), für Muster, die in PHP Bytes zählen
@@ -102,8 +144,17 @@ function plainLinks(text: string): string | null {
   return out + text.slice(last);
 }
 
+// Optionen für Texte von Nutzern (Statusseiten): base = Adresse der Seite, gegen die eigene Pfade (/…, #…) aufgelöst
+// werden (statt gegen /updates der Hauptseite); ugc = fremde Links mit rel="nofollow ugc noopener noreferrer" und dem
+// Host in Klammern hinter dem Linktext, damit ein Text wie „Login“ nicht verschleiert, wohin er führt. Ohne Optionen
+// bleibt die Ausgabe Byte für Byte die von PHP (Updates, Roadmap, Feed).
+export interface MarkdownOptions {
+  base?: string;
+  ugc?: boolean;
+}
+
 // oys_markdown(): zeilenweise, ohne Zeilenumbrüche zwischen den Elementen
-export function markdown(md: string): string {
+export function markdown(md: string, opts: MarkdownOptions = {}): string {
   const lines = md.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   let html = '';
   let para: string[] = [];
@@ -112,7 +163,7 @@ export function markdown(md: string): string {
   let code: string[] = [];
   const flushPara = (): void => {
     if (para.length) {
-      html += '<p>' + para.map(mdInline).join('<br>') + '</p>';
+      html += '<p>' + para.map((l) => mdInline(l, opts)).join('<br>') + '</p>';
       para = [];
     }
   };
@@ -150,7 +201,7 @@ export function markdown(md: string): string {
       flushPara();
       closeList();
       const tag = m[1].length === 3 ? 'h5' : 'h4';
-      html += '<' + tag + '>' + mdInline(m[2]) + '</' + tag + '>';
+      html += '<' + tag + '>' + mdInline(m[2], opts) + '</' + tag + '>';
       continue;
     }
     m = LIST.exec(line);
@@ -163,14 +214,14 @@ export function markdown(md: string): string {
         html += '<' + want + '>';
         list = want;
       }
-      html += '<li>' + mdInline(m[2]) + '</li>';
+      html += '<li>' + mdInline(m[2], opts) + '</li>';
       continue;
     }
     m = QUOTE.exec(line);
     if (m) {
       flushPara();
       closeList();
-      html += '<blockquote>' + mdInline(m[1]) + '</blockquote>';
+      html += '<blockquote>' + mdInline(m[1], opts) + '</blockquote>';
       continue;
     }
     closeList();
@@ -183,7 +234,7 @@ export function markdown(md: string): string {
 }
 
 // oys_md_inline(): Code und Links zuerst beiseitelegen, den Rest maskieren, dann nur bekannte Muster in Tags verwandeln
-export function mdInline(input: string): string {
+export function mdInline(input: string, opts: MarkdownOptions = {}): string {
   let text = input.replace(/[\x01\x02]/g, '');
   const keep: string[] = [];
   const stash = (h: string): string => {
@@ -193,14 +244,15 @@ export function mdInline(input: string): string {
   text = text.replace(CODE_SPAN, (_m, c: string) => stash('<code>' + e(c) + '</code>'));
   // Adressen dürfen ausgeglichene Klammern enthalten, z. B. …/wiki/Foo_(bar)
   text = fromBytes(toBytes(text).replace(LINK_BYTES, (m0: string, label: string, url: string) => {
-    const link = mdLink(fromBytes(url), mdEmphasis(e(fromBytes(label))));
+    const link = mdLink(fromBytes(url), mdEmphasis(e(fromBytes(label))), opts);
     return link === '' ? m0 : stash(link);
   }));
   // Nackte Adressen: Satzzeichen und Markdown-Zeichen am Ende gehören nicht dazu. Ist eine zu lang für PCRE, liefert
   // PHP hier null – die ganze Zeile wird leer (auch Code und Links, die schon beiseitegelegt waren).
   if (urlStackExhausted(text)) return '';
+  // Der Linktext einer nackten Adresse ist die Adresse selbst – der Host steht also schon da
   text = text.replace(BARE_URL, (m0: string) =>
-    stash('<a href="' + e(m0) + '" target="_blank" rel="noopener noreferrer">' + e(prettyUrl(m0)) + '</a>'));
+    stash('<a href="' + e(m0) + '" target="_blank" rel="' + relOf(opts) + '">' + e(prettyUrl(m0)) + '</a>'));
   text = mdEmphasis(e(text));
   // Platzhalter einsetzen (auch verschachtelte, z. B. Code in einem Link)
   for (let i = 0; i < 3 && text.includes('\x01'); i++) {
@@ -210,21 +262,48 @@ export function mdInline(input: string): string {
 }
 
 // oys_md_link(): eigene Pfade (/…, #…) werden zu vollen Adressen, weil der Text auch im Feed steht
-export function mdLink(url: string, labelHtml: string): string {
+export function mdLink(url: string, labelHtml: string, opts: MarkdownOptions = {}): string {
   if (/^\/(?![/\\])/.test(url) || (url !== '' && url[0] === '#')) {
+    if (opts.base !== undefined) return '<a href="' + e(onBase(opts.base, url)) + '">' + labelHtml + '</a>';
     return '<a href="' + e(mainUrl(url[0] === '#' ? '/updates' + url : url)) + '">' + labelHtml + '</a>';
   }
   const clean = cleanUrl(url);
-  return clean === '' ? '' : '<a href="' + e(clean) + '" target="_blank" rel="noopener noreferrer">' + labelHtml + '</a>';
+  if (clean === '') return '';
+  return '<a href="' + e(clean) + '" target="_blank" rel="' + relOf(opts) + '">' + labelHtml + '</a>' + (opts.ugc ? hostNote(clean) : '');
+}
+
+// Fremde Links: rel wie bisher, bei Texten von Nutzern zusätzlich nofollow ugc
+const relOf = (opts: MarkdownOptions): string => (opts.ugc ? 'nofollow ugc noopener noreferrer' : 'noopener noreferrer');
+
+// Eigener Pfad auf der Seite von base: /x → Ursprung von base + /x, #x → base (ohne #…) + #x
+function onBase(base: string, url: string): string {
+  if (url[0] === '#') return base.replace(/#.*$/s, '') + url;
+  const origin = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i.exec(base);
+  return (origin ? origin[0] : base.replace(/\/+$/, '')) + url;
+}
+
+// „ (host)“ hinter dem Linktext: Host einer Web-Adresse in ASCII (Punycode zeigt verwechselbare Zeichen), bei mailto:
+// die Domain der Adresse; tel: und Unlesbares bekommen keinen Hinweis
+function hostNote(clean: string): string {
+  let host = '';
+  if (/^mailto:/i.test(clean)) {
+    host = /@([^?&#]+)/.exec(clean)?.[1] ?? '';
+  } else if (/^https?:/i.test(clean)) {
+    try {
+      host = new URL(clean).hostname;
+    } catch {
+      host = '';
+    }
+  }
+  return host === '' ? '' : ' <span class="md-host">(' + e(host) + ')</span>';
 }
 
 // oys_md_emphasis(): der Reihe nach **, ~~, *, _ (falsch verschachtelte Paare bleiben wie in PHP)
 export function mdEmphasis(escaped: string): string {
-  return escaped
-    .replace(STRONG, '<strong>$1</strong>')
-    .replace(DEL, '<del>$1</del>')
-    .replace(EM_STAR, '<em>$1</em>')
-    .replace(EM_UNDERSCORE, '<em>$1</em>');
+  let text = emphasis(escaped, ['**'], null, (t) => '<strong>' + t + '</strong>');
+  text = emphasis(text, ['~~'], null, (t) => '<del>' + t + '</del>');
+  text = emphasis(text, ['*'], isWordOrStar, (t) => '<em>' + t + '</em>');
+  return emphasis(text, ['_'], isWordChar, (t) => '<em>' + t + '</em>');
 }
 
 // oys_md_plain(): kurzer Klartext (Feed, Vorschauen)
@@ -232,12 +311,9 @@ export function mdPlain(md: string, max = 200): string {
   // Ein zu langer Link sprengt den JIT-Stapel: preg_replace liefert null, der Klartext ist dann leer
   const linked = plainLinks(md.replace(PLAIN_CODE_BLOCK, ''));
   if (linked === null) return '';
-  let text = linked
-    .replace(PLAIN_CODE, '$1')
-    .replace(PLAIN_LINE_MARK, '')
-    .replace(PLAIN_STRONG_DEL, '$2')
-    .replace(EM_STAR, '$1')
-    .replace(EM_UNDERSCORE, '$1');
+  let text = emphasis(linked.replace(PLAIN_CODE, '$1').replace(PLAIN_LINE_MARK, ''), ['**', '~~'], null, (t) => t);
+  text = emphasis(text, ['*'], isWordOrStar, (t) => t);
+  text = emphasis(text, ['_'], isWordChar, (t) => t);
   text = phpTrim(text.replace(PLAIN_SPACES, ' '));
   return mbStrlen(text) > max ? phpRtrim(mbSubstr(text, 0, max - 1)) + '…' : text;
 }

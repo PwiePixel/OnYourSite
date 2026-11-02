@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { buildServer, readBody } from '../src/server.js';
 import { closePool } from '../src/db.js';
 import { makeTestCtx } from '../src/web/ctx.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const TYPE = 'multipart/form-data; boundary=B';
 
@@ -64,7 +65,7 @@ test('a broken upload does not stop the server', async () => {
   }
 });
 
-test('$_FILES and $_POST from multipart bodies match PHP (partial uploads, path parts in names)', async () => {
+test('$_FILES and $_POST from multipart bodies match PHP (partial uploads, path parts in names)', { skip: PHP_SKIP }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-mp-'));
   writeFileSync(join(dir, 'router.php'), `<?php header('Content-Type: application/json'); $f = $_FILES['file'] ?? null;
     echo json_encode(['file' => $f === null ? null : [$f['name'], $f['type'], $f['size'], $f['error']], 'post' => $_POST], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);`);

@@ -6,11 +6,14 @@
 #   --docker   als Docker-Container – z. B. auf einem eigenen kleinen Server nur für den Bot
 #
 #   sudo bash install.sh              Einrichten oder Einstellungen ändern (fragt nach der Art)
-#   sudo bash install.sh --update     Neue Version übernehmen, Einstellungen bleiben
+#   sudo bash install.sh --update     Neue Version übernehmen, Einstellungen bleiben; Kanäle, die die neue Version
+#                                     kennt (z. B. #updates, #status, #alerts), werden einmal angelegt oder übernommen
+#   sudo bash install.sh --channel KEY  Einen dieser Kanäle noch einmal versuchen (z. B. UPDATES_CHANNEL_ID)
 #
 # Die Einstellungen (Token, IDs, Geheimnis) liegen in einer Datei, die nur root lesen kann – nie im Webordner
 # und nie im Docker-Image. Beim erneuten Aufruf behält Enter die bisherigen Werte.
-# server/install.sh übergibt OYS_SITE_URL und OYS_BOT_SECRET, dann muss nichts in config.php kopiert werden.
+# server/install.sh übergibt OYS_SITE_URL und OYS_BOT_SECRET, dann muss nichts in die Einstellungen der Webseite
+# (config.json) kopiert werden.
 set -euo pipefail
 # Pakete immer ohne Rückfragen installieren – auch die Programme, die apt nebenbei startet
 # (debconf, apt-listchanges bei Debian, needrestart bei Ubuntu), sonst warten sie unsichtbar auf eine Taste
@@ -19,9 +22,10 @@ cd "$(dirname "$(readlink -f "$0")")"
 SRC=$(pwd)
 
 NAME=onyoursite-bot
-APP_DIR=/opt/onyoursite-bot
-SERVICE_ENV=/etc/onyoursite-bot.env
-UNIT=/etc/systemd/system/onyoursite-bot.service
+# Die Pfade lassen sich nur für Tests umstellen (OYS_BOT_TEST_ROOT: alles unter diesem Ordner)
+APP_DIR=${OYS_BOT_TEST_ROOT:-}/opt/onyoursite-bot
+SERVICE_ENV=${OYS_BOT_TEST_ROOT:-}/etc/onyoursite-bot.env
+UNIT=${OYS_BOT_TEST_ROOT:-}/etc/systemd/system/onyoursite-bot.service
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -36,6 +40,12 @@ choose() {
 node_ok() {
   "$1" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 18 || (a === 18 && b >= 17) ? 0 : 1)' 2>/dev/null
 }
+# Dieselbe Node.js-Installation wie die Webseite (server/node.sh, Node.js 22 von NodeSource). Fehlt sie – nur der
+# Bot-Ordner wurde kopiert –, reicht ein schon vorhandenes Node.js.
+if [ -f "$SRC/../server/node.sh" ]; then
+  # shellcheck source-path=SCRIPTDIR source=../server/node.sh
+  . "$SRC/../server/node.sh"
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || fail "Please run this as root."
@@ -48,13 +58,20 @@ if [ -n "${SUDO_USER:-}" ]; then SUDO_HINT="sudo "; fi
 
 UPDATE=0
 MODE=""
-for arg in "$@"; do
-  case $arg in
+CHANNEL_KEY=""
+while [ $# -gt 0 ]; do
+  case $1 in
     --update) UPDATE=1 ;;
     --service) MODE=service ;;
     --docker) MODE=docker ;;
-    *) fail "Unknown option: $arg (use --service, --docker or --update)" ;;
+    --channel)
+      [[ ${2:-} =~ ^[A-Z0-9_]+$ ]] || fail "Use --channel with the name of a channel setting, e.g. --channel UPDATES_CHANNEL_ID"
+      UPDATE=1
+      CHANNEL_KEY=$2
+      shift ;;
+    *) fail "Unknown option: $1 (use --service, --docker, --update or --channel KEY)" ;;
   esac
+  shift
 done
 
 # Art: was schon installiert ist – sonst fragen
@@ -88,23 +105,13 @@ if [ "$MODE" = service ]; then
   done
   if [ -z "$NODE" ]; then
     [ "$UPDATE" = 0 ] || fail "Node.js 18.17 or newer is missing."
-    command -v apt-get >/dev/null 2>&1 || fail "Install Node.js 22 (nodejs.org) and run this again."
+    { command -v apt-get >/dev/null 2>&1 && declare -f node_install >/dev/null; } || fail "Install Node.js 22 (nodejs.org) and run this again."
     case "$(choose "Node.js 18.17 or newer is missing. Install Node.js 22 now (from deb.nodesource.com)? [Y/n]" y)" in
       [nN]*) fail "Install Node.js 22 and run this again." ;;
     esac
-    command -v curl >/dev/null 2>&1 || fail "curl is missing – install it first (apt install curl)."
     info "Installing Node.js 22 – this takes a minute or two …"
-    # Die Ausgabe kommt in eine Datei und wird nur bei einem Fehler gezeigt
-    log=$(mktemp)
-    if ! { curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; } >"$log" 2>&1 \
-      || ! apt-get -o DPkg::Lock::Timeout=600 install -y -qq nodejs >>"$log" 2>&1; then
-      tail -n 25 "$log" | grep -v "stable CLI interface" | sed 's/^/    /'
-      rm -f "$log"
-      fail "Node.js couldn’t be installed – see above."
-    fi
-    rm -f "$log"
-    NODE=$(command -v node || true)
-    if [ -z "$NODE" ] || ! node_ok "$NODE"; then fail "Node.js couldn’t be installed."; fi
+    node_install || fail "Node.js couldn’t be installed – see above."
+    NODE=$(node_find 18 17) || fail "Node.js couldn’t be installed."
   fi
   NODE_BIN=$(dirname "$NODE")
   [ -x "$NODE_BIN/npm" ] || command -v npm >/dev/null 2>&1 || fail "npm is missing next to $NODE."
@@ -131,7 +138,7 @@ else
   case "$SRC" in
     /var/www/*|*/httpdocs/*|*/public_html/*)
       info "Note: this is inside a website folder, and the settings file (.env) would be stored here."
-      info "The .htaccess blocks it, but --service keeps the settings in /etc instead." ;;
+      info "The website never serves it, but --service keeps the settings in /etc instead." ;;
   esac
 fi
 
@@ -163,7 +170,8 @@ bot_tool() {
   else
     DISCORD_TOKEN=$TOKEN "${COMPOSE[@]}" run --rm --no-deps -T -e DISCORD_TOKEN -e DISCORD_API_BASE -e TEAM_ROLE_ID \
       -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e TAG_ACCEPTED_ID \
-      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID bot node index.js "$@" </dev/null
+      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID -e UPDATES_CHANNEL_ID -e STATUS_CHANNEL_ID -e ALERTS_CHANNEL_ID \
+      bot node index.js "$@" </dev/null
   fi
 }
 
@@ -173,6 +181,63 @@ NEW_SECRET=""
 # Bisheriger Wert aus der Einstellungsdatei (ohne sie auszuführen)
 current() {
   if [ -f "$ENV_FILE" ]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; fi
+}
+
+# Eine Zeile der Einstellungsdatei setzen oder anhängen (nur Schlüssel A–Z/0–9/_ und Discord-IDs); jede andere Zeile
+# bleibt Byte für Byte, wie sie ist. Erst komplett schreiben, dann ersetzen; nur für root lesbar.
+env_set() {
+  local key=$1 value=$2 tmp
+  [[ $key =~ ^[A-Z0-9_]+$ && $value =~ ^[0-9]*$ ]] || fail "Invalid setting $key."
+  tmp=$(umask 077 && mktemp "$ENV_FILE.XXXXXX")
+  if grep -q "^$key=" "$ENV_FILE"; then
+    sed "s/^$key=.*/$key=$value/" "$ENV_FILE" > "$tmp"
+  else
+    cat "$ENV_FILE" > "$tmp"
+    if [ -s "$ENV_FILE" ] && [ -n "$(tail -c 1 "$ENV_FILE")" ]; then echo >> "$tmp"; fi
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+# Kanäle, die der Bot kennt (KEY=name), z. B. UPDATES_CHANNEL_ID=updates
+CHANNEL_NAMES=""
+
+# Einen Kanal finden oder anlegen (nur diesen – Rollen und andere Kanäle bleiben, wie sie sind) und seine ID merken.
+# Klappt es nicht, steht der Schlüssel leer in der Datei: das nächste --update versucht es nicht noch einmal.
+add_channel() {
+  local key=$1 name out id err
+  name=$(sed -n "s/^$key=//p" <<< "$CHANNEL_NAMES" | tail -n 1)
+  name=${name:-$key}
+  info "Adding the #$name channel …"
+  err=$(mktemp)
+  # Die bisherige ID dieses Kanals (z. B. nach --channel) und die Rolle des Teams (für private Kanäle wie #alerts) – nur
+  # in der Umgebung dieses einen Aufrufs (die Befehlsersetzung läuft in einer eigenen Shell)
+  if out=$(export "$key=$(current "$key")"; TEAM_ROLE_ID=$(current TEAM_ROLE_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
+      SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) bot_tool --discord-channel "$key" "$(current GUILD_ID)" 2>"$err") \
+      && id=$(sed -n "s/^$key=//p" <<< "$out" | tail -n 1) && [[ $id =~ ^[0-9]{15,22}$ ]]; then
+    env_set "$key" "$id"
+    while IFS='=' read -r k v; do
+      case $k in
+        DONE) info "  $v" ;;
+        WARN) info "  Note: $v" ;;
+      esac
+    done <<< "$out"
+  else
+    env_set "$key" ""
+    info "  Note: The #$name channel couldn’t be added: $(tr '\n' ' ' < "$err" | sed 's/ *$//') – run ${SUDO_HINT}bash $SRC/install.sh --channel $key to try again."
+  fi
+  rm -f "$err"
+}
+
+# Bei --update: jeden Kanal, den diese Version kennt und der in den Einstellungen noch fehlt, einmal anlegen
+add_missing_channels() {
+  local key _
+  while IFS='=' read -r key _; do
+    [[ $key =~ ^[A-Z0-9_]+$ ]] || continue
+    if grep -q "^$key=" "$ENV_FILE"; then continue; fi
+    add_channel "$key"
+  done <<< "$CHANNEL_NAMES"
 }
 
 # ask KEY "Frage" Art [Vorgabe] [neu] – Art: id (Discord-ID), token, secret, url; „neu“: der bisherige Wert gilt nicht
@@ -204,6 +269,15 @@ if [ "$UPDATE" = 1 ]; then
   # Leer = nur der Platzhalter eines abgebrochenen Docker-Laufs, keine Einstellungen
   [ -s "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   info "Keeping the settings in $ENV_FILE"
+  # Das Token für die Werkzeuge des Bots kommt aus der Einstellungsdatei (es wird nirgends angezeigt)
+  TOKEN=$(current DISCORD_TOKEN)
+  CHANNEL_NAMES=$(bot_tool --channel-keys 2>/dev/null || true)
+  if [ -n "$CHANNEL_KEY" ]; then
+    grep -q "^$CHANNEL_KEY=" <<< "$CHANNEL_NAMES" || fail "Unknown channel setting: $CHANNEL_KEY (known: $(cut -d= -f1 <<< "$CHANNEL_NAMES" | tr '\n' ' '))"
+    add_channel "$CHANNEL_KEY"
+  else
+    add_missing_channels
+  fi
 else
   info "From the Discord Developer Portal (discord.com/developers/applications) you only need two things:"
   info "  1. New Application → tab Bot → Reset Token. On the same tab turn on Server Members Intent and"
@@ -273,14 +347,15 @@ else
     RULES_CHANNEL_ID=$(current RULES_CHANNEL_ID) SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) \
     SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) TAG_ACCEPTED_ID=$(current TAG_ACCEPTED_ID) \
     TAG_DECLINED_ID=$(current TAG_DECLINED_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
-    bot_tool --discord-setup "$guild_id" 2>"$errf") \
+    UPDATES_CHANNEL_ID=$(current UPDATES_CHANNEL_ID) STATUS_CHANNEL_ID=$(current STATUS_CHANNEL_ID) \
+    ALERTS_CHANNEL_ID=$(current ALERTS_CHANNEL_ID) bot_tool --discord-setup "$guild_id" 2>"$errf") \
     || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – if the bot is missing permissions, open this link, choose the server and authorize again: $invite"
   rm -f "$errf"
   while IFS='=' read -r key value; do
     case $key in
       DONE) info "  $value" ;;
       WARN) info "  Note: $value" ;;
-      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID)
+      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID|UPDATES_CHANNEL_ID|STATUS_CHANNEL_ID|ALERTS_CHANNEL_ID)
         printf -v "VAL_$key" '%s' "$value" ;;
     esac
   done <<< "$setup"
@@ -292,12 +367,12 @@ else
   ask SITE_URL "Website address" url "${OYS_SITE_URL:-https://on-your.site}"
   PRESET_SECRET=${OYS_BOT_SECRET:-}
   if [ -z "$(current BOT_SECRET)" ] && [ "${#PRESET_SECRET}" -ge 32 ]; then
-    # Vom Server-Installer: steht schon in config.php
+    # Vom Server-Installer: steht schon in den Einstellungen der Webseite (config.json)
     VAL_BOT_SECRET=$PRESET_SECRET
-    info "Secret for the website connection: taken from config.php."
+    info "Secret for the website connection: taken from the website’s settings (config.json)."
   elif [ -z "$(current BOT_SECRET)" ]; then
     case "$(choose "Create a new secret for the website connection? [Y/n]" y)" in
-      [nN]*) ask BOT_SECRET "Secret (the same as bot_secret in config.php)" secret ;;
+      [nN]*) ask BOT_SECRET "Secret (the same as bot_secret in the website’s config.json)" secret ;;
       *) VAL_BOT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); NEW_SECRET=$VAL_BOT_SECRET ;;
     esac
   else
@@ -312,7 +387,8 @@ else
   {
     echo "# OnYourSite Discord bot – written by install.sh on $(date -u +%Y-%m-%d). Keep this file private."
     for key in DISCORD_TOKEN DISCORD_CLIENT_ID GUILD_ID TEAM_ROLE_ID WELCOME_CHANNEL_ID WELCOME_ROLE_ID RULES_CHANNEL_ID SUPPORT_CHANNEL_ID \
-               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID SITE_URL BOT_SECRET POLL_SECONDS; do
+               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID UPDATES_CHANNEL_ID STATUS_CHANNEL_ID ALERTS_CHANNEL_ID \
+               SITE_URL BOT_SECRET POLL_SECONDS; do
       var="VAL_$key"
       echo "$key=${!var:-}"
     done
@@ -322,12 +398,18 @@ else
   umask 022
   info "Saved to $ENV_FILE (readable only by root)."
   if [ -n "$NEW_SECRET" ]; then
+    # Der Befehl liest das Geheimnis von der Eingabe: auf der Befehlszeile stünde es in der Prozessliste, im Verlauf der
+    # Shell und im Protokoll von sudo
     echo
-    info "Add this line to config.php of the website (same secret on both sides):"
+    info "Give the website the same secret. On the website’s server, run this command, paste the secret and press Enter:"
     echo
-    echo "      'bot_secret' => '$NEW_SECRET',"
+    echo "      sudo node /var/www/onyoursite/app/scripts/config.mjs set bot_secret --stdin"
     echo
-    read -rp "  Press Enter once it’s in config.php … " _ || true
+    info "The secret:"
+    echo "      $NEW_SECRET"
+    echo
+    info "Then restart the website: sudo systemctl restart onyoursite-web"
+    read -rp "  Press Enter once the website has it … " _ || true
   fi
 fi
 
@@ -343,7 +425,7 @@ if "${CHECK[@]}" </dev/null; then
   info "The website accepts the bot."
 else
   info "The website didn’t accept the bot. Check that:"
-  info "  - the website is updated and has 'bot_secret' in config.php,"
+  info "  - the website is updated and has 'bot_secret' in its config.json,"
   info "  - it’s exactly the same secret as here,"
   info "  - the website address is right (and points to the website’s server)."
   if [ "$UPDATE" = 1 ]; then
@@ -372,6 +454,7 @@ Group=$NAME
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
 Environment=NODE_ENV=production
+Environment=OYS_BOT_RUNTIME=service
 ExecStart=$NODE $APP_DIR/index.js
 Restart=always
 RestartSec=5

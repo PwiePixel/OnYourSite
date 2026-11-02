@@ -5,7 +5,8 @@
 // Prüfung über die Kante macht nur der Domain-Dienst.
 import { exec, one, q, transaction, value, type Db, type Param, type Row } from '../db.js';
 import { date, intval, mbSubstr, phpStr, time } from '../php.js';
-import { domainTarget } from './targets.js';
+import { liveDomain, type PageLike } from '../helpers.js';
+import { domainTarget, type DomainTarget } from './targets.js';
 
 export const DOMAIN_STATES = ['verifying', 'pending', 'active', 'broken', 'suspended', 'failed', 'blocked', 'removing'] as const;
 export type DomainState = (typeof DOMAIN_STATES)[number];
@@ -13,7 +14,9 @@ export type DomainState = (typeof DOMAIN_STATES)[number];
 export const SERVING_STATES: ReadonlySet<string> = new Set(['pending', 'active', 'broken', 'suspended']);
 
 export const LOG_EVENTS = ['added', 'txt_ok', 'waiting', 'cf_created', 'cf_adopted', 'cf_deleted', 'active', 'broken', 'recovered',
-  'suspended', 'resumed', 'failed', 'blocked', 'unblocked', 'removed', 'transferred', 'redirect', 'check', 'api_error'] as const;
+  'suspended', 'resumed', 'failed', 'blocked', 'unblocked', 'removed', 'transferred', 'redirect', 'check', 'api_error',
+  // Hinweise an den Besitzer (Glocke, mit mail = 1 auch per Mail) und Meldungen an die Admins (PD-3)
+  'domain_live', 'domain_problem', 'domain_back', 'domain_paused', 'domain_removed', 'alert'] as const;
 export type LogEvent = (typeof LOG_EVENTS)[number];
 
 // Zeile aus custom_domains (Zahlen als Zahl, Zeiten als 'Y-m-d H:i:s' wie überall)
@@ -66,9 +69,10 @@ export async function hostnameForPage(pageId: number, db?: Db): Promise<string |
 }
 
 // Live-Domain einer Seite, auf die ihre OnYourSite-Adressen weiterleiten (Schalter „Forward my OnYourSite addresses“),
-// sonst null. Fragt nur bei Seiten mit Live-Domain (pages.custom_domain) – alle anderen kostet das nichts.
+// sonst null. Fragt nur bei Seiten mit Live-Domain (pages.custom_domain, bei eingerichteten eigenen Domains) – alle
+// anderen kostet das nichts.
 export async function forwardingDomain(page: Row, db?: Db): Promise<string | null> {
-  const host = phpStr(page.custom_domain ?? '');
+  const host = liveDomain(page as unknown as PageLike);
   if (host === '') return null;
   const r = await use(db).one("SELECT redirect FROM custom_domains WHERE hostname = ? AND target_type = 'page' AND target_id = ? AND state = 'active'",
     [host, intval(page.id)]);
@@ -160,10 +164,22 @@ export async function createDomain(d: NewDomain, db?: Db): Promise<number> {
 
 // Compare-and-set: true = geschrieben, false = die Zeile hat sich inzwischen geändert oder ist weg (der Aufrufer liest
 // neu). Mit db auf dessen Verbindung (dessen Transaktion), sonst in einer eigenen Transaktion.
+// Wechselt das Ziel (Übernahme durch ein anderes Konto: target_type/target_id in set), wandert die Hauptadresse mit:
+// das alte Ziel verliert sie immer, das neue hat sie genau dann, wenn die Zeile danach live ist.
 export async function transition(row: DomainRef, change: DomainChange, db?: Db): Promise<boolean> {
   const run = async (x: Db): Promise<boolean> => {
     const target = domainTarget(row.target_type);
-    if (target) await target.lock(x, row.target_id);
+    const set = change.set ?? {};
+    const nextType = set.target_type !== undefined && set.target_type !== null ? phpStr(set.target_type) : row.target_type;
+    const nextId = set.target_id !== undefined && set.target_id !== null ? intval(set.target_id) : intval(row.target_id);
+    const moved = nextType !== row.target_type || nextId !== intval(row.target_id);
+    const nextTarget = moved ? domainTarget(nextType) : target;
+    // Ziele vor der Domain sperren; zwei Ziele in fester Reihenfolge (Art, dann ID), damit zwei Übernahmen in
+    // Gegenrichtung nicht aufeinander warten
+    const locks: Array<[DomainTarget | null, string, number]> = [[target, row.target_type, intval(row.target_id)]];
+    if (moved) locks.push([nextTarget, nextType, nextId]);
+    locks.sort((a, b) => (a[1] === b[1] ? a[2] - b[2] : a[1] < b[1] ? -1 : 1));
+    for (const [t, , id] of locks) if (t) await t.lock(x, id);
     const now = date('Y-m-d H:i:s');
     const sets = ['version = version + 1', 'updated_at = ?'];
     const params: Param[] = [now];
@@ -188,7 +204,13 @@ export async function transition(row: DomainRef, change: DomainChange, db?: Db):
     const res = await x.exec(`UPDATE custom_domains SET ${sets.join(', ')} WHERE id = ? AND version = ?`, [...params, row.id, row.version]);
     if (res.affectedRows === 0) return false;
     // Hauptadresse folgt dem Zustand – auch beim Wechsel zwischen zwei anderen Zuständen (heilt Abweichungen)
-    if (change.state !== undefined && target) await target.setPrimary(x, row.target_id, change.state === 'active' ? row.hostname : null);
+    const live = (change.state ?? row.state) === 'active';
+    if (moved) {
+      if (target) await target.setPrimary(x, intval(row.target_id), null);
+      if (nextTarget) await nextTarget.setPrimary(x, nextId, live ? row.hostname : null);
+    } else if (change.state !== undefined && target) {
+      await target.setPrimary(x, intval(row.target_id), live ? row.hostname : null);
+    }
     if (change.log) {
       await logEvent(x, { id: row.id, hostname: row.hostname, user_id: row.user_id }, change.log.event, change.log.detail ?? '',
         { mail: change.log.mail, cfId: change.log.cfId });

@@ -1,6 +1,6 @@
 // Erkennung beim Hochladen gegen PHP: getimagesize() (ist es ein Bild, welche Größe?) und finfo_file() (passt der
 // Inhalt zur Endung?) – auf echten Bildern, Audio-, Dokument- und Textdateien, abgeschnittenen und zufällig
-// veränderten Varianten. Verglichen wird das Ergebnis jeder Datei.
+// veränderten Varianten. Verglichen wird das Ergebnis jeder Datei (nur mit OYS_PHP_REF, siehe support/phpRef.ts).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +12,7 @@ import sharp from 'sharp';
 import { getImageSize } from '../src/content/imageSize.js';
 import { fileMime } from '../src/content/fileMime.js';
 import { rng } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 let dir = '';
 const r = rng(20261101);
@@ -179,6 +180,7 @@ async function makeCorpus(d: string): Promise<void> {
 }
 
 before(async () => {
+  if (PHP_SKIP) return;
   dir = mkdtempSync(join(tmpdir(), 'oys-detect-'));
   await makeCorpus(dir);
 });
@@ -188,7 +190,7 @@ after(() => {
   else if (dir) console.log('corpus kept in ' + dir);
 });
 
-test('getimagesize() decisions and sizes match PHP', () => {
+test('getimagesize() decisions and sizes match PHP', { skip: PHP_SKIP }, () => {
   const files = readdirSync(dir).sort();
   const php = JSON.parse(execFileSync('php', ['-r', `$o = []; foreach (json_decode(stream_get_contents(STDIN), true) as $f) { $r = @getimagesize('${dir}/' . $f); $o[] = $r ? [$r[0], $r[1], $r[2]] : false; } echo json_encode($o);`],
     { input: JSON.stringify(files), maxBuffer: 1 << 26 }).toString()) as unknown[];
@@ -206,7 +208,7 @@ test('getimagesize() decisions and sizes match PHP', () => {
 // (dort ließe Node eine solche Datei zu, PHP nicht); echte Musik hat diese Bytes nicht.
 const KNOWN_MIME: Record<string, [node: string, php: string]> = { 'fat_eb_24.f1': ['application/octet-stream', 'application/x-dbt'] };
 
-test('finfo MIME types match PHP for audio, documents, text and images', () => {
+test('finfo MIME types match PHP for audio, documents, text and images', { skip: PHP_SKIP }, () => {
   const files = readdirSync(dir).sort();
   const php = JSON.parse(execFileSync('php', ['-r', `$fi = finfo_open(FILEINFO_MIME_TYPE); $o = []; foreach (json_decode(stream_get_contents(STDIN), true) as $f) { $o[] = finfo_file($fi, '${dir}/' . $f); } echo json_encode($o);`],
     { input: JSON.stringify(files), maxBuffer: 1 << 26 }).toString()) as string[];

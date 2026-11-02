@@ -16,6 +16,7 @@ import { UNCONFIRMED_MESSAGE } from '../src/views/partials/ui.js';
 import type { PhpArray } from '../src/php.js';
 // @ts-ignore – reines ES-Modul ohne Typen
 import { checkText } from '../../tools/check-native-dialogs.mjs';
+import { ensureSchema } from '../src/schema.js';
 
 const BASE = loadConfig();
 const SOURCE = configString('db.name');
@@ -35,6 +36,8 @@ before(async () => {
   }
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
+  // Die Kopie kommt aus der Test-Datenbank: auf den neuesten Stand des Schemas bringen
+  await ensureSchema();
   // Daten, damit jedes bestätigte Formular erscheint: Code-Seite, Meilenstein mit Aufgabe, offenes Ticket, Discord
   await exec("INSERT INTO code_sites (id, user_id, slug, title, created_at, updated_at) VALUES (40, 6, 'tomcode', 'Tom', NOW(), NOW())");
   await exec("INSERT INTO milestones (id, title, status, position, created_at, updated_at) VALUES (50, 'Dialogs', 'planned', 0, NOW(), NOW())");

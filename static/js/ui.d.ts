@@ -63,7 +63,12 @@
 // einen beforeSubmit-Handler oder tragen Knopf oder Formular data-confirm, wird gefragt; bei OK setzt ui.js
 // _confirmed = 1 und sendet einmal neu – mit dem gedrückten Knopf (name/value). Danach bleiben die Absendeknöpfe bis
 // zur nächsten Seite gesperrt (kein doppelter Newsletter). Formulare mit _confirmed, die für den gedrückten Knopf
-// keine Frage haben, bekommen _confirmed = 1 ohne Dialog.
+// keine Frage haben, bekommen _confirmed = 1 ohne Dialog. Ohne requestSubmit (Safari 15) gelten formaction,
+// formmethod, formenctype und formtarget des gedrückten Knopfs genauso.
+//
+// Meldungen unter Feldern: eine je Feld; eine Optionsgruppe (Optionsfelder mit gleichem Namen) hat eine gemeinsame
+// Meldung nach der letzten Option. form.reset() nimmt die Meldungen des Formulars wieder weg (z. B. ein Fenster, das
+// für die nächste Zeile neu öffnet).
 //
 // Standardtexte: "OK", "Cancel", "Close", "Confirm", "Dismiss", "Something went wrong. Please try again.",
 // "+N more notifications", "+N more", "Type {match} to confirm", "Please check “{label}”.",

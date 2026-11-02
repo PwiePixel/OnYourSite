@@ -1,9 +1,11 @@
 // Gemeinsame Hilfen für die Vergleiche des Inhalts-Pakets mit den echten PHP-Funktionen (lib/themes.php, social.php,
-// blocks.php, pages.php, share.php). PHP bekommt dieselben Eingaben als JSON-Text und eigene Einstellungen
-// (oys_config() wird hier ersetzt), damit Datenbank und Upload-Ordner pro Test frei wählbar sind.
+// blocks.php, pages.php, share.php der PHP-Version, siehe support/phpRef.ts). PHP bekommt dieselben Eingaben als
+// JSON-Text und eigene Einstellungen (oys_config() wird hier ersetzt), damit Datenbank und Upload-Ordner pro Test frei
+// wählbar sind.
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR, loadConfig, type ConfigData } from '../src/config.js';
+import { loadConfig, type ConfigData } from '../src/config.js';
 import { jsonUnescaped } from '../src/html.js';
+import { phpFile } from './support/phpRef.js';
 
 const LIBS = ['lib/helpers.php', 'lib/storage.php', 'lib/themes.php', 'lib/social.php', 'lib/blocks.php', 'lib/pages.php', 'lib/share.php', 'lib/codesites.php'];
 
@@ -21,7 +23,7 @@ export function runPhp(body: string, input: string, opts: { config?: ConfigData;
     }
     date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
     mb_internal_encoding('UTF-8');
-    ${LIBS.map((f) => `require '${ROOT_DIR}/${f}';`).join('\n')}
+    ${LIBS.map((f) => `require '${phpFile(f)}';`).join('\n')}
     ${opts.db ? `$pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . oys_config('db.name') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
       $pdo->exec("SET time_zone = '" . date('P') . "'");` : ''}

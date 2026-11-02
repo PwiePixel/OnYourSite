@@ -1,11 +1,11 @@
 // Paket public gegen PHP: checkdate(), Ziel-Adressen geschützter Blöcke (oys_block_target), die Zwischenseite für
 // geschützte Links (oys_render_gate), Accept-Erkennung (oys_wants_json), die 404-Seite (views/404.php) und die
-// Termin-Seite (views/kalender.php) – jeweils Byte für Byte mit den echten PHP-Dateien. Die Funktionen aus
-// lib/routes_public.php werden dafür aus der Datei gelesen (die Datei selbst beantwortet beim Einbinden eine Anfrage).
-// Dazu Node-Prüfungen der Wege durch die Routen ohne Server (Weiterleitungen, Status, 404 für alle /_/-Reste).
+// Termin-Seite (views/kalender.php) – jeweils Byte für Byte mit den echten PHP-Dateien der PHP-Version (siehe
+// support/phpRef.ts). Die Funktionen aus lib/routes_public.php werden dafür aus der Datei gelesen (die Datei selbst
+// beantwortet beim Einbinden eine Anfrage). Dazu Node-Prüfungen der Wege durch die Routen ohne Server (Weiterleitungen,
+// Status, 404 für alle /_/-Reste).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ROOT_DIR } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { hmac } from '../src/crypto.js';
 import { parseStr } from '../src/php.js';
@@ -13,17 +13,19 @@ import { isHalt, makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { blockFromRow } from '../src/content/pages.js';
 import { blockTarget, publicRoutes, renderGate, wantsJson } from '../src/public/routes.js';
 import { notFoundData, notFoundView } from '../src/public/notFound.js';
+import { ensureSchema } from '../src/schema.js';
 import { checkdate, kalender } from '../src/public/views/kalender.js';
 import { diffs, rng, runPhp } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
 import { withoutDialogs } from './support/dialogParity.js';
+import { PHP_SKIP, phpFile } from './support/phpRef.js';
 
 after(() => closePool());
 
 // Funktion aus lib/routes_public.php lesen und in PHP bekannt machen
 const PHP_FROM_ROUTES = (name: string) => `
   (function () {
-    $src = file_get_contents('${ROOT_DIR}/lib/routes_public.php');
+    $src = file_get_contents('${phpFile('lib/routes_public.php')}');
     if (!preg_match('/^function ${name}\\(.*?^}$/ms', $src, $m)) { fwrite(STDERR, 'missing ${name}'); exit(1); }
     eval($m[0]);
   })();`;
@@ -40,7 +42,7 @@ async function run(ctx: Ctx, fn: (c: Ctx) => Promise<void>): Promise<Ctx> {
 
 const HASH = '$2y$10$wTrscK.WaG22eq5whSC/5uUBtskLFCfrfgCArmJWiQfd/OLfY0VG2';
 
-test('checkdate() matches PHP for edge and random dates', () => {
+test('checkdate() matches PHP for edge and random dates', { skip: PHP_SKIP }, () => {
   const r = rng(7);
   const cases: Array<[number, number, number]> = [];
   for (const m of [-1, 0, 1, 2, 3, 4, 6, 9, 11, 12, 13]) {
@@ -71,7 +73,7 @@ const DATA = [
   '{"title":["x"],"url":"+49 170 1234567"}', '{"title":"\\u202eevil","url":"javascript:alert(1)"}', '{"title":"<b>\\"q\\"<\\/b>","url":"tel:123"}',
 ];
 
-test('blockTarget() matches oys_block_target() for every block type, URL form and page address mode', () => {
+test('blockTarget() matches oys_block_target() for every block type, URL form and page address mode', { skip: PHP_SKIP }, () => {
   const cases: Array<{ row: Record<string, unknown>; page: Record<string, unknown> }> = [];
   let id = 100;
   for (const page of PAGES) {
@@ -98,7 +100,7 @@ test('blockTarget() matches oys_block_target() for every block type, URL form an
   assert.deepEqual(diffs(cases, node, php), []);
 });
 
-test('renderGate() matches oys_render_gate() byte for byte (age, password, with and without error)', () => {
+test('renderGate() matches oys_render_gate() byte for byte (age, password, with and without error)', { skip: PHP_SKIP }, () => {
   const cases: Array<{ row: Record<string, unknown>; page: Record<string, unknown>; kind: string; error: string | null }> = [];
   let id = 7;
   for (const page of PAGES) {
@@ -119,7 +121,7 @@ test('renderGate() matches oys_render_gate() byte for byte (age, password, with 
   });
 });
 
-test('wantsJson() matches stripos() on the Accept header (ASCII case folding only)', () => {
+test('wantsJson() matches stripos() on the Accept header (ASCII case folding only)', { skip: PHP_SKIP }, () => {
   const values = ['', 'application/json', 'Application/JSON', 'APPLICATION/JSON', 'text/html, application/json;q=0.9', 'application/jsonp', 'application/ json',
     'APPLİCATION/JSON', 'application/jsonİ', 'text/*', '*/*', 'application/x-json', 'ＡＰＰＬＩＣＡＴＩＯＮ/JSON'];
   const php = JSON.parse(runPhp(`echo json_encode(array_map(fn($a) => stripos($a, 'application/json') !== false, $in));`, JSON.stringify(values))) as boolean[];
@@ -127,17 +129,19 @@ test('wantsJson() matches stripos() on the Accept header (ASCII case folding onl
   assert.deepEqual(node, php.map((x, i) => (values[i] === '' ? false : x)));
 });
 
-test('the 404 page matches views/404.php for every host and path form (taken, free, reserved, www, foreign)', async () => {
+test('the 404 page matches views/404.php for every host and path form (taken, free, reserved, www, foreign)', { skip: PHP_SKIP }, async () => {
+  // Die Liste aller Adressen gehört zur Prüfung „Adresse frei?“ – die Datenbank dieses Arbeitsordners braucht sie
+  await ensureSchema();
   const hosts = ['oys.test:8080', 'OYS.TEST:8080', 'www.oys.test:8080', 'mia.oys.test:8080', 'free-name.oys.test:8080', 'admin.oys.test:8080',
     'a--b.oys.test:8080', '.oys.test:8080', 'x.y.oys.test:8080', 'example.com', 'evil-oys.test:8080', 'tomcode.oys.test'];
   const uris = ['/', '/free-name', '/Free-Name/', '/mia', '/a', '/' + 'a'.repeat(30), '/' + 'b'.repeat(31), '/kalender', '/x/y', '/%3Cscript%3E',
     '//evil', '/a:80/x', '/free-name?x=1', '/_/nope', '/www', '/-ab', '/ab-'];
   const cases: Array<{ host: string; uri: string }> = [];
   for (const host of hosts) for (const uri of uris) cases.push({ host, uri });
-  const php = runPhpList(`require_once '${ROOT_DIR}/blacklist.php';
+  const php = runPhpList(`require_once '${phpFile('blacklist.php')}';
     foreach ($in as $c) {
       $_SERVER['HTTP_HOST'] = $c['host']; $_SERVER['REQUEST_URI'] = $c['uri'];
-      ob_start(); include '${ROOT_DIR}/views/404.php'; $out[] = ob_get_clean();
+      ob_start(); include '${phpFile('views/404.php')}'; $out[] = ob_get_clean();
     }`, JSON.stringify(cases), { db: true });
   let free = 0;
   for (let i = 0; i < cases.length; i++) {
@@ -155,7 +159,7 @@ function bookingTokens(html: string, pageId: number): string {
     hmac('booking|' + pageId + '|' + ts).slice(0, 32) === mac && Math.abs(Number(ts) - Date.now() / 1000) < 600 ? 'name="t" value="TOKEN"' : m);
 }
 
-test('the calendar page matches views/kalender.php (form, success notice, every error, refilled values)', async () => {
+test('the calendar page matches views/kalender.php (form, success notice, every error, refilled values)', { skip: PHP_SKIP }, async () => {
   const ts = Math.floor(Date.now() / 1000);
   const pages = [
     { id: 2, user_id: 5, slug: 'mia', title: 'Mia Müller', avatar: null, address_mode: 'subdomain', theme: 'cyberpunk', settings: '{"accent":"#ff5500"}' },
@@ -194,7 +198,7 @@ test('the calendar page matches views/kalender.php (form, success notice, every 
       $_GET = []; parse_str($c['query'], $_GET);
       $_POST = []; if ($c['method'] === 'POST') parse_str($c['body'], $_POST);
       $page = $c['page']; $calendarKey = $c['key'];
-      ob_start(); include '${ROOT_DIR}/views/kalender.php'; $out[] = ob_get_clean();
+      ob_start(); include '${phpFile('views/kalender.php')}'; $out[] = ob_get_clean();
     }`, JSON.stringify(cases), { db: true });
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];

@@ -12,8 +12,10 @@ import type { Ctx } from '../web/ctx.js';
 import { phpStr } from '../php.js';
 import { cleanupFiles, deletePage, userPages } from '../content/pages.js';
 import { codeDeleteUser } from '../code/sites.js';
+import { hcDeleteUser } from '../honeycombs/deletion.js';
 import { userUploadFiles } from '../content/uploads.js';
 import { uploadPath } from '../content/storage.js';
+import { releaseUserAddresses } from '../content/addresses.js';
 
 export interface DeletionRun {
   // Arbeit nach dem Commit (Dateien aufräumen …) – läuft nur, wenn das Konto wirklich gelöscht wurde
@@ -90,11 +92,20 @@ export async function deleteAccount(ctx: Ctx | null, uid: number): Promise<void>
 
 // ---------------------------------------------------------------- Haken des Kerns
 
-// Code-Seite mit Dateien (und bis der Shop seinen eigenen Haken hat: die Honigwaben-Buchungen)
+// Code-Seite mit Dateien
 registerUserDeletion({
   name: 'code',
   order: 30,
   run: (db, uid) => codeDeleteUser(uid, db),
+});
+
+// Honigwaben: Buchungen, Berechtigungen und Shop-Zeilen (das Protokoll verliert nur den Bezug zum Konto). Angemeldet
+// hier und nicht im Shop: Dieses Modul lädt den Shop schon über code/sites.ts – eine Anmeldung dort liefe, bevor es
+// die Liste der Haken gibt. So ist der Haken überall da, wo Konten gelöscht werden.
+registerUserDeletion({
+  name: 'honeycombs',
+  order: 40,
+  run: (db, uid) => hcDeleteUser(uid, db),
 });
 
 // Alle Profilseiten mit Blöcken, Statistik und Nachrichten; ihre Dateien nach dem Commit
@@ -117,6 +128,14 @@ registerUserDeletion({
       await db.exec(`DELETE FROM ${table} WHERE user_id = ?`, [uid]);
     }
   },
+});
+
+// Adressen des Kontos: für niemanden reserviert (Link- und Code-Seiten 30 Tage, wenn sie mindestens 7 Tage benutzt
+// wurden, Statusseiten 90 Tage) – ohne Bezug zur Person (content/addresses.ts)
+registerUserDeletion({
+  name: 'addresses',
+  order: 70,
+  run: (db, uid) => releaseUserAddresses(db, uid),
 });
 
 // Zuletzt das Konto selbst; danach alles, was noch im Upload-Ordner liegt (z. B. Bilder der Code-Seite)

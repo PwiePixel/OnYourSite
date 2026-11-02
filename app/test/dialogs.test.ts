@@ -6,7 +6,12 @@ import { makeTestCtx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 import { bellMarkup, confirmAttrs, confirmField, flashBanner, flashMarkup, uiAssets, unconfirmed, UNCONFIRMED_MESSAGE } from '../src/views/partials/ui.js';
 // @ts-ignore – reines ES-Modul ohne Typen (läuft auch als Kommandozeile)
-import { checkFiles, checkText } from '../../tools/check-native-dialogs.mjs';
+import { checkFiles, checkText, targetFiles } from '../../tools/check-native-dialogs.mjs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { ROOT_DIR } from '../src/config.js';
 
 test('uiAssets() loads ui.css and ui.js (deferred, versioned) on app pages and only ui.js on profile pages', () => {
   const app = uiAssets('app');
@@ -80,14 +85,37 @@ test('the native-dialog check finds browser pop-ups and leaves the own library a
   assert.deepEqual(rules("await exec('INSERT INTO notifications (user_id) VALUES (?)', [1]);", { notifyAllowed: true }), []);
 });
 
-test('the native-dialog check over the code base (warning mode until the profile pages are converted)', () => {
-  const found = checkFiles() as Array<{ file: string; line: number; rule: string }>;
-  // Warnungen: noch offene Stellen (Editor, Profilseiten, Startskript der Code-Seiten, Benachrichtigungen ohne notify())
-  for (const f of found) console.log(`warning ${f.file}:${f.line} ${f.rule}`);
-  assert.ok(Array.isArray(found));
-  // Die Bibliothek selbst wird nie geprüft (sie ersetzt die Browser-Popups)
-  assert.ok(!found.some((f) => f.file === 'static/js/ui.js'));
-  // Admin, Anmelden und Registrieren sind umgestellt (CD-3): dort darf nichts mehr gefunden werden
-  const done = /^app\/src\/(admin\/|app\/views\/(login|register)\.ts|app\/impersonate\.ts|updates\/adminView\.ts|community\/adminView\.ts|honeycombs\/adminView\.ts)/;
-  assert.deepEqual(found.filter((f) => done.test(f.file)), []);
+test('the native-dialog check over the code base is an error: nothing may be found', () => {
+  // Admin und Anmelden (CD-3), Editor (CD-2), Profilseiten und das Startskript der Code-Seiten (CD-4) sind umgestellt
+  const found = checkFiles() as Array<{ file: string; line: number; rule: string; match: string }>;
+  assert.deepEqual(found.map((f) => `${f.file}:${f.line} ${f.rule}: ${f.match.trim()}`), []);
+  // Die Bibliothek selbst wird nie geprüft (sie ersetzt die Browser-Popups); geprüft werden Skripte und Server-Code
+  const files = (targetFiles() as string[]).map((f) => relative(ROOT_DIR, f));
+  assert.ok(!files.includes('static/js/ui.js'));
+  for (const f of ['static/js/editor.js', 'static/js/page.js', 'static/js/share.js', 'app/src/code/sites.ts', 'app/src/content/render.ts']) assert.ok(files.includes(f), f);
+});
+
+test('the check is an error on the command line (exit 1), --warn only warns', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'oys-lint-'));
+  try {
+    // Eine Kopie des Prüfskripts über einem Baum mit einem Browser-Popup
+    mkdirSync(join(dir, 'tools'));
+    mkdirSync(join(dir, 'static/js'), { recursive: true });
+    mkdirSync(join(dir, 'app/src'), { recursive: true });
+    copyFileSync(join(ROOT_DIR, 'tools/check-native-dialogs.mjs'), join(dir, 'tools/check-native-dialogs.mjs'));
+    writeFileSync(join(dir, 'static/js/x.js'), "if (!confirm('Sure?')) return;\n");
+    const run = (args: string[]) => spawnSync(process.execPath, [join(dir, 'tools/check-native-dialogs.mjs'), ...args], { encoding: 'utf8' });
+    const strict = run([]);
+    assert.equal(strict.status, 1);
+    assert.match(strict.stdout, /^error static\/js\/x\.js:1 native-dialog: confirm\(/m);
+    const warn = run(['--warn']);
+    assert.equal(warn.status, 0);
+    assert.match(warn.stdout, /^warning static\/js\/x\.js:1 native-dialog/m);
+    writeFileSync(join(dir, 'static/js/x.js'), "OYSUI.confirm({ title: 'Sure?' });\n");
+    const clean = run([]);
+    assert.equal(clean.status, 0);
+    assert.match(clean.stdout, /no native dialogs found/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

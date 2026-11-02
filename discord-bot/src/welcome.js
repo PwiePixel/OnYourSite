@@ -17,6 +17,7 @@ function welcomeEmbed(member, cfg) {
   if (cfg.rulesChannelId) more.push({ name: 'Rules', value: `<#${cfg.rulesChannelId}>`, inline: true });
   if (cfg.suggestionForumId) more.push({ name: 'Ideas', value: `<#${cfg.suggestionForumId}>`, inline: true });
   if (cfg.supportChannelId) more.push({ name: 'Help', value: `<#${cfg.supportChannelId}>`, inline: true });
+  if (cfg.updatesChannelId) more.push({ name: 'Updates', value: `<#${cfg.updatesChannelId}>`, inline: true });
   if (more.length) e.addFields(more);
   return e
     .setThumbnail(member.user.displayAvatarURL({ size: 256 }))

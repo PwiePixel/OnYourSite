@@ -1,13 +1,12 @@
 // Honigwaben gegen PHP: Einstellungen, Kontostand, Buchungen, Verdienen, Bezahlen, Editor-Daten und der Admin-Teil.
-// Dieselben Aufrufe laufen mit lib/honeycombs.php auf Datenbank A und mit der Node-Version auf Datenbank B;
-// nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im Admin stehen die Aktionen
-// und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) – verglichen wird mit
-// denselben Teilen von PHP.
+// Dieselben Aufrufe laufen mit lib/honeycombs.php (PHP-Version, siehe support/phpRef.ts) auf Datenbank A und mit der
+// Node-Version auf Datenbank B; nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im
+// Admin stehen die Aktionen und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) –
+// verglichen wird mit denselben Teilen von PHP.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR } from '../src/config.js';
 import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
@@ -15,13 +14,11 @@ import { phpInt, phpJsonDecode } from '../src/honeycombs/util.js';
 import { adminHoneycombsView } from '../src/honeycombs/adminView.js';
 import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
-import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
-import type { ConfigData } from '../src/config.js';
+import { phpBoot, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
-// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
-const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
-const DB = { php: SOURCE + '_hcphp', node: SOURCE + '_hcnode' };
+const DB = { php: testDbName('hcu_hc_php'), node: testDbName('hcu_hc_node') };
 let admin: Connection;
 
 function fixture(): Array<[string, unknown[]]> {
@@ -94,7 +91,12 @@ async function same(ops: Op[], label: string): Promise<unknown[]> {
 
 const deep = (n: number, inner: string) => '['.repeat(n) + inner + ']'.repeat(n);
 
-test('settings: defaults and merging of stored values', async () => {
+test('settings without stored values are the defaults; broken JSON reads as null', () => {
+  assert.deepEqual(hcSettingsFrom(''), hcDefaults());
+  assert.equal(phpJsonDecode('{"a":"\\ud800"}'), null);
+});
+
+test('settings: defaults and merging of stored values', { skip: PHP_SKIP }, async () => {
   const metas = ['', 'null', '[]', '[1,2,3]', '5', '"str"', '{}', '{"daily":7}', ' {"daily":4} ',
     '{"daily":"7","profile":" 30","views":"1e1","views_step":"0","code_page":"12.9"}',
     '{"daily":-5,"profile":100001,"views":1e400,"views_step":-1,"code_page":9223372036854775807}',
@@ -114,12 +116,9 @@ test('settings: defaults and merging of stored values', async () => {
     ['save_settings', { daily: '\t7 ', profile: '+3', views: '-0', views_step: '.9', code_page: '100000', extra: '1' }],
     ['meta_delete']];
   await same(ops, 'settings');
-  // Die reine Fassung (ohne Datenbank) rechnet gleich
-  assert.deepEqual(hcSettingsFrom(''), hcDefaults());
-  assert.equal(phpJsonDecode('{"a":"\\ud800"}'), null);
 });
 
-test('balance, add (unique key), history and describe', async () => {
+test('balance, add (unique key), history and describe', { skip: PHP_SKIP }, async () => {
   const rows = [
     { reason: 'daily', ref: '2026-10-01', note: '', amount: 5 }, { reason: 'profile', ref: 'complete', note: '', amount: 20 },
     { reason: 'views', note: '1000', amount: 10 }, { reason: 'views', note: 'abc', amount: 10 }, { reason: 'views', note: '1234567', amount: 10 },
@@ -140,12 +139,12 @@ test('balance, add (unique key), history and describe', async () => {
     ['profile_complete', 3], ['profile_complete', 5], ['profile_complete', 6], ['profile_complete', 7], ['profile_complete', 8], ['profile_complete', 9]];
   await same(ops, 'ledger');
   // describe() ohne Datenbank: dieselben Texte wie die echte Funktion
-  const php = JSON.parse(execFileSync('php', ['-r', `${PHP_BOOT} echo json_encode(array_map('oys_hc_describe', json_decode(stream_get_contents(STDIN), true)), JSON_UNESCAPED_UNICODE);`],
-    { input: JSON.stringify(rows), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }).toString());
+  const php = JSON.parse(execFileSync('php', ['-r', `${phpBoot()} echo json_encode(array_map('oys_hc_describe', json_decode(stream_get_contents(STDIN), true)), JSON_UNESCAPED_UNICODE);`],
+    { input: JSON.stringify(rows), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }).toString());
   assert.deepEqual(rows.map((r) => hcDescribe(r)), php);
 });
 
-test('earn: daily, profile and views (one level a day, at most 20)', async () => {
+test('earn: daily, profile and views (one level a day, at most 20)', { skip: PHP_SKIP }, async () => {
   const ops: Op[] = [
     ['earn', 5], ['earn', 5], ['for_editor', 5], ['for_editor', 5, [{ amount: 5, text: 'for being active today' }]],
     ['earn', 6], ['earn', 3], ['earn', 9],
@@ -163,7 +162,7 @@ test('earn: daily, profile and views (one level a day, at most 20)', async () =>
   assert.deepEqual(php[1], []);
 });
 
-test('spend: price, once per ref, not below 0', async () => {
+test('spend: price, once per ref, not below 0', { skip: PHP_SKIP }, async () => {
   const ops: Op[] = [
     ['spend', 9, 100, 'code_page'], ['spend', 5, 50, 'theme'], ['spend', 5, 50, 'theme'], ['spend', 5, 0, 'free'], ['spend', 5, 100000, 'big'],
     ['spend', 999, 0, 'code_page'], ['spend', 7, -5, 'neg'], ['spend', 5, 1, 'THEME'], ['spend', 6, 1000, 'code_page'],
@@ -172,14 +171,12 @@ test('spend: price, once per ref, not below 0', async () => {
   assert.match(String(php[0]), /^You need 100 honeycombs – you have \d+\.$/);
 });
 
-test('admin handler: every action incl. invalid input', async () => {
+test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, async () => {
   const g = (o: Record<string, unknown>) => ({ hc_action: 'grant', ...o });
   const ops: Op[] = [
     ['admin', {}, 3], ['admin', { hc_action: 'nope' }, 3], ['admin', { hc_action: ['settings'] }, 3], ['admin', { hc_action: 'Settings' }, 3], ['admin', { hc_action: '' }, 3],
-    ['admin', { hc_action: 'settings', daily: '3', profile: '15', views: '8', views_step: '50', code_page: '250' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: '1e400', views_step: '0', code_page: '-1', profile: '1e5', views: '100001' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: ['5'], profile: '', views: 'abc', views_step: ' 7 ', code_page: '0x10' }, 3], ['settings'],
+    // hc_action=settings vergleicht hc-admin.http.test.ts: seit „Catalogue & prices“ steht der Preis nur im Katalog,
+    // und das Formular lässt Schlüssel, die es nicht schickt (spätere Schritte), stehen – PHP schrieb alle fünf neu
     ['admin', g({ user_id: '0', amount: '5' }), 3], ['admin', g({ user_id: 'abc', amount: '5' }), 3], ['admin', g({ user_id: '999', amount: '5' }), 3],
     ['admin', g({ amount: '5' }), 3], ['admin', g({ user_id: '1e400', amount: '5' }), 3],
     ['admin', g({ user_id: '5', amount: '0' }), 3], ['admin', g({ user_id: '5', amount: '100001' }), 3], ['admin', g({ user_id: '5', amount: '-100001' }), 3],
@@ -229,43 +226,40 @@ test('admin handler: every action incl. invalid input', async () => {
     ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30], ['history', 8, 5]];
   const php = await same(ops, 'admin');
   assert.deepEqual(php[0], null);
-  assert.deepEqual(php[5], { ok: 'Honeycomb settings saved.' });
+  // Nur Node: jede Gutschrift des Teams nennt den Admin (actor_id = die ID aus dem Bezug a<id>-…)
+  const [grants] = await admin.query<RowDataPacket[]>(`SELECT ref, actor_id FROM \`${DB.node}\`.honeycomb_ledger WHERE reason = 'admin' AND id > 4 ORDER BY id`);
+  assert.ok(grants.length >= 5);
+  for (const g of grants) assert.equal(g.actor_id, Number(/^a(\d+)-/.exec(String(g.ref))?.[1]), String(g.ref));
 });
 
-test('locked: busy message after 10 s, and parallel spends never overdraw', async () => {
-  // Fremde Sperre halten: PHP und Node warten je 10 Sekunden und melden dann, dass es gerade nicht geht
+test('locked: busy message while the account is locked, and parallel spends never overdraw (Node only)', async () => {
+  // PHP wartete auf GET_LOCK('oys_hc_<id>', 10). Node sperrt seit dem Shop-Kern die Zeile des Kontos in hc_accounts
+  // (höchstens 5 Sekunden) – eine zweite Sperrart gibt es nicht mehr, deshalb ohne Vergleich mit PHP.
+  await useDb(DB.node);
   const holder = await adminConnection();
   try {
-    await holder.query("SELECT GET_LOCK('oys_hc_99999', 30)");
-    const php = new Promise<string>((resolve, reject) => {
-      const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_hc_spend($pdo, 99999, 0, 'busy'), JSON_UNESCAPED_UNICODE);`],
-        { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out))));
-      child.stdin?.end();
-    });
-    await useDb(DB.node);
-    const node = hcSpend(99999, 0, 'busy');
-    const [a, b] = await Promise.all([php, node]);
-    assert.equal(a, HC_BUSY);
-    assert.equal(b, HC_BUSY);
+    await holder.query(`USE \`${DB.node}\``);
+    await holder.query('INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) VALUES (99999, NOW(), NOW())');
+    await holder.query('START TRANSACTION');
+    await holder.query('SELECT * FROM hc_accounts WHERE user_id = 99999 FOR UPDATE');
+    assert.equal(await hcSpend(99999, 0, 'busy_test'), HC_BUSY);
+    assert.equal(await hcLocked(99999, async () => 'ran'), HC_BUSY);
+    await holder.query('ROLLBACK');
   } finally {
-    await holder.query("SELECT RELEASE_LOCK('oys_hc_99999')");
     await holder.end();
   }
-  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt, die Sperre ist danach frei
+  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt
   await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (99998, 100, 'admin', 'p', '', NOW())`);
-  const results = await Promise.all([hcSpend(99998, 60, 'x'), hcSpend(99998, 60, 'y'), hcSpend(99998, 60, 'z')]);
+  const results = await Promise.all([hcSpend(99998, 60, 'xx'), hcSpend(99998, 60, 'yy'), hcSpend(99998, 60, 'zz')]);
   assert.equal(results.filter((r) => r === null).length, 1);
   assert.deepEqual(results.filter((r) => r !== null), ['You need 60 honeycombs – you have 40.', 'You need 60 honeycombs – you have 40.']);
-  const [free] = await admin.query<RowDataPacket[]>("SELECT IS_FREE_LOCK('oys_hc_99998') AS f");
-  assert.equal(Number(free[0].f), 1);
-  // Fehler in fn: Sperre wird trotzdem gelöst
+  // Fehler in fn: zurückgerollt, die Sperre ist danach frei
   await assert.rejects(hcLocked(99998, async () => { throw new Error('boom'); }));
-  const [free2] = await admin.query<RowDataPacket[]>("SELECT IS_FREE_LOCK('oys_hc_99998') AS f");
-  assert.equal(Number(free2[0].f), 1);
+  assert.equal(await hcLocked(99998, async () => 'free'), 'free');
   await restoreDb();
 });
 
-test('(int) of form and JSON values matches PHP 8.3', () => {
+test('(int) of form and JSON values matches PHP 8.3', { skip: PHP_SKIP }, () => {
   const inputs: unknown[] = ['1e400', '-1e400', '1e300', '-1e300', '99999999999999999999', '9223372036854775807', '12abc', ' 12', '\n-7', '0x1A', '.5', '5.', '-0', '',
     'abc', '+3', '1e3', '1.9e2', 9.9e18, -9.9e18, 1e19, 2 ** 63, -(2 ** 63), 1e300, 12.7, -12.7, true, false, null, ['a'], [], { a: 1 }];
   const php = JSON.parse(execFileSync('php', ['-r', 'echo json_encode(array_map(function ($v) { return (int) $v; }, json_decode(stream_get_contents(STDIN), true)));'],
@@ -274,7 +268,7 @@ test('(int) of form and JSON values matches PHP 8.3', () => {
   assert.deepEqual(inputs.map((v) => phpInt(v)), php.map((n) => Number(n)));
 });
 
-test('kb() rounds like the PHP view', () => {
+test('kb() rounds like the PHP view', { skip: PHP_SKIP }, () => {
   const sizes = [0, 1, 511, 512, 1023, 1024, 1535, 1536, 2047, 2048, 1048575, 1048576, 1101004, 1101005, 1310720, 1572864, 2097152, 5242879, 10485760, 123456789];
   const php = JSON.parse(execFileSync('php', ['-r', '$kb = function (int $b) { return $b >= 1048576 ? round($b / 1048576, 1) . \' MB\' : max(1, round($b / 1024)) . \' KB\'; };'
     + 'echo json_encode(array_map($kb, json_decode(stream_get_contents(STDIN), true)));'], { input: JSON.stringify(sizes) }).toString());
@@ -284,18 +278,18 @@ test('kb() rounds like the PHP view', () => {
 // views/admin_honeycombs.php mit den Variablen aus views/admin.php
 async function phpView(db: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile('php', ['-r', `${PHP_BOOT} $_SESSION = ['csrf' => 'CSRFTOKEN'];
+    const child = execFile('php', ['-r', `${phpBoot()} $_SESSION = ['csrf' => 'CSRFTOKEN'];
       $all_users = $pdo->query("SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
       foreach ($all_users as &$u) { $u['discord_id'] = decryptData($u['discord_id']); } unset($u);
-      ob_start(); require '${ROOT_DIR}/views/admin_honeycombs.php'; echo ob_get_clean();`],
-    { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR, maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(out)));
+      ob_start(); require '${phpFile('views/admin_honeycombs.php')}'; echo ob_get_clean();`],
+    { env: { ...process.env, OYS_TEST_DB: db }, cwd: phpRoot(), maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(out)));
     child.stdin?.end();
   });
 }
-async function nodeView(db: string): Promise<string> {
+async function nodeView(db: string, tab = ''): Promise<string> {
   await useDb(db);
   try {
-    const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+    const ctx = new Ctx({ method: 'GET', url: '/admin' + (tab ? '?hc_tab=' + tab : ''), headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
     // Sitzung mit festem CSRF-Wert (wie $_SESSION im PHP-Aufruf)
     ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
     const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
@@ -341,26 +335,41 @@ function nodeCodeList(node: string): string {
 }
 // Die Formulare senden jetzt code_action statt hc_action=code_*
 const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(block|unblock)"/g, 'name="code_action" value="$1"');
-// Gelbe Honigwaben-Symbole (honeycomb-shop §5.1): Kopf von „Give honeycombs“ und das Symbol bei jedem Kontostand
-const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text-brand-400'></i>", "<i class='bx bx-hive text-2xl text-yellow-400'></i>")
-  .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
 
-test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', async () => {
-  for (const [label, prep] of [['current data', ''], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
+test('admin view: the grant form and balances keep the fields of PHP, the moved code page list is unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
+  // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
+  // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
+  // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
+  // zufälligen Bezüge der Gutschriften nicht).
+  const [phpTimes] = await admin.query<RowDataPacket[]>(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS t FROM \`${DB.php}\`.honeycomb_ledger ORDER BY id`);
+  const [nodeRows] = await admin.query<RowDataPacket[]>(`SELECT id FROM \`${DB.node}\`.honeycomb_ledger ORDER BY id`);
+  for (const [i, r] of nodeRows.entries()) {
+    if (phpTimes[i]) await admin.query(`UPDATE \`${DB.node}\`.honeycomb_ledger SET created_at = ? WHERE id = ?`, [phpTimes[i].t, r.id]);
+  }
+  // Die Code-Seiten stehen nach updated_at DESC (ohne zweites Sortierfeld, wie in PHP). Die Admin-Aktionen oben setzen
+  // drei Seiten in derselben Sekunde auf „jetzt“ – bei Gleichstand wählt MariaDB die Reihenfolge selbst, in beiden
+  // Datenbanken womöglich verschieden. Darum vorher eindeutige Zeiten (gleicher Tag, angezeigt wird nur das Datum).
+  const unambiguous = 'UPDATE code_sites SET updated_at = DATE(updated_at) + INTERVAL id SECOND WHERE updated_at IS NOT NULL';
+  for (const [label, prep] of [['current data', unambiguous], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
     ['ledger only', 'DELETE FROM code_sites'], ['empty', 'DELETE FROM honeycomb_ledger']] as const) {
     if (prep) for (const db of Object.values(DB)) await admin.query(`USE \`${db}\``).then(() => admin.query(prep));
     const php = splitPhpView(viewNorm(await phpView(DB.php)));
     const node = viewNorm(await nodeView(DB.node));
     assert.ok(php.honeycombs.length > 1000, label);
-    // Eigene Dialoge (custom-dialogs): Node ohne data-confirm/_confirmed/data-error-*, PHP ohne confirm()
-    assert.equal(withoutDialogs(node), withoutNativeConfirms(yellowIcons(php.honeycombs)), label);
+    // Seit HC-5 hat der Bereich Honeycombs eigene Unterbereiche (hc-admin.http.test.ts); „Give honeycombs“ und die
+    // Kontostände stehen unter „Users“ mit denselben Feldern wie in PHP
+    const users = viewNorm(await nodeView(DB.node, 'users'));
+    for (const part of ['name="hc_action" value="grant"', 'name="grant_ref" value="REF"', 'id="hcUser" name="user_id"', 'id="hcAmount" type="number" name="amount" required min="-100000" max="100000"',
+      'id="hcNote" type="text" name="note" maxlength="150"', 'id="hcFilter"', 'id="hcRows"']) {
+      assert.ok(users.includes(part) && php.honeycombs.includes(part), label + ': ' + part);
+    }
     assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
     assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
     assert.equal(withoutDialogs(nodeCodeList(await nodeCodeView(DB.node))), withoutNativeConfirms(asCodeAction(php.codeList)), label);
   }
 });
 
-test('date() of today matches (earn refs use the site time zone)', () => {
-  const php = execFileSync('php', ['-r', `${PHP_BOOT} echo date('Y-m-d');`], { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }).toString();
+test('date() of today matches (earn refs use the site time zone)', { skip: PHP_SKIP }, () => {
+  const php = execFileSync('php', ['-r', `${phpBoot()} echo date('Y-m-d');`], { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }).toString();
   assert.equal(date('Y-m-d', time()), php);
 });

@@ -9,6 +9,10 @@ import { csrfField } from '../web/security.js';
 import { date, intval, phpStr, phpTruthy, strtotime, time, ucfirst } from '../php.js';
 import { botLastSeen, botSecret, ticketGet, ticketMessages } from './community.js';
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
+import { baseAuthority } from '../helpers.js';
+import { hiddenReason, suggestionsPageOn, visible, webCounts } from './suggestions.js';
+import { DISCORD_TAB_JOBS_SQL } from '../discord/jobs.js';
+import { report } from '../discord/botReport.js';
 
 const FILTERS = ['open', 'accepted', 'declined', 'all'];
 const FILTER_LABELS: Array<[string, string]> = [['open', 'Open'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['all', 'All']];
@@ -24,9 +28,14 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
   const botOnline = botSeenAt !== null && time() - botSeenAt < 300;
   const requested = ctx.get.suggestions ?? 'open';
   const suggestionFilter = typeof requested === 'string' && FILTERS.includes(requested) ? requested : 'open';
+  // Öffentliche Vorschlagsseite: an/aus, und je Vorschlag, ob er dort steht (on_web) bzw. bei eingeschalteter Seite
+  // stünde (web_ok) – entschieden von visible()
+  const pageOn = await suggestionsPageOn();
+  const webColumns = `, ${visible(pageOn)} AS on_web, ${visible(true)} AS web_ok`;
   const suggestions = suggestionFilter === 'all'
-    ? await q('SELECT * FROM community_suggestions ORDER BY id DESC LIMIT 100')
-    : await q('SELECT * FROM community_suggestions WHERE status = ? ORDER BY id DESC LIMIT 100', [suggestionFilter]);
+    ? await q(`SELECT *${webColumns} FROM community_suggestions ORDER BY id DESC LIMIT 100`)
+    : await q(`SELECT *${webColumns} FROM community_suggestions WHERE status = ? ORDER BY id DESC LIMIT 100`, [suggestionFilter]);
+  const web = pageOn ? await webCounts(true) : null;
   // Zähler wie ein PHP-Array: feste Schlüssel zuerst, dann was die Datenbank sonst noch liefert; all = Summe
   const counts = new Map<string, number>([['open', 0], ['accepted', 0], ['declined', 0]]);
   for (const row of await q('SELECT status, COUNT(*) AS n FROM community_suggestions GROUP BY status')) {
@@ -39,7 +48,10 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
   const ticketView = ctx.get.ticket !== undefined ? await ticketGet(intval(ctx.get.ticket)) : null;
   const messages = ticketView ? await ticketMessages(intval(ticketView.id)) : [];
   const pendingOutbox = intval(await value('SELECT COUNT(*) FROM community_outbox WHERE done_at IS NULL AND attempts < 10'));
-  const failedOutbox = await q('SELECT action, last_error, attempts FROM community_outbox WHERE done_at IS NULL AND last_error IS NOT NULL ORDER BY id DESC LIMIT 3');
+  // Aufträge für Updates, den Bericht und den Test des Bots und die Richtlinien von #suggestions stehen mit Retry/Forget
+  // im Reiter Discord (discord/jobs.ts) – hier nur Vorschläge und Tickets
+  const failedOutbox = await q(`SELECT action, last_error, attempts FROM community_outbox WHERE done_at IS NULL AND last_error IS NOT NULL AND NOT ${DISCORD_TAB_JOBS_SQL} ORDER BY id DESC LIMIT 3`);
+  const botVersion = botReady ? (await report())?.version ?? '' : '';
 
   const inputClass = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
   const btn = 'inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors';
@@ -66,11 +78,15 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
     o += (pendingOutbox === 1 ? '' : 's');
     o += " waiting for the bot</p>\n                        ";
   }
+  // Version des Bots (aus seinem Bericht) und der Weg zu den Discord-Einstellungen
+  if (botReady) {
+    o += '<p class="text-xs text-gray-500 mt-1" data-bot-extra>' + (botVersion !== '' ? 'Version ' + e(botVersion) + ' · ' : '') + '<a href="#discord" class="text-brand-400 hover:text-white">Discord settings</a></p>\n';
+  }
   o += "                    </div>\n                </div>\n\n                ";
   if (!botReady) {
-    o += "                <div class=\"rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 text-sm text-gray-300 space-y-2\">\n                    <p class=\"font-semibold text-amber-300\">Connect the Discord bot</p>\n                    <ol class=\"list-decimal pl-5 space-y-1\">\n                        <li>Add this line to <code>config.php</code> (a random secret, made just now): <code class=\"text-white break-all\">'bot_secret' =&gt; '";
+    o += "                <div class=\"rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 text-sm text-gray-300 space-y-2\">\n                    <p class=\"font-semibold text-amber-300\">Connect the Discord bot</p>\n                    <ol class=\"list-decimal pl-5 space-y-1\">\n                        <li>Add this line to <code>config.json</code> (a random secret, made just now) and restart the website: <code class=\"text-white break-all\">&quot;bot_secret&quot;: &quot;";
     o += randomHex(32);
-    o += "',</code></li>\n                        <li>Put the same value into <code>BOT_SECRET</code> in the bot’s <code>.env</code> and start the bot – see <code>discord-bot/README.md</code>.</li>\n                    </ol>\n                </div>\n                ";
+    o += "&quot;,</code></li>\n                        <li>Put the same value into <code>BOT_SECRET</code> in the bot’s <code>.env</code> and start the bot – see <code>discord-bot/README.md</code>.</li>\n                    </ol>\n                </div>\n                ";
   }
   o += "                ";
   for (const f of failedOutbox) {
@@ -82,6 +98,7 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
     o += e(f.last_error);
     o += "</div>\n                ";
   }
+  o += await publicPageCard(ctx, { botReady, pageOn, web, btn });
   o += "\n                <!-- Vorschläge -->\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-bulb text-xl text-brand-400'></i> Suggestions from Discord</h2>\n                        <div class=\"flex flex-wrap gap-1.5\">\n                            ";
   for (const [key, label] of FILTER_LABELS) {
     o += "                            <a href=\"/admin?suggestions=";
@@ -149,6 +166,7 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
         o += (s.reason !== '' ? ' – “' + e(s.reason) + '”' : '');
         o += "</p>\n                            ";
       }
+      o += await webRow(ctx, s, { botReady, pageOn, filter: suggestionFilter, btn });
       o += "                        </div>\n                        ";
     }
     o += "                    </div>\n                    ";
@@ -229,4 +247,67 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
   }
   o += "                </div>\n            </div>\n";
   return o;
+}
+
+// Karte „Public suggestions page“: Aus/An (Einschalten nach Rückfrage, nur mit dem Bot) und die Zahlen dazu
+async function publicPageCard(ctx: Ctx, d: { botReady: boolean; pageOn: boolean; web: { shown: number; waiting: number; hidden: number } | null; btn: string }): Promise<string> {
+  const host = baseAuthority();
+  const seg = 'px-3 py-1.5 rounded-md text-xs font-medium transition-colors';
+  const option = async (value: 'off' | 'on', label: string): Promise<string> => {
+    const active = (value === 'on') === d.pageOn;
+    const disabled = active || (value === 'on' && !d.botReady);
+    const confirm = value === 'on' ? confirmAttrs({
+      title: 'Turn on the suggestions page?',
+      text: `Suggestions the team decides from now on are shown at ${host}/suggestions, without names. The bot adds a note about this to the #suggestions guidelines and to every new post. Older suggestions stay hidden unless you show them one by one.`,
+      ok: 'Turn on', tone: 'warn',
+    }) : '';
+    return `<form action="/admin" method="POST" class="m-0"${confirm}>${await csrfField(ctx)}${value === 'on' ? confirmField() : ''}<input type="hidden" name="community_action" value="suggestions_page"><input type="hidden" name="suggestions" value="${value}"><button type="submit" class="${seg} ${active ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white disabled:opacity-50 disabled:hover:text-gray-400'}" aria-pressed="${active ? 'true' : 'false'}"${disabled ? ' disabled' : ''}>${label}</button></form>`;
+  };
+  let o = `
+                <!-- Öffentliche Vorschlagsseite -->
+                <div id="community-suggestions-page" class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6${d.botReady ? '' : ' opacity-60'}">
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-4">
+                        <div class="flex-1 min-w-0">
+                            <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-globe text-xl text-brand-400'></i> Public suggestions page</h2>
+                            <p class="text-sm text-gray-400 mt-1">Decided suggestions can be shown at ${e(host)}/suggestions – never with names.</p>
+                        </div>
+                        <div class="inline-flex shrink-0 gap-1 p-1 rounded-lg border border-bordercolor bg-inputbg" role="group" aria-label="Public suggestions page">
+                            ${await option('off', 'Off')}
+                            ${await option('on', 'On')}
+                        </div>
+                    </div>
+`;
+  if (!d.botReady) {
+    o += '                    <p class="mt-3 text-sm text-amber-400">The suggestions page needs the Discord bot.</p>\n';
+  } else if (d.web) {
+    o += `                    <p class="mt-3 text-sm text-gray-400">On the website: ${d.web.shown} · Waiting for a decision: ${d.web.waiting} · Not shown: ${d.web.hidden} · <a href="/suggestions" target="_blank" rel="noopener" class="text-brand-400 hover:text-white">View /suggestions</a></p>\n`;
+  }
+  o += '                </div>\n                <!-- /Öffentliche Vorschlagsseite -->';
+  return o;
+}
+
+// Je Vorschlag: steht er auf der Webseite (und warum nicht), dazu Zeigen/Verbergen. Gelöscht in Discord: nur das Abzeichen.
+async function webRow(ctx: Ctx, s: Record<string, unknown>, d: { botReady: boolean; pageOn: boolean; filter: string; btn: string }): Promise<string> {
+  const removed = s.removed_at !== null && s.removed_at !== undefined;
+  const badge = (cls: string, text: string, title = ''): string =>
+    `<span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${cls}"${title !== '' ? ` title="${e(title)}"` : ''}>${text}</span>`;
+  const parts: string[] = [];
+  if (removed) {
+    parts.push(badge('bg-red-500/15 text-red-400', 'Deleted in Discord'));
+  } else if (d.pageOn) {
+    parts.push(intval(s.on_web) === 1 ? badge('bg-emerald-500/15 text-emerald-400', 'On the website') : badge('bg-white/10 text-gray-400', 'Not on the website', hiddenReason(s)));
+  }
+  if (!removed && d.botReady) {
+    const show = intval(s.web_ok) !== 1;
+    // Ohne Hinweis an den Autor erst nach der Rückfrage
+    const ask = show && intval(s.web_notice) !== 1;
+    const confirm = ask ? confirmAttrs({
+      title: 'Show it anyway?',
+      text: 'The author posted it before the website showed suggestions and wasn’t told it could appear there.',
+      ok: 'Show on website', tone: 'warn',
+    }) : '';
+    parts.push(`<form action="/admin" method="POST" class="m-0"${confirm}>${await csrfField(ctx)}${ask ? confirmField() : ''}<input type="hidden" name="community_action" value="suggestion_web"><input type="hidden" name="id" value="${intval(s.id)}"><input type="hidden" name="state" value="${show ? 'shown' : 'hidden'}"><input type="hidden" name="filter" value="${e(d.filter)}"><button type="submit" class="${d.btn}"><i class='bx ${show ? 'bx-show' : 'bx-hide'}'></i> ${show ? 'Show on website' : 'Hide on website'}</button></form>`);
+  }
+  if (!parts.length) return '';
+  return `<div class="mt-3 flex flex-wrap items-center gap-2" data-web>${parts.join('')}</div>\n                            `;
 }

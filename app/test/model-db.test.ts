@@ -1,6 +1,7 @@
 // Schreibende Funktionen gegen PHP: dieselben Aufrufe (Seite anlegen, speichern, löschen, Benutzername, Dateien
-// aufräumen, Kalender) laufen in PHP und Node auf je einer frischen Kopie der Test-Datenbank und je einem eigenen
-// Upload-Ordner. Danach müssen alle betroffenen Tabellen und die Dateien übereinstimmen.
+// aufräumen, Kalender) laufen in PHP (PHP-Version, siehe support/phpRef.ts) und Node auf je einer frischen Kopie der
+// Test-Datenbank und je einem eigenen Upload-Ordner. Danach müssen alle betroffenen Tabellen und die Dateien
+// übereinstimmen. Ohne PHP läuft derselbe Ablauf nur mit Node (dritte Kopie) und wird an Stichproben geprüft.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
@@ -10,6 +11,7 @@ import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import { loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
 import { closePool, exec, q, value } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { passwordVerify } from '../src/crypto.js';
 import { strtotime, time } from '../src/php.js';
 import { calendarKey } from '../src/content/blocks.js';
@@ -18,10 +20,12 @@ import {
 } from '../src/content/pages.js';
 import { entries, isArr, jsonDecode, phpArray, type PhpArr } from '../src/content/util.js';
 import { runPhp, enc, FLAGS, jsonText, O, Raw } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const SOURCE = configString('db.name');
-const DBS = { php: SOURCE + '_mphp', node: SOURCE + '_mnode' };
+const DBS = { php: SOURCE + '_mphp', node: SOURCE + '_mnode', solo: SOURCE + '_msolo' };
+type Side = keyof typeof DBS;
 const TABLES = ['users', 'pages', 'page_blocks', 'block_clicks_daily', 'stats_daily', 'messages', 'code_sites', 'code_files', 'notifications', 'user_bookings'];
 const PASSWORDS = ['secret123', 'another-pass'];
 let admin: Connection;
@@ -32,7 +36,7 @@ const FILES = ['avatar_5_1700000001_abcdef12.png', 'bg_5_1700000002_abcdef12.jpg
   'gal_5_1700000005_abcdef12.png', 'gal_5_1700000006_abcdef12.png', 'music_5_1700000007_abcdef12.mp3', 'avatar_6_1700000008_abcdef12.png',
   'avatar_5_1700000009_abcdef12.png', 'file_5_1773643714.pdf', 'unused_5_1700000011_abcdef12.png', 'legacy name.png', '.htaccess'];
 
-const dirs = (side: 'php' | 'node') => ({ base: join(tmp, side), uploads: join(tmp, side, 'uploads') });
+const dirs = (side: Side) => ({ base: join(tmp, side), uploads: join(tmp, side, 'uploads') });
 
 before(async () => {
   admin = await mysql.createConnection({
@@ -49,8 +53,17 @@ before(async () => {
       await admin.query(`INSERT INTO \`${db}\`.\`${t}\` SELECT * FROM \`${SOURCE}\`.\`${t}\``);
     }
   }
+  // Beide Kopien auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert); PHP arbeitet auf demselben
+  // Schema und kennt die neuen Tabellen einfach nicht
+  for (const db of Object.values(DBS)) {
+    await closePool();
+    setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: db } });
+    await ensureSchema();
+  }
+  await closePool();
+  setConfigForTests(BASE);
   tmp = mkdtempSync(join(tmpdir(), 'oys-model-'));
-  for (const side of ['php', 'node'] as const) {
+  for (const side of Object.keys(DBS) as Side[]) {
     const d = dirs(side);
     mkdirSync(d.uploads, { recursive: true });
     for (const f of FILES) writeFileSync(join(d.uploads, f), 'x' + f);
@@ -357,13 +370,69 @@ async function dump(db: string): Promise<Record<string, unknown[]>> {
   return out;
 }
 
-const listing = (side: 'php' | 'node') => ({
+const listing = (side: Side) => ({
   uploads: readdirSync(dirs(side).uploads).sort(),
   base: readdirSync(dirs(side).base).sort(),
 });
 
-test('creating, saving, deleting and cleaning up pages writes exactly what PHP writes', async () => {
-  const config = (side: 'php' | 'node'): ConfigData => ({ ...BASE, db: { ...(BASE.db as ConfigData), name: DBS[side] }, uploads_dir: dirs(side).uploads });
+const config = (side: Side): ConfigData => ({ ...BASE, db: { ...(BASE.db as ConfigData), name: DBS[side] }, uploads_dir: dirs(side).uploads });
+
+// Stichproben der Rückgaben: Warnungen einmalig, idmap in Block-Reihenfolge, Fehler beim doppelten Namen, abgebrochene
+// Speichervorgänge, Kalender, 150 Blöcke, gehashte Passwörter (out: Rückgaben, norm: vereinheitlicht)
+function scenarioChecks(out: string[], norm: string[]): void {
+  const save1 = jsonDecode(norm[SCENARIO.findIndex((o) => o[0] === 'save_page')]) as { idmap: Record<string, number>; warnings: string[] };
+  assert.deepEqual(Object.keys(save1.idmap), ['n1', '1', 'n2', 'n3', 'n4', 'n5', '0012']);
+  assert.equal(save1.warnings.length, 2);
+  assert.equal(out[SCENARIO.findIndex((o) => o[0] === 'create_page' && o[1][1] === 'mia')], 'THROW');
+  // Die beiden abgebrochenen Speichervorgänge ändern nichts; danach: idmap mit "-0" und der Playlist aus der tiefen Adresse
+  const at = (save: unknown) => SCENARIO.findIndex((o) => o[0] === 'save_page' && o[1][1] === save);
+  assert.equal(out[at(SAVE_FAIL_PASSWORD)], 'THROW');
+  assert.equal(out[at(SAVE_FAIL_EMBED)], 'THROW');
+  assert.equal(norm[at(SAVE_FAIL_PASSWORD) + 1], norm[at(SAVE_FAIL_PASSWORD) - 1]);
+  assert.equal(norm[at(SAVE_FAIL_EMBED) + 1], norm[at(SAVE_FAIL_PASSWORD) - 1]);
+  const save3 = jsonDecode(norm[at(SAVE_3)]) as { idmap: Record<string, number>; blocks: Array<{ data: Record<string, unknown> }> };
+  // (Block 5 hat SAVE_2 entfernt, Block 12 gehört zu Toms Seite: beide werden neu angelegt; Reihenfolge wie in PHP)
+  assert.deepEqual(Object.keys(save3.idmap), ['-0', 'n9', '5', '-5', '1.0E+15', '12']);
+  assert.ok(save3.blocks.some((b) => b.data.provider === 'youtube'));
+  // Kalender: Schlüssel über den Block mit \n im Start, Fehler beim ungültigen Datum
+  const cal = SCENARIO.map((o, i) => [o, out[i]] as const).filter(([o]) => o[0] === 'calendar_access').map(([, r]) => r);
+  assert.deepEqual(cal.slice(-3).map((r) => (r === 'THROW' || r === 'null' ? r : 'KEY')), ['null', 'KEY', 'THROW']);
+  // Lea: 150 von 152 Blöcken
+  const lea = jsonDecode(norm[SCENARIO.findIndex((o) => o[0] === 'save_page' && o[1][0] === '@page:lea' && (o[1][1] as { page: unknown }).page !== 'nope')]) as { blocks: unknown[]; idmap: Record<string, number> };
+  assert.equal(lea.blocks.length, 150);
+  assert.equal(Object.keys(lea.idmap).length, 150);
+  // Neue Passwörter wurden gehasht (die Seite ist am Ende gelöscht – geprüft wird an den Rückgaben von save_page)
+  const saved = norm.join('\n');
+  assert.ok(saved.includes('BCRYPT:secret123') && saved.includes('BCRYPT:another-pass') && !saved.includes('BCRYPT:unknown'));
+}
+
+// Die Zeitsteuerung mit \n steht wirklich als gültiges JSON in der Tabelle (sonst wäre sie null und der Block immer an)
+function scheduleCheck(db: unknown): void {
+  const nlRow = (db as Record<string, Array<Record<string, unknown>>>).page_blocks.find((b) => String(b.data).includes('NlFuture'));
+  assert.equal((jsonDecode(String(nlRow?.schedule)) as { start: string }).start, '2099-01-01T10:00\n');
+}
+
+// Dateien: gelöscht und behalten (auch die eine außerhalb des Ordners über '../')
+const filesCheck = (side: Side): void =>
+  assert.ok(!listing(side).uploads.includes('avatar_5_1700000001_abcdef12.png') && listing(side).uploads.includes('img_5_1700000003_abcdef12.png'));
+
+test('creating, saving, deleting and cleaning up pages: results, tables and files', async () => {
+  setConfigForTests(config('solo'));
+  await closePool();
+  let out: string[];
+  try {
+    out = await nodeScenario(jsonDecode(jsonText(SCENARIO)) as Array<[string, unknown[]]>);
+  } finally {
+    await closePool();
+    setConfigForTests(BASE);
+  }
+  const hashes: string[] = [];
+  scenarioChecks(out, await Promise.all(out.map((x) => normText(x, hashes))));
+  scheduleCheck(await normalize(await dump(DBS.solo), []));
+  filesCheck('solo');
+});
+
+test('creating, saving, deleting and cleaning up pages writes exactly what PHP writes', { skip: PHP_SKIP }, async () => {
   const ops = jsonDecode(jsonText(SCENARIO)) as Array<[string, unknown[]]>;
   const phpOut = JSON.parse(runPhp(PHP_SCENARIO, jsonText(SCENARIO), { config: config('php'), db: true })) as string[];
 
@@ -383,47 +452,20 @@ test('creating, saving, deleting and cleaning up pages writes exactly what PHP w
   const nodeNorm = await norm(nodeOut, 'node');
   const mismatches = SCENARIO.map((op, i) => ({ i, op: op[0], node: nodeNorm[i], php: phpNorm[i] })).filter((m) => m.node !== m.php);
   assert.deepEqual(mismatches, []);
-
-  // Rückgaben stichprobenartig: Warnungen einmalig, idmap in Block-Reihenfolge, Fehler beim doppelten Namen
-  const save1 = jsonDecode(phpNorm[SCENARIO.findIndex((o) => o[0] === 'save_page')]) as { idmap: Record<string, number>; warnings: string[] };
-  assert.deepEqual(Object.keys(save1.idmap), ['n1', '1', 'n2', 'n3', 'n4', 'n5', '0012']);
-  assert.equal(save1.warnings.length, 2);
-  assert.equal(phpOut[SCENARIO.findIndex((o) => o[0] === 'create_page' && o[1][1] === 'mia')], 'THROW');
-  // Die beiden abgebrochenen Speichervorgänge ändern nichts; danach: idmap mit "-0" und der Playlist aus der tiefen Adresse
-  const at = (save: unknown) => SCENARIO.findIndex((o) => o[0] === 'save_page' && o[1][1] === save);
-  assert.equal(phpOut[at(SAVE_FAIL_PASSWORD)], 'THROW');
-  assert.equal(phpOut[at(SAVE_FAIL_EMBED)], 'THROW');
-  assert.equal(phpNorm[at(SAVE_FAIL_PASSWORD) + 1], phpNorm[at(SAVE_FAIL_PASSWORD) - 1]);
-  assert.equal(phpNorm[at(SAVE_FAIL_EMBED) + 1], phpNorm[at(SAVE_FAIL_PASSWORD) - 1]);
-  const save3 = jsonDecode(phpNorm[at(SAVE_3)]) as { idmap: Record<string, number>; blocks: Array<{ data: Record<string, unknown> }> };
-  // (Block 5 hat SAVE_2 entfernt, Block 12 gehört zu Toms Seite: beide werden neu angelegt; Reihenfolge wie in PHP)
-  assert.deepEqual(Object.keys(save3.idmap), ['-0', 'n9', '5', '-5', '1.0E+15', '12']);
-  assert.ok(save3.blocks.some((b) => b.data.provider === 'youtube'));
-  // Kalender: Schlüssel über den Block mit \n im Start, Fehler beim ungültigen Datum
-  const cal = SCENARIO.map((o, i) => [o, phpOut[i]] as const).filter(([o]) => o[0] === 'calendar_access').map(([, r]) => r);
-  assert.deepEqual(cal.slice(-3).map((r) => (r === 'THROW' || r === 'null' ? r : 'KEY')), ['null', 'KEY', 'THROW']);
-  // Lea: 150 von 152 Blöcken
-  const lea = jsonDecode(phpNorm[SCENARIO.findIndex((o) => o[0] === 'save_page' && o[1][0] === '@page:lea' && (o[1][1] as { page: unknown }).page !== 'nope')]) as { blocks: unknown[]; idmap: Record<string, number> };
-  assert.equal(lea.blocks.length, 150);
-  assert.equal(Object.keys(lea.idmap).length, 150);
+  scenarioChecks(phpOut, phpNorm);
 
   // Tabellen
   // (die Login-Hashes der Nutzer sind auf beiden Seiten gleich und zählen hier nicht mit)
   const phpDb = await normalize(await dump(DBS.php), []);
   const nodeDb = await normalize(await dump(DBS.node), []);
   for (const t of TABLES) assert.deepEqual((nodeDb as Record<string, unknown>)[t], (phpDb as Record<string, unknown>)[t], `table ${t}`);
-  // Die Zeitsteuerung mit \n steht wirklich als gültiges JSON in der Tabelle (sonst wäre sie null und der Block immer an)
-  const nlRow = (phpDb as Record<string, Array<Record<string, unknown>>>).page_blocks.find((b) => String(b.data).includes('NlFuture'));
-  assert.equal((jsonDecode(String(nlRow?.schedule)) as { start: string }).start, '2099-01-01T10:00\n');
-  // Neue Passwörter wurden gehasht (die Seite ist am Ende gelöscht – geprüft wird an den Rückgaben von save_page)
-  const saved = phpNorm.join('\n');
-  assert.ok(saved.includes('BCRYPT:secret123') && saved.includes('BCRYPT:another-pass') && !saved.includes('BCRYPT:unknown'));
+  scheduleCheck(phpDb);
 
   // PHP akzeptiert die Hashes, die Node geschrieben hat
   const phpVerify = JSON.parse(runPhp('echo json_encode(array_map(fn($h) => password_verify("secret123", $h) || password_verify("another-pass", $h), $in));', JSON.stringify(hashes.node))) as boolean[];
   assert.ok(hashes.node.length > 0 && phpVerify.every(Boolean));
 
-  // Dateien: dieselben gelöscht und behalten (auch die eine außerhalb des Ordners über '../')
+  // Dateien: dieselben gelöscht und behalten
   assert.deepEqual(listing('node'), listing('php'));
-  assert.ok(!listing('php').uploads.includes('avatar_5_1700000001_abcdef12.png') && listing('php').uploads.includes('img_5_1700000003_abcdef12.png'));
+  filesCheck('php');
 });

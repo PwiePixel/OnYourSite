@@ -1,19 +1,27 @@
-// Prüfstand für Honigwaben und Code-Seiten: dieselben Aufrufe laufen einmal mit den echten PHP-Funktionen auf
-// Datenbank A und einmal mit der Node-Version auf Datenbank B (gleicher Ausgangsstand). Danach werden Ergebnisse
-// und Tabellen verglichen. Zeitstempel „jetzt“ und zufällige Formular-Schlüssel werden vereinheitlicht.
+// Prüfstand für Honigwaben und Code-Seiten: dieselben Aufrufe laufen einmal mit den echten PHP-Funktionen (PHP-Version,
+// siehe support/phpRef.ts) auf Datenbank A und einmal mit der Node-Version auf Datenbank B (gleicher Ausgangsstand).
+// Danach werden Ergebnisse und Tabellen verglichen. Zeitstempel „jetzt“ und zufällige Formular-Schlüssel werden
+// vereinheitlicht.
 import { execFile } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool, exec } from '../src/db.js';
 import { ensureSchema } from '../src/schema.js';
 import { strtotime, time, type PhpArray } from '../src/php.js';
 import * as hc from '../src/honeycombs/honeycombs.js';
 import * as code from '../src/code/sites.js';
 import { adminCodeHandle, legacyCodePost } from '../src/code/admin.js';
+import { hcDeleteUser } from '../src/honeycombs/deletion.js';
+import { poolDb } from '../src/honeycombs/util.js';
+import { ensureCatalogue } from '../src/honeycombs/catalogue.js';
+import { phpFile, phpRoot } from './support/phpRef.js';
 
 export const BASE = loadConfig();
 export const started = time();
+// Name einer Test-Datenbank: abgeleitet von der Datenbank der Einstellungen (je Arbeitsordner eine eigene), damit
+// gleichzeitige Läufe in verschiedenen Arbeitsordnern sich nicht gegenseitig die Daten löschen
+export const testDbName = (suffix: string): string => String((BASE.db as ConfigData).name ?? 'oys_test') + '_' + suffix;
 export type Op = [string, ...unknown[]];
 
 // Verbindung ohne feste Datenbank (für CREATE DATABASE und Vergleiche)
@@ -43,14 +51,14 @@ export async function freshDb(admin: Connection, name: string, rows: Array<[stri
 }
 
 // PHP mit eigener Verbindung auf die Test-Datenbank; die Funktionen kommen aus den echten Dateien
-export const PHP_BOOT = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
+export const phpBoot = (): string => `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
   $pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . getenv('OYS_TEST_DB') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
   $pdo->exec("SET time_zone = '" . date('P') . "'");
-  require '${ROOT_DIR}/security.php'; require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php';
-  require '${ROOT_DIR}/lib/honeycombs.php'; require '${ROOT_DIR}/lib/codesites.php';`;
+  require '${phpFile('security.php')}'; require '${phpFile('blacklist.php')}'; require '${phpFile('lib/helpers.php')}';
+  require '${phpFile('lib/honeycombs.php')}'; require '${phpFile('lib/codesites.php')}';`;
 
-const PHP_OPS = `${PHP_BOOT}
+const phpOps = (): string => `${phpBoot()}
   $ops = json_decode(stream_get_contents(STDIN), true);
   // {"__pairs": [[k, v], …]} → PHP-Array in genau dieser Reihenfolge (wie json_decode)
   $arr = function ($v) { if (is_array($v) && array_key_exists('__pairs', $v)) { $a = []; foreach ($v['__pairs'] as $p) { $a[$p[0]] = $p[1]; } return $a; } return $v; };
@@ -79,6 +87,8 @@ const PHP_OPS = `${PHP_BOOT}
         case 'code_admin': $p = $a[0]; if (isset($p['code_action'])) { $p['hc_action'] = is_string($p['code_action']) ? 'code_' . $p['code_action'] : $p['code_action']; unset($p['code_action']); }
           $r = oys_admin_hc_handle($pdo, $p, $a[1]); break;
         case 'sql': $pdo->exec($a[0]); $r = true; break;
+        // Preis der Code-Seite: PHP las ihn aus den Einstellungen, Node aus dem Katalog (hc_items)
+        case 'set_code_price': $pdo->prepare("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)")->execute([json_encode(['code_page' => $a[0]])]); $r = true; break;
         case 'code_site': $r = oys_code_site($pdo, $a[0]); break;
         case 'code_site_by_id': $r = oys_code_site_by_id($pdo, $a[0]); break;
         case 'code_site_by_slug': $r = oys_code_site_by_slug($pdo, $a[0]); break;
@@ -107,7 +117,7 @@ const PHP_OPS = `${PHP_BOOT}
 
 export function phpRun(db: string, ops: Op[]): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
-    const child = execFile('php', ['-r', PHP_OPS], { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile('php', ['-r', phpOps()], { env: { ...process.env, OYS_TEST_DB: db }, cwd: phpRoot(), maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`php failed: ${err.message}\n${stderr}`));
       try {
         resolve(JSON.parse(stdout) as unknown[]);
@@ -155,6 +165,12 @@ export async function nodeRun(db: string, ops: Op[]): Promise<unknown[]> {
           }
           case 'code_admin': r = await adminCodeHandle(a[0] as PhpArray); break;
           case 'sql': await exec(a[0] as string); r = true; break;
+          case 'set_code_price':
+            await exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [JSON.stringify({ code_page: a[0] })]);
+            await ensureCatalogue();
+            await exec("UPDATE hc_items SET price = ? WHERE item_key = 'code_page'", [a[0] as number]);
+            r = true;
+            break;
           case 'code_site': r = await code.codeSite(a[0] as number); break;
           case 'code_site_by_id': r = await code.codeSiteById(a[0] as number); break;
           case 'code_site_by_slug': r = await code.codeSiteBySlug(a[0] as string); break;
@@ -166,7 +182,8 @@ export async function nodeRun(db: string, ops: Op[]): Promise<unknown[]> {
           case 'code_create': r = await code.codeCreate(a[0] as number, a[1] as string, a[2] as string); break;
           case 'code_save': r = await code.codeSave(await siteOf(a[0]), arr(a[1]), a[2] as unknown[]); break;
           case 'code_write': r = await code.codeWrite(await siteOf(a[0]), arr(a[1]), a[2] as unknown[]); break;
-          case 'code_delete_user': await code.codeDeleteUser(a[0] as number); r = null; break;
+          // oys_code_delete_user() löschte auch die Buchungen; in Node sind das zwei Haken des Kontolöschens (code, honeycombs)
+          case 'code_delete_user': await code.codeDeleteUser(a[0] as number); await hcDeleteUser(a[0] as number, poolDb); r = null; break;
           case 'code_used_uploads': r = [...(await code.codeUsedUploads(a[0] as number))]; break;
           case 'preview_token': r = code.codePreviewToken(await siteOf(a[0]), a[1] as number); break;
           case 'preview_valid': r = code.codePreviewValid(await siteOf(a[0]), a[1] as string); break;
@@ -201,14 +218,31 @@ export function normalize(v: unknown, knownRefs: string[] = []): unknown {
 
 export const TABLES = ['users', 'pages', 'page_blocks', 'honeycomb_ledger', 'code_sites', 'code_files', 'oys_meta'];
 
+const omit = (row: Record<string, unknown>, keys: string[]): Record<string, unknown> => Object.fromEntries(Object.entries(row).filter(([k]) => !keys.includes(k)));
+
+// Code-Seiten, deren gespeicherte Zähler nicht zu ihren Dateien passen (leer = alle stimmen)
+export async function codeCounters(admin: Connection, db: string): Promise<unknown[]> {
+  const [rows] = await admin.query<RowDataPacket[]>(`SELECT s.id, s.file_count, s.bytes, COUNT(f.id) AS n, COALESCE(SUM(LENGTH(f.content)), 0) AS b
+    FROM \`${db}\`.code_sites s LEFT JOIN \`${db}\`.code_files f ON f.site_id = s.id GROUP BY s.id HAVING s.file_count <> n OR s.bytes <> b`);
+  return rows.map((r) => ({ ...r }));
+}
+
 export async function dump(admin: Connection, db: string, knownRefs: string[] = []): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const t of TABLES) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${db}\`.\`${t}\` ORDER BY 1`);
-    out[t] = normalize(rows.map((r) => ({ ...r })), knownRefs);
+    // Die Zähler der Code-Seiten (Dateien, Größe) führt nur Node – PHP kennt sie nicht; geprüft in codeCounters().
+    // Buchungen seit dem Shop-Kern: actor_id (wer gebucht hat) schreibt nur Node – PHP kennt die Spalte nicht; geprüft
+    // wird sie in honeycombs.test.ts und hc-core.db.test.ts. Eine schon vorhandene Freischaltung bucht Node gar nicht
+    // erst (PHP verbraucht dabei mit INSERT IGNORE eine Nummer) – verglichen werden Inhalt und Reihenfolge, nicht die IDs.
+    out[t] = normalize(rows.map((r) => {
+      if (t === 'code_sites') return omit({ ...r }, ['file_count', 'bytes']);
+      if (t === 'honeycomb_ledger') return omit({ ...r }, ['actor_id', 'id']);
+      return { ...r };
+    }), knownRefs);
   }
   // Nächste freie IDs (INSERT IGNORE und ON DUPLICATE KEY verbrauchen Nummern)
-  const [ai] = await admin.query<RowDataPacket[]>(`SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('honeycomb_ledger', 'code_sites', 'code_files') ORDER BY 1`, [db]);
+  const [ai] = await admin.query<RowDataPacket[]>(`SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('code_sites', 'code_files') ORDER BY 1`, [db]);
   out.auto_increment = ai.map((r) => ({ ...r }));
   return out;
 }

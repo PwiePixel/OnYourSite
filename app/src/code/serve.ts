@@ -6,10 +6,12 @@ import { e } from '../html.js';
 import { md5Hex } from '../crypto.js';
 import { baseAuthority, isBot, mainUrl } from '../helpers.js';
 import { poolDb, pathExtension } from '../honeycombs/util.js';
+import { ownerPremium } from '../content/branding.js';
 import { CODE_SANDBOX, CODE_TYPES, codePreviewValid, codeValidPath } from './sites.js';
 
-// oys_code_serve(): Datei einer Code-Seite ausliefern (path = Pfad der Anfrage, nicht dekodiert)
-export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void> {
+// oys_code_serve(): Datei einer Code-Seite ausliefern (path = Pfad der Anfrage, nicht dekodiert). slug: die Adresse, unter
+// der sie gerade ausgeliefert wird – ihre eigene oder die des Seitenplatzes, der sie zeigt (Vorschau-Schlüssel, Hinweise).
+export async function codeServe(ctx: Ctx, site: Row, path: string, slug: string = phpStr(site.slug)): Promise<void> {
   ctx.header('Content-Security-Policy', CODE_SANDBOX);
   ctx.header('X-Content-Type-Options', 'nosniff');
   ctx.header('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -34,7 +36,7 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
   const rel = strtolower(phpTrim(rawurldecode(path), '/'));
   // Offline sehen Besucher nur einen Hinweis. Der Besitzer sieht Seiten mit Vorschau-Schlüssel (Editor) –
   // Dateien wie CSS, JS und Bilder werden dafür auch offline ausgeliefert, die Sandbox gibt keinen Referer mit.
-  const hidden = !phpTruthy(site.is_published) && !codePreviewValid(site, urlToken);
+  const hidden = !phpTruthy(site.is_published) && !codePreviewValid(site, urlToken, slug);
   const askedExt = pathExtension(rel);
   if (hidden && (askedExt === '' || askedExt === 'html' || askedExt === 'htm' || !CODE_TYPES.has(askedExt))) {
     ctx.status = 404;
@@ -56,7 +58,7 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
     file = await lookup('404.html');
     if (!file) {
       ctx.status = 404;
-      ctx.write(codeNotice(ctx, 'Page not found', 'This page doesn’t exist on ' + phpStr(site.slug) + '.' + baseAuthority() + '.'));
+      ctx.write(codeNotice(ctx, 'Page not found', 'This page doesn’t exist on ' + slug + '.' + baseAuthority() + '.'));
       return;
     }
   }
@@ -75,7 +77,8 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
     ctx.redirect('/' + rel + '/' + (qs !== '' ? '?' + qs : ''), 302);
   }
   let body = phpStr(file.content);
-  if (isHtml) body = codeAddBadge(body, site);
+  // Mit Premium des Besitzers nur ein schlichter „Report“-Link (eine Abfrage, nur für HTML)
+  if (isHtml) body = codeAddBadge(body, site, await ownerPremium(site));
   const etag = '"' + md5Hex(Buffer.from(body, 'utf8')).slice(0, 16) + '"';
   ctx.status = status;
   ctx.header('Content-Type', type + (type.startsWith('text/') || ['json', 'svg', 'xml', 'webmanifest'].includes(ext) ? '; charset=utf-8' : ''));
@@ -94,13 +97,20 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
   ctx.write(body);
 }
 
-// oys_code_add_badge(): kleiner Hinweis „Hosted on OnYourSite“ unten rechts (mit Link zu den Regeln und zum Melden)
-export function codeAddBadge(html: string, _site: Row): string {
-  const badge = '<a href="' + e(mainUrl('/terms/code-pages')) + '#report" target="_blank" rel="noopener" '
+// Abzeichen unten rechts mit Link zu den Regeln und zum Melden: „Hosted on OnYourSite“ mit Sechseck – mit Premium des
+// Besitzers ein schlichter „Report“-Link an derselben Stelle mit demselben Ziel, ohne Namen und Sechseck (Q2 = c).
+// Den Link zum Melden gibt es immer.
+export function codeBadge(premium: boolean): string {
+  return '<a href="' + e(mainUrl('/terms/code-pages')) + '#report" target="_blank" rel="noopener" '
     + 'style="position:fixed;right:10px;bottom:10px;z-index:2147483647;display:inline-flex;align-items:center;gap:5px;'
     + 'padding:6px 10px;border-radius:999px;background:rgba(15,15,20,.78);color:#fff;font:600 11px/1 system-ui,sans-serif;'
-    + 'text-decoration:none;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)" title="Hosted on OnYourSite – report this page">'
-    + '<span style="color:#818cf8">&#x2B21;</span> OnYourSite</a>';
+    + 'text-decoration:none;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)" title="'
+    + (premium ? 'Report this page">Report</a>' : 'Hosted on OnYourSite – report this page"><span style="color:#818cf8">&#x2B21;</span> OnYourSite</a>');
+}
+
+// oys_code_add_badge(): das Abzeichen vor dem letzten </body> (ohne: am Ende)
+export function codeAddBadge(html: string, _site: Row, premium = false): string {
+  const badge = codeBadge(premium);
   // strripos(): letztes </body>, Groß-/Kleinschreibung nur bei ASCII egal (gleiche Länge, gleiche Stellen)
   const pos = strtolower(html).lastIndexOf('</body>');
   return pos === -1 ? html + badge : html.slice(0, pos) + badge + html.slice(pos);

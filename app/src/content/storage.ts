@@ -336,7 +336,7 @@ function phpRename(from: Buffer, to: Buffer): boolean {
 export function storageMoveToDataDir(): MoveResult {
   const from = uploadsDefaultDir();
   const to = uploadsDir();
-  if (!uploadsExternal()) return { moved: 0, error: 'Set “uploads_dir” in config.php first.' };
+  if (!uploadsExternal()) return { moved: 0, error: 'Set “uploads_dir” in config.json and restart the website first.' };
   let dirOk = false;
   try {
     dirOk = statSync(to).isDirectory();

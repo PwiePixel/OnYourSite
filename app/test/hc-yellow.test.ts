@@ -9,6 +9,7 @@ import { ROOT_DIR } from '../src/config.js';
 import { termsCodePagesView } from '../src/code/terms.js';
 
 const css = readFileSync(join(ROOT_DIR, 'static/css/editor.css'), 'utf8');
+const uiCss = readFileSync(join(ROOT_DIR, 'static/css/ui.css'), 'utf8');
 const js = readFileSync(join(ROOT_DIR, 'static/js/editor.js'), 'utf8');
 
 // Deklarationen einer Regel auf oberster Ebene (genau ein Treffer für den Selektor; eingerückte Regeln stehen in @media)
@@ -24,7 +25,6 @@ test('editor.css: honeycomb rules use the --hc tokens with yellow fallbacks', ()
     ['.bdg.hc', [/background: var\(--hc-soft, rgba\(250, 204, 21, \.12\)\)/, /color: var\(--hc, #facc15\)/]],
     ['.hc-pill', [/background: var\(--hc-soft, rgba\(250, 204, 21, \.12\)\)/, /border: 1px solid var\(--hc-line, rgba\(250, 204, 21, \.35\)\)/, /color: var\(--hc-text, #fef08a\)/]],
     ['.hc-pill i', [/color: var\(--hc, #facc15\)/]],
-    ['.toast.hc', [/background: var\(--hc-soft, rgba\(250, 204, 21, \.12\)\)/, /border: 1px solid var\(--hc-line, rgba\(250, 204, 21, \.35\)\)/, /color: var\(--hc-2, #fde047\)/]],
     ['.hc-big', [/rgba\(250, 204, 21, \.24\)/, /border: 1px solid var\(--hc-line, rgba\(250, 204, 21, \.35\)\)/]],
     ['.hc-big > i', [/color: var\(--hc, #facc15\)/]],
     ['.hc-big small', [/color: var\(--hc-text, #fef08a\)/]],
@@ -40,16 +40,26 @@ test('editor.css: honeycomb rules use the --hc tokens with yellow fallbacks', ()
   assert.match(rule('.hc-rule.done .ri'), /color: #4ade80/);
   // Kein Blau/Lila mehr in den Honigwaben-Regeln (inklusive Hover und Puls)
   const hcRules = [...css.matchAll(/(^|\n)([^{}\n]*(?:\.hc-|\.toast\.hc|hc-pop)[^{}\n]*)\{([^}]*(?:\{[^}]*\}[^}]*)?)\}/g)].map((m) => m[2] + '{' + m[3] + '}');
-  assert.ok(hcRules.length >= 15, String(hcRules.length));
+  assert.ok(hcRules.length >= 14, String(hcRules.length));
   for (const r of hcRules) assert.doesNotMatch(r, /99, 102, 241|#6366f1|#818cf8|#4f46e5|#a5b4fc|#c7d2fe|--e-brand/, r);
 });
 
-test('editor.js: the code page unlock and the honeycomb window use the yellow classes', () => {
+test('honeycomb notices are yellow: .ui-toast.hc in ui.css; the old .toast rules of the editor are gone', () => {
+  const m = /(^|\n)\.ui-toast\.hc \{([^}]*)\}/.exec(uiCss);
+  assert.ok(m, '.ui-toast.hc');
+  assert.match(m![2], /background: var\(--hc-soft\)/);
+  assert.match(m![2], /border: 1px solid var\(--hc-line\)/);
+  assert.match(m![2], /color: var\(--hc-2\)/);
+  assert.doesNotMatch(css, /(^|\n)\.toasts? |\.toast\./);
+});
+
+test('editor.js: the code page unlock and the Honeycombs tab use the yellow classes', () => {
   assert.ok(js.includes(`'<span class="bdg hc"><i class="bx bx-hive"></i> Unlock with honeycombs</span>'`));
   assert.ok(js.includes(`fmtNum(st.cost) + ' <i class="bx bx-hive hc-icon"></i></b></div>'`));
-  assert.ok(js.includes(`data-action="honeycombs"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>`));
-  assert.ok(js.includes(`fmtNum(r.code_page) + ' <i class="bx bx-hive hc-icon"></i>'`));
-  // Jedes Honigwaben-Symbol ist gelb: über .hc-icon, .bdg.hc, .hc-big, .hc-pill oder den Hinweis .toast.hc
+  assert.ok(js.includes(`data-action="honeycombs" data-feature="earn"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>`));
+  // Preis auf den Karten des Bereichs „Honeycombs“
+  assert.ok(js.includes(`'<div class="shop-price"><i class="bx bx-hive hc-icon"></i><b>'`));
+  // Jedes Honigwaben-Symbol ist gelb: über .hc-icon, .bdg.hc, .hc-big, .hc-pill oder den Hinweis .ui-toast.hc (ui.css)
   for (const m of js.matchAll(/bx-hive[^'"]*/g)) assert.ok(/hc-icon|^bx-hive$/.test(m[0]), m[0]);
   assert.ok(!js.includes('bdg brand"><i class="bx bx-hive'));
   assert.ok(!/bx-hive text-brand/.test(js));

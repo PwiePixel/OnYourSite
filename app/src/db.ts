@@ -197,6 +197,26 @@ export async function withConnection<T>(fn: (db: Db, conn: PoolConnection) => Pr
   }
 }
 
+// db.php verbindet sich bei jeder Anfrage neu und zeigt ohne Datenbank vor allem anderen die 503-Seite. Node hält
+// Verbindungen im Pool und merkt einen Ausfall sonst erst bei der ersten Abfrage – oder nie, wenn eine Seite gar keine
+// braucht. Darum vor jeder Anfrage eine kurze Probe. Eine tote Verbindung aus dem Pool (Server neu gestartet, Leitung
+// still getrennt) wirft mysql2 danach weg: dann mit der nächsten bzw. einer neuen Verbindung noch einmal versuchen.
+export async function dbReachable(): Promise<void> {
+  let lastCode = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await withConnection((db) => db.value('SELECT 1'));
+      return;
+    } catch (err) {
+      if (err instanceof DbUnavailableError) throw err;
+      const e = err as { fatal?: boolean; code?: string };
+      if (!e.fatal) throw err;
+      lastCode = e.code ?? 'fatal';
+    }
+  }
+  throw new DbUnavailableError(`database unavailable (${lastCode})`);
+}
+
 // Bewusst außerhalb des laufenden Abschnitts arbeiten (eigene Verbindung), z. B. um eine fremde Sperre zu prüfen
 export function outsidePinned<T>(fn: () => Promise<T>): Promise<T> {
   return pinned.exit(fn);

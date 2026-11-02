@@ -1,4 +1,4 @@
-// Gemeinsamer Rahmen für die öffentlichen Seiten /updates und /roadmap (später /suggestions): Kopf mit Titel,
+// Gemeinsamer Rahmen für die öffentlichen Seiten /updates, /roadmap und /suggestions: Kopf mit Titel,
 // Beschreibung und kanonischer Adresse, Navigation, Hero mit Unternavigation und Fußzeile – dasselbe Aussehen wie
 // bisher views/updates.php. Die Seiten setzen keine Cookies.
 import { e } from '../html.js';
@@ -6,7 +6,7 @@ import { asset, mainUrl } from '../helpers.js';
 import { date } from '../php.js';
 import { uiAssets } from '../views/partials/ui.js';
 
-export type Section = 'updates' | 'roadmap';
+export type Section = 'updates' | 'roadmap' | 'suggestions';
 
 export interface LayoutOptions {
   section: Section;
@@ -19,6 +19,10 @@ export interface LayoutOptions {
   statusUrl?: string;
   // Skript, das vor allem anderen laufen soll (Weiterleitung alter Anker)
   headScript?: string;
+  // Die Vorschlagsseite ist an: ihre Pille erscheint in der Unternavigation
+  suggestions?: boolean;
+  // <meta name="robots"> (z. B. gefilterte Ansichten: noindex, follow)
+  robots?: string;
 }
 
 export interface HeroOptions {
@@ -42,10 +46,12 @@ export const cardButton = (href: string, label: string, icon: string): string =>
 const PILLS: Array<{ section: Section; href: string; icon: string; label: string }> = [
   { section: 'updates', href: '/updates', icon: 'bx-news', label: 'Changelog' },
   { section: 'roadmap', href: '/roadmap', icon: 'bx-map-alt', label: 'Roadmap' },
+  { section: 'suggestions', href: '/suggestions', icon: 'bx-bulb', label: 'Suggestions' },
 ];
-export function subNav(active: Section): string {
+// showSuggestions: die Pille „Suggestions“ nur, solange die Seite an ist
+export function subNav(active: Section, showSuggestions = false): string {
   const pill = 'shrink-0 inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-full text-sm font-medium';
-  const links = PILLS.map((p) => (p.section === active
+  const links = PILLS.filter((p) => p.section !== 'suggestions' || showSuggestions || active === 'suggestions').map((p) => (p.section === active
     ? `<a href="${p.href}" aria-current="page" class="${pill} bg-white text-black"><i class='bx ${p.icon} hidden sm:inline-block'></i> ${p.label}</a>`
     : `<a href="${p.href}" class="${pill} text-gray-400 hover:text-white hover:bg-white/5 transition-colors"><i class='bx ${p.icon} hidden sm:inline-block'></i> ${p.label}</a>`));
   return `<nav aria-label="Updates sections" class="mt-8 inline-flex max-w-full overflow-x-auto [scrollbar-width:none] gap-1 p-1 rounded-full border border-bordercolor bg-card/60">
@@ -65,7 +71,7 @@ export function layoutPage(o: LayoutOptions, hero: HeroOptions, main: string): s
     <meta name="darkreader-lock">
     <title>${e(o.title)}</title>
 ${o.headScript ? `    <script>${o.headScript}</script>\n` : ''}    <meta name="description" content="${e(o.description)}">
-    <link rel="canonical" href="${e(canonical)}">
+${o.robots ? `    <meta name="robots" content="${e(o.robots)}">\n` : ''}    <link rel="canonical" href="${e(canonical)}">
     <meta property="og:type" content="website">
     <meta property="og:url" content="${e(canonical)}">
     <meta property="og:title" content="${e(o.title)}">
@@ -151,7 +157,7 @@ ${o.loggedIn
             <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
                 ${hero.buttons}
             </div>
-            ${subNav(o.section)}
+            ${subNav(o.section, o.suggestions === true)}
         </div>
     </header>
 

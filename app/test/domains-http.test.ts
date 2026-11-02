@@ -169,10 +169,32 @@ test('uploads on a custom domain: only files of the domain’s owner', async () 
   for (const path of ['/static/uploads/' + files.foreign, '/static/%75ploads/' + files.foreign, '/static/uploads/avatar_5_x/../' + files.foreign,
     '/static/uploads/avatar_5_x%2f..%2f' + files.foreign, '/static/uploads/avatar_5_1700000000_missing.webp', '/static/uploads/og/2-abcdefabcdef.png',
     '/static/uploads/', '/static/uploads/x.php']) {
-    neutral(await req('GET', path, HOST), path);
+    const res = await req('GET', path, HOST);
+    // Kodierte Schrägstriche, Ordner und gesperrte Endungen beantwortet schon die Apache-Schicht des Routers (wie Apache
+    // auf dem Server) mit 403/404 – nie mit der Datei
+    if (path.includes('%2f') || path.endsWith('/') || path.endsWith('.php')) {
+      assert.ok([403, 404].includes(res.statusCode ?? 0), `${path}: ${res.statusCode}`);
+      continue;
+    }
+    neutral(res, path);
   }
   // Auf der Hauptdomain unverändert öffentlich
   assert.equal((await req('GET', '/static/uploads/' + files.foreign, 'oys.test:8080')).statusCode, 200);
+});
+
+test('a domain whose account doesn’t own the page never shows that page', async () => {
+  // Zeile und Seite gehören verschiedenen Konten (darf nie vorkommen – wenn doch, zeigt die Domain nichts von der Seite)
+  await setState('active', { user_id: 6 });
+  try {
+    neutral(await req('GET', '/', HOST), 'page of another account');
+    neutral(await req('GET', '/kalender', HOST), 'calendar of another account');
+    neutral(await req('POST', '/_/v', HOST, { form: { p: '2' }, headers: { origin: ORIGIN } }), 'view on a page of another account');
+    neutral(await req('GET', '/_/go/' + ids.link, HOST), 'link of another account');
+    neutral(await req('GET', '/static/uploads/' + files.own, HOST), 'upload of the page owner, not of the domain’s account');
+  } finally {
+    await setState('active', { user_id: 5 });
+  }
+  assert.equal((await req('GET', '/', HOST)).statusCode, 200);
 });
 
 test('/_/ endpoints on a custom domain take only ids of this page', async () => {
@@ -220,15 +242,20 @@ test('/_/ endpoints on a custom domain take only ids of this page', async () => 
   // Vorschaubild: der Hash enthält die Domain, das Bild einer anderen Seite gibt es hier nicht
   const mia = (await loadPage(2))!;
   assert.equal(mia.custom_domain, HOST);
-  const hash = ogHash(mia);
+  const hash = ogHash(mia, false);
   const og = await req('GET', `/_/og/2-${hash}.png`, HOST);
   assert.equal(og.statusCode, 200);
   assert.equal(og.headers['content-type'], 'image/png');
   const old = await req('GET', '/_/og/2-000000000000.png', HOST);
   assert.equal(old.statusCode, 302);
   assert.equal(old.headers.location, `/_/og/2-${hash}.png`);
-  neutral(await req('GET', `/_/og/3-${ogHash((await loadPage(3))!)}.png`, HOST), 'card of another page');
+  neutral(await req('GET', `/_/og/3-${ogHash((await loadPage(3))!, false)}.png`, HOST), 'card of another page');
   assert.ok((await req('GET', '/', HOST)).body.includes(`${ORIGIN}/_/og/2-${hash}.png`));
+  // Favicon aus dem Profilbild: nur für die Seite dieser Domain (ohne Premium führt es zum Favicon von OnYourSite)
+  const fav = await req('GET', '/_/icon/2-000000000000.png', HOST);
+  assert.equal(fav.statusCode, 302);
+  assert.equal(fav.headers.location, '/static/images/favicon.png');
+  neutral(await req('GET', '/_/icon/3-000000000000.png', HOST), 'favicon of another page');
 });
 
 test('pending and broken domains still show the page, with the OnYourSite address as canonical; paused ones forward', async () => {
@@ -342,12 +369,15 @@ test('without the setup an unknown host gets today’s 404 and costs no database
   const res = await req('GET', '/', 'nothing.example.net');
   assert.equal(res.statusCode, 404);
   assert.ok(res.body.includes('Page not found') && res.body.includes('OnYourSite'), 'today’s 404 page');
+  assert.equal(acquired, 0, 'an unknown host costs no query');
+  // Die eigenen Adressen prüfen vor jeder Seite, ob die Datenbank erreichbar ist (wie db.php) – mehr nicht
   assert.equal((await req('GET', '/_/domain-check', 'oys.test:8080')).statusCode, 404);
-  assert.equal(acquired, 0);
+  assert.ok(acquired <= 1, `main host: ${acquired} connections`);
 
   setConfigForTests(cfg);
   await closePool();
   clearUnknownHostsForTests();
+  acquired = 0;
   watch();
   neutral(await req('GET', '/', 'nothing.example.net'), 'unknown host');
   assert.equal(acquired, 1);
@@ -361,3 +391,36 @@ test('without the setup an unknown host gets today’s 404 and costs no database
   assert.equal(await transition((await domainById(id))!, { state: 'active' }), true);
   assert.equal((await req('GET', '/', 'nothing.example.net')).statusCode, 200);
 });
+
+test('without the setup a domain that is still live is no primary address: the page stays on its OnYourSite addresses', async () => {
+  await setState('active', { redirect: 1 });
+  assert.equal((await loadPage(2))!.custom_domain, HOST);
+  const plainHash = ogHash({ ...(await loadPage(2))!, custom_domain: null }, false);
+  // z. B. config.json nach einer Wiederherstellung ohne die Werte von --domains: der Router beantwortet die Domain
+  // dann nicht – ein Verweis dorthin machte die Seite unerreichbar
+  setConfigForTests({ ...cfg, cloudflare: {} });
+  try {
+    neutralFree(await req('GET', '/', HOST));
+    const sub = await req('GET', '/?x=1', 'mia.oys.test:8080');
+    assert.equal(sub.statusCode, 200);
+    assert.equal(canonical(sub.body), 'http://mia.oys.test:8080');
+    assert.ok(!sub.body.includes(HOST), 'nothing on the page points to the domain');
+    assert.equal((await req('GET', '/xyz', 'mia.oys.test:8080')).headers.location, 'http://mia.oys.test:8080');
+    const path = await req('GET', '/mia/kalender', 'oys.test:8080');
+    assert.equal(path.headers.location, 'http://mia.oys.test:8080/kalender');
+    const api = JSON.parse((await req('GET', '/api.php?user=mia', 'oys.test:8080')).body);
+    assert.equal(api.data.profile.url, 'http://mia.oys.test:8080');
+    assert.deepEqual(Object.keys(api.data.profile.urls), ['subdomain', 'path']);
+    assert.equal(ogHash((await loadPage(2))!, false), plainHash);
+  } finally {
+    setConfigForTests(cfg);
+  }
+  // Mit der Einrichtung ist die Domain wieder die Hauptadresse
+  assert.equal((await req('GET', '/', 'mia.oys.test:8080')).headers.location, ORIGIN);
+});
+
+// Ohne Einrichtung: der Host bekommt die bisherige 404 von OnYourSite (nicht die neutrale Seite und nicht die Seite)
+function neutralFree(res: LightMyRequestResponse): void {
+  assert.equal(res.statusCode, 404);
+  assert.ok(!res.body.includes(NEUTRAL));
+}

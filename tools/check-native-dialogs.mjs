@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Prüft, dass keine Browser-Popups zurückkommen: alert/confirm/prompt, Bestätigungen im HTML (onsubmit=, return confirm),
 // Seitenwechsel an der Wache vorbei (location.href = … in Skripten mit OYSUI.guard) und Benachrichtigungen ohne notify().
-// Aufruf: node tools/check-native-dialogs.mjs [--strict]   (ohne --strict nur Warnungen, Exit 0; mit --strict Exit 1)
-// Die Tests (app/test/native-dialogs.test.ts) laufen es bei jedem npm test mit.
+// Aufruf: node tools/check-native-dialogs.mjs [--warn]   (Fundstellen sind Fehler, Exit 1; mit --warn nur Warnungen, Exit 0)
+// Seit die Profilseiten umgestellt sind (custom-dialogs CD-4), ist jede Fundstelle ein Fehler. Die Tests
+// (app/test/dialogs.test.ts) laufen es bei jedem npm test mit.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +75,7 @@ export function checkFiles(files = targetFiles(), root = ROOT) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const strict = process.argv.includes('--strict');
+  const strict = !process.argv.includes('--warn');
   const found = checkFiles();
   for (const f of found) console.log(`${strict ? 'error' : 'warning'} ${f.file}:${f.line} ${f.rule}: ${f.match.trim()}`);
   console.log(found.length ? `${found.length} finding(s)` : 'no native dialogs found');

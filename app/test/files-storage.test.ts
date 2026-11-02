@@ -1,6 +1,7 @@
 // Upload-Ordner gegen PHP: Liste der Dateien, Dateien eines Kontos, Aufräumen alter Uploads, ZIP-Backup, Umzug in den
 // eingestellten Ordner, Upload-Grenze, round() – und das Ausliefern von /static/uploads/… über HTTP (PHP mit php -S,
-// Node mit dem echten Server): Status, Kopfzeilen und Inhalt Byte für Byte, auch mit Range und If-None-Match.
+// Node mit dem echten Server): Status, Kopfzeilen und Inhalt Byte für Byte, auch mit Range und If-None-Match. Die
+// Vergleiche brauchen die PHP-Version (support/phpRef.ts); was Node allein entscheidet, prüfen eigene Tests.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -18,8 +19,9 @@ import { setUploadsDefaultDirForTests, storageDownloadZip, storageFiles, storage
 import { sweepUploads, uploadLimitMb, userUploadFiles } from '../src/content/uploads.js';
 import { phpRound } from '../src/content/phpMath.js';
 import { buildServer } from '../src/server.js';
-import { PHP_PRELUDE, configWith, copyDatabase, runPhp, startPhpServer, type DbCopies } from './filesHarness.js';
+import { phpPrelude, configWith, copyDatabase, runPhp, startPhpServer, type DbCopies } from './filesHarness.js';
 import { rng } from './modelHarness.js';
+import { PHP_SKIP, phpFile, phpRef } from './support/phpRef.js';
 
 const BASE = loadConfig();
 // Feste Zeitstempel für alle Ordner eines Laufs (sonst unterscheiden sich die Namen, wenn die Sekunde wechselt)
@@ -62,7 +64,7 @@ function makeUploads(dir: string): void {
 const mapJson = (m: Map<string, number>) => JSON.stringify([...m.entries()]);
 const phpMapJson = 'echo json_encode(array_map(null, array_map("strval", array_keys($r)), array_values($r)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);';
 
-test('storage listing and the files of an account match PHP', () => {
+test('storage listing and the files of an account match PHP', { skip: PHP_SKIP }, () => {
   const dir = join(tmp, 'list');
   makeUploads(dir);
   const config = { ...BASE, uploads_dir: dir };
@@ -78,7 +80,7 @@ test('storage listing and the files of an account match PHP', () => {
   }
 });
 
-test('sweeping unused uploads deletes the same files as PHP', async () => {
+test('sweeping unused uploads deletes the same files as PHP', { skip: PHP_SKIP }, async () => {
   const dirs = { php: join(tmp, 'sweep-php'), node: join(tmp, 'sweep-node') };
   for (const d of Object.values(dirs)) makeUploads(d);
   const old = OLD;
@@ -101,7 +103,12 @@ test('sweeping unused uploads deletes the same files as PHP', async () => {
   assert.ok(!readdirSync(dirs.php).includes(`img_5_${old}_0123abcd.webp`) && readdirSync(dirs.php).includes(`avatar_5_${old}_abcdef12.png`));
 });
 
-test('upload limit and round() match PHP', () => {
+test('the upload limit follows the server settings (16 MB)', () => {
+  assert.equal(uploadLimitMb(), 16);
+  assert.equal(uploadLimitMb('2M', '8M'), 2);
+});
+
+test('upload limit and round() match PHP', { skip: PHP_SKIP }, () => {
   for (const [u, p] of [['16M', '20M'], ['2M', '8M'], ['1G', '2G'], ['-1', '512M'], ['1.5M', '3M'], ['100K', '1M'], ['0', '20M'], ['300M', '-1'], ['999999', '20M']]) {
     const php = Number(runPhp('echo json_encode(oys_upload_limit_mb());', '', { ini: [`upload_max_filesize=${u}`, `post_max_size=${p}`] }));
     assert.equal(uploadLimitMb(u, p), php, `${u}/${p}`);
@@ -142,12 +149,44 @@ async function nodeZip(): Promise<{ error: string } | { headers: Array<[string, 
   return { headers: ctx.headersOut(), zip: Buffer.concat(chunks) };
 }
 
-test('the ZIP backup has the same entries as PHP and passes unzip -t', async () => {
+test('the ZIP backup stores every upload, passes unzip -t and says so when there is nothing', async () => {
+  const dir = join(tmp, 'zip-node');
+  makeUploads(dir);
+  writeFileSync(join(dir, 'big_5_x.bin'), Buffer.alloc(300000, 7));
+  setConfigForTests({ ...BASE, uploads_dir: dir });
+  let node;
+  try {
+    node = await nodeZip();
+  } finally {
+    setConfigForTests(BASE);
+  }
+  assert.ok('zip' in node);
+  const entries = zipEntries(node.zip);
+  assert.ok(entries.length > 15 && entries.every((e) => e.method === 0));
+  assert.ok(entries.some((e) => e.name === 'uploads/big_5_x.bin' && e.size === 300000));
+  const file = join(tmp, 'node-only.zip');
+  writeFileSync(file, node.zip);
+  assert.match(execFileSync('unzip', ['-t', file]).toString(), /No errors detected/);
+  const h = Object.fromEntries(node.headers.map(([k, v]) => [k.toLowerCase(), v]));
+  assert.equal(h['content-type'], 'application/zip');
+  assert.equal(h['content-length'], String(node.zip.length));
+  const empty = join(tmp, 'zip-node-empty');
+  mkdirSync(empty);
+  setConfigForTests({ ...BASE, uploads_dir: empty });
+  try {
+    const none = await nodeZip();
+    assert.ok('error' in none && none.error.length > 0);
+  } finally {
+    setConfigForTests(BASE);
+  }
+});
+
+test('the ZIP backup has the same entries as PHP and passes unzip -t', { skip: PHP_SKIP }, async () => {
   const dir = join(tmp, 'zip');
   makeUploads(dir);
   writeFileSync(join(dir, 'big_5_x.bin'), Buffer.alloc(300000, 7));
   const config = { ...BASE, uploads_dir: dir };
-  const php = execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${PHP_PRELUDE} $e = oys_storage_download_zip(); echo 'ERR:' . $e;`], {
+  const php = execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${phpPrelude()} $e = oys_storage_download_zip(); echo 'ERR:' . $e;`], {
     env: { ...process.env, OYS_TEST_CONFIG: JSON.stringify(config) }, maxBuffer: 64 * 1024 * 1024,
   });
   setConfigForTests(config);
@@ -177,7 +216,7 @@ test('the ZIP backup has the same entries as PHP and passes unzip -t', async () 
   const empty = join(tmp, 'zip-empty');
   mkdirSync(empty);
   const cfg2 = { ...BASE, uploads_dir: empty };
-  const phpEmpty = execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${PHP_PRELUDE} echo oys_storage_download_zip();`], { env: { ...process.env, OYS_TEST_CONFIG: JSON.stringify(cfg2) } }).toString();
+  const phpEmpty = execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${phpPrelude()} echo oys_storage_download_zip();`], { env: { ...process.env, OYS_TEST_CONFIG: JSON.stringify(cfg2) } }).toString();
   setConfigForTests(cfg2);
   try {
     assert.deepEqual(await nodeZip(), { error: phpEmpty });
@@ -186,7 +225,7 @@ test('the ZIP backup has the same entries as PHP and passes unzip -t', async () 
   }
 });
 
-test('moving uploads into the data folder works like PHP', () => {
+test('moving uploads into the data folder works like PHP', { skip: PHP_SKIP }, () => {
   // PHP rechnet den Code-Ordner aus lib/storage.php: dafür eine Kopie mit eigenem static/uploads
   const cases: Array<{ name: string; external: boolean; prepare?: (code: string, target: string) => void }> = [
     { name: 'move', external: true, prepare: (_code, target) => {
@@ -203,13 +242,13 @@ test('moving uploads into the data folder works like PHP', () => {
     for (const side of ['php', 'node'] as const) {
       const code = join(tmp, `move-${c.name}-${side}`);
       mkdirSync(join(code, 'lib'), { recursive: true });
-      writeFileSync(join(code, 'lib/storage.php'), readFileSync(join(ROOT_DIR, 'lib/storage.php')));
+      writeFileSync(join(code, 'lib/storage.php'), readFileSync(phpRef('lib/storage.php')));
       makeUploads(join(code, 'static/uploads'));
       const target = c.name === 'blocked' ? join(code, 'blocker/uploads') : c.external ? join(code, 'data/uploads') : join(code, 'static/uploads');
       c.prepare?.(code, target);
       const config = { ...BASE, uploads_dir: target };
       if (side === 'php') {
-        results.php = JSON.parse(execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${PHP_PRELUDE.replace(`require_once '${ROOT_DIR}/lib/storage.php';`, `require_once '${code}/lib/storage.php';`)} echo json_encode(oys_storage_move_to_data_dir(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`], {
+        results.php = JSON.parse(execFileSync('php', ['-d', 'display_errors=stderr', '-r', `${phpPrelude().replace(`require_once '${phpFile('lib/storage.php')}';`, `require_once '${code}/lib/storage.php';`)} echo json_encode(oys_storage_move_to_data_dir(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`], {
           env: { ...process.env, OYS_TEST_CONFIG: JSON.stringify(config) },
         }).toString().replaceAll(code, '<CODE>'));
       } else {
@@ -231,7 +270,9 @@ test('moving uploads into the data folder works like PHP', () => {
       };
       listings[side] = { from: list(join(code, 'static/uploads')), to: list(target) };
     }
-    assert.deepEqual(results.node, results.php, c.name);
+    // Seit 3.0 nennt der Hinweis config.json (und den Neustart) statt config.php
+    const asPhp = (r: unknown) => JSON.parse(JSON.stringify(r).replace('Set “uploads_dir” in config.json and restart the website first.', 'Set “uploads_dir” in config.php first.'));
+    assert.deepEqual(asPhp(results.node), results.php, c.name);
     assert.deepEqual(listings.node, listings.php, c.name);
   }
 });
@@ -258,7 +299,60 @@ function headerList(raw: string[]): string[] {
   return out;
 }
 
-test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied and missing files)', async () => {
+// Was im Betrieb Apache selbst beantwortet (php -S kennt es nicht): der Ordner selbst 403 (Options -Indexes),
+// kodierter Schrägstrich oder Nullbyte 404, kaputte %-Folge 400 – Node wie Apache (gemessen, test/static.test.ts)
+const APACHE_OWN: Record<string, number> = {
+  '/static/uploads/': 403, '/static/uploads/%2e%2e%2fconfig.php': 404, '/static/uploads/%2e%2e%2f%2e%2e%2findex.php': 404,
+  '/static/uploads/%00.jpg': 404, '/static/uploads/notes.txt%00': 404, '/static/uploads/per%2': 400,
+};
+// static/uploads/.htaccess sperrt Skripte, HTML und SVG schon über den Namen – auch wenn die Datei fehlt
+const DENIED_UPLOAD = /^\/static\/uploads\/[^/]*\.(php[0-9]?|phtml|phar|pl|py|cgi|sh|html?|svg|js)$/;
+
+// Dekodierte ../ zu gesperrten Dateien (config.json enthält alle Schlüssel): Node sperrt wie Apache nach dem Bereinigen
+// des Pfads mit 403 (web/static.ts). Ein kodierter Schrägstrich (%2F) ist bei Apache (AllowEncodedSlashes Off) schon
+// vorher ein 404. Beides mit der Fehlerseite von Apache.
+async function outOfTheFolder(nodePort: number): Promise<void> {
+  const apachePage = (code: number, title: string, text: string): string =>
+    `<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n<html><head>\n<title>${code} ${title}</title>\n</head><body>\n<h1>${title}</h1>\n<p>${text}</p>\n</body></html>\n`;
+  for (const path of ['/static/%2e%2e/config.json', '/static/%2E%2E/config.json', '/static/css/%2e%2e/%2e%2e/config.json',
+    '/static/uploads/%2E%2E%2F%2E%2E%2Fconfig.json', '/static/uploads/%2e%2e%2f%2e%2e%2fconfig.json', '/static/uploads/%2e%2e/%2e%2e/config.json',
+    '/static/uploads/%2E%2E/%2E%2E/config.php', '/static/%2e%2e/server/backup.sh', '/static/uploads/%2e%2e/%2e%2e/.git/config']) {
+    const n = await request(nodePort, 'GET', path);
+    const expected = /%2F/i.test(path)
+      ? [404, apachePage(404, 'Not Found', 'The requested URL was not found on this server.')]
+      : [403, apachePage(403, 'Forbidden', "You don't have permission to access this resource.")];
+    assert.deepEqual([n.status, n.body.toString('latin1')], expected, path);
+  }
+}
+
+test('serving uploads: denied names, answers Apache gives itself and paths out of the folder', async () => {
+  const dir = join(tmp, 'serve-node');
+  makeUploads(dir);
+  for (const n of ['notes.txt', 'evil.php', 'x.svg', 'x.phar']) writeFileSync(join(dir, n), n);
+  setConfigForTests({ ...BASE, uploads_dir: dir });
+  const app = await buildServer();
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const nodePort = (app.server.address() as AddressInfo).port;
+  try {
+    for (const [path, status] of Object.entries(APACHE_OWN)) {
+      const n = await request(nodePort, 'GET', path);
+      assert.equal(n.status, status, path);
+      assert.equal(n.headers[n.headers.findIndex((x, i) => i % 2 === 0 && x.toLowerCase() === 'content-type') + 1], 'text/html; charset=iso-8859-1', path);
+    }
+    for (const path of ['/static/uploads/evil.php', '/static/uploads/x.svg', '/static/uploads/x.phar', '/static/uploads/missing.php']) {
+      assert.ok(DENIED_UPLOAD.test(path));
+      assert.equal((await request(nodePort, 'GET', path)).status, 403, path);
+    }
+    const ok = await request(nodePort, 'GET', '/static/uploads/notes.txt');
+    assert.deepEqual([ok.status, ok.body.toString()], [200, 'notes.txt']);
+    await outOfTheFolder(nodePort);
+  } finally {
+    await app.close();
+    setConfigForTests(BASE);
+  }
+});
+
+test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied and missing files)', { skip: PHP_SKIP }, async () => {
   const dir = join(tmp, 'serve');
   makeUploads(dir);
   const big = Buffer.alloc(200000);
@@ -314,9 +408,22 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
         // Bekannt: der Router von Node sperrt Pfade mit einem Abschnitt, der mit einem Punkt beginnt, vorher mit 403
         // (web/static.ts: isDenied) – PHP antwortet hier 404
         if (path.includes('/..%2F')) continue;
+        // Was im Betrieb Apache selbst beantwortet (siehe APACHE_OWN)
+        if (Object.hasOwn(APACHE_OWN, path)) {
+          if (n.status !== APACHE_OWN[path] || n.headers[n.headers.findIndex((x, i) => i % 2 === 0 && x.toLowerCase() === 'content-type') + 1] !== 'text/html; charset=iso-8859-1') {
+            mismatches.push({ method, path, h, expected: APACHE_OWN[path], node: n.status });
+          }
+          continue;
+        }
         // Bekannt: static/uploads/.htaccess sperrt Skripte, HTML und SVG schon über den Namen – im Betrieb antwortet Apache
         // 403, auch wenn die Datei fehlt (Node genauso, web/static.ts). php -S kennt keine .htaccess: oys_serve_upload() → 404
-        if (!path.includes('%') && /^\/static\/uploads\/[^/]*\.(php[0-9]?|phtml|phar|pl|py|cgi|sh|html?|svg|js)$/.test(path)) {
+        if (!path.includes('%') && DENIED_UPLOAD.test(path)) {
+          if (n.status !== 403) mismatches.push({ method, path, h, expected: 403, node: n.status });
+          continue;
+        }
+        // Bekannt: der Ordner static/uploads/ selbst – Apache (Options -Indexes) antwortet 403, Node genauso (web/static.ts);
+        // php -S kommt bis oys_serve_upload('') und antwortet 404
+        if (path === '/static/uploads/') {
           if (n.status !== 403) mismatches.push({ method, path, h, expected: 403, node: n.status });
           continue;
         }
@@ -325,14 +432,8 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
         }
       }
     }
-    // Dekodierte ../ zu gesperrten Dateien (config.json enthält alle Schlüssel): Node sperrt wie Apache nach dem Bereinigen
-    // des Pfads mit 403 (web/static.ts) – php -S ohne diese Regeln kommt bis oys_serve_upload() und antwortet 404
-    for (const path of ['/static/%2e%2e/config.json', '/static/%2E%2E/config.json', '/static/css/%2e%2e/%2e%2e/config.json',
-      '/static/uploads/%2E%2E%2F%2E%2E%2Fconfig.json', '/static/uploads/%2e%2e%2f%2e%2e%2fconfig.json', '/static/uploads/%2e%2e/%2e%2e/config.json',
-      '/static/uploads/%2E%2E/%2E%2E/config.php', '/static/%2e%2e/lib/storage.php', '/static/uploads/%2e%2e/%2e%2e/.git/config']) {
-      const n = await request(nodePort, 'GET', path);
-      assert.deepEqual([n.status, n.body.toString('latin1')], [403, 'Forbidden'], path);
-    }
+    // Dekodierte ../ zu gesperrten Dateien – php -S ohne diese Regeln kommt bis oys_serve_upload() und antwortet 404
+    await outOfTheFolder(nodePort);
   } finally {
     await app.close();
     await php.stop();

@@ -87,9 +87,10 @@ export async function suggestionGet(id: number): Promise<Row | null> {
   return one('SELECT * FROM community_suggestions WHERE id = ?', [id]);
 }
 
-// oys_suggestion_public(): was der Bot über einen Vorschlag erfährt (IDs bleiben Text)
-export function suggestionPublic(s: Row): Record<string, unknown> {
-  return {
+// oys_suggestion_public(): was der Bot über einen Vorschlag erfährt (IDs bleiben Text). web (suggestions.web()): ob neue
+// Beiträge den Hinweis auf die Webseite bekommen und deren Adresse – ältere Bots übergehen den Schlüssel.
+export function suggestionPublic(s: Row, web?: { notice: boolean; host: string }): Record<string, unknown> {
+  const out: Record<string, unknown> = {
     id: intval(s.id),
     thread_id: s.thread_id,
     title: s.title,
@@ -101,6 +102,8 @@ export function suggestionPublic(s: Row): Record<string, unknown> {
     status_message_id: phpStr(s.status_message_id),
     author_id: s.author_id,
   };
+  if (web) out.web = web;
+  return out;
 }
 
 // oys_suggestion_decide(): Entscheidung speichern (nur solange offen). Gibt [Vorschlag, geändert?] zurück.
@@ -173,8 +176,22 @@ export async function ticketMessages(ticketId: number): Promise<Row[]> {
 
 // ---------------------------------------------------------------- Aufträge für den Bot (Warteschlange)
 
-// oys_outbox_add(): JSON mit Umlauten, aber maskierten Schrägstrichen (JSON_UNESCAPED_UNICODE)
-export async function outboxAdd(action: string, data: unknown): Promise<void> {
+// oys_outbox_add(): JSON mit Umlauten, aber maskierten Schrägstrichen (JSON_UNESCAPED_UNICODE).
+// ref: Aufträge mit demselben ref gehen der Reihe nach (z. B. 'post:7', 'ticket:3'); db: die Transaktion des
+// Aufrufers, damit Auftrag und eigene Zeile zusammen entstehen. Gibt die ID des Auftrags zurück.
+export async function outboxAdd(action: string, data: unknown, opts: { ref?: string | null; db?: Db } = {}): Promise<number> {
   const payload = phpJsonEncode(data, { unescapedUnicode: true });
-  await exec('INSERT INTO community_outbox (action, payload, created_at) VALUES (?, ?, ?)', [action, payload === false ? '' : payload, date('Y-m-d H:i:s')]);
+  const db = opts.db ?? POOL;
+  const res = await db.exec('INSERT INTO community_outbox (action, payload, ref, created_at) VALUES (?, ?, ?, ?)', [action, payload === false ? '' : payload, opts.ref ?? null, date('Y-m-d H:i:s')]);
+  return res.insertId;
+}
+
+// Noch nicht abgeholte Aufträge mit diesem ref und dieser Aktion ersetzen (als erledigt markieren) – z. B. ein
+// älterer Test, der noch wartet. Gibt die Zahl der ersetzten Aufträge zurück.
+export async function supersede(ref: string, action: string, db: Db = POOL): Promise<number> {
+  const res = await db.exec(
+    "UPDATE community_outbox SET done_at = ?, last_error = 'superseded' WHERE ref = ? AND action = ? AND done_at IS NULL AND claimed_at IS NULL",
+    [date('Y-m-d H:i:s'), ref, action],
+  );
+  return res.affectedRows;
 }

@@ -4,8 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { discordBase, discordError, walkErrors, type DiscordResponse } from '../src/discord/rest.js';
 import { cleanWebhookLink, maskedWebhook, parseWebhookLink } from '../src/discord/webhook.js';
-import { activeDestination, discordDefaults, displayNameProblem, normalizeSettings, parseMention } from '../src/discord/settings.js';
-import { discordWithMention, storedTarget, threadName } from '../src/updates/discord.js';
+import {
+  activeDestination, discordDefaults, discordDefaultsV1, discordSettingsFromV1, displayNameProblem, normalizeSettings, normalizeV1, parseMention,
+} from '../src/discord/settings.js';
+import { discordWithMention, threadName } from '../src/updates/discord.js';
+import { legacyPostRow } from '../src/discord/legacy.js';
 import type { Update } from '../src/updates/updates.js';
 
 // Token zur Laufzeit zusammengesetzt (kein tokenförmiger Text im Repository)
@@ -158,33 +161,42 @@ test('walkErrors finds the first nested message and its path', () => {
   assert.equal(walkErrors('x'), null);
 });
 
-test('stored targets, forum post names and the active destination', () => {
-  assert.deepEqual(storedTarget('webhook:123456'), { via: 'webhook', id: '123456', threadId: '' });
-  assert.deepEqual(storedTarget('webhook:123456:1401234567890123456'), { via: 'webhook', id: '123456', threadId: '1401234567890123456' });
-  assert.deepEqual(storedTarget('bot:1301234567890123456'), { via: 'token', id: '1301234567890123456', threadId: '' });
-  for (const bad of ['', 'webhook:', 'webhook:12:34', 'bot:12', 'other:123456', 'webhook:123456\n']) assert.equal(storedTarget(bad), null, bad);
+test('stored targets of posts from before (migration), forum post names and the active destination', () => {
+  const opts = { tokenStored: false, botInstalled: false };
+  assert.deepEqual(legacyPostRow('webhook:123456', '1300000000000000001', opts), { via: 'webhook', target: 'webhook:123456', kind: 'message', channel_id: null, legacy: 0 });
+  // Thread-ID = Nachrichten-ID: ein neuer Forenbeitrag; sonst eine Nachricht in einem Thread
+  assert.deepEqual(legacyPostRow('webhook:123456:1401234567890123456', '1401234567890123456', opts), { via: 'webhook', target: 'webhook:123456', kind: 'forum_post', channel_id: '1401234567890123456', legacy: 0 });
+  assert.deepEqual(legacyPostRow('webhook:123456:1401234567890123456', '1300000000000000002', opts), { via: 'webhook', target: 'webhook:123456', kind: 'thread_msg', channel_id: '1401234567890123456', legacy: 0 });
+  // Alter Token: bleibt beim Token, solange er gespeichert ist; sonst übernimmt ihn der installierte Bot; sonst nicht
+  assert.deepEqual(legacyPostRow('bot:1301234567890123456', '1300000000000000003', { tokenStored: true, botInstalled: true }), { via: 'token', target: 'bot:1301234567890123456', kind: 'message', channel_id: '1301234567890123456', legacy: 1 });
+  assert.deepEqual(legacyPostRow('bot:1301234567890123456', '1300000000000000003', { tokenStored: false, botInstalled: true }), { via: 'bot', target: 'bot', kind: 'message', channel_id: '1301234567890123456', legacy: 1 });
+  assert.equal(legacyPostRow('bot:1301234567890123456', '1300000000000000003', opts), null);
+  for (const bad of ['', 'webhook:', 'webhook:12:34', 'bot:12', 'other:123456', 'webhook:123456\n']) assert.equal(legacyPostRow(bad, '1', { tokenStored: true, botInstalled: true }), null, bad);
   const u = { id: 1, title: 'Own pages for the roadmap', version: '2.5' } as Update;
   assert.equal(threadName(u), '2.5 – Own pages for the roadmap');
   assert.equal(threadName({ ...u, version: '', title: 'x'.repeat(150) }), 'x'.repeat(100));
   // Der Stand aus der Schleife (Bot-Modus ohne Token) zählt nicht: ein gespeicherter Webhook wird benutzt
   const hook = 'https://discord.com/api/webhooks/123456789012345678/' + TOKEN;
-  assert.equal(activeDestination({ ...discordDefaults(), mode: 'bot', webhook_url: hook }), 'webhook');
-  assert.equal(activeDestination({ ...discordDefaults(), mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', webhook_url: hook }), 'token');
-  assert.equal(activeDestination({ ...discordDefaults(), mode: 'bot', bot_token: 'x'.repeat(60), webhook_url: hook }), null);
-  assert.equal(activeDestination({ ...discordDefaults(), webhook_url: 'nonsense' }), null);
+  const v1 = (o: Record<string, unknown>) => discordSettingsFromV1(normalizeV1({ ...discordDefaultsV1(), ...o }));
+  assert.equal(activeDestination(v1({ mode: 'bot', webhook_url: hook })), 'webhook');
+  assert.equal(activeDestination(v1({ mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', webhook_url: hook })), 'token');
+  assert.equal(activeDestination(v1({ mode: 'bot', bot_token: 'x'.repeat(60), webhook_url: hook })), null);
+  assert.equal(activeDestination(v1({ webhook_url: 'nonsense' })), null);
   assert.equal(activeDestination(discordDefaults()), null);
   // Name und Bild nur für den Webhook
-  const s = { ...discordDefaults(), webhook_url: hook, username: 'News', avatar_url: 'https://x.y/a.png', mention: 'here' };
+  const s = v1({ webhook_url: hook, username: 'News', avatar_url: 'https://x.y/a.png', mention: 'here' });
   assert.deepEqual(discordWithMention({ embeds: [] }, s), { embeds: [], allowed_mentions: { parse: ['everyone'] }, content: '@here', username: 'News', avatar_url: 'https://x.y/a.png' });
-  assert.deepEqual(discordWithMention({ embeds: [] }, s, 'token'), { embeds: [], allowed_mentions: { parse: ['everyone'] }, content: '@here' });
+  const t = v1({ mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', mention: 'here' });
+  assert.deepEqual(discordWithMention({ embeds: [] }, t, 'token'), { embeds: [], allowed_mentions: { parse: ['everyone'] }, content: '@here' });
 });
 
-test('stored settings of any shape become well-typed settings', () => {
+test('stored settings of any shape become well-typed v2 settings; v1 values are converted', () => {
   const d = discordDefaults();
   assert.deepEqual(normalizeSettings(null), d);
   assert.deepEqual(normalizeSettings([1, 2]), d);
   assert.deepEqual(normalizeSettings('x'), d);
-  const n = normalizeSettings({ mode: 'bot', auto_post: 0, thread_verified: '1', post_in: 'nowhere', channel_id: 1301234567890, mention: ['x'], extra: 1, username: null });
+  // Alte Form: Werte in ihre Typen, unbekannte Schlüssel weg
+  const n = normalizeV1({ mode: 'bot', auto_post: 0, thread_verified: '1', post_in: 'nowhere', channel_id: 1301234567890, mention: ['x'], extra: 1, username: null });
   assert.equal(n.mode, 'bot');
   assert.equal(n.auto_post, false);
   assert.equal(n.thread_verified, true);
@@ -193,4 +205,39 @@ test('stored settings of any shape become well-typed settings', () => {
   assert.equal(n.mention, '');
   assert.equal(n.username, '');
   assert.equal('extra' in n, false);
+  // v2 mit kaputten Teilen
+  const v2 = normalizeSettings({ v: 2, auto_post: '', bot: { enabled: 1, channel_id: 5, channel_type: 'voice', extra: 1 }, webhook: 'x', bot_token: ['t'], other: 1 });
+  assert.equal(v2.auto_post, false);
+  assert.deepEqual(v2.bot, { enabled: true, channel_id: '5', channel_type: '', mention: '', saved_at: '' });
+  assert.deepEqual(v2.webhook, discordDefaults().webhook);
+  assert.equal(v2.bot_token, '');
+  assert.equal('other' in v2, false);
+});
+
+test('v1 → v2: webhook (active or kept off), the old token with its channel and ping, names Discord refuses, the bot prefilled', () => {
+  const hook = 'https://discord.com/api/webhooks/123456789012345678/' + TOKEN;
+  const conv = (o: Record<string, unknown>) => discordSettingsFromV1(normalizeV1({ ...discordDefaultsV1(), ...o }));
+  // Webhook mit allem aus PR 1
+  const w = conv({ mode: 'webhook', webhook_url: hook, username: 'News', avatar_url: 'https://x.y/a.png', mention: 'everyone', invite_url: 'https://discord.gg/x',
+    auto_post: false, post_in: 'thread', thread_id: '1401234567890123456', thread_verified: true, checked_at: '2026-11-01 10:00:00', hook_name: 'Captain Hook' });
+  assert.equal(w.v, 2);
+  assert.equal(w.auto_post, false);
+  assert.equal(w.invite_url, 'https://discord.gg/x');
+  assert.deepEqual(w.webhook, { enabled: true, url: hook, post_in: 'thread', thread_id: '1401234567890123456', thread_verified: true, test_thread_id: '', display_name: 'News',
+    avatar_url: 'https://x.y/a.png', mention: 'everyone', checked_at: '2026-11-01 10:00:00', check_error: '', hook_name: 'Captain Hook', hook_channel_id: '', hook_guild_id: '' });
+  assert.equal(w.bot_token, '');
+  assert.equal(w.bot.enabled, false);
+  // Alter Token gewählt: bleibt Ziel mit Kanal und Ping; ein gespeicherter Webhook bleibt ausgeschaltet; der Bot ist vorgemerkt, aber aus
+  const t = conv({ mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', mention: '1301234567890123457', webhook_url: hook, username: 'admin@test.de' });
+  assert.equal(t.bot_token, 'x'.repeat(60));
+  assert.equal(t.channel_id, '1301234567890123456');
+  assert.equal(t.mention, '1301234567890123457');
+  assert.equal(t.webhook.enabled, false);
+  assert.equal(t.webhook.url, hook);
+  assert.equal(t.webhook.display_name, '', 'a name Discord refuses (the login e-mail) is dropped');
+  assert.deepEqual(t.bot, { enabled: false, channel_id: '1301234567890123456', channel_type: '', mention: '1301234567890123457', saved_at: '' });
+  // Unbrauchbarer Link: kein Webhook
+  assert.equal(conv({ webhook_url: 'https://evil.example/hook' }).webhook.url, '');
+  // Rundreise: v2 bleibt v2
+  assert.deepEqual(normalizeSettings(JSON.parse(JSON.stringify(t))), t);
 });

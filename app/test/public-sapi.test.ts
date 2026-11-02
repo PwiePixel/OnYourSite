@@ -1,7 +1,7 @@
 // Paket public gegen den Webserver von PHP (php -S): was nur mit echter SAPI sichtbar ist. header('Location: …') aus
 // oys_redirect() (Leerraum am Ende, CR/LF/NUL, andere Steuerzeichen) und php://input bei multipart/form-data (POST
 // /track-click liest den Inhalt selbst). Die Antworten werden roh gelesen: Node als Client lehnt PHPs Steuerzeichen im
-// Header ab.
+// Header ab. Die Vergleiche laufen nur mit OYS_PHP_REF (siehe support/phpRef.ts).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isHalt, makeTestCtx } from '../src/web/ctx.js';
 import { phpInput } from '../src/public/routes.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 let dir = '';
 let port = 0;
@@ -45,6 +46,7 @@ function raw(request: Buffer): Promise<{ status: number; headers: Array<[string,
 }
 
 before(async () => {
+  if (PHP_SKIP) return;
   dir = mkdtempSync(join(tmpdir(), 'oys-public-sapi-'));
   // oys_redirect() aus lib/helpers.php mit einem Ziel aus der Anfrage (hex, damit jedes Byte ankommt)
   writeFileSync(join(dir, 'loc.php'), "<?php header('Location: ' . hex2bin($_GET['u']), true, (int) $_GET['c']); exit;");
@@ -64,10 +66,26 @@ before(async () => {
 
 after(() => {
   server?.kill();
-  rmSync(dir, { recursive: true, force: true });
+  if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-test('redirects follow header() of PHP: trailing whitespace, CR/LF/NUL and other control characters', async () => {
+test('redirect targets with control characters are sent %-encoded and stay valid headers', () => {
+  for (const url of ['/a\u0001b', 'https://example.com/a\u007fb', '/a\nb', '/a\rb']) {
+    const ctx = makeTestCtx({ url: '/_/go/1' });
+    try {
+      ctx.redirect(url, 302);
+    } catch (err) {
+      if (!isHalt(err)) throw err;
+    }
+    const location = ctx.header('Location');
+    if (location !== undefined) assert.doesNotThrow(() => validateHeaderValue('Location', location), JSON.stringify(url));
+  }
+  // php://input bei anderen Methoden: immer der Inhalt
+  const put = makeTestCtx({ method: 'PUT', url: '/track-click', headers: { 'content-type': 'multipart/form-data; boundary=x' }, rawBody: Buffer.from('{"link_id":1}') });
+  assert.equal(phpInput(put).toString(), '{"link_id":1}');
+});
+
+test('redirects follow header() of PHP: trailing whitespace, CR/LF/NUL and other control characters', { skip: PHP_SKIP }, async () => {
   const urls = ['/a', 'https://example.com/a?b=1#c', 'https://münchen.example/ä?x=ü', 'http://mia.oys.test:8080/rel\u0001x',
     'https://example.com/a\u0001b', 'https://example.com/a\u007fb', '/a\u001fb\u0008c', '/a\tb', '/a\u000bb', '/a\u000cb',
     '/a\u0000b', '/a\nb', '/a\rb', '/a\r\nb', '/a\n', '/a  \t', '/a \u000b\u000c\r\n', '/a\u0000', ' /a', '/a '];
@@ -97,7 +115,7 @@ test('redirects follow header() of PHP: trailing whitespace, CR/LF/NUL and other
   }
 });
 
-test('php://input of POST /track-click is empty exactly when PHP reads the body as multipart/form-data', async () => {
+test('php://input of POST /track-click is empty exactly when PHP reads the body as multipart/form-data', { skip: PHP_SKIP }, async () => {
   const body = '{"link_id":1}';
   const types = ['application/json', 'text/plain', '', 'multipart/form-data', 'multipart/form-data;', 'multipart/form-data; charset=utf-8',
     'multipart/form-data; boundary', 'multipart/form-data; Boundary', 'multipart/form-data; boundary=', 'multipart/form-data; boundary=""',

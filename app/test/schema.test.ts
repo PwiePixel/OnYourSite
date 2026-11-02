@@ -1,19 +1,22 @@
 // Datenbank-Schema gegen PHP: Neuinstallation und Übernahme alter Profile (users + user_links) müssen in Node
-// dieselben Tabellen und Daten ergeben wie oys_ensure_schema(). Jede Seite bekommt eine eigene Test-Datenbank.
+// dieselben Tabellen und Daten ergeben wie oys_ensure_schema() der PHP-Version (support/phpRef.ts). Jede Seite bekommt
+// eine eigene Test-Datenbank. Ohne PHP prüfen eigene Tests die Node-Seite an Stichproben.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { encryptData } from '../src/crypto.js';
 import { strtotime, time } from '../src/php.js';
 import { ensureSchema, SCHEMA_VERSION, V_SESSIONS } from '../src/schema.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 const BASE = loadConfig();
-// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
-const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
+// Eigene Namen je Arbeitsordner (abgeleitet von der Datenbank der Einstellungen) – feste Namen kollidierten bei
+// gleichzeitigen Läufen
+const SOURCE = configString('db.name', 'oys_test');
 const DBS = { phpFresh: SOURCE + '_schema_pf', nodeFresh: SOURCE + '_schema_nf', phpLegacy: SOURCE + '_schema_pl', nodeLegacy: SOURCE + '_schema_nl' };
 let admin: Connection;
 let started = 0;
@@ -62,14 +65,14 @@ function legacyRows(): Array<[string, unknown[]]> {
 
 // PHP-Version mit eigener Verbindung auf die Test-Datenbank migrieren lassen
 function phpEnsure(db: string): void {
-  const script = `require '${ROOT_DIR}/lib/config.php';
+  const script = `require '${phpFile('lib/config.php')}';
     date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
     $pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . getenv('OYS_TEST_DB') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
     $pdo->exec("SET time_zone = '" . date('P') . "'");
-    require '${ROOT_DIR}/security.php'; require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/pages.php'; require '${ROOT_DIR}/lib/schema.php';
+    require '${phpFile('security.php')}'; require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/pages.php')}'; require '${phpFile('lib/schema.php')}';
     oys_ensure_schema($pdo); echo 'ok';`;
-  assert.equal(execFileSync('php', ['-r', script], { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR }).toString(), 'ok');
+  assert.equal(execFileSync('php', ['-r', script], { env: { ...process.env, OYS_TEST_DB: db }, cwd: phpRoot() }).toString(), 'ok');
 }
 
 // upTo: bis zu diesem Schritt (der Vergleich mit PHP gilt für den Stand der portierten Seite, V_SESSIONS)
@@ -149,7 +152,17 @@ after(async () => {
   await admin.end();
 });
 
-test('a fresh install creates the same tables and seeds as PHP', async () => {
+test('a fresh install creates every table and the seeds', async () => {
+  await freshDb(DBS.nodeFresh, false);
+  await nodeEnsure(DBS.nodeFresh);
+  assert.equal(await version(DBS.nodeFresh), String(SCHEMA_VERSION));
+  const all = await tables(DBS.nodeFresh);
+  for (const t of [...DATA_TABLES, 'oys_meta', 'oys_sessions']) assert.ok(all.includes(t), t);
+  assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
+  assert.match(await ddl(DBS.nodeFresh, 'notifications'), /KEY `idx_user_id` \(`user_id`,`id`\)/);
+});
+
+test('a fresh install creates the same tables and seeds as PHP', { skip: PHP_SKIP }, async () => {
   await freshDb(DBS.phpFresh, false);
   await freshDb(DBS.nodeFresh, false);
   phpEnsure(DBS.phpFresh);
@@ -158,41 +171,91 @@ test('a fresh install creates the same tables and seeds as PHP', async () => {
   assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
 });
 
-test('old profiles are taken over exactly like PHP does it', async () => {
+// Stichproben: Seiten nur für Nutzer mit Adresse, „Story“ nach den Links bei bento-grid, fremde Adressen im CSS entfernt
+async function legacySamples(db: string): Promise<void> {
+  const pages = (await dump(db, 'pages')) as Array<Record<string, unknown>>;
+  assert.deepEqual(pages.map((p) => p.slug), ['pixel', 'mia', 'tom', 'lea', 'bee']);
+  assert.ok(!String(pages[0].settings).includes('evil.com'));
+  const tomBlocks = ((await dump(db, 'page_blocks')) as Array<Record<string, unknown>>).filter((b) => b.page_id === pages[2].id);
+  assert.deepEqual(tomBlocks.map((b) => b.type), ['booking', 'file', 'link', 'heading', 'text']);
+}
+
+test('old profiles are taken over, and a second run changes nothing', async () => {
+  await freshDb(DBS.nodeLegacy, true);
+  await nodeEnsure(DBS.nodeLegacy);
+  assert.equal(await version(DBS.nodeLegacy), String(SCHEMA_VERSION));
+  await legacySamples(DBS.nodeLegacy);
+  // Bestandsschutz (V_BRANDING_LEGACY, Q9): genau die Seite, die den Hinweis ausblendete, behält das – keiner der alten
+  // Besitzer ist Admin oder hat Premium
+  const flags = ((await dump(DBS.nodeLegacy, 'pages')) as Array<Record<string, unknown>>).map((p) => {
+    const s = JSON.parse(String(p.settings)) as Record<string, unknown>;
+    return [p.slug, s.hide_branding === true, s.branding_legacy === true];
+  });
+  assert.deepEqual(flags.filter(([, hides, kept]) => hides || kept), [['pixel', true, true]]);
+  const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.nodeLegacy, t)));
+  await nodeEnsure(DBS.nodeLegacy);
+  assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.nodeLegacy, t))), before);
+});
+
+test('old profiles are taken over exactly like PHP does it', { skip: PHP_SKIP }, async () => {
   await freshDb(DBS.phpLegacy, true);
   await freshDb(DBS.nodeLegacy, true);
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.nodeLegacy, V_SESSIONS);
   await assertSame(DBS.phpLegacy, DBS.nodeLegacy);
-  // Stichproben: Seiten nur für Nutzer mit Adresse, „Story“ nach den Links bei bento-grid, fremde Adressen im CSS entfernt
-  const pages = (await dump(DBS.nodeLegacy, 'pages')) as Array<Record<string, unknown>>;
-  assert.deepEqual(pages.map((p) => p.slug), ['pixel', 'mia', 'tom', 'lea', 'bee']);
-  assert.ok(!String(pages[0].settings).includes('evil.com'));
-  const tomBlocks = ((await dump(DBS.nodeLegacy, 'page_blocks')) as Array<Record<string, unknown>>).filter((b) => b.page_id === pages[2].id);
-  assert.deepEqual(tomBlocks.map((b) => b.type), ['booking', 'file', 'link', 'heading', 'text']);
+  await legacySamples(DBS.nodeLegacy);
 });
 
-test('Node upgrades a database PHP has migrated, and a second run changes nothing', async () => {
+// Daten nach der Migration: vorhandene Spalten unverändert; Spalten, die ein späterer Schritt anlegt (z. B.
+// users.status_terms_at), sind leer – sonst hätte der Schritt Daten geändert
+function sameData(after: unknown[][], before: unknown[][]): unknown[][] {
+  return after.map((rows, t) => rows.map((row, i) => {
+    const ref = (before[t][i] ?? {}) as Record<string, unknown>;
+    const r = row as Record<string, unknown>;
+    for (const k of Object.keys(r)) if (!(k in ref)) assert.equal(r[k], null, `new column ${k} is empty`);
+    return Object.fromEntries(Object.keys(ref).map((k) => [k, r[k]]));
+  }));
+}
+
+test('Node upgrades a database PHP has migrated, and a second run changes nothing', { skip: PHP_SKIP }, async () => {
   const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)));
   // Spalten, die spätere Schritte anfügen (z. B. pages.custom_domain), sind bei bestehenden Zeilen leer; alle bisherigen
-  // Werte bleiben, wie sie waren
-  const known = async (): Promise<unknown[][]> => (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
-    (rows as Array<Record<string, unknown>>).map((row, j) => {
-      const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
-      for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
-      return Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
-    }));
+  // Werte bleiben, wie sie waren. Einzige gewollte Datenänderung: V_BRANDING_LEGACY merkt Seiten, die den Hinweis ohne
+  // Premium ausblenden (Bestandsschutz Q9) – an settings wird "branding_legacy":true angehängt, der Rest bleibt Zeichen
+  // für Zeichen gleich. Die Liste der so markierten Seiten wird mitgeschrieben und unten geprüft.
+  const LEGACY_MARK = ',"branding_legacy":true}';
+  let marked: number[] = [];
+  const known = async (): Promise<unknown[][]> => {
+    marked = [];
+    return (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
+      (rows as Array<Record<string, unknown>>).map((row, j) => {
+        const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
+        for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
+        const out = Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
+        if (DATA_TABLES[i] === 'pages' && typeof out.settings === 'string' && out.settings.endsWith(LEGACY_MARK)) {
+          marked.push(Number(out.id));
+          out.settings = out.settings.slice(0, -LEGACY_MARK.length) + '}';
+        }
+        return out;
+      }));
+  };
+  // Seiten, die den Hinweis vorher ausblendeten (keiner der alten Besitzer ist Admin oder hat Premium)
+  const hiding = (before[DATA_TABLES.indexOf('pages')] as Array<Record<string, unknown>>)
+    .filter((r) => (JSON.parse(String(r.settings)) as { hide_branding?: unknown }).hide_branding === true).map((r) => Number(r.id));
+  assert.ok(hiding.length > 0, 'the fixture has a page that hides the note');
   await nodeEnsure(DBS.phpLegacy);
   assert.equal(await version(DBS.phpLegacy), String(SCHEMA_VERSION));
   assert.ok((await tables(DBS.phpLegacy)).includes('oys_sessions'));
   assert.deepEqual(await known(), before);
+  assert.deepEqual(marked, hiding, 'exactly the pages that hide the note keep hiding it');
   // PHP kommt mit der höheren Version zurecht (nichts wird erneut ausgeführt)
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.phpLegacy);
   assert.deepEqual(await known(), before);
+  assert.deepEqual(marked, hiding);
 });
 
-test('the feature steps give a database PHP installed the same tables as a fresh Node install', async () => {
+test('the feature steps give a database PHP installed the same tables as a fresh Node install', { skip: PHP_SKIP }, async () => {
   // Beide bis zum letzten Schritt: PHP-Neuinstallation (Version 4) + Node gegen Node allein
   await nodeEnsure(DBS.phpFresh);
   await nodeEnsure(DBS.nodeFresh);
