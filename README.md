@@ -1,6 +1,6 @@
 # OnYourSite
 
-Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in PHP, without a framework.
+Your own link-in-bio page at `name.onys.me (Coming Soon)` `name.on-your.site` or `on-your.site/name` – in PHP, without a framework.
 
 ## Features
 
