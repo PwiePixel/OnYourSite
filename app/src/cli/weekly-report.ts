@@ -1,9 +1,9 @@
 // Wochenbericht als Befehl (cron/weekly_report.php). Eigener Server: montags um 8:00 über den systemd-Timer
 // onyoursite-weekly-report.
 //   node dist/cli/weekly-report.js        (Entwicklung: node --import tsx src/cli/weekly-report.ts)
-// Ausgabe und Rückgabewert wie in PHP: eine Zeile „Y-m-d H:i – Weekly reports sent: N, failed: M“ und 0. Ist die
-// Datenbank nicht erreichbar, steht wie bei PHP (db.php) die Hinweisseite in der Ausgabe – auch dann mit 0. Jeder andere
-// Fehler endet wie ein PHP Fatal error mit 255.
+// Ausgabe und Rückgabewert wie in PHP: eine Zeile „Y-m-d H:i – Weekly reports sent: N, failed: M“ (dazu „, skipped: K“,
+// wenn Konten nichts zu berichten hatten) und 0. Ist die Datenbank nicht erreichbar, steht wie bei PHP (db.php) die
+// Hinweisseite in der Ausgabe – auch dann mit 0. Jeder andere Fehler endet wie ein PHP Fatal error mit 255.
 import { ConfigMissingError, loadConfig } from '../config.js';
 import { DbUnavailableError, closePool, timeZone, value } from '../db.js';
 import { ensureSchemaOnce } from '../schema.js';
@@ -47,7 +47,8 @@ export async function weeklyReportCli(io: CliOutput = stdio): Promise<number> {
       return 0;
     }
     const result = await runWeeklyReports();
-    await io.out(date('Y-m-d H:i') + ' – Weekly reports sent: ' + result.sent + ', failed: ' + result.failed + '\n');
+    await io.out(date('Y-m-d H:i') + ' – Weekly reports sent: ' + result.sent + ', failed: ' + result.failed
+      + (result.skipped > 0 ? ', skipped: ' + result.skipped : '') + '\n');
     return 0;
   } catch (err) {
     io.err('Weekly report failed: ' + (err instanceof Error ? (err.stack ?? err.message) : String(err)));

@@ -6,7 +6,7 @@ import { phpJson } from '../html.js';
 import { cleanUrl, mainUrl, normalizeSlug, pageOrigin, pageUrl, pageUrls, prettyUrl, uploadUrl, type PageLike } from '../helpers.js';
 import { intval, phpStr, phpTruthy } from '../php.js';
 import { scheduleActive } from '../content/blocks.js';
-import { loadBlocks, loadPageBySlug, pageSettings } from '../content/pages.js';
+import { isShownLinkPage, loadBlocks, loadPageBySlug, pageSettings } from '../content/pages.js';
 import { detectBrand, socialUrl } from '../content/social.js';
 import { layoutKey, themeKey, themes } from '../content/themes.js';
 import { isArr, own, values } from '../content/util.js';
@@ -24,7 +24,8 @@ export async function api(ctx: Ctx): Promise<void> {
 
   try {
     const page = await loadPageBySlug(slug);
-    if (!page) ctx.send(plain('User not found.'));
+    // Zeigt der Platz eine Code-Seite, gibt es seine Link-Seite für Besucher nicht
+    if (!page || !isShownLinkPage(page)) ctx.send(plain('User not found.'));
     const pageLike = page as unknown as PageLike;
     const settings = pageSettings(page);
     const theme = themeKey(page.theme);

@@ -11,7 +11,7 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { loadConfig, setConfigForTests } from '../src/config.js';
 import { exec, one, q, transaction, value, type Db } from '../src/db.js';
 import { date, strtotime, time } from '../src/php.js';
-import { ensureSchema, V_CUSTOM_DOMAINS } from '../src/schema.js';
+import { ensureSchema, SCHEMA_VERSION, V_CUSTOM_DOMAINS } from '../src/schema.js';
 import { slugProblem } from '../src/helpers.js';
 import {
   AccountDeletionError, deleteAccount, registerUserDeletion, unregisterUserDeletionForTests, userDeletionHooks,
@@ -69,7 +69,7 @@ test('the step creates both tables and pages.custom_domain, and running it again
   await t.admin.query(`REPLACE INTO \`${t.name}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)`, [String(V_CUSTOM_DOMAINS - 1)]);
   await ensureSchema();
   assert.deepEqual(await Promise.all(tables.map(ddl)), first);
-  assert.equal(await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), String(V_CUSTOM_DOMAINS));
+  assert.equal(await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), String(SCHEMA_VERSION));
   // Bestehende Seiten bleiben ohne Domain
   assert.equal(Number(await value('SELECT COUNT(*) FROM pages WHERE custom_domain IS NOT NULL')), 0);
 });

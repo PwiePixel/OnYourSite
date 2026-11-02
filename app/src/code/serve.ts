@@ -8,8 +8,9 @@ import { baseAuthority, isBot, mainUrl } from '../helpers.js';
 import { poolDb, pathExtension } from '../honeycombs/util.js';
 import { CODE_SANDBOX, CODE_TYPES, codePreviewValid, codeValidPath } from './sites.js';
 
-// oys_code_serve(): Datei einer Code-Seite ausliefern (path = Pfad der Anfrage, nicht dekodiert)
-export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void> {
+// oys_code_serve(): Datei einer Code-Seite ausliefern (path = Pfad der Anfrage, nicht dekodiert). slug: die Adresse, unter
+// der sie gerade ausgeliefert wird – ihre eigene oder die des Seitenplatzes, der sie zeigt (Vorschau-Schlüssel, Hinweise).
+export async function codeServe(ctx: Ctx, site: Row, path: string, slug: string = phpStr(site.slug)): Promise<void> {
   ctx.header('Content-Security-Policy', CODE_SANDBOX);
   ctx.header('X-Content-Type-Options', 'nosniff');
   ctx.header('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -34,7 +35,7 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
   const rel = strtolower(phpTrim(rawurldecode(path), '/'));
   // Offline sehen Besucher nur einen Hinweis. Der Besitzer sieht Seiten mit Vorschau-Schlüssel (Editor) –
   // Dateien wie CSS, JS und Bilder werden dafür auch offline ausgeliefert, die Sandbox gibt keinen Referer mit.
-  const hidden = !phpTruthy(site.is_published) && !codePreviewValid(site, urlToken);
+  const hidden = !phpTruthy(site.is_published) && !codePreviewValid(site, urlToken, slug);
   const askedExt = pathExtension(rel);
   if (hidden && (askedExt === '' || askedExt === 'html' || askedExt === 'htm' || !CODE_TYPES.has(askedExt))) {
     ctx.status = 404;
@@ -56,7 +57,7 @@ export async function codeServe(ctx: Ctx, site: Row, path: string): Promise<void
     file = await lookup('404.html');
     if (!file) {
       ctx.status = 404;
-      ctx.write(codeNotice(ctx, 'Page not found', 'This page doesn’t exist on ' + phpStr(site.slug) + '.' + baseAuthority() + '.'));
+      ctx.write(codeNotice(ctx, 'Page not found', 'This page doesn’t exist on ' + slug + '.' + baseAuthority() + '.'));
       return;
     }
   }

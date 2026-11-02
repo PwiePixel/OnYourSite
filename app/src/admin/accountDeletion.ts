@@ -14,6 +14,7 @@ import { cleanupFiles, deletePage, userPages } from '../content/pages.js';
 import { codeDeleteUser } from '../code/sites.js';
 import { userUploadFiles } from '../content/uploads.js';
 import { uploadPath } from '../content/storage.js';
+import { releaseUserAddresses } from '../content/addresses.js';
 
 export interface DeletionRun {
   // Arbeit nach dem Commit (Dateien aufräumen …) – läuft nur, wenn das Konto wirklich gelöscht wurde
@@ -117,6 +118,14 @@ registerUserDeletion({
       await db.exec(`DELETE FROM ${table} WHERE user_id = ?`, [uid]);
     }
   },
+});
+
+// Adressen des Kontos: für niemanden reserviert (Link- und Code-Seiten 30 Tage, wenn sie mindestens 7 Tage benutzt
+// wurden, Statusseiten 90 Tage) – ohne Bezug zur Person (content/addresses.ts)
+registerUserDeletion({
+  name: 'addresses',
+  order: 70,
+  run: (db, uid) => releaseUserAddresses(db, uid),
 });
 
 // Zuletzt das Konto selbst; danach alles, was noch im Upload-Ordner liegt (z. B. Bilder der Code-Seite)

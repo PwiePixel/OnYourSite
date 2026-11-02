@@ -25,6 +25,8 @@ export const V_SESSIONS = 5; // Sitzungen in der Datenbank (Node-Version)
 // Funktionen nach dem Umstieg (Nummer = Reihenfolge des Zusammenführens)
 export const V_NOTIFICATIONS_INDEX = 6; // Glocke: neueste zuerst und „gelesen bis“
 export const V_CUSTOM_DOMAINS = 7; // Eigene Domains (Premium): Domains, Verlauf, Hauptadresse der Seite
+export const V_SITE_ADDRESSES = 8; // Adressen aller Seiten in einer Tabelle, freigegebene bleiben reserviert
+export const V_CODE_SLOTS = 9; // Code-Seiten auch auf Seitenadressen (Plätze), Zähler, Moderation
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -56,6 +58,8 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SESSIONS, name: 'sessions', run: createSessionTable },
   { version: V_NOTIFICATIONS_INDEX, name: 'notificationsIndex', run: notificationsIndex },
   { version: V_CUSTOM_DOMAINS, name: 'customDomains', run: customDomains },
+  { version: V_SITE_ADDRESSES, name: 'siteAddresses', run: siteAddresses },
+  { version: V_CODE_SLOTS, name: 'codeSlots', run: codeSlots },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -575,6 +579,78 @@ async function customDomains(conn: PoolConnection): Promise<void> {
     ) ${OPTS}`);
   await addColumn(conn, 'pages', 'custom_domain', 'VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NULL');
   await addIndex(conn, 'pages', 'uq_custom_domain', 'UNIQUE KEY uq_custom_domain (custom_domain)');
+}
+
+// V_SITE_ADDRESSES (braucht V_PAGES und V_CODE_PAGES; status_pages aus V_STATUS_TABLES nur, wenn es die Tabelle schon
+// gibt): eine Zeile je Adresse – Link-Seite, Code-Seite, Statusseite oder reserviert (kind = 'held'). Der Primärschlüssel
+// hält jede Adresse über alle Arten eindeutig. Regeln und Schreibzugriffe stehen in content/addresses.ts.
+async function siteAddresses(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS site_addresses (
+        slug VARCHAR(63) NOT NULL PRIMARY KEY,
+        kind VARCHAR(8) NOT NULL,
+        ref_id INT NULL,
+        user_id INT NULL,
+        claimed_at DATETIME NOT NULL,
+        released_at DATETIME NULL,
+        hold_until DATETIME NULL,
+        KEY idx_ref (kind, ref_id),
+        KEY idx_user (user_id),
+        KEY idx_hold (kind, hold_until)
+    ) ${OPTS}`);
+  // Bestand übernehmen. Bei alten Doppelungen (Wettlauf vor dieser Version) gewinnt die Link-Seite – sie wird auch auf
+  // der Subdomain ausgeliefert. INSERT IGNORE: ein abgebrochener Schritt läuft einfach noch einmal.
+  await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'page', id, user_id, COALESCE(slug_changed_at, created_at, NOW()) FROM pages ORDER BY id`);
+  await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'code', id, user_id, COALESCE(created_at, NOW()) FROM code_sites WHERE slug IS NOT NULL AND slug <> '' ORDER BY id`);
+  // Statusseiten, falls ihr Schritt schon gelaufen ist (die Seite von OnYourSite hat kein Konto: user_id NULL)
+  if (await hasTable(conn, 'status_pages')) {
+    const cols = (await rows(conn, 'SHOW COLUMNS FROM status_pages')).map((c) => String(c.Field));
+    const since = cols.includes('created_at') ? 'COALESCE(created_at, NOW())' : 'NOW()';
+    await run(conn, `INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at)
+        SELECT slug, 'status', id, user_id, ${since} FROM status_pages WHERE slug IS NOT NULL AND slug <> '' ORDER BY id`);
+  }
+}
+
+// V_CODE_SLOTS (braucht V_CODE_PAGES und V_SITE_ADDRESSES): eine Code-Seite kann statt der Link-Seite auf einem der
+// Seitenplätze eines Kontos stehen (pages.code_site_id; die Link-Seite bleibt gespeichert) und hat dann keine eigene
+// Adresse (code_sites.slug NULL). Der einzige Schritt, der etwas entfernt: uq_user (eine Code-Seite je Konto) weicht
+// uq_own – höchstens EINE Code-Seite mit eigener Adresse je Konto, auch bei gleichzeitigen Anfragen. Dazu Zähler für
+// Dateien und Größe, die Sperre der Code-Funktion je Konto und das Protokoll der Team-Aktionen. Jede Anweisung ist
+// wiederholbar (ein abgebrochener Schritt läuft einfach noch einmal).
+async function codeSlots(conn: PoolConnection): Promise<void> {
+  // Mehrere Code-Seiten je Konto: erst den einfachen Index anlegen, dann den eindeutigen entfernen
+  await addIndex(conn, 'code_sites', 'idx_user', 'KEY idx_user (user_id)');
+  await dropIndex(conn, 'code_sites', 'uq_user');
+  // Eine Code-Seite auf einer Seitenadresse hat keine eigene Adresse (nur ändern, solange die Spalte NOT NULL ist)
+  if (await columnIsNotNull(conn, 'code_sites', 'slug')) await run(conn, 'ALTER TABLE code_sites MODIFY slug VARCHAR(63) NULL');
+  // Höchstens eine Code-Seite mit eigener Adresse je Konto – die Datenbank prüft das auch bei gleichzeitigen Anfragen
+  await addColumn(conn, 'code_sites', 'own_user_id', 'INT AS (IF(slug IS NULL, NULL, user_id)) PERSISTENT');
+  await addIndex(conn, 'code_sites', 'uq_own', 'UNIQUE KEY uq_own (own_user_id)');
+  // Anzahl und Größe der Dateien (Admin-Liste und Grenzen, ohne bei jedem Aufruf alle Dateien zu summieren)
+  await addColumn(conn, 'code_sites', 'file_count', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn(conn, 'code_sites', 'bytes', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await run(conn, `UPDATE code_sites s SET
+        s.file_count = (SELECT COUNT(*) FROM code_files f WHERE f.site_id = s.id),
+        s.bytes = (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id)`);
+  // Der Platz zeigt eine Code-Seite statt seiner Link-Seite (die Link-Seite bleibt gespeichert)
+  await addColumn(conn, 'pages', 'code_site_id', 'INT NULL');
+  await addIndex(conn, 'pages', 'uq_code_site', 'UNIQUE KEY uq_code_site (code_site_id)');
+  // Moderation: Code-Funktion für ein Konto abschalten, Protokoll der Team-Aktionen (user_id NULL bei Grenzen)
+  await addColumn(conn, 'users', 'code_banned_at', 'DATETIME NULL');
+  await addColumn(conn, 'users', 'code_ban_reason', 'VARCHAR(200) NULL');
+  await run(conn, `CREATE TABLE IF NOT EXISTS code_moderation (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        site_id INT NULL,
+        user_id INT NULL,
+        admin_id INT NOT NULL,
+        action VARCHAR(12) NOT NULL,
+        address VARCHAR(100) NOT NULL DEFAULT '',
+        reason VARCHAR(200) NOT NULL DEFAULT '',
+        created_at DATETIME NOT NULL,
+        KEY idx_user (user_id, id),
+        KEY idx_site (site_id, id)
+    ) ${OPTS}`);
 }
 
 type Seed = [string | null, string, string, string, string];

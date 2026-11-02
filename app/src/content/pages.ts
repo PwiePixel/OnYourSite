@@ -2,13 +2,14 @@
 // Eigenes CSS (oys_clean_css, oys_css_unescape, oys_css_external) steht in src/css.ts.
 import { unlinkSync } from 'node:fs';
 import type { ResultSetHeader } from 'mysql2/promise';
-import { q, one, exec, value, transaction, type Db, type Param, type Row } from '../db.js';
+import { q, one, exec, transaction, type Db, type Param, type Row } from '../db.js';
 import { cleanCss } from '../css.js';
 import { cleanText, cleanUrl, pageUrl, pageUrls, type PageLike } from '../helpers.js';
 import { safeEqual } from '../crypto.js';
 import { phpJson } from '../html.js';
 import { ctypeDigit, date, intval, mbSubstr, phpStr, phpTruthy, strtolower } from '../php.js';
 import { codeUsedUploads } from '../code/sites.js';
+import { claimAddress, releaseAddress } from './addresses.js';
 import { isFile, uploadsDir } from './storage.js';
 import { DEFAULT_THEME, fontChoices, layoutKey, themeKey } from './themes.js';
 import { IMAGE_EXTS, blockNormalize, bookingIsInternal, bookingPointsTo, calendarKey, pick, scheduleActive, validUpload } from './blocks.js';
@@ -175,6 +176,10 @@ export function settingsNormalize(input: unknown, userId: number, premium: boole
 export const loadPage = (id: number): Promise<Row | null> => one('SELECT * FROM pages WHERE id = ?', [id]);
 // oys_load_page_by_slug()
 export const loadPageBySlug = (slug: string): Promise<Row | null> => one('SELECT * FROM pages WHERE slug = ? LIMIT 1', [slug]);
+// Zeigt der Seitenplatz seine Link-Seite? Sonst zeigt er eine Code-Seite (pages.code_site_id), und die Link-Seite ist
+// geparkt: gespeichert, aber für Besucher nicht vorhanden (keine Aufrufe, Klicks, Nachrichten, Vorschaubilder …)
+export const isShownLinkPage = (page: Row | null | undefined): boolean =>
+  !!page && (page.code_site_id === null || page.code_site_id === undefined);
 // oys_user_pages(): Reihenfolge wie im Editor
 export const userPages = (userId: number): Promise<Row[]> => q('SELECT * FROM pages WHERE user_id = ? ORDER BY position ASC, id ASC', [userId]);
 
@@ -242,15 +247,19 @@ export function pageForEditor(page: Row): EditorPage {
 // Anlegen
 // ---------------------------------------------------------------
 
-// oys_create_page(): neue Seite samt Startinhalt; gibt die neue ID zurück
-export async function createPage(userId: number, slug: string, title: string): Promise<number> {
-  const position = intval(await value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
+// oys_create_page(): neue Seite samt Startinhalt; gibt die neue ID zurück. Belegt ihre Adresse in der Liste aller
+// Adressen (content/addresses.ts) in derselben Transaktion – ist sie vergeben, wird nichts angelegt (AddressTakenError
+// bzw. ER_DUP_ENTRY auf uq_slug). Mit db läuft alles auf dieser Verbindung in der Transaktion des Aufrufers.
+export async function createPage(userId: number, slug: string, title: string, db?: Db): Promise<number> {
+  if (!db) return transaction((_conn, sql) => createPage(userId, slug, title, sql));
+  const position = intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
   const now = date('Y-m-d H:i:s');
-  const { insertId } = await exec(
+  const { insertId } = await db.exec(
     "INSERT INTO pages (user_id, slug, position, title, subtitle, bio, theme, layout, address_mode, settings, created_at, updated_at)\n        VALUES (?, ?, ?, ?, '', '', ?, 'buttons', 'subdomain', ?, ?, ?)",
     [userId, slug, position, mbSubstr(title, 0, 120), DEFAULT_THEME, phpJson(defaultSettings(), { unescapedUnicode: true }), now, now],
   );
   const pageId = intval(insertId);
+  await claimAddress(db, slug, 'page', pageId, userId);
 
   // Startinhalt, damit niemand vor einer leeren Seite sitzt
   const starter: Array<[string, unknown]> = [
@@ -258,7 +267,7 @@ export async function createPage(userId: number, slug: string, title: string): P
     ['link', { title: 'My first link', url: '', subtitle: '', icon: '', thumb: '', featured: false }],
   ];
   for (const [i, [type, data]] of starter.entries()) {
-    await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, ?, 1, ?, ?)',
+    await db.exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, ?, 1, ?, ?)',
       [pageId, type, i, phpJson(data, { unescapedUnicode: true }), now]);
   }
   return pageId;
@@ -462,6 +471,9 @@ export async function deletePage(page: Row, db?: Db): Promise<unknown[]> {
     await sql.exec('DELETE FROM page_blocks WHERE page_id = ?', [id]);
     await sql.exec('DELETE FROM messages WHERE page_id = ?', [id]);
     await sql.exec('DELETE FROM pages WHERE id = ?', [id]);
+    // Die Adresse bleibt für den Besitzer reserviert (wenn sie lange genug benutzt wurde)
+    await releaseAddress(sql, phpStr(page.slug), page.user_id === null || page.user_id === undefined ? null : intval(page.user_id), 'owner',
+      { kind: 'page', refId: id });
   };
   if (db) {
     await rows(db);

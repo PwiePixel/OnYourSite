@@ -11,6 +11,7 @@ import tls from 'node:tls';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { ROOT_DIR, configString, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { register, setAuthMailerForTests } from '../src/app/auth.js';
 import { setMailDirForTests } from '../src/mail.js';
@@ -42,6 +43,8 @@ before(async () => {
   await admin.query(`DELETE FROM \`${DB}\`.rate_limits`);
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
+  // Kopie auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert)
+  await ensureSchema();
 
   // Test-CA und Zertifikat für den SMTP-Server (STARTTLS wie im Betrieb); Node und PHP vertrauen der CA
   dir = mkdtempSync(join(tmpdir(), 'oys-welcome-'));

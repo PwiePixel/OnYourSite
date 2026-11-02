@@ -32,16 +32,23 @@ function stamp(v: unknown): number {
   return t === false ? 0 : t;
 }
 
-// Adresse einer Code-Seite, wie sie in der Liste steht
-const address = (cs: Row): string => phpStr(cs.slug) + '.' + baseAuthority();
+// Adresse, unter der eine Code-Seite zu sehen ist: ihre eigene oder die des Seitenplatzes, der sie zeigt (slot_slug aus
+// der Abfrage). '' = nirgends (nur nach Handarbeit in der Datenbank)
+const slugOf = (cs: Row): string => (phpTruthy(cs.slug) ? phpStr(cs.slug) : phpTruthy(cs.slot_slug) ? phpStr(cs.slot_slug) : '');
+// … so, wie sie in der Liste steht
+const address = (cs: Row): string => slugOf(cs) + '.' + baseAuthority();
 
 // allUsers: alle Konten aus admin/page.ts (id, full_name, email, username, …; neueste zuerst)
 export async function adminCodePagesView(ctx: Ctx, allUsers: Row[]): Promise<string> {
   const price = (await hcSettings()).code_page;
+  // Dateien und Größe wie bisher aus den Dateien selbst gezählt (gleichnamig nach s.*, also maßgeblich); dazu der
+  // Seitenplatz, der eine Code-Seite ohne eigene Adresse zeigt
   const codeSites = await q(`SELECT s.*, u.full_name, u.email,
         (SELECT COUNT(*) FROM code_files f WHERE f.site_id = s.id) AS file_count,
-        (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id) AS bytes
-    FROM code_sites s JOIN users u ON u.id = s.user_id ORDER BY s.updated_at DESC`);
+        (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id) AS bytes,
+        p.id AS slot_id, p.slug AS slot_slug
+    FROM code_sites s JOIN users u ON u.id = s.user_id LEFT JOIN pages p ON p.code_site_id = s.id AND p.user_id = s.user_id
+    ORDER BY s.updated_at DESC`);
   // Freischaltung je Konto: der Betrag der Buchung (0 = vom Team geschenkt, sonst bezahlt)
   const unlocks = new Map<number, number>();
   for (const r of await q("SELECT user_id, amount FROM honeycomb_ledger WHERE reason = 'unlock' AND ref = 'code_page'")) {
@@ -108,12 +115,19 @@ ${join(allUsers.map((u) => html`                                    <option valu
   } else {
     o += "                    <div class=\"divide-y divide-bordercolor\">\n                        ";
     for (const cs of codeSites) {
-      const csUrl = codeUrl(cs);
-      o += "                        <div class=\"p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3\">\n                            <div class=\"min-w-0 flex-1\">\n                                <div class=\"flex items-center gap-2 flex-wrap\">\n                                    <a href=\"";
-      o += e(csUrl);
-      o += "/\" target=\"_blank\" rel=\"noopener\" class=\"text-white font-medium hover:text-brand-400 break-all\">";
-      o += e(address(cs));
-      o += "</a>\n                                    ";
+      o += "                        <div class=\"p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3\">\n                            <div class=\"min-w-0 flex-1\">\n                                <div class=\"flex items-center gap-2 flex-wrap\">\n                                    ";
+      if (slugOf(cs) === '') {
+        // Weder eigene Adresse noch Seitenplatz: nirgends zu sehen
+        o += "<span class=\"text-white font-medium\">";
+        o += e(phpTruthy(cs.title) ? cs.title : '#' + intval(cs.id));
+        o += "</span> <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-400\">No address</span>\n                                    ";
+      } else {
+        o += "<a href=\"";
+        o += e(codeUrl(slugOf(cs)));
+        o += "/\" target=\"_blank\" rel=\"noopener\" class=\"text-white font-medium hover:text-brand-400 break-all\">";
+        o += e(address(cs));
+        o += "</a>\n                                    ";
+      }
       if (phpTruthy(cs.is_blocked)) {
         o += "                                    <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-400\">Blocked</span>\n                                    ";
       } else if (!phpTruthy(cs.is_published)) {
@@ -214,7 +228,8 @@ function accessRow(u: Row, unlocks: Map<number, number>, sites: Row[], csrf: Saf
   const paid = unlocks.get(uid);
   const search = strtolower(phpStr(userName(u)) + ' ' + phpStr(u.email) + ' ' + phpStr(u.username) + sites.map((cs) => ' ' + address(cs)).join(''));
   const pages = sites.length
-    ? join(sites.map((cs) => html`<a href="${codeUrl(cs)}/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">${address(cs)}</a>`))
+    ? join(sites.map((cs) => (slugOf(cs) === '' ? html`<span class="block text-red-400">No address</span>`
+      : html`<a href="${codeUrl(slugOf(cs))}/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">${address(cs)}</a>`)))
     : html`<span class="text-gray-500">—</span>`;
   const unlocked = paid === undefined
     ? html`<span class="text-gray-500">—</span>`

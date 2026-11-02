@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { configString, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 
@@ -43,6 +44,9 @@ export async function testDatabase(suffix: string, opts: { empty?: boolean } = {
   const uploads = mkdtempSync(join(tmpdir(), 'oys-core-uploads-'));
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name }, uploads_dir: uploads });
+  // Die Kopie auf den Stand dieses Codes bringen (die Quelle ist vielleicht noch nicht migriert – z. B. direkt nach
+  // pkg-env.sh, oder während eine andere Testdatei sie gerade migriert)
+  if (!opts.empty) await ensureSchema();
   return {
     name,
     admin,

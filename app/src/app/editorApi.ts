@@ -2,16 +2,16 @@
 // Die Reihenfolge der Prüfungen ist die von PHP: CSRF vor dem JSON, Seiten-ID vor allem anderen (auch vor Code-Seite
 // und Upload), dann die Aktion. Jede Antwort endet mit ctx.json() (= oys_json(); exit).
 import type { Ctx } from '../web/ctx.js';
-import { exec, type Param, type Row } from '../db.js';
-import { config } from '../config.js';
-import { csrfCheck, csrfFromRequest, rateLimit } from '../web/security.js';
+import { exec, transaction, type Db, type Param, type Row } from '../db.js';
+import { csrfCheck, csrfFromRequest, rateHit, rateLimit, rateOk } from '../web/security.js';
 import { encryptData } from '../crypto.js';
 import { cleanText, normalizeSlug, slugProblem, uploadUrl } from '../helpers.js';
 import { phpJson } from '../html.js';
 import { date, intval, phpStr, phpTruthy, strtolower, strtotime, time, type PhpArray } from '../php.js';
 import { IMAGE_EXTS, blockNormalize, validUpload } from '../content/blocks.js';
 import {
-  blockForEditor, createPage, deletePage, loadPage, pageForEditor, pageSettings, savePage, settingsNormalize, syncUsername, userPages,
+  blockForEditor, cleanupFiles, createPage, deletePage, isShownLinkPage, loadPage, pageForEditor, pageSettings, savePage, settingsNormalize, syncUsername,
+  userPages,
 } from '../content/pages.js';
 import { renderPage } from '../content/render.js';
 import { stats } from '../content/stats.js';
@@ -20,10 +20,22 @@ import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, u
 import { entries, isArr, jsonDecode, own, values, type PhpArr } from '../content/util.js';
 import { hcForEditor, hcSettings, hcSpend } from '../honeycombs/honeycombs.js';
 import { phpFloatString } from '../community/json.js';
-import { CODE_MAX_FILES, codeCreate, codeEditorState, codeFileCount, codeSave, codeSite, codeUnlocked } from '../code/sites.js';
+import {
+  CODE_MAX_FILES, codeChangeAddress, codeCreate, codeDeleteRows, codeEditorState, codeFileCount, codeSave, codeSite, codeSiteById, codeSiteOfUser, codeUnlocked,
+} from '../code/sites.js';
+import {
+  SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError, pageAllowance, pageLimitText, slotRateKey,
+  withSlotLock, type SlotUser,
+} from '../code/slots.js';
+import { beforePageRemoved } from '../domains/index.js';
+import { claimAddress, isTakenError, releaseAddress } from '../content/addresses.js';
 import { currentPage, hasPremium } from './context.js';
 import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
+
+// Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
+const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
+const PAGE_BLOCKED_TEXT = 'This page shows a code page that has been blocked by the team. It can’t be deleted right now.';
 
 // is_scalar()
 const isScalar = (v: unknown): boolean => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
@@ -107,6 +119,11 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     if (!page || intval(page.user_id) !== userId) {
       ctx.json({ ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true }, 409);
     }
+    // Der Platz zeigt inzwischen eine Code-Seite: seine Link-Seite ist geparkt und wird nicht mehr bearbeitet (ein
+    // älterer Tab darf nichts in sie schreiben)
+    if (!isShownLinkPage(page) && LINK_PAGE_ACTIONS.has(action)) {
+      ctx.json({ ok: false, error: 'This page now shows a code page. Please reload the editor.', reload: true }, 409);
+    }
     session.set('page_id', requestedPage);
   } else {
     page = await currentPage(ctx, user);
@@ -147,22 +164,99 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     ctx.json({ ok: true, file: res.file, url: uploadUrl(res.file) });
   }
 
-  // Seite anlegen geht auch ohne bestehende Seite
+  // Seite anlegen geht auch ohne bestehende Seite – unter der Sperre der Seitenplätze des Kontos (code/slots.ts):
+  // Anzahl, Adresse und Anlegen sehen denselben Stand, auch bei gleichzeitigen Anfragen
   if (action === 'page-create' && isPost) {
-    const count = (await userPages(userId)).length;
-    const max = intval(config('max_pages', 3));
-    if (count >= max && !premium) {
-      ctx.json({ ok: false, error: `You can create up to ${max} ` + (max === 1 ? 'page.' : 'pages.') });
-    }
+    if (!(await rateOk(slotRateKey(userId), SLOT_RATE_MAX, SLOT_RATE_WINDOW))) ctx.json({ ok: false, error: SLOT_RATE_TEXT });
     const slug = normalizeSlug(inp('slug') ?? '');
-    const problem = await slugProblem(slug);
-    if (problem !== null) ctx.json({ ok: false, error: problem });
     const cleanTitle = cleanText(inp('title') ?? '', 120);
     const title = phpTruthy(cleanTitle) ? cleanTitle : phpStr(user.full_name ?? '');
-    const newId = await createPage(userId, slug, title);
-    session.set('page_id', newId);
-    if (count === 0) await syncUsername(userId);
-    ctx.json({ ok: true, id: newId });
+    let created: { error: string } | { id: number; first: boolean } = { error: '' };
+    try {
+      created = await slotChange(ctx, userId, async (db, locked) => {
+        const count = intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
+        const allowance = await pageAllowance(ctx, locked, db);
+        if (count >= allowance.max && !allowance.unlimited) return { error: pageLimitText(allowance.max) };
+        // Eigene reservierte Adressen (in den letzten 30 Tagen freigegeben) darf man wieder nehmen
+        const problem = await slugProblem(slug, null, null, { userId, db });
+        if (problem !== null) return { error: problem };
+        // Ist die Adresse inzwischen vergeben, wirft createPage – die Transaktion wird zurückgerollt
+        return { id: await createPage(userId, slug, title, db), first: count === 0 };
+      });
+    } catch (err) {
+      // Gleichzeitige Anfrage hat die Adresse genommen: Meldung statt Fehler 500, nichts angelegt
+      if (!isTakenError(err)) throw err;
+      ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
+    }
+    if ('error' in created) ctx.json({ ok: false, error: created.error });
+    await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
+    session.set('page_id', created.id);
+    if (created.first) await syncUsername(userId);
+    ctx.json({ ok: true, id: created.id });
+  }
+
+  // Ab hier Aktionen des Kontos, die auch ohne gezeigte Link-Seite gehen (alle Plätze können Code-Seiten zeigen)
+  if (action === 'page-delete' && isPost) {
+    const target = await loadPage(intval(inp('id') ?? 0));
+    if (!target || intval(target.user_id) !== userId) {
+      ctx.json({ ok: false, error: 'Page not found.' }, 404);
+    }
+    // Die letzte Seite bleibt – gezählt werden alle Plätze, auch die mit Code-Seite
+    if ((await userPages(userId)).length <= 1) {
+      ctx.json({ ok: false, error: 'You can’t delete your last page.' });
+    }
+    if ((inp('confirm') ?? '') !== target.slug) {
+      ctx.json({ ok: false, error: 'To confirm, please type the page’s address.' });
+    }
+    if (!isShownLinkPage(target) && phpTruthy((await codeSiteById(intval(target.code_site_id)))?.is_blocked)) {
+      ctx.json({ ok: false, error: PAGE_BLOCKED_TEXT });
+    }
+    if (!(await rateOk(slotRateKey(userId), SLOT_RATE_MAX, SLOT_RATE_WINDOW))) ctx.json({ ok: false, error: SLOT_RATE_TEXT });
+    const deleted = await slotChange(ctx, userId, async (db) => {
+      // Unter der Sperre noch einmal: die Seite, die Zahl der Plätze und die Code-Seite des Platzes (gesperrt – eine
+      // Sperre durch das Team, die gerade kommt, gilt)
+      const page = await db.one('SELECT * FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(target.id), userId]);
+      if (!page) return { error: 'Page not found.', status: 404 };
+      if (intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId])) <= 1) return { error: 'You can’t delete your last page.' };
+      const site = isShownLinkPage(page) ? null : await codeSiteOfUser(userId, intval(page.code_site_id), db, true);
+      if (site && phpTruthy(site.is_blocked)) return { error: PAGE_BLOCKED_TEXT };
+      // Eigene Domain der Seite entfernen (nur Datenbank; nach allen Prüfungen, damit eine abgelehnte Löschung nie eine
+      // Domain trennt)
+      await beforePageRemoved(intval(page.id), db);
+      const codeUploads = site ? await codeDeleteRows(db, site) : new Set<string>();
+      const files = await deletePage(page, db);
+      return { files: [...files, ...codeUploads] };
+    });
+    if ('error' in deleted) ctx.json({ ok: false, error: deleted.error }, deleted.status ?? 200);
+    // Nach dem Commit: Dateien der Seite und Bilder der Code-Seite, die nichts anderes mehr benutzt
+    await cleanupFiles(userId, deleted.files);
+    session.delete('page_id');
+    await syncUsername(userId);
+    await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
+    ctx.json({ ok: true });
+  }
+
+  if (action === 'weekly' && isPost) {
+    await exec('UPDATE users SET weekly_report = ? WHERE id = ?', [phpTruthy(inp('enabled')) ? 1 : 0, userId]);
+    ctx.json({ ok: true });
+  }
+
+  if (action === 'weekly-test' && isPost) {
+    // Ohne gezeigte Link-Seite gibt es nichts zu berichten (zählt nicht als Test)
+    if (!(await userPages(userId)).some(isShownLinkPage)) {
+      ctx.json({ ok: false, error: 'There’s no link page to report on yet.' });
+    }
+    if (!(await rateLimit('weeklytest:' + userId, 3, 3600))) {
+      ctx.json({ ok: false, error: 'You can send up to 3 test reports per hour.' });
+    }
+    const ok = await sendWeeklyReport(user);
+    ctx.json(ok ? { ok: true } : { ok: false, error: 'The email couldn’t be sent. Please check the mail settings in the admin area.' });
+  }
+
+  if (action === 'discord' && isPost) {
+    const discord = jsonValueText(raw, 'discord_id', inp('discord_id') ?? '').replace(/[^0-9]/g, '');
+    await exec('UPDATE users SET discord_id = ? WHERE id = ?', [discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '', userId]);
+    ctx.json({ ok: true });
   }
 
   if (!page) {
@@ -243,60 +337,43 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         if (phpTruthy(changed) && daysLeft > 0 && !premium) {
           ctx.json({ ok: false, error: `You can change your address again in ${daysLeft} ` + (daysLeft === 1 ? 'day.' : 'days.') });
         }
-        const problem = await slugProblem(slug, intval(page.id));
+        const problem = await slugProblem(slug, intval(page.id), null, { userId });
         if (problem !== null) ctx.json({ ok: false, error: problem });
-        await exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), page.id as Param]);
+        // Neue Adresse belegen, alte für den Besitzer reservieren – zusammen mit der Seite (Sperren: pages → Adressen)
+        try {
+          await transaction(async (_conn, db) => {
+            await db.exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), page.id as Param]);
+            await claimAddress(db, slug, 'page', intval(page.id), userId);
+            await releaseAddress(db, phpStr(page.slug), userId, 'owner', { kind: 'page', refId: intval(page.id) });
+          });
+        } catch (err) {
+          if (!isTakenError(err)) throw err;
+          ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
+        }
       }
       await exec('UPDATE pages SET address_mode = ? WHERE id = ?', [mode, page.id as Param]);
       await syncUsername(userId);
       ctx.json({ ok: true, page: pageForEditor((await loadPage(intval(page.id))) as Row) });
-    }
-    case 'page-delete': {
-      if (!isPost) break;
-      const target = await loadPage(intval(inp('id') ?? 0));
-      if (!target || intval(target.user_id) !== userId) {
-        ctx.json({ ok: false, error: 'Page not found.' }, 404);
-      }
-      if ((await userPages(userId)).length <= 1) {
-        ctx.json({ ok: false, error: 'You can’t delete your last page.' });
-      }
-      if ((inp('confirm') ?? '') !== target.slug) {
-        ctx.json({ ok: false, error: 'To confirm, please type the page’s address.' });
-      }
-      await deletePage(target);
-      session.delete('page_id');
-      await syncUsername(userId);
-      ctx.json({ ok: true });
     }
     case 'stats': {
       let range = intval(ctx.get.range ?? 7);
       if (![7, 30, 90, 0].includes(range)) range = 7;
       ctx.json({ ok: true, stats: await stats(page, range) });
     }
-
-    case 'weekly': {
-      if (!isPost) break;
-      await exec('UPDATE users SET weekly_report = ? WHERE id = ?', [phpTruthy(inp('enabled')) ? 1 : 0, userId]);
-      ctx.json({ ok: true });
-    }
-
-    case 'weekly-test': {
-      if (!isPost) break;
-      if (!(await rateLimit('weeklytest:' + userId, 3, 3600))) {
-        ctx.json({ ok: false, error: 'You can send up to 3 test reports per hour.' });
-      }
-      const ok = await sendWeeklyReport(user);
-      ctx.json(ok ? { ok: true } : { ok: false, error: 'The email couldn’t be sent. Please check the mail settings in the admin area.' });
-    }
-
-    case 'discord': {
-      if (!isPost) break;
-      const discord = jsonValueText(raw, 'discord_id', inp('discord_id') ?? '').replace(/[^0-9]/g, '');
-      await exec('UPDATE users SET discord_id = ? WHERE id = ?', [discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '', userId]);
-      ctx.json({ ok: true });
-    }
   }
   ctx.json({ ok: false, error: 'Unknown action.' }, 404);
+}
+
+// Änderung unter der Sperre der Seitenplätze des Kontos. Kommt die Sperre nicht (3 s), antwortet die Anfrage „busy“;
+// gibt es das Konto nicht mehr, 409 mit reload. Beides beendet die Anfrage.
+async function slotChange<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUser) => Promise<T>): Promise<T> {
+  try {
+    return await withSlotLock(userId, fn);
+  } catch (err) {
+    if (err instanceof SlotBusyError) ctx.json({ ok: false, error: SLOT_BUSY_TEXT, busy: true });
+    if (err instanceof SlotGoneError) ctx.json({ ok: false, error: SLOT_GONE_TEXT, reload: true }, 409);
+    throw err;
+  }
 }
 
 // Code-Seite: alle Aktionen, die mit „code“ beginnen (enden immer hier)
@@ -354,9 +431,8 @@ async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boolean, inp
   if (action === 'code-address') {
     const slug = normalizeSlug(inp('slug') ?? '');
     if (slug !== site.slug) {
-      const problem = await slugProblem(slug, null, intval(site.id));
+      const problem = await codeChangeAddress(site, slug, userId);
       if (problem !== null) ctx.json({ ok: false, error: problem });
-      await exec('UPDATE code_sites SET slug = ?, updated_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), site.id as Param]);
     }
     ctx.json(await state());
   }

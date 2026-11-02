@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection } from 'mysql2/promise';
-import { ROOT_DIR } from '../src/config.js';
+import { ROOT_DIR, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { time } from '../src/php.js';
 import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX, CODE_TYPES, codePreviewToken, codePreviewValid, codeStarterFiles, codeValidPath,
@@ -12,9 +12,11 @@ import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
-import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import { BASE, PHP_BOOT, adminConnection, codeCounters, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
 
-const DB = { php: 'oys_test_hcu_code_php', node: 'oys_test_hcu_code_node' };
+// Namen aus der Datenbank dieses Arbeitsordners: andere Arbeitsordner auf demselben Server stören sich so nicht
+const SOURCE = String((BASE.db as ConfigData).name);
+const DB = { php: SOURCE + '_hcu_code_php', node: SOURCE + '_hcu_code_node' };
 let admin: Connection;
 
 // Reine Funktion mit JSON-Ein- und Ausgabe in PHP aufrufen
@@ -61,10 +63,14 @@ async function same(ops: Op[], label: string): Promise<unknown[]> {
   const p = await phpRun(DB.php, ops);
   const n = await nodeRun(DB.node, ops);
   if (process.env.HC_DEBUG) ops.forEach((op, i) => console.log(label, i, JSON.stringify(op).slice(0, 90), '→', JSON.stringify(normalize(p[i])).slice(0, 160)));
-  const diffs = ops.map((op, i) => ({ i, op: JSON.stringify(op).slice(0, 200), php: normalize(p[i]), node: normalize(n[i]) }))
+  // Zähler der Code-Seiten (file_count, bytes) führt nur Node – in zurückgegebenen Zeilen zählen sie nicht mit
+  const noCounters = (v: unknown): unknown => JSON.parse(JSON.stringify(v ?? null, (k, x) => (k === 'file_count' || k === 'bytes' ? undefined : x)));
+  const diffs = ops.map((op, i) => ({ i, op: JSON.stringify(op).slice(0, 200), php: normalize(noCounters(p[i])), node: normalize(noCounters(n[i])) }))
     .filter((d) => JSON.stringify(d.php) !== JSON.stringify(d.node));
   assert.deepEqual(diffs, [], `${label}: results differ`);
   assert.deepEqual(await dump(admin, DB.node), await dump(admin, DB.php), `${label}: tables differ`);
+  // Node führt die Zähler für Dateien und Größe mit (die Fixture legt Dateien direkt an: nur Seiten, die Node schrieb)
+  assert.deepEqual((await codeCounters(admin, DB.node)).filter((r) => Number((r as { id: number }).id) > 2), [], `${label}: counters`);
   return p;
 }
 

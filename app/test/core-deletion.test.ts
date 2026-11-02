@@ -85,7 +85,7 @@ after(async () => {
 
 test('the core hooks run in the agreed order; names are unique', () => {
   assert.deepEqual(userDeletionHooks(), [
-    { name: 'code', order: 30 }, { name: 'pages', order: 50 }, { name: 'account data', order: 60 }, { name: 'user', order: 99 },
+    { name: 'code', order: 30 }, { name: 'pages', order: 50 }, { name: 'account data', order: 60 }, { name: 'addresses', order: 70 }, { name: 'user', order: 99 },
   ]);
   assert.throws(() => registerUserDeletion({ name: 'pages', order: 51, run: async () => undefined }), /registered twice/);
   assert.throws(() => registerUserDeletion({ name: 'Bad Name!', order: 1, run: async () => undefined }), /invalid/);
@@ -93,7 +93,7 @@ test('the core hooks run in the agreed order; names are unique', () => {
   registerUserDeletion({ name: 'test-between', order: 40, run: async () => undefined });
   registerUserDeletion({ name: 'test-tie', order: 50, run: async () => undefined });
   try {
-    assert.deepEqual(userDeletionHooks().map((h) => h.name), ['code', 'test-between', 'pages', 'test-tie', 'account data', 'user']);
+    assert.deepEqual(userDeletionHooks().map((h) => h.name), ['code', 'test-between', 'pages', 'test-tie', 'account data', 'addresses', 'user']);
   } finally {
     unregisterUserDeletionForTests('test-between');
     unregisterUserDeletionForTests('test-tie');

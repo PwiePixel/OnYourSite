@@ -2,7 +2,7 @@
 import type { Ctx } from '../web/ctx.js';
 import { one, type Row } from '../db.js';
 import { intval, phpEmpty, phpTruthy } from '../php.js';
-import { userPages } from '../content/pages.js';
+import { isShownLinkPage, userPages } from '../content/pages.js';
 
 // oys_current_user(): nur mit laufender Sitzung
 export async function currentUser(ctx: Ctx): Promise<Row | null> {
@@ -22,9 +22,10 @@ export function flash(ctx: Ctx, type: string, message: string): void {
   ctx.session?.set(type, message);
 }
 
-// oys_current_page(): aus ?page=, der Sitzung oder die erste Seite
+// oys_current_page(): aus ?page=, der Sitzung oder die erste Seite – nur gezeigte Link-Seiten (ein Platz, der eine
+// Code-Seite zeigt, hat keine bearbeitbare Link-Seite); zeigen alle Plätze Code-Seiten: null
 export async function currentPage(ctx: Ctx, user: Row, requested: unknown = null): Promise<Row | null> {
-  const pages = await userPages(intval(user.id));
+  const pages = (await userPages(intval(user.id))).filter(isShownLinkPage);
   if (!pages.length) return null;
   for (const want of [requested, ctx.session?.get('page_id') ?? null]) {
     if (want === null || want === undefined || want === '') continue;

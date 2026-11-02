@@ -13,7 +13,7 @@ import { GdImage, trueColorAlpha } from './gdImage.js';
 import { gdTextWidth, loadFont } from './ogFont.js';
 import { idx, phpRound, strArg } from './phpValues.js';
 import { isFile, uploadReadPath, uploadsDir } from './storage.js';
-import { loadPage, pageSettings } from './pages.js';
+import { isShownLinkPage, loadPage, pageSettings } from './pages.js';
 import { DEFAULT_THEME, themeKey, themes } from './themes.js';
 import { basename, own } from './util.js';
 
@@ -68,7 +68,8 @@ type Rgb = [number, number, number];
 // oys_og_serve(): /_/og/{id}-{hash}.png ausliefern (aus dem Zwischenspeicher oder frisch erzeugt)
 export async function ogServe(ctx: Ctx, id: number, hash: string): Promise<void> {
   const page = await loadPage(id);
-  if (!page || !ogSupported()) {
+  // Die geparkte Link-Seite eines Platzes mit Code-Seite hat kein Vorschaubild
+  if (!page || !isShownLinkPage(page) || !ogSupported()) {
     ctx.status = 404;
     ctx.halt();
   }

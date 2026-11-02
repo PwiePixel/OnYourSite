@@ -13,6 +13,7 @@ import { isHalt, makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { blockFromRow } from '../src/content/pages.js';
 import { blockTarget, publicRoutes, renderGate, wantsJson } from '../src/public/routes.js';
 import { notFoundData, notFoundView } from '../src/public/notFound.js';
+import { ensureSchema } from '../src/schema.js';
 import { checkdate, kalender } from '../src/public/views/kalender.js';
 import { diffs, rng, runPhp } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
@@ -128,6 +129,8 @@ test('wantsJson() matches stripos() on the Accept header (ASCII case folding onl
 });
 
 test('the 404 page matches views/404.php for every host and path form (taken, free, reserved, www, foreign)', async () => {
+  // Die Liste aller Adressen gehört zur Prüfung „Adresse frei?“ – die Datenbank dieses Arbeitsordners braucht sie
+  await ensureSchema();
   const hosts = ['oys.test:8080', 'OYS.TEST:8080', 'www.oys.test:8080', 'mia.oys.test:8080', 'free-name.oys.test:8080', 'admin.oys.test:8080',
     'a--b.oys.test:8080', '.oys.test:8080', 'x.y.oys.test:8080', 'example.com', 'evil-oys.test:8080', 'tomcode.oys.test'];
   const uris = ['/', '/free-name', '/Free-Name/', '/mia', '/a', '/' + 'a'.repeat(30), '/' + 'b'.repeat(31), '/kalender', '/x/y', '/%3Cscript%3E',

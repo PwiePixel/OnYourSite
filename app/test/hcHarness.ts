@@ -201,11 +201,21 @@ export function normalize(v: unknown, knownRefs: string[] = []): unknown {
 
 export const TABLES = ['users', 'pages', 'page_blocks', 'honeycomb_ledger', 'code_sites', 'code_files', 'oys_meta'];
 
+const omit = (row: Record<string, unknown>, keys: string[]): Record<string, unknown> => Object.fromEntries(Object.entries(row).filter(([k]) => !keys.includes(k)));
+
+// Code-Seiten, deren gespeicherte Zähler nicht zu ihren Dateien passen (leer = alle stimmen)
+export async function codeCounters(admin: Connection, db: string): Promise<unknown[]> {
+  const [rows] = await admin.query<RowDataPacket[]>(`SELECT s.id, s.file_count, s.bytes, COUNT(f.id) AS n, COALESCE(SUM(LENGTH(f.content)), 0) AS b
+    FROM \`${db}\`.code_sites s LEFT JOIN \`${db}\`.code_files f ON f.site_id = s.id GROUP BY s.id HAVING s.file_count <> n OR s.bytes <> b`);
+  return rows.map((r) => ({ ...r }));
+}
+
 export async function dump(admin: Connection, db: string, knownRefs: string[] = []): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const t of TABLES) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${db}\`.\`${t}\` ORDER BY 1`);
-    out[t] = normalize(rows.map((r) => ({ ...r })), knownRefs);
+    // Die Zähler der Code-Seiten (Dateien, Größe) führt nur Node – PHP kennt sie nicht; geprüft in codeCounters()
+    out[t] = normalize(rows.map((r) => (t === 'code_sites' ? omit({ ...r }, ['file_count', 'bytes']) : { ...r })), knownRefs);
   }
   // Nächste freie IDs (INSERT IGNORE und ON DUPLICATE KEY verbrauchen Nummern)
   const [ai] = await admin.query<RowDataPacket[]>(`SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('honeycomb_ledger', 'code_sites', 'code_files') ORDER BY 1`, [db]);

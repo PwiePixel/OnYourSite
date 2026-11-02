@@ -23,6 +23,7 @@ import { weeklyReportCli } from '../src/cli/weekly-report.js';
 import { enc, rng, runPhp } from './modelHarness.js';
 import { SmtpSink } from './support/smtpSink.js';
 import { decodeWords, header, leaves, parseMessage } from './support/mime.js';
+import { ensureSchema } from '../src/schema.js';
 
 const BASE = loadConfig();
 const SOURCE = configString('db.name');
@@ -46,6 +47,8 @@ before(async () => {
   }
   await closePool();
   setConfigForTests(CONFIG);
+  // Die Kopie kommt aus der Test-Datenbank: auf den neuesten Stand des Schemas bringen
+  await ensureSchema();
   dir = mkdtempSync(join(tmpdir(), 'oys-report-'));
   await seed();
 });
@@ -263,7 +266,9 @@ test('running all reports sends, counts and marks the same users as PHP', async 
   const result = await runWeeklyReports();
   const nodeState = await sentState();
   await restoreSent(before);
-  assert.deepEqual({ result, to: calls.map((c) => c[0]) }, phpOut);
+  // Neu in Node: übersprungene Konten (alle Plätze zeigen Code-Seiten) – hier gibt es keine
+  assert.equal(result.skipped, 0);
+  assert.deepEqual({ result: { sent: result.sent, failed: result.failed }, to: calls.map((c) => c[0]) }, phpOut);
   assert.deepEqual(nodeState, phpState);
   assert.ok((phpOut.result as { sent: number }).sent > 3 && (phpOut.result as { failed: number }).failed > 3, JSON.stringify(phpOut.result));
 });

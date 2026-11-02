@@ -5,14 +5,14 @@ import { one, type Row } from '../db.js';
 import { config } from '../config.js';
 import { passwordVerify, safeEqual } from '../crypto.js';
 import { e } from '../html.js';
-import { addressUrl, cleanUrl, customOrigin, isBot, isMainHost, liveDomain, mainUrl, onPageHost, pageOrigin, pageUrl, uploadUrl, type PageLike } from '../helpers.js';
+import { addressUrl, cleanUrl, customOrigin, isBot, isMainHost, liveDomain, mainUrl, onPageHost, pageOrigin, pageUrl, pageUrls, uploadUrl, type PageLike } from '../helpers.js';
 import { ctypeDigit, intval, phpStr, phpTruthy, strtolower } from '../php.js';
 import { attemptFailed, attemptsAllowed } from '../web/security.js';
 import { botApi } from '../community/api.js';
 import { blockIsClickable, bookingIsInternal, calendarKey, scheduleActive } from '../content/blocks.js';
 import { demoPage } from '../content/demo.js';
 import { contactCheck, storeMessage } from '../content/messages.js';
-import { blockFromRow, calendarAccess, loadBlocks, loadPage, loadPageBySlug, type Block } from '../content/pages.js';
+import { blockFromRow, calendarAccess, isShownLinkPage, loadBlocks, loadPage, loadPageBySlug, type Block } from '../content/pages.js';
 import { renderPage, renderSimple } from '../content/render.js';
 import { ogServe } from '../content/share.js';
 import { brands, uiIcon } from '../content/social.js';
@@ -20,7 +20,7 @@ import { recordClick, recordView, requestFromOwnSite } from '../content/stats.js
 import { layouts } from '../content/themes.js';
 import { isArr, jsonDecode, own } from '../content/util.js';
 import { codeServe } from '../code/serve.js';
-import { codeSiteBySlug, codeUrl } from '../code/sites.js';
+import { codeSiteById, codeSiteBySlug, codeUrl } from '../code/sites.js';
 import { runWeeklyReports } from '../app/report.js';
 import { domainsAvailable } from '../domains/config.js';
 import { controlResponse } from '../domains/answers.js';
@@ -31,13 +31,15 @@ import { kalender } from './views/kalender.js';
 // Block mit dem Ergebnis der Zeitsteuerung (active)
 export type PublicBlock = Block & { active: boolean };
 
-// oys_public_block(): Block samt Seite laden (nur sichtbare Blöcke; active = gerade laut Zeitsteuerung sichtbar)
+// oys_public_block(): Block samt Seite laden (nur sichtbare Blöcke; active = gerade laut Zeitsteuerung sichtbar). Die
+// Link-Seite eines Platzes, der eine Code-Seite zeigt, gibt es für Besucher nicht (kein Klick, kein Passwort, kein
+// Kontaktformular – /_/c, /_/unlock, /_/go, /_/contact).
 export async function publicBlock(id: unknown): Promise<{ block: PublicBlock; page: Row } | null> {
   if (!ctypeDigit(phpStr(id))) return null;
   const row = await one('SELECT * FROM page_blocks WHERE id = ?', [intval(id)]);
   if (!row || intval(row.is_visible) === 0) return null;
   const page = await loadPage(intval(row.page_id));
-  if (!page) return null;
+  if (!page || !isShownLinkPage(page)) return null;
   const block = blockFromRow(row);
   return { block: { ...block, active: scheduleActive(block.schedule, Date.now() / 1000) }, page };
 }
@@ -140,7 +142,8 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
   if (path === '/_/v' && method === 'POST') {
     if (!isBot(ctx.userAgent()) && requestFromOwnSite(ctx)) {
       const pageId = intval(own(ctx.post, 'p') ?? 0);
-      if (pageId > 0 && (await loadPage(pageId))) await recordView(pageId);
+      // Nur gezeigte Link-Seiten (nicht die geparkte eines Platzes mit Code-Seite)
+      if (pageId > 0 && isShownLinkPage(await loadPage(pageId))) await recordView(pageId);
     }
     ctx.status = 204;
     ctx.halt();
@@ -257,7 +260,7 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
     if (secret === '' || !safeEqual(secret, ctx.q('key'))) ctx.send('Forbidden', 403);
     ctx.header('Content-Type', 'text/plain; charset=utf-8');
     const result = await runWeeklyReports();
-    ctx.send('Weekly reports sent: ' + phpStr(result.sent) + ', failed: ' + phpStr(result.failed));
+    ctx.send('Weekly reports sent: ' + phpStr(result.sent) + ', failed: ' + phpStr(result.failed) + (result.skipped > 0 ? ', skipped: ' + result.skipped : ''));
   }
 
   return notFound(ctx);
@@ -270,7 +273,9 @@ export async function trackClick(ctx: Ctx): Promise<void> {
   const legacyId = intval(isArr(data) ? (own(data, 'link_id') ?? 0) : 0);
   if (legacyId > 0 && !isBot(ctx.userAgent())) {
     const row = await one('SELECT id, page_id FROM page_blocks WHERE legacy_link_id = ? LIMIT 1', [legacyId]);
-    if (row) await recordClick(intval(row.page_id), intval(row.id));
+    // Die geparkte Link-Seite eines Platzes mit Code-Seite zählt nichts (Antwort wie immer)
+    const page = row ? await loadPage(intval(row.page_id)) : null;
+    if (row && (!page || isShownLinkPage(page))) await recordClick(intval(row.page_id), intval(row.id));
   }
   ctx.json({ status: 'success' });
 }
@@ -300,9 +305,28 @@ function redirectToDomain(ctx: Ctx, page: Row, sub: string, withQuery: boolean):
   ctx.redirect(pageUrl(page as unknown as PageLike, sub) + (withQuery ? queryPart(ctx) : ''), 302);
 }
 
+// Seitenadresse ausliefern: die Link-Seite – oder, wenn der Platz eine Code-Seite zeigt, die Code-Seite (unter der
+// Adresse des Platzes, eigener Ursprung wie jede Code-Seite). Die einzige Stelle, die zwischen beiden entscheidet.
+export async function serveSlot(ctx: Ctx, page: Row, sub: string): Promise<void> {
+  if (!isShownLinkPage(page)) {
+    const site = await codeSiteById(intval(page.code_site_id));
+    // Kaputte Verbindung (nur durch Handarbeit in der Datenbank möglich): wie eine unbekannte Adresse
+    if (!site || intval(site.user_id) !== intval(page.user_id)) return notFound(ctx);
+    await codeServe(ctx, site, ctx.path, phpStr(page.slug));
+    ctx.halt();
+  }
+  return servePage(ctx, page, sub);
+}
+
 // --- Hauptdomain: on-your.site/name bzw. on-your.site/name/kalender (slug klein geschrieben, sub '' oder 'kalender') ---
 export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<void> {
   const page = await loadPageBySlug(slug);
+  // Code gibt es nie auf der Hauptdomain: ein Platz mit Code-Seite leitet auf seine Subdomain weiter (ohne Abfrage),
+  // /name/kalender gibt es dort nicht
+  if (page && !isShownLinkPage(page)) {
+    if (sub === '') ctx.redirect(pageUrls(page as unknown as PageLike).subdomain + '/', 302);
+    return notFound(ctx);
+  }
   // Code-Seiten gibt es nur unter name.on-your.site (eigener Ursprung)
   if (!page && sub === '') {
     const site = await codeSiteBySlug(slug);
@@ -318,10 +342,13 @@ export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<
   return notFound(ctx);
 }
 
-// --- Subdomain: name.on-your.site – Profil, sonst Code-Seite, sonst 404 (sub = Pfad klein und ohne / am Rand) ---
+// --- Subdomain: name.on-your.site – Profil (oder die Code-Seite seines Platzes), sonst Code-Seite mit eigener Adresse,
+// sonst 404 (sub = Pfad klein und ohne / am Rand) ---
 export async function subdomain(ctx: Ctx, slug: string, sub: string): Promise<void> {
   const page = await loadPageBySlug(slug);
   if (page) {
+    // Platz mit Code-Seite: jeder Pfad gehört der Code-Seite (kein Kalender, keine Weiterleitung, kein Pfad-Modus)
+    if (!isShownLinkPage(page)) return serveSlot(ctx, page, sub);
     if (sub !== '' && sub !== 'kalender') {
       if (liveDomain(page as unknown as PageLike) !== '') redirectToDomain(ctx, page, '', false);
       ctx.redirect(pageUrl(page as unknown as PageLike), 302);

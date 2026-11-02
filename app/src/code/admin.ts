@@ -5,7 +5,7 @@ import { date, field, intval, phpStr, type PhpArray } from '../php.js';
 import { cleanText } from '../helpers.js';
 import { hcAdd, type AdminResult } from '../honeycombs/honeycombs.js';
 import { phpInt, poolDb } from '../honeycombs/util.js';
-import { codeSiteById } from './sites.js';
+import { codeAddress, codeSiteById, slotOfSite } from './sites.js';
 
 // Was sich im Admin freischalten lässt (weitere Code-Seiten kommen mit den Code-Seiten-Plätzen dazu)
 export const CODE_UNLOCK_ITEMS: readonly string[] = ['code_page'];
@@ -22,7 +22,9 @@ export async function adminCodeHandle(post: PhpArray): Promise<AdminResult> {
       const reason = block ? cleanText(post.reason ?? '', 200) : '';
       await poolDb.exec('UPDATE code_sites SET is_blocked = ?, blocked_reason = ?, updated_at = ? WHERE id = ?',
         [block ? 1 : 0, reason !== '' ? reason : null, date('Y-m-d H:i:s'), intval(site.id)]);
-      return { ok: block ? '“' + phpStr(site.slug) + '” is blocked.' : '“' + phpStr(site.slug) + '” is online again.' };
+      // Die Adresse, unter der die Code-Seite zu sehen ist (auf einem Seitenplatz dessen Adresse)
+      const address = codeAddress(site, await slotOfSite(intval(site.id)))?.slug ?? phpStr(site.slug);
+      return { ok: block ? '“' + address + '” is blocked.' : '“' + address + '” is online again.' };
     }
 
     case 'unlock': {

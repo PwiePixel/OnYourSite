@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { configString, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, one, q } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 import { adminPage } from '../src/admin/page.js';
@@ -32,6 +33,8 @@ before(async () => {
   }
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
+  // Kopie auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert)
+  await ensureSchema();
   mkdirSync(mailDir, { recursive: true });
   setEmailDirForTests(mailDir);
 });

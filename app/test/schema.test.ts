@@ -12,7 +12,9 @@ import { strtotime, time } from '../src/php.js';
 import { ensureSchema, SCHEMA_VERSION, V_SESSIONS } from '../src/schema.js';
 
 const BASE = loadConfig();
-const DBS = { phpFresh: 'oys_test_schema_pf', nodeFresh: 'oys_test_schema_nf', phpLegacy: 'oys_test_schema_pl', nodeLegacy: 'oys_test_schema_nl' };
+// Namen aus der Datenbank dieses Arbeitsordners: andere Arbeitsordner auf demselben Server stören sich so nicht
+const SOURCE = String((BASE.db as ConfigData).name);
+const DBS = { phpFresh: SOURCE + '_schema_pf', nodeFresh: SOURCE + '_schema_nf', phpLegacy: SOURCE + '_schema_pl', nodeLegacy: SOURCE + '_schema_nl' };
 let admin: Connection;
 let started = 0;
 

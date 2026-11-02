@@ -3,8 +3,9 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { configString } from './config.js';
 import { ROOT_DIR } from './config.js';
-import { one } from './db.js';
+import { one, type Db } from './db.js';
 import { md5Hex } from './crypto.js';
+import { addressNameProblem, addressTaken, type AddressKind } from './content/addresses.js';
 import { strtolower, phpStr, phpTruthy, rawurlencode, strtotime, date, time, phpLtrim } from './php.js';
 import * as compat from './compat/core.js';
 import type { Ctx } from './web/ctx.js';
@@ -94,18 +95,35 @@ const RESERVED = ['login', 'logout', 'register', 'dashboard', 'admin', 'challeng
   'roadmap', 'changelog', 'news', 'feed'];
 export const reservedPaths = (): string[] => RESERVED;
 
-// oys_slug_problem(): Meldung oder null
-export async function slugProblem(slug: string, exceptPageId: number | null = null, exceptCodeId: number | null = null): Promise<string | null> {
+// Wer fragt (slugProblem): userId darf seine eigenen reservierten Adressen wieder nehmen, exceptStatusId ist die eigene
+// Statusseite, kind die Art der neuen Seite (Namensregeln), db die feste Verbindung einer laufenden Transaktion
+export interface SlugOptions {
+  userId?: number | null;
+  exceptStatusId?: number | null;
+  kind?: AddressKind;
+  db?: Db;
+}
+
+// oys_slug_problem(): Meldung oder null. Vergeben ist eine Adresse laut Liste aller Adressen (content/addresses.ts –
+// auch reservierte zählen, außer den eigenen) und, als Rückhalt gegen Handarbeit in der Datenbank, wie bisher laut
+// Link- und Code-Seiten. Ohne userId (404-Seite, Registrierung) zählt jede Reservierung als vergeben.
+export async function slugProblem(slug: string, exceptPageId: number | null = null, exceptCodeId: number | null = null,
+  opts: SlugOptions = {}): Promise<string | null> {
   if (slug === '') return 'Please enter an address.';
   const len = Buffer.byteLength(slug, 'utf8');
   if (len < 2 || len > 30) return 'The address must be 2–30 characters long.';
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug) || slug.includes('--')) return 'Only a–z, 0–9 and single hyphens are allowed (not at the start or end).';
   if (isForbiddenSubdomain(slug)) return `The address “${slug}” is reserved or not allowed.`;
   if (RESERVED.includes(slug)) return `The address “${slug}” is reserved.`;
+  const named = addressNameProblem(slug, opts.kind ?? 'page');
+  if (named !== null) return named;
   // Namen der eigenen Domains aus der Einrichtung (CNAME-Ziel, Rückfall-Ursprung) gehören nie einer Seite
   if (domainReservedSlugs(baseHost()).includes(slug)) return `The address “${slug}” is reserved.`;
-  if (await one('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptPageId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
-  if (await one('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptCodeId ?? 0])) return `Sorry, the address “${slug}” is already taken.`;
+  const sql: Pick<Db, 'one'> = opts.db ?? { one };
+  const taken = `Sorry, the address “${slug}” is already taken.`;
+  if (await addressTaken(slug, { pageId: exceptPageId, codeId: exceptCodeId, statusId: opts.exceptStatusId ?? null, userId: opts.userId ?? null }, sql)) return taken;
+  if (await sql.one('SELECT id FROM pages WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptPageId ?? 0])) return taken;
+  if (await sql.one('SELECT id FROM code_sites WHERE slug = ? AND id <> ? LIMIT 1', [slug, exceptCodeId ?? 0])) return taken;
   return null;
 }
 
