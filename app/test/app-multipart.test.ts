@@ -1,6 +1,7 @@
 // multipart/form-data wie PHP (web/multipart.ts ↔ main/rfc1867.c): $_POST, $_FILES (mit MD5 des Inhalts statt tmp_name)
 // und ob php://input leer bleibt – gegen PHPs eingebauten Server mit den Einstellungen des eigenen Servers. Feste Fälle
-// (Feldnamen, max_file_uploads, MAX_FILE_SIZE, abgebrochene Inhalte, Kopfzeilen) und zufällig erzeugte Inhalte.
+// (Feldnamen, max_file_uploads, MAX_FILE_SIZE, abgebrochene Inhalte, Kopfzeilen) und zufällig erzeugte Inhalte. Die
+// Vergleiche laufen nur mit OYS_PHP_REF (siehe support/phpRef.ts).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -14,6 +15,7 @@ import { phpMultipart } from '../src/web/multipart.js';
 import { readBody } from '../src/server.js';
 import { makeTestCtx } from '../src/web/ctx.js';
 import { phpBytes, phpUtf8Substitute, type PhpArray, type PhpValue } from '../src/php.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const UPLOAD_MAX = 16 * 1024 * 1024;
 const DUMP = `<?php
@@ -222,7 +224,7 @@ const FIXED: Array<[string, string, string]> = [
   ['invalid UTF-8 in fields', TYPE, field('name', 'Mia\xff') + field('pw', '\xe2\x82\xed\xa0\x80x\xc0\xaf') + field('n\xfe', '\xc3\xa4') + field('ok', 'ä') + end],
 ];
 
-test('multipart bodies are read like PHP (rfc1867): fixed cases', async () => {
+test('multipart bodies are read like PHP (rfc1867): fixed cases', { skip: PHP_SKIP }, async () => {
   const port = await startPhp();
   const cases: Array<[string, string, Buffer]> = FIXED.map(([label, type, body]) => [label, type, Buffer.from(body, 'latin1')]);
   // ein Upload über upload_max_filesize (16M) und einer knapp darunter
@@ -242,7 +244,7 @@ function rng(seed: number): () => number {
   };
 }
 
-test('multipart bodies are read like PHP (rfc1867): random bodies', async () => {
+test('multipart bodies are read like PHP (rfc1867): random bodies', { skip: PHP_SKIP }, async () => {
   const port = await startPhp();
   // Mehr Fälle bzw. andere Startwerte: OYS_FUZZ_SEED=… OYS_FUZZ_COUNT=… npm test
   const rand = rng(Number(process.env.OYS_FUZZ_SEED) || 20261101);

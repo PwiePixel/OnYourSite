@@ -1,8 +1,9 @@
-// Profilseite gegen PHP (lib/render.php): dieselbe Seite, dieselben Blöcke und Optionen gehen in oys_render_page()
-// und renderPage(); die Ausgabe muss Byte für Byte gleich sein. Nur das Kontakt-Token (time()) wird nach der Prüfung
-// ersetzt. Geprüft werden alle Seiten der Test-Datenbank, erzeugte Seiten mit jedem Blocktyp, jeder Option, jedem
-// Design und jeder Anordnung, allen Modi, Zeitsteuerung, geschützten und ausgeblendeten Blöcken, leeren und
-// feindlichen Werten – einmal direkt übergeben (wie Vorschau und Demo) und einmal über die Datenbank geladen.
+// Profilseite gegen PHP (lib/render.php der PHP-Version, siehe support/phpRef.ts): dieselbe Seite, dieselben Blöcke und
+// Optionen gehen in oys_render_page() und renderPage(); die Ausgabe muss Byte für Byte gleich sein. Nur das
+// Kontakt-Token (time()) wird nach der Prüfung ersetzt. Geprüft werden alle Seiten der Test-Datenbank, erzeugte Seiten
+// mit jedem Blocktyp, jeder Option, jedem Design und jeder Anordnung, allen Modi, Zeitsteuerung, geschützten und
+// ausgeblendeten Blöcken, leeren und feindlichen Werten – einmal direkt übergeben (wie Vorschau und Demo) und einmal
+// über die Datenbank geladen.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { closePool, exec, q } from '../src/db.js';
@@ -18,6 +19,7 @@ import { jsonDecode } from '../src/content/util.js';
 import { phpJsonFloat, phpNumber, phpRound } from '../src/content/phpValues.js';
 import { jsonText, rng, O, Raw } from './modelHarness.js';
 import { firstDiff, normalizeTokens, runPhpList } from './renderHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 // Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz
 const renderPage = (...a: Parameters<typeof renderPageRaw>): string => withoutDialogs(renderPageRaw(...a));
@@ -271,7 +273,7 @@ function compare(list: unknown[], decoded: Array<{ page: Record<string, unknown>
   return problems;
 }
 
-test('pages passed directly (preview, demo, generated) render byte for byte like PHP', () => {
+test('pages passed directly (preview, demo, generated) render byte for byte like PHP', { skip: PHP_SKIP }, () => {
   const list = cases(Number(process.env.RENDER_SEED ?? 4242), Number(process.env.RENDER_CASES ?? 1400));
   const text = jsonText(list);
   const php = runPhpList(PHP_RENDER_EACH, text);
@@ -301,7 +303,7 @@ test('pages passed directly (preview, demo, generated) render byte for byte like
   assert.deepEqual(marks.filter((m) => !php.some((x) => x.includes(m))), []);
 });
 
-test('every page in the test database renders like PHP, also after loading generated pages from the database', async () => {
+test('every page in the test database renders like PHP, also after loading generated pages from the database', { skip: PHP_SKIP }, async () => {
   const r = rng(777);
   const inserted: number[] = [];
   try {
@@ -362,7 +364,7 @@ test('every page in the test database renders like PHP, also after loading gener
   }
 });
 
-test('oys_render_simple and oys_format_text match PHP', () => {
+test('oys_render_simple and oys_format_text match PHP', { skip: PHP_SKIP }, () => {
   const r = rng(99);
   const simple: unknown[] = [];
   for (let i = 0; i < 150; i++) simple.push({ page: page(r, 7), title: r.pick(SHORT), body: r.pick(['', '<p>x</p>', '<div class="oys-card">ü</div>']) });
@@ -389,13 +391,13 @@ test('oys_render_simple and oys_format_text match PHP', () => {
   assert.ok(phpText.filter((x) => x.includes('<a href=')).length > 500, 'many links');
 });
 
-test('the config JSON escapes like json_encode with JSON_HEX_* (also a backslash at the end of a text)', () => {
+test('the config JSON escapes like json_encode with JSON_HEX_* (also a backslash at the end of a text)', { skip: PHP_SKIP }, () => {
   const vals = ['a\\', 'x"y', 'a\\"b', '\\\\', '</script>', "it's & co", 'é🎧', ' ', '\u007f', 'a/b'];
   const php = runPhpList('foreach ($in as $v) { $out[] = json_encode(["t" => $v], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES); }', jsonText(vals));
   assert.deepEqual(vals.map((v) => phpJson({ t: v }, { hexTag: true, hexAmp: true, hexApos: true, hexQuot: true, unescapedSlashes: true })), php);
 });
 
-test('unusual stored values behave like PHP, including the cases where PHP stops with an error', () => {
+test('unusual stored values behave like PHP, including the cases where PHP stops with an error', { skip: PHP_SKIP }, () => {
   const base = { id: 7, slug: 'mia', title: 'Mia', subtitle: '', bio: '', avatar: '', bg_image: 'bg.webp', theme: 'galaxy', layout: 'cards', address_mode: 'subdomain' };
   const blk = (type: string, data: unknown, extra: Record<string, unknown> = {}): unknown => ({ id: 5, type, is_visible: 1, data, schedule: null, protection: 'none', effect: 'none', ...extra });
   const pages: unknown[] = [
@@ -467,7 +469,7 @@ test('unusual stored values behave like PHP, including the cases where PHP stops
   assert.ok(php.filter((x) => x !== 'THROW').length >= 15, 'PHP warnings are covered');
 });
 
-test('round() and number casts used by the page match PHP', () => {
+test('round() and number casts used by the page match PHP', { skip: PHP_SKIP }, () => {
   const r = rng(31);
   const values: number[] = [0, 0.5, 1.5, 2.5, -0.5, -2.5, 0.285, 1.005, 2.675, 0.045, 1.16 * 72, 0.92 * 52, 28.499999999999996, 1e15 + 0.5, 1e-9, 123456.785];
   for (let i = 0; i < 4000; i++) values.push((r.next(2000000) - 1000000) / [1, 10, 100, 1000, 7, 3][r.next(6)]);
@@ -490,7 +492,7 @@ test('round() and number casts used by the page match PHP', () => {
 
 // Gespeicherte Einstellungen mit Kommazahlen (alte oder von Hand geänderte Daten): round() und (string) behalten -0,
 // json_encode() schreibt Exponenten wie PHP (1.0e-5, 1.0e+21) und scheitert an INF – dann bleibt die Konfiguration leer
-test('floats in stored settings are written like PHP: -0, json_encode exponents and INF', () => {
+test('floats in stored settings are written like PHP: -0, json_encode exponents and INF', { skip: PHP_SKIP }, () => {
   const base = { id: 7, slug: 'mia', title: 'Mia', subtitle: '', bio: '', avatar: '', bg_image: 'bg.webp', theme: 'galaxy', layout: 'cards', address_mode: 'subdomain' };
   const list: unknown[] = [];
   const add = (settings: string): void => {
@@ -524,7 +526,7 @@ test('floats in stored settings are written like PHP: -0, json_encode exponents 
   assert.ok(php.some((x) => x.includes('<script id="oys-config" type="application/json"></script>')), 'json_encode fails on INF');
 });
 
-test('json_encode() of a float matches phpJsonFloat for random and boundary values', () => {
+test('json_encode() of a float matches phpJsonFloat for random and boundary values', { skip: PHP_SKIP }, () => {
   const r = rng(17);
   const values: number[] = [0, -0, 1, -1, 0.1, 0.5, 1.5, 1e-4, 9.999e-5, 1e-5, 1.5e-7, 5e-324, -5e-324, 2.2250738585072014e-308, 1.7976931348623157e308, 1e15, 1e16, 1e17,
     9.999999999999999e16, 1.0000000000000002e17, 2 ** 53, 2 ** 63, 2 ** 64, 123456789.123, 0.30000000000000004, 1 / 3, -2 / 3, 1e21, 1e22, 1e-300];
@@ -546,7 +548,7 @@ test('json_encode() of a float matches phpJsonFloat for random and boundary valu
 // Countdown-Ziele in jeder Form, die oys_block_normalize speichern kann (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}, auch mit "\n"
 // dahinter): übergelaufene Monate, Tage und Stunden, Jahr 0, Zeiten vor 1893 (Ortszeit), Lücke und doppelte Stunde
 // der Zeitumstellung – Datum im data-target, verbleibende Zeit und leere Blöcke wie PHP
-test('countdown targets in every stored form give the same date and remaining time as PHP', () => {
+test('countdown targets in every stored form give the same date and remaining time as PHP', { skip: PHP_SKIP }, () => {
   const r = rng(2024);
   const p2 = (n: number): string => String(n).padStart(2, '0');
   const range = (a: number, b: number): string[] => Array.from({ length: b - a + 1 }, (_x, i) => p2(a + i));

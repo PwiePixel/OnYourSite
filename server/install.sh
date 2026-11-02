@@ -2390,7 +2390,7 @@ on_exit() {
 }
 
 update_site() {
-  local pending=0 label args
+  local pending=0 label
   DOMAIN=$(conf_get DOMAIN)
   PHPV=$(conf_get PHP_VERSION)
   GIT=(git -c safe.directory="$CODE" -C "$CODE")
@@ -2436,12 +2436,7 @@ update_site() {
   build_app "$STAGE/app" force || fail "The new version couldn’t be built – see above. The website keeps running as before."
 
   bold "Checking the new version with the data of this server"
-  args=(check --crypto)
-  if [ "$MIGRATE" = 1 ] && [ -f "$CODE/config.php" ] && command -v php >/dev/null 2>&1; then
-    # PHP ist noch da: zusätzlich mit PHP und dem Schlüssel aus config.php vergleichen (nur lesend)
-    args+=(--php --php-config "$CODE/config.php")
-  fi
-  app_cli "$STAGE" "$NEW_CFG" "${args[@]}" | sed 's/^/  /' \
+  app_cli "$STAGE" "$NEW_CFG" check --crypto | sed 's/^/  /' \
     || fail "Encrypted data can’t be read with the key in the new settings – nothing was switched. The website keeps running as before."
   app_cli "$STAGE" "$NEW_CFG" migrate | sed 's/^/  /' \
     || fail "The database couldn’t be updated – see above. The website keeps running as before; the backup is in $BACKUP_DIR."

@@ -1,8 +1,9 @@
 // app/scripts/config.mjs gegen PHP: config.php wird ohne PHP gelesen – das Ergebnis muss genau dem entsprechen, was
-// include in PHP liefert (Typen, Bytes jedes Texts, Schlüssel und ihre Reihenfolge). PHP läuft hier nur zum Vergleich:
-// handgeschriebene Grenzfälle, Dateien im Format des alten Installers (write_config mit var_export) mit Zufallswerten
-// und Zufallstexte mit allen Escapes. Dazu: was abgelehnt wird, write wie write_config der PHP-Version, Dateirechte,
-// get/set/reset-keys und from-php wie das frühere config-from-php.php (json_encode).
+// include in PHP liefert (Typen, Bytes jedes Texts, Schlüssel und ihre Reihenfolge). PHP läuft hier nur zum Vergleich
+// (mit OYS_PHP_REF, siehe support/phpRef.ts): handgeschriebene Grenzfälle, Dateien im Format des alten Installers
+// (write_config mit var_export) mit Zufallswerten und Zufallstexte mit allen Escapes. Dazu: was abgelehnt wird, write
+// wie write_config der PHP-Version, Dateirechte, get/set/reset-keys und from-php wie das frühere config-from-php.php
+// (json_encode).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -12,9 +13,9 @@ import { join } from 'node:path';
 import { ROOT_DIR } from '../src/config.js';
 // @ts-expect-error – reines JavaScript ohne Typen (Installer-Werkzeug)
 import { ConfigError, PhpArray, buildConfig, encodeJson, loadSettings, main, parsePhpConfig, phpToJson } from '../scripts/config.mjs';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const SCRIPT = join(ROOT_DIR, 'app', 'scripts', 'config.mjs');
-const HAS_PHP = spawnSync('php', ['-v']).status === 0;
 let dir = '';
 let n = 0;
 
@@ -121,8 +122,61 @@ function compare(files: string[], label: string): number {
 
 // ---------------------------------------------------------------- Grenzfälle von Hand
 
+// Die Vorlage config.example.php der Version 2.x: nach ihr sind die config.php-Dateien geschrieben, die beim Umzug
+// gelesen werden
+const EXAMPLE_2X = `<?php
+// ---------------------------------------------------------------
+// OnYourSite â configuration
+// Copy this file to "config.php" and fill in your details.
+// config.php is NOT committed to the Git repo (see .gitignore).
+// ---------------------------------------------------------------
+return [
+    // Database (usually localhost â on your own server, server/install.sh fills this in)
+    'db' => [
+        'host' => 'localhost',
+        'name' => 'onyoursite_',
+        'user' => 'onyoursiteuser',
+        'pass' => '',
+    ],
+
+    // AES-256 key, EXACTLY 32 characters.
+    // IMPORTANT when updating: enter the old value from your previous security.php
+    // (define('AES_256_KEY', '...')) here â otherwise data that is already
+    // encrypted (Discord IDs, booking requests) can no longer be read.
+    'aes_key' => '',
+
+    // Random secret text (at least 32 characters) for form signatures
+    // (spam protection in the contact form). Just generate it once, e.g. with
+    // php -r "echo bin2hex(random_bytes(32));"
+    'app_secret' => '',
+
+    // Main domain without "www" â profiles live at name.DOMAIN or DOMAIN/name
+    'base_domain' => 'on-your.site',
+    'scheme' => 'https',
+
+    'timezone' => 'Europe/Berlin',
+
+    // How many pages an account may create
+    'max_pages' => 3,
+
+    // Optional: secret for running the weekly report via web cron
+    // (https://on-your.site/cron/weekly_report.php is blocked). Not needed when the report
+    // runs on the server itself: own server (server/install.sh) or a Plesk scheduled task.
+    'cron_secret' => '',
+
+    // Optional: shared secret for the Discord bot (discord-bot/), at least 32 characters.
+    // Generate one with: php -r "echo bin2hex(random_bytes(32));"
+    // The bot needs the same value as BOT_SECRET (its installer asks for it â server/install.sh
+    // takes care of both sides). Empty = bot connection off.
+    'bot_secret' => '',
+
+    // Show errors in the browser (only set to true for testing)
+    'debug' => false,
+];
+`;
+
 const EDGE: string[] = [
-  readFileSync(join(ROOT_DIR, 'config.example.php'), 'latin1'),
+  EXAMPLE_2X,
   "<?php\nreturn [];\n",
   "<?php return['a'=>1];",
   "<?php\r\nreturn [\r\n  'a' => 'b',\r\n];\r\n",
@@ -178,7 +232,7 @@ const EDGE: string[] = [
   "<?php return [ // ?>\n 'a' => 1];",
 ];
 
-test('config.php edge cases are read exactly like PHP include', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('config.php edge cases are read exactly like PHP include', { skip: PHP_SKIP }, () => {
   compare(EDGE.map((s) => file(Buffer.from(s, 'latin1'))), 'edge');
 });
 
@@ -275,7 +329,7 @@ for ($f = 0; $f < $count; $f++) {
   file_put_contents("$dir/written$f.php", $out);
 }`;
 
-test('files written by the PHP installer (write_config, var_export) are read exactly like PHP include', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('files written by the PHP installer (write_config, var_export) are read exactly like PHP include', { skip: PHP_SKIP }, () => {
   const sub = mkdtempSync(join(dir, 'w-'));
   const writer = file(WRITE_CONFIG_PHP, 'write_config.php');
   const count = 120;
@@ -310,7 +364,7 @@ function randomLiteral(rand: () => number): string {
     '1_000.000_1', '9223372036854775807', '9223372036854775808', '0x8000000000000000', '1e400', '0.1', '00', '0_7']);
 }
 
-test('random texts and numbers in every notation are read exactly like PHP', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('random texts and numbers in every notation are read exactly like PHP', { skip: PHP_SKIP }, () => {
   let seed = 7;
   const rand = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
@@ -329,7 +383,7 @@ test('random texts and numbers in every notation are read exactly like PHP', { s
 
 // Zufällige Anordnung: Leerraum und Kommentare jeder Art zwischen allen Teilen (auch \r allein als Zeilenende, ?> im
 // Zeilenkommentar, Kommentarzeichen in Kommentaren), verschachtelte Listen, Verkettung mit .
-test('random layouts with comments and line ends of every kind are read exactly like PHP', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('random layouts with comments and line ends of every kind are read exactly like PHP', { skip: PHP_SKIP }, () => {
   // mulberry32: genug Zufall für viele tausend Aufrufe (das einfache LCG oben wiederholt sich nach etwa 14 000)
   let seed = 20261102;
   const rand = () => {
@@ -404,7 +458,7 @@ const REFUSED: string[] = [
   "<?php return ['a' => 1]; ?>\nok <?php echo 2;",
 ];
 
-test('anything else is refused with a clear message (PHP itself accepts these)', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('anything else is refused with a clear message (PHP itself accepts these)', { skip: PHP_SKIP }, () => {
   const files = REFUSED.map((s) => file(s));
   const php = phpTyped(files);
   files.forEach((f, i) => {
@@ -413,6 +467,16 @@ test('anything else is refused with a clear message (PHP itself accepts these)',
     assert.equal(node[0], 'error', `must be refused: ${REFUSED[i]}`);
     assert.match(String(node[1]), /line \d+: .*(without PHP|expected|no more PHP code)/, REFUSED[i]);
   });
+});
+
+test('the config.php template of version 2.x is read without PHP', () => {
+  assert.deepEqual(JSON.parse(encodeJson(phpToJson(parsePhpConfig(Buffer.from(EXAMPLE_2X, 'latin1'))))), {
+    db: { host: 'localhost', name: 'onyoursite_', user: 'onyoursiteuser', pass: '' }, aes_key: '', app_secret: '', base_domain: 'on-your.site',
+    scheme: 'https', timezone: 'Europe/Berlin', max_pages: 3, cron_secret: '', bot_secret: '', debug: false,
+  });
+  const r = runScript(['from-php', file(EXAMPLE_2X)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).base_domain, 'on-your.site');
 });
 
 test('refusals name the file, the line and what was found', () => {
@@ -434,11 +498,11 @@ function runScript(args: string[], env: Record<string, string> = {}, input?: str
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
-test('from-php prints the same JSON as PHP json_encode (and runs without PHP)', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('from-php prints the same JSON as PHP json_encode (and runs without PHP)', { skip: PHP_SKIP }, () => {
   const sub = mkdtempSync(join(dir, 'j-'));
   const writer = file(WRITE_CONFIG_PHP, 'write_config2.php');
   execFileSync('php', ['-d', 'display_errors=stderr', '-r', RANDOM_CONFIGS_PHP, writer, sub, '60', '99', 'utf8'], { stdio: ['ignore', 'ignore', 'inherit'] });
-  const files = [join(ROOT_DIR, 'config.example.php'), ...EDGE.slice(0, 25).map((s) => file(Buffer.from(s, 'latin1')))];
+  const files = [file(EXAMPLE_2X), ...EDGE.slice(0, 25).map((s) => file(Buffer.from(s, 'latin1')))];
   for (let i = 0; i < 60; i++) files.push(join(sub, `written${i}.php`));
   let utf8 = 0;
   let broken = 0;
@@ -476,7 +540,7 @@ function nodeWrite(current: string, old: string, env: Record<string, string>): M
   return loadSettings(target) as Map<string, unknown>;
 }
 
-test('write keeps, replaces and creates values exactly like write_config of the PHP installer', { skip: !HAS_PHP && 'php is not installed' }, () => {
+test('write keeps, replaces and creates values exactly like write_config of the PHP installer', { skip: PHP_SKIP }, () => {
   // Schlüssel erst zur Laufzeit zusammengesetzt (keine schlüsselartigen Texte im Repository)
   const curKey = 'current-' + 'c'.repeat(24);
   const oldKey = 'imported-' + 'i'.repeat(23);

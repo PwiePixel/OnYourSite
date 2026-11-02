@@ -1,5 +1,6 @@
-// Beispielseiten gegen PHP (lib/demo.php): Daten von oys_demo_page() für jedes Design, die damit gezeichnete
-// Seite (wie /_/demo/{design}, auch mit ?layout=) und die kleinen Vorschauen von oys_mini_html()
+// Beispielseiten gegen PHP (lib/demo.php der PHP-Version, siehe support/phpRef.ts): Daten von oys_demo_page() für jedes
+// Design, die damit gezeichnete Seite (wie /_/demo/{design}, auch mit ?layout=) und die kleinen Vorschauen von
+// oys_mini_html()
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { baseHost } from '../src/helpers.js';
@@ -9,6 +10,7 @@ import { withoutDialogs } from './support/dialogParity.js';
 import { layouts, themes } from '../src/content/themes.js';
 import { enc, jsonText } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 // Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz
 const renderPage = (...a: Parameters<typeof renderPageRaw>): string => withoutDialogs(renderPageRaw(...a));
@@ -16,12 +18,12 @@ const renderPage = (...a: Parameters<typeof renderPageRaw>): string => withoutDi
 const THEMES = [...Object.keys(themes()), 'unknown', '', 'TRS', 'constructor', '__proto__', 'Deep-Dark'];
 const LAYOUTS = [...Object.keys(layouts()), 'zigzag', '"x'];
 
-test('demo page data matches oys_demo_page() for every theme', () => {
+test('demo page data matches oys_demo_page() for every theme', { skip: PHP_SKIP }, () => {
   const php = runPhpList('foreach ($in as $t) { $out[] = json_encode(oys_demo_page($t), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); }', jsonText(THEMES));
   assert.deepEqual(THEMES.map((t) => enc(demoPage(t))), php);
 });
 
-test('demo pages render like /_/demo/{theme} in PHP – every theme with its own and with every other layout', () => {
+test('demo pages render like /_/demo/{theme} in PHP – every theme with its own and with every other layout', { skip: PHP_SKIP }, () => {
   const now = Math.floor(Date.now() / 1000);
   const cases: Array<{ theme: string; layout: string | null }> = [];
   for (const theme of Object.keys(themes())) {
@@ -43,7 +45,7 @@ test('demo pages render like /_/demo/{theme} in PHP – every theme with its own
   assert.ok(php.every((x) => x.includes('oys-cd-num') && x.includes('mode-demo')), 'countdown and demo mode');
 });
 
-test('mini previews match oys_mini_html() for every theme and layout', () => {
+test('mini previews match oys_mini_html() for every theme and layout', { skip: PHP_SKIP }, () => {
   const cases: Array<[string, string | null]> = [];
   for (const t of THEMES) cases.push([t, null]);
   for (const l of LAYOUTS) cases.push(['galaxy', l]);
@@ -54,7 +56,7 @@ test('mini previews match oys_mini_html() for every theme and layout', () => {
 
 // Der Countdown der Beispielseite endet in 9 Tagen um 18 Uhr Ortszeit – wie (new DateTimeImmutable('today', $tz))
 // ->modify('+9 days')->setTime(18, 0), hier mit festem „jetzt“ (Mitternacht, Zeitumstellung, Jahres- und Monatsende)
-test('the demo countdown target is today + 9 days at 18:00 local time for any moment', () => {
+test('the demo countdown target is today + 9 days at 18:00 local time for any moment', { skip: PHP_SKIP }, () => {
   const nows: number[] = [];
   for (const day of ['2026-03-20', '2026-03-29', '2026-10-16', '2026-10-25', '2026-12-22', '2026-12-31', '2028-02-20', '2027-01-31']) {
     const midnight = Date.parse(day + 'T00:00:00Z') / 1000;

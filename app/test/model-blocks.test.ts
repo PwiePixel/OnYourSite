@@ -1,5 +1,6 @@
-// Blöcke gegen PHP (lib/blocks.php): Prüfung der Eingaben mit gültigen, ungültigen, feindlichen und zufälligen Werten
-// für jeden Blocktyp, Einbettungen, Zeitsteuerung rund um die Zeitumstellung und die Kalender-Schlüssel
+// Blöcke gegen PHP (lib/blocks.php der PHP-Version, siehe support/phpRef.ts): Prüfung der Eingaben mit gültigen,
+// ungültigen, feindlichen und zufälligen Werten für jeden Blocktyp, Einbettungen, Zeitsteuerung rund um die
+// Zeitumstellung und die Kalender-Schlüssel
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { passwordHash, passwordVerify } from '../src/crypto.js';
@@ -10,6 +11,7 @@ import {
 } from '../src/content/blocks.js';
 import { jsonDecode, parseLocalDateTime, type PhpArr } from '../src/content/util.js';
 import { runPhp, PHP_EACH, nodeEach, nodeEachAsync, diffs, jsonText, rng, O, Raw, enc } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const UPLOADS = ['avatar_5_1700000000_abcdef12.png', 'thumb_5_1700000000_abcdef12.JPG', 'thumb_5_1700000000_abcdef12.jpg', 'img_5_x.webp', 'gal_5_1_a.gif',
   'file_5_1.pdf', 'file_5_1.vcf', 'file_5_1.zip', 'music_5_1.mp3', 'music_5_1.m4a', 'music_5_1.wav', 'x_6_1.png', 'avatar_05_1.png', '../avatar_5_1.png',
@@ -17,7 +19,7 @@ const UPLOADS = ['avatar_5_1700000000_abcdef12.png', 'thumb_5_1700000000_abcdef1
   'avatar_5_1.png.php', 'avatar_5_1.p', 'avatar_5_1', '/', '', 'a/b/', '///', 'avatar_5_1_2_3.jpeg', 'avatar_99999999999999999999_1.png', 'avatar_5_ä.png',
   'avatar_5_1.PNG', 'avatar-5-1.png', 'avatar_5_1.png/x', 'file_5_1773643714.pdf'];
 
-test('upload names are checked like PHP', () => {
+test('upload names are checked like PHP', { skip: PHP_SKIP }, () => {
   const extLists = [[], IMAGE_EXTS, ['pdf', 'vcf', 'zip'], ['mp3', 'm4a', 'ogg', 'wav'], ['PNG']];
   const values: unknown[] = [...UPLOADS, null, 5, true, ['avatar_5_1.png'], { a: 1 }];
   const cases = values.flatMap((f) => [5, 6, 0, new Raw('9223372036854775807')].flatMap((u) => extLists.map((x) => [f, u, x])));
@@ -30,7 +32,7 @@ test('upload names are checked like PHP', () => {
   assert.ok(php.filter((r) => r !== 'null').length > 20, 'some names are valid');
 });
 
-test('oys_pick, booking addresses and calendar keys match PHP', () => {
+test('oys_pick, booking addresses and calendar keys match PHP', { skip: PHP_SKIP }, () => {
   const picks = [['a', ['a', 'b'], 'x'], ['c', ['a', 'b'], 'x'], [null, ['', 'a'], 'd'], ['', ['', 'a'], 'd'], [1, ['1'], 'n'], ['1', [1], 'n'], [true, ['1'], 'n']];
   const phpPick = JSON.parse(runPhp(PHP_EACH('oys_pick($c[0], $c[1], $c[2])'), jsonText(picks))) as string[];
   assert.deepEqual(diffs(picks, nodeEach(picks, (c) => pick((c as unknown[])[0], (c as unknown[][])[1], (c as unknown[])[2])), phpPick), []);
@@ -195,7 +197,7 @@ async function nodeNormalize(c: unknown): Promise<unknown> {
   return r;
 }
 
-test('block normalization matches PHP for fixed cases, including new and kept passwords', async () => {
+test('block normalization matches PHP for fixed cases, including new and kept passwords', { skip: PHP_SKIP }, async () => {
   const link = (extra: Array<[string, unknown]>) => new O([['type', 'link'], ['data', { title: 'My link', url: 'example.com' }], ...extra]);
   const cases = [
     // jeder Typ mit gültigen Daten
@@ -243,7 +245,7 @@ test('block normalization matches PHP for fixed cases, including new and kept pa
   assert.ok(php.includes('THROW'), 'a NUL byte in a new password fails like PHP');
 });
 
-test('random and hostile block input matches PHP', async () => {
+test('random and hostile block input matches PHP', { skip: PHP_SKIP }, async () => {
   const r = rng(4242);
   const cases = Array.from({ length: 3000 }, () => blockCase(r));
   const text = jsonText(cases);
@@ -259,7 +261,7 @@ test('random and hostile block input matches PHP', async () => {
   assert.ok(php.filter((x) => x === 'THROW').length > 0, 'errors like PHP');
 });
 
-test('node and PHP accept each other’s link password hashes', async () => {
+test('node and PHP accept each other’s link password hashes', { skip: PHP_SKIP }, async () => {
   const pws = ['secret123', 'äöüäöü', 'x'.repeat(100)];
   const nodeHashes = await Promise.all(pws.map((p) => passwordHash(p)));
   const phpOk = JSON.parse(runPhp('echo json_encode(array_map(fn($c) => password_verify($c[0], $c[1]), $in));', JSON.stringify(pws.map((p, i) => [p, nodeHashes[i]])))) as boolean[];
@@ -270,7 +272,7 @@ test('node and PHP accept each other’s link password hashes', async () => {
 
 // ---------------------------------------------------------------- Zeitsteuerung
 
-test('schedule normalization matches PHP', () => {
+test('schedule normalization matches PHP', { skip: PHP_SKIP }, () => {
   const r = rng(77);
   const cases = Array.from({ length: 2000 }, () => schedule(r));
   const text = jsonText(cases);
@@ -280,7 +282,7 @@ test('schedule normalization matches PHP', () => {
   assert.ok(php.filter((x) => x !== 'null').length > 500);
 });
 
-test('schedule activity matches PHP at many times, also across the time changes', () => {
+test('schedule activity matches PHP at many times, also across the time changes', { skip: PHP_SKIP }, () => {
   const r = rng(99);
   const day = (d: string, h: number, m: number): string => `${d}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   const starts = ['', '2026-03-29T01:30', '2026-03-29T02:30', '2026-03-29T03:00', '2026-10-25T02:00', '2026-10-25T02:30', '2026-10-25T03:00', '2026-01-01T00:00',
@@ -316,7 +318,7 @@ test('schedule activity matches PHP at many times, also across the time changes'
   assert.ok(php.filter((x) => x === 'true').length > 500 && php.filter((x) => x === 'false').length > 500 && php.includes('THROW'));
 });
 
-test('local date and time like new DateTimeImmutable($s, $tz), with PHP’s overflow and errors', () => {
+test('local date and time like new DateTimeImmutable($s, $tz), with PHP’s overflow and errors', { skip: PHP_SKIP }, () => {
   const r = rng(5);
   const years = ['0000', '0001', '0099', '0100', '1893', '1916', '1970', '2026', '2038', '9999'];
   const two = (n: number) => String(n).padStart(2, '0');
@@ -335,7 +337,7 @@ test('local date and time like new DateTimeImmutable($s, $tz), with PHP’s over
 
 // ---------------------------------------------------------------- Einbettungen
 
-test('embeds (YouTube, Twitch, Spotify) match PHP', () => {
+test('embeds (YouTube, Twitch, Spotify) match PHP', { skip: PHP_SKIP }, () => {
   const r = rng(31);
   const hosts = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be', 'youtube-nocookie.com', 'www.youtube-nocookie.com',
     'WWW.youtube.com', 'YouTube.com', 'youtube.com.evil.com', 'clips.twitch.tv', 'www.clips.twitch.tv', 'twitch.tv', 'www.twitch.tv', 'm.twitch.tv', 'TWITCH.TV',
@@ -365,12 +367,15 @@ test('embeds (YouTube, Twitch, Spotify) match PHP', () => {
   assert.deepEqual(diffs(cases, node, phpNorm), []);
   for (const kind of ['"video"', '"playlist"', '"clip"', '"channel"', '"track"']) assert.ok(php.some((x) => x.includes(kind)), kind);
   assert.ok(php.includes('THROW'), 'v[] makes PHP fail – and Node too');
+});
+
+test('a YouTube start time beyond 64 bit becomes the largest number', () => {
   assert.equal(enc(parseEmbed('https://youtube.com/watch?v=dQw4w9WgXcQ&t=99999999999999999999')), enc({ provider: 'youtube', kind: 'video', id: 'dQw4w9WgXcQ', start: 2 ** 63 }));
 });
 
 // Prüfung des Pakets: parse_str() in oys_parse_embed() löscht Namen mit mehr als 64 Klammer-Ebenen ganz
 // (max_input_nesting_level) – Node hat daraus vorher ein Array gemacht und ist mit einem TypeError abgebrochen
-test('embeds with deeply nested query names match PHP', () => {
+test('embeds with deeply nested query names match PHP', { skip: PHP_SKIP }, () => {
   const V = 'v=dQw4w9WgXcQ';
   const LIST = 'list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG';
   const cases: string[] = [];
@@ -393,7 +398,7 @@ test('embeds with deeply nested query names match PHP', () => {
 
 // Prüfung des Pakets: zufällige Upload-Namen rund um einen gültigen Kern (Ordner, Leerraum, Nullbyte, \n vor „/“ …)
 // und zufällige Kalender-Adressen gegen PHP
-test('random upload names and booking addresses match PHP', () => {
+test('random upload names and booking addresses match PHP', { skip: PHP_SKIP }, () => {
   const r = rng(4040);
   const noise = ['', '', '', '', '', '', '/', '//', 'a/', '../', ' ', '\t', '\n', '\r', '\0', '\u000b', 'x', 'ä', '/\n', '\n/', '.', '\\', ' '];
   const words = ['avatar', 'thumb', 'img', 'gal', 'music', 'file', 'a', 'Avatar', 'x1', ''];

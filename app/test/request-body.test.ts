@@ -1,6 +1,7 @@
 // Formular-Inhalte wie PHP lesen: welcher Content-Type $_POST füllt (SAPI: Typ klein geschrieben bis zum ersten ';', ','
-// oder Leerzeichen) und welche Grenze ein multipart-Inhalt hat (rfc1867.c). Verglichen mit PHPs eingebautem Server;
-// dazu, dass Fastify ungewöhnliche Werte nicht selbst mit 415 ablehnt (PHP liest sie, z. B. beim Anmelden).
+// oder Leerzeichen) und welche Grenze ein multipart-Inhalt hat (rfc1867.c). Verglichen mit PHPs eingebautem Server (mit
+// OYS_PHP_REF, siehe support/phpRef.ts); dazu, dass Fastify ungewöhnliche Werte nicht selbst mit 415 ablehnt (PHP liest
+// sie, z. B. beim Anmelden).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -12,6 +13,7 @@ import { join } from 'node:path';
 import { buildServer, phpBoundary, phpPostType, readBody } from '../src/server.js';
 import { makeTestCtx } from '../src/web/ctx.js';
 import { closePool } from '../src/db.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 
 const multipart = (boundary: string): string =>
@@ -71,7 +73,7 @@ function post(port: number, contentType: string, body: string): Promise<string> 
   });
 }
 
-test('form bodies are read for the same Content-Type values as in PHP', async () => {
+test('form bodies are read for the same Content-Type values as in PHP', { skip: PHP_SKIP }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-body-'));
   writeFileSync(join(dir, 'p.php'), '<?php echo json_encode($_POST, JSON_FORCE_OBJECT);');
   const port = await freePort();

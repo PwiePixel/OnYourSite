@@ -39,10 +39,10 @@ test('no way out of static/ and no secrets, however the address is written', asy
   const attacks = [
     '/static/%2e%2e/config.json', '/static/%2E%2E/config.json', '/static/uploads/%2e%2e/%2e%2e/config.json', '/static/..%2fconfig.json',
     '/static/%2e%2e%2fconfig.json', '/static/css/../../config.json', '/static/./../config.json', '/static//..//config.json',
-    '/static/%2e%2e/config.php', '/static/%2e%2e/lib/helpers.php', '/static/%2e%2e/app/src/config.ts', '/static/%2e%2e/.git/HEAD',
+    '/static/%2e%2e/config.php', '/static/%2e%2e/server/backup.sh', '/static/%2e%2e/app/src/config.ts', '/static/%2e%2e/.git/HEAD',
     '/static/%2e%2e/email/smtp.json', '/static/%2e%2e%2f%2e%2e%2fetc/passwd', '/static/%2e%2e/%2e%2e/%2e%2e/etc/passwd',
     '/static/..\\config.json', '/static/%5c..%5cconfig.json', '/static/%00/../config.json', '/robots.txt/../config.json',
-    '/%2e%2e/config.json', '/config.json', '/config.php', '/%63onfig.json', '/lib/helpers.php', '/%6Cib/helpers.php', '/.git/HEAD',
+    '/%2e%2e/config.json', '/config.json', '/config.php', '/%63onfig.json', '/server/backup.sh', '/%73erver/backup.sh', '/.git/HEAD',
     '/static/.htaccess', '/static/uploads/.htaccess', '/static/%2ehtaccess', '/app/src/config.ts', '/email/smtp.json',
   ];
   for (const path of attacks) {
@@ -55,8 +55,17 @@ test('no way out of static/ and no secrets, however the address is written', asy
 });
 
 test('denied folders and dotfiles answer 403, also when encoded', async () => {
-  for (const path of ['/lib/helpers.php', '/%6Cib/helpers.php', '/static/.htaccess', '/static/%2ehtaccess', '/config.php', '/.env', '/static/uploads/x.php']) {
+  for (const path of ['/server/install.sh', '/%73erver/install.sh', '/email/smtp.example.json', '/discord-bot/.env.example', '/app/package.json',
+    '/static/.htaccess', '/static/%2ehtaccess', '/config.php', '/.env', '/static/uploads/x.php']) {
     assert.equal((await get(path)).status, 403, path);
+  }
+});
+
+test('the folder names of the PHP version are ordinary addresses now', async () => {
+  // lib/, views/, cron/, tests/ und PHPMailer/ gibt es nicht mehr – keine Sperre, die 404-Seite der Website
+  for (const path of ['/lib/helpers.php', '/%6Cib/helpers.php', '/views/admin.php', '/cron/weekly_report.php', '/tests/unit.php', '/PHPMailer/src/SMTP.php']) {
+    const res = await get(path);
+    assert.deepEqual([res.status, res.headers['content-type']], [404, 'text/html; charset=UTF-8'], path);
   }
 });
 
@@ -144,8 +153,8 @@ test('dot segments and encoded dots are resolved before the rules, like Apache',
     assert.deepEqual(res.body, css, path);
   }
   // Nach dem Bereinigen gesperrt: 403 wie Apache
-  for (const path of ['/static/../config.php', '/static/../lib/helpers.php', '/static/../.env', '/static/uploads/../../config.php',
-    '/static/%2e%2e/config.json', '/%6Cib/helpers.php', '/static/%2ehtaccess', '/static/uploads/x.php/y', '/.well-known/x']) {
+  for (const path of ['/static/../config.php', '/static/../server/backup.sh', '/static/../.env', '/static/uploads/../../config.php',
+    '/static/%2e%2e/config.json', '/%73erver/backup.sh', '/static/%2ehtaccess', '/static/uploads/x.php/y', '/.well-known/x']) {
     const res = await get(path);
     assert.deepEqual([res.status, res.headers['content-type'], res.body.toString('latin1')], [403, ISO, FORBIDDEN], path);
   }
@@ -197,7 +206,7 @@ test('behind the proxy: locked paths answer 403 before the https redirect, which
   setConfigForTests({ ...base, scheme: 'https' });
   try {
     const xfp = { 'X-Forwarded-Proto': 'http' };
-    for (const path of ['/lib/helpers.php', '/config.php', '/.env', '/static/uploads/x.svg', '/cron/weekly_report.php']) {
+    for (const path of ['/server/install.sh', '/config.php', '/.env', '/static/uploads/x.svg', '/email/smtp.json']) {
       assert.equal((await get(path, xfp)).status, 403, path);
     }
     for (const [path, location] of [['/static/css/page.css', '/static/css/page.css'], ['/static/../robots.txt', '/robots.txt'],
