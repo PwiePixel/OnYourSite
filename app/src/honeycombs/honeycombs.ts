@@ -15,6 +15,7 @@ import { feature } from './features.js';
 import { shopPrice } from './catalogue.js';
 import { adminShopHandle } from './admin.js';
 import { reconcileNow } from './reconcile.js';
+import { audit } from './audit.js';
 
 export interface HcSettings {
   daily: number;
@@ -265,7 +266,8 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
           return 'That would take the balance below 0 (current: ' + (await hcBalance(userId, sql)) + ').';
         }
         if ((await credit(sql, userId, amount, 'admin', ref, note, adminId)) === null) return 'This was already booked – the form was sent twice.';
-        // Glocke nur, wenn gebucht wurde – in derselben Transaktion, also genau einmal
+        // Protokoll (nur Betrag, nie die Notiz) und Glocke nur, wenn gebucht wurde – in derselben Transaktion, also genau einmal
+        await audit(sql, adminId, 'grant', userId, '', { amount });
         await notify(userId, 'honeycombs', (amount > 0 ? '+' + amount + ' honeycombs from the team' : '−' + -amount + ' honeycombs (correction by the team)'), note, '/dashboard#honeycombs', { db: sql });
         return true;
       });

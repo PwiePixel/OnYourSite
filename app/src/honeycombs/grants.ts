@@ -16,6 +16,7 @@ import { grantUnlock, isActive, setPeriod, type EntRow } from './entitlements.js
 import { reconcileNow } from './reconcile.js';
 import { premiumReady } from './premium.js';
 import { audit } from './audit.js';
+import { poolDb } from './util.js';
 
 export type GrantResult = { ok: string } | { error: string };
 
@@ -41,6 +42,12 @@ async function userLabel(db: Db, uid: number): Promise<string | null> {
   const u = await db.one('SELECT full_name, email FROM users WHERE id = ?', [uid]);
   if (!u) return null;
   return phpStr(u.full_name ?? '') !== '' ? phpStr(u.full_name) : phpStr(u.email);
+}
+
+// Gibt es das Konto? Vor withAccount prüfen: die Sperre legt sonst für jede ID eine leere Zeile in hc_accounts an –
+// auch für eine, zu der es kein Konto gibt (unter der Sperre wird noch einmal gelesen)
+async function userExists(uid: number): Promise<boolean> {
+  return (await poolDb.value('SELECT 1 FROM users WHERE id = ?', [uid])) !== null;
 }
 
 // Gibt es die Buchung schon? (Groß/klein genau wie der eindeutige Schlüssel uq_entry)
@@ -87,6 +94,7 @@ export async function grantFeature(adminId: number, uid: number, key: string, mo
   const lot = lotOf(f, mode.lot);
   if (lot === null) return { error: 'This pack doesn’t exist.' };
   const text = mbSubstr(note, 0, 150);
+  if (!(await userExists(uid))) return { error: 'Please choose a user.' };
   const out = await withAccount(uid, async (db): Promise<GrantResult> => {
     const name = await userLabel(db, uid);
     if (name === null) return { error: 'Please choose a user.' };
@@ -150,6 +158,7 @@ export async function revokeFeature(adminId: number, uid: number, key: string, l
   if (!FORM_REF.test(formRef)) return { error: 'Please reload the page and try again.' };
   if (lot !== null && (!Number.isInteger(lot) || lot < 0 || lot > 9)) return { error: 'This pack doesn’t exist.' };
   const text = mbSubstr(note, 0, 150);
+  if (!(await userExists(uid))) return { error: 'Please choose a user.' };
   const out = await withAccount(uid, async (db): Promise<GrantResult> => {
     const name = await userLabel(db, uid);
     if (name === null) return { error: 'Please choose a user.' };

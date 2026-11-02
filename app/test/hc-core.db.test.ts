@@ -440,8 +440,10 @@ test('deleting an account removes every honeycomb row; the audit keeps only numb
   assert.deepEqual(await ledgerOf(7), []);
   assert.deepEqual(await entsOf(7), []);
   assert.equal(await account(7), undefined);
-  assert.deepEqual((await sql("SELECT admin_id, action, user_id, details FROM `DB`.hc_audit WHERE action = 'grant'")).map((r) => ({ ...r })),
+  // Die Zeile des gelöschten Kontos bleibt ohne Bezug; Zeilen anderer Konten (Geschenke oben) behalten ihren
+  assert.deepEqual((await sql("SELECT admin_id, action, user_id, details FROM `DB`.hc_audit WHERE action = 'grant' AND (user_id IS NULL OR user_id = 7)")).map((r) => ({ ...r })),
     [{ admin_id: 3, action: 'grant', user_id: null, details: '{"amount":5}' }]);
+  assert.equal(Number((await sql("SELECT COUNT(*) AS n FROM `DB`.hc_audit WHERE action = 'grant' AND user_id IS NOT NULL"))[0].n) > 0, true);
   // Andere Konten unberührt
   assert.ok((await ledgerOf(5)).length > 0 && (await entsOf(5)).length > 0);
 });

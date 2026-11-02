@@ -293,6 +293,33 @@ test('purchases tab: filters by option, user, date and status, refund forms only
   assert.ok(!xss.includes('<b>x</b>') && xss.includes('No purchases found.'));
 });
 
+test('give honeycombs writes one audit line (amount only) that the details list under team actions; a second send writes none', async () => {
+  const lines = async (): Promise<Array<Record<string, unknown>>> =>
+    (await sql("SELECT admin_id, target, details FROM `DB`.hc_audit WHERE action = 'grant' AND user_id = 8 ORDER BY id")).map((r) => ({ ...r }));
+  const before = await lines();
+  const form = { hc_action: 'grant', user_id: '8', amount: '12', note: 'Private note', grant_ref: randomHex(8) };
+  assert.ok(String(flash(await post(form)).ok).startsWith('+12 honeycombs for Lea.'));
+  assert.equal(flash(await post(form)).error, 'This was already booked – the form was sent twice.');
+  assert.ok(String(flash(await post({ ...form, amount: '-2', grant_ref: randomHex(8) })).ok).startsWith('−2 honeycombs for Lea.'));
+  assert.deepEqual((await lines()).slice(before.length), [{ admin_id: 3, target: '', details: '{"amount":12}' }, { admin_id: 3, target: '', details: '{"amount":-2}' }]);
+  const audit = section(await page('?hc_tab=users&hc_user=8'));
+  assert.match(audit.slice(audit.indexOf('id="hcUserAudit"')), /<li>[^<]* · Pixel Admin · grant · <\/li>/);
+});
+
+test('grants and removals for an account that doesn’t exist book nothing and leave no empty honeycomb account behind', async () => {
+  const accounts = await num('SELECT COUNT(*) FROM `DB`.hc_accounts');
+  const grant = await post({ hc_action: 'feature_grant', user_id: '4242', feature: 'code_page', mode: 'permanent', form_ref: randomHex(8) });
+  assert.equal(flash(grant).error, 'Please choose a user.');
+  const units = await post({ hc_action: 'feature_grant', user_id: '4243', feature: 'test_passes', mode: 'units', units: '1', form_ref: randomHex(8) });
+  assert.equal(flash(units).error, 'Please choose a user.');
+  const revoke = await post({ hc_action: 'feature_revoke', user_id: '4244', feature: 'code_page', lot: '', form_ref: randomHex(8), _confirmed: '1' });
+  assert.equal(flash(revoke).error, 'Please choose a user.');
+  assert.deepEqual(await grantFeature(3, 4245, 'code_page', { permanent: true }, ''), { error: 'Please choose a user.' });
+  assert.equal(await num('SELECT COUNT(*) FROM `DB`.hc_accounts WHERE user_id BETWEEN 4242 AND 4245'), 0);
+  assert.equal(await num('SELECT COUNT(*) FROM `DB`.hc_accounts'), accounts);
+  assert.equal(await num('SELECT COUNT(*) FROM `DB`.honeycomb_ledger WHERE user_id BETWEEN 4242 AND 4245'), 0);
+});
+
 test('grants at the same time: one form_ref books once, the bell rings once', async () => {
   const bellsBefore = await bells(7, 'unlock');
   const quantityBefore = Number((await ent(7, 'test_passes'))?.quantity ?? 0);
