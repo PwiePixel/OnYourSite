@@ -7,6 +7,7 @@ import { e } from '../html.js';
 import { cleanText, looksLikeSpam, mainUrl, pageDisplayUrl, validateEmail, type PageLike } from '../helpers.js';
 import { date, intval, mbStrlen, mbSubstr, phpStr, phpTrim, phpTruthy, time, type PhpArray } from '../php.js';
 import { clientKey, rateLimit } from '../web/security.js';
+import { notify } from '../notify/notify.js';
 import { pageSettings } from './pages.js';
 import { own } from './util.js';
 
@@ -105,8 +106,5 @@ export async function storeMessage(page: Row, post: PhpArray): Promise<number> {
   return id;
 }
 
-// oys_notify(): Eintrag für die Glocke im Dashboard
-export async function notify(userId: number, type: string, title: string, body = '', link = ''): Promise<void> {
-  await exec('INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)',
-    [userId, type, mbSubstr(title, 0, 190), mbSubstr(body, 0, 255), link, date('Y-m-d H:i:s')]);
-}
+// oys_notify(): Eintrag für die Glocke im Dashboard – geschrieben nur noch von notify/notify.ts
+export { notify } from '../notify/notify.js';

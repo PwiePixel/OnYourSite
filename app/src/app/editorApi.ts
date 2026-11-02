@@ -2,11 +2,11 @@
 // Die Reihenfolge der Prüfungen ist die von PHP: CSRF vor dem JSON, Seiten-ID vor allem anderen (auch vor Code-Seite
 // und Upload), dann die Aktion. Jede Antwort endet mit ctx.json() (= oys_json(); exit).
 import type { Ctx } from '../web/ctx.js';
-import { exec, q, value, type Param, type Row } from '../db.js';
+import { exec, type Param, type Row } from '../db.js';
 import { config } from '../config.js';
 import { csrfCheck, csrfFromRequest, rateLimit } from '../web/security.js';
-import { decryptData, encryptData } from '../crypto.js';
-import { cleanText, normalizeSlug, slugProblem, timeAgo, uploadUrl } from '../helpers.js';
+import { encryptData } from '../crypto.js';
+import { cleanText, normalizeSlug, slugProblem, uploadUrl } from '../helpers.js';
 import { phpJson } from '../html.js';
 import { date, intval, phpStr, phpTruthy, strtolower, strtotime, time, type PhpArray } from '../php.js';
 import { IMAGE_EXTS, blockNormalize, validUpload } from '../content/blocks.js';
@@ -22,6 +22,7 @@ import { hcForEditor, hcSettings, hcSpend } from '../honeycombs/honeycombs.js';
 import { phpFloatString } from '../community/json.js';
 import { CODE_MAX_FILES, codeCreate, codeEditorState, codeFileCount, codeSave, codeSite, codeUnlocked } from '../code/sites.js';
 import { currentPage, hasPremium } from './context.js';
+import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
 
 // is_scalar()
@@ -118,6 +119,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   if (action === 'honeycombs') {
     ctx.json({ ok: true, honeycombs: await hcForEditor(userId) });
   }
+  // Glocke, Nachrichten und Termine ebenso (auch ohne gezeigte Profilseite)
+  await accountApi(ctx, userId, action, isPost, input);
   if (action.startsWith('code')) await codeApi(ctx, user, action, isPost, input);
 
   // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
@@ -269,75 +272,6 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       let range = intval(ctx.get.range ?? 7);
       if (![7, 30, 90, 0].includes(range)) range = 7;
       ctx.json({ ok: true, stats: await stats(page, range) });
-    }
-
-    case 'messages': {
-      const messages = (await q('SELECT m.*, p.slug FROM messages m LEFT JOIN pages p ON p.id = m.page_id WHERE m.user_id = ? ORDER BY m.created_at DESC, m.id DESC LIMIT 200', [userId]))
-        .map((m) => {
-          const created = strtotime(phpStr(m.created_at));
-          return {
-            id: intval(m.id),
-            page: m.slug,
-            name: decryptData(m.name as string),
-            email: decryptData(m.email as string),
-            message: decryptData(m.message as string),
-            read: phpTruthy(m.is_read),
-            date: date('M j, Y, H:i', created === false ? 0 : created),
-            ago: timeAgo(m.created_at),
-          };
-        });
-      const bookings = (await q('SELECT * FROM user_bookings WHERE user_id = ? ORDER BY booking_date DESC, booking_time DESC LIMIT 200', [userId]))
-        .map((b) => {
-          const day = phpTruthy(b.booking_date) ? strtotime(phpStr(b.booking_date)) : 0;
-          return {
-            id: intval(b.id),
-            name: decryptData((b.guest_name ?? '') as string),
-            email: decryptData((b.guest_email ?? '') as string),
-            date: phpTruthy(b.booking_date) ? date('M j, Y', day === false ? 0 : day) : '',
-            time: b.booking_time,
-            // Vergleich als Text (Y-m-d)
-            past: phpTruthy(b.booking_date) && phpStr(b.booking_date) < date('Y-m-d'),
-          };
-        });
-      ctx.json({ ok: true, messages, bookings });
-    }
-
-    case 'message': {
-      if (!isPost) break;
-      const id = intval(inp('id') ?? 0);
-      const act = phpStr(inp('action') ?? '');
-      if (act === 'delete') {
-        await exec('DELETE FROM messages WHERE id = ? AND user_id = ?', [id, userId]);
-      } else if (act === 'read' || act === 'unread') {
-        await exec('UPDATE messages SET is_read = ? WHERE id = ? AND user_id = ?', [act === 'read' ? 1 : 0, id, userId]);
-      }
-      ctx.json({ ok: true });
-    }
-
-    case 'booking-delete': {
-      if (!isPost) break;
-      await exec('DELETE FROM user_bookings WHERE id = ? AND user_id = ?', [intval(inp('id') ?? 0), userId]);
-      ctx.json({ ok: true });
-    }
-
-    case 'notifications': {
-      const items = (await q('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 15', [userId])).map((n) => ({
-        id: intval(n.id),
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        read: phpTruthy(n.is_read),
-        ago: timeAgo(n.created_at),
-      }));
-      const unread = intval(await value('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0', [userId]));
-      const messagesUnread = intval(await value('SELECT COUNT(*) FROM messages WHERE user_id = ? AND is_read = 0', [userId]));
-      ctx.json({ ok: true, unread, messages_unread: messagesUnread, items });
-    }
-
-    case 'notifications-read': {
-      if (!isPost) break;
-      await exec('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [userId]);
-      ctx.json({ ok: true });
     }
 
     case 'weekly': {

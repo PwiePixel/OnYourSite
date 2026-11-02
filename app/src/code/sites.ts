@@ -201,13 +201,14 @@ export async function codeWrite(site: Row, files: CodeFileInput, deleted: unknow
 }
 
 // oys_code_delete_user(): Konto gelöscht – Code-Seite, Dateien und Honigwaben entfernen
-export async function codeDeleteUser(userId: number): Promise<void> {
-  const site = await codeSite(userId);
+// sql: die Verbindung des Aufrufers (Konto löschen: alles in einer Transaktion)
+export async function codeDeleteUser(userId: number, sql: Db = poolDb): Promise<void> {
+  const site = await sql.one('SELECT * FROM code_sites WHERE user_id = ? LIMIT 1', [userId]);
   if (site) {
-    await poolDb.exec('DELETE FROM code_files WHERE site_id = ?', [intval(site.id)]);
-    await poolDb.exec('DELETE FROM code_sites WHERE id = ?', [intval(site.id)]);
+    await sql.exec('DELETE FROM code_files WHERE site_id = ?', [intval(site.id)]);
+    await sql.exec('DELETE FROM code_sites WHERE id = ?', [intval(site.id)]);
   }
-  await poolDb.exec('DELETE FROM honeycomb_ledger WHERE user_id = ?', [userId]);
+  await sql.exec('DELETE FROM honeycomb_ledger WHERE user_id = ?', [userId]);
 }
 
 // oys_code_used_uploads(): Uploads, die in den Dateien der Code-Seite vorkommen (zählen nicht als ungenutzt)

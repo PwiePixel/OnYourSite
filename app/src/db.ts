@@ -30,6 +30,17 @@ export interface Db {
 export class DbUnavailableError extends Error {}
 // GET_LOCK hat nicht geklappt (nur bei onBusy 'fail')
 export class LockBusyError extends Error {}
+// Nur mit OYS_DB_STRICT=1 (Tests): Code, der schon eine Verbindung hält, will eine zweite aus dem Pool
+export class NestedConnectionError extends Error {}
+
+// Testschalter (im Betrieb nicht gesetzt): OYS_DB_POOL_SIZE = Größe des Pools (1 deckt verschachtelte Anfragen auf,
+// die bei einem vollen Pool hängen würden), OYS_DB_STRICT=1 = eine zweite Verbindung im selben Ablauf wirft sofort
+const strictDb = (): boolean => process.env.OYS_DB_STRICT === '1';
+function poolSize(): number {
+  const env = process.env.OYS_DB_POOL_SIZE;
+  if (env !== undefined && /^[1-9][0-9]?$/.test(env)) return Number(env);
+  return configInt('db.pool', 10);
+}
 
 let pool: Pool | null = null;
 
@@ -59,7 +70,14 @@ function currentOffset(): string {
   return tzCache.offset;
 }
 
+// Der Pool selbst. Wer ihn direkt benutzt, umgeht die feste Verbindung des Ablaufs – im strengen Modus ist das
+// innerhalb eines Abschnitts ein Fehler (sonst wartet der Abschnitt womöglich auf sich selbst).
 export function getPool(): Pool {
+  if (strictDb()) assertNoHeldConnection();
+  return poolInstance();
+}
+
+function poolInstance(): Pool {
   if (pool) return pool;
   const host = configString('db.host', 'localhost');
   pool = mysql.createPool({
@@ -72,7 +90,7 @@ export function getPool(): Pool {
     database: configString('db.name', ''),
     // wie PDO mit charset=utf8mb4
     charset: 'UTF8MB4_GENERAL_CI',
-    connectionLimit: configInt('db.pool', 10),
+    connectionLimit: poolSize(),
     enableKeepAlive: true,
     dateStrings: true,
     supportBigNumbers: true,
@@ -98,9 +116,10 @@ const UNAVAILABLE = new Set(['ECONNREFUSED', 'ENOENT', 'ETIMEDOUT', 'EHOSTUNREAC
 
 // Verbindung holen und die Zeitzone prüfen (nach einer Zeitumstellung neu setzen)
 async function acquire(): Promise<PoolConnection> {
+  if (strictDb()) assertNoHeldConnection();
   let conn: PoolConnection;
   try {
-    conn = await getPool().getConnection();
+    conn = await poolInstance().getConnection();
   } catch (err) {
     const code = (err as { code?: string }).code ?? '';
     if (UNAVAILABLE.has(code)) throw new DbUnavailableError(`database unavailable (${code})`);
@@ -153,6 +172,15 @@ interface Pinned {
   released: boolean;
 }
 const pinned = new AsyncLocalStorage<Pinned>();
+// Wer gerade eine Verbindung hält – auch innerhalb von outsidePinned() (nur für den strengen Modus)
+const holding = new AsyncLocalStorage<Pinned>();
+
+function assertNoHeldConnection(): void {
+  const held = holding.getStore();
+  if (held && !held.released) {
+    throw new NestedConnectionError('a second pool connection was requested while this code already holds one');
+  }
+}
 
 // Eine Verbindung für mehrere Schritte (FOR UPDATE, Sperren, LAST_INSERT_ID …); verschachtelt: dieselbe Verbindung
 export async function withConnection<T>(fn: (db: Db, conn: PoolConnection) => Promise<T>): Promise<T> {
@@ -162,7 +190,7 @@ export async function withConnection<T>(fn: (db: Db, conn: PoolConnection) => Pr
   const conn = await acquire();
   const store: Pinned = { db: facade(conn), conn, inTransaction: false, released: false };
   try {
-    return await pinned.run(store, () => fn(store.db, conn));
+    return await holding.run(store, () => pinned.run(store, () => fn(store.db, conn)));
   } finally {
     store.released = true;
     conn.release();

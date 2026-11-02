@@ -1,6 +1,14 @@
 // Datenbank-Schema und automatische Migration (wie lib/schema.php). Läuft beim Start einmal auf einer eigenen
 // Verbindung (GET_LOCK gilt je Verbindung). Alte Tabellen werden NICHT gelöscht. Die Versionsnummer steht wie bisher
 // in oys_meta.schema_version – PHP hat bis 4 gezählt, die Node-Version macht dort weiter.
+//
+// Schritte (ab 6: Funktionen nach dem Umstieg): je Schritt eine Funktion `async function name(conn)` hier in dieser Datei
+// und eine Konstante `export const V_NAME = n` – n ist beim Zusammenführen die nächste freie Zahl. Neue Schritte
+// kommen ans Ende von STEPS; ensureSchema() führt jeden Schritt mit version < V_NAME genau in dieser Reihenfolge aus und
+// speichert die Version erst nach dem letzten. Jede Anweisung eines Schritts muss deshalb wiederholbar sein
+// (CREATE TABLE IF NOT EXISTS, addColumn, addIndex, dropIndex …). Der Kopfkommentar eines Schritts nennt die
+// Schritte, die er braucht. Tests benutzen nur die Konstanten, nie Zahlen. Benachrichtigungen schreibt ein Schritt nur
+// über notify(…, { db: conn }). Hintergrunddienste migrieren nie – sie warten mit schemaAtLeast(V_…) auf ihren Schritt.
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { withConnection } from './db.js';
 import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower } from './php.js';
@@ -8,9 +16,14 @@ import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
 import { cleanCss } from './css.js';
 
-// 1: Profilseiten + Übernahme der alten Profile, 2: Updates, Roadmap, Discord, 3: Honigwaben und Code-Seiten,
-// 4: Discord-Bot (Vorschläge, Support-Tickets), 5: Sitzungen in der Datenbank (Node-Version)
-export const SCHEMA_VERSION = 5;
+// Stand der portierten Seite (Release 3.0 migriert genau bis hier)
+export const V_PAGES = 1; // Profilseiten + Übernahme der alten Profile
+export const V_UPDATES = 2; // Updates, Roadmap, Discord
+export const V_CODE_PAGES = 3; // Honigwaben und Code-Seiten
+export const V_COMMUNITY = 4; // Discord-Bot (Vorschläge, Support-Tickets)
+export const V_SESSIONS = 5; // Sitzungen in der Datenbank (Node-Version)
+// Funktionen nach dem Umstieg (Nummer = Reihenfolge des Zusammenführens)
+export const V_NOTIFICATIONS_INDEX = 6; // Glocke: neueste zuerst und „gelesen bis“
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -24,6 +37,32 @@ async function run(conn: PoolConnection, sql: string, params: unknown[] = []): P
   return r;
 }
 
+export interface SchemaStep {
+  version: number;
+  name: string;
+  run: (conn: PoolConnection) => Promise<void>;
+}
+
+// Alle Schritte in Merge-Reihenfolge (aufsteigende Versionen, keine doppelt)
+const STEPS: readonly SchemaStep[] = [
+  { version: V_PAGES, name: 'pages', run: async (conn) => {
+    await createTables(conn);
+    await migrateLegacyUsers(conn);
+  } },
+  { version: V_UPDATES, name: 'updates', run: createUpdateTables },
+  { version: V_CODE_PAGES, name: 'codePages', run: createCodeTables },
+  { version: V_COMMUNITY, name: 'community', run: createCommunityTables },
+  { version: V_SESSIONS, name: 'sessions', run: createSessionTable },
+  { version: V_NOTIFICATIONS_INDEX, name: 'notificationsIndex', run: notificationsIndex },
+];
+
+for (let i = 1; i < STEPS.length; i++) {
+  if (!(STEPS[i].version > STEPS[i - 1].version)) throw new Error(`schema step ${STEPS[i].name} is out of order`);
+}
+
+// Höchster Schritt = Version einer vollständig migrierten Datenbank
+export const SCHEMA_VERSION = STEPS[STEPS.length - 1].version;
+
 // Fehlt die Tabelle oder die Zeile, gilt Version 0
 export async function schemaVersion(conn: PoolConnection): Promise<number> {
   try {
@@ -32,6 +71,24 @@ export async function schemaVersion(conn: PoolConnection): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+// Nur lesen: ist die Datenbank mindestens auf diesem Schritt? (für Hintergrunddienste, die nie selbst migrieren)
+export async function schemaAtLeast(version: number): Promise<boolean> {
+  return withConnection(async (_db, conn) => (await schemaVersion(conn)) >= version);
+}
+
+// Schritte, die eine Datenbank auf diesem Stand noch braucht (rein, ohne Datenbank)
+export function stepsAfter(version: number, upTo: number = SCHEMA_VERSION): Array<{ version: number; name: string }> {
+  return STEPS.filter((s) => s.version > version && s.version <= upTo).map((s) => ({ version: s.version, name: s.name }));
+}
+
+// Für `cli.js migrate --pending` (install.sh --update sichert vorher, wenn etwas aussteht): aktueller Stand der
+// Datenbank, Zielversion dieses Codes und die offenen Schritte. current > target heißt: die Datenbank ist neuer als
+// der Code (nichts zu tun, aber auffällig).
+export async function pendingSteps(): Promise<{ current: number; target: number; steps: Array<{ version: number; name: string }> }> {
+  const current = await withConnection(async (_db, conn) => schemaVersion(conn));
+  return { current, target: SCHEMA_VERSION, steps: stepsAfter(current) };
 }
 
 // Einmal je Prozess: beim Start und – falls die Datenbank da nicht erreichbar war – mit der nächsten Anfrage
@@ -50,33 +107,69 @@ export async function ensureSchemaOnce(): Promise<void> {
   await schemaTry;
 }
 
-export async function ensureSchema(): Promise<void> {
+// upTo (nur für Tests): bis zu diesem Schritt migrieren, z. B. { upTo: V_FEATURE - 1 } als Ausgangsstand eines Tests
+export async function ensureSchema(opts: { upTo?: number } = {}): Promise<void> {
+  const target = Math.min(opts.upTo ?? SCHEMA_VERSION, SCHEMA_VERSION);
   // Eigene Verbindung mit der Zeitzone der Seite (TIMESTAMP-Werte der alten Profile werden übernommen)
   await withConnection(async (_db, conn) => {
-    if ((await schemaVersion(conn)) >= SCHEMA_VERSION) return;
+    if ((await schemaVersion(conn)) >= target) return;
     // Nur ein Prozess migriert gleichzeitig
     await conn.query("SELECT GET_LOCK('oys_migrate', 60)");
     try {
       const version = await schemaVersion(conn);
-      if (version >= SCHEMA_VERSION) return;
+      if (version >= target) return;
       // Jeder Schritt läuft genau einmal
-      if (version < 1) {
-        await createTables(conn);
-        await migrateLegacyUsers(conn);
+      for (const step of STEPS) {
+        if (version < step.version && step.version <= target) await step.run(conn);
       }
-      if (version < 2) await createUpdateTables(conn);
-      if (version < 3) await createCodeTables(conn);
-      if (version < 4) await createCommunityTables(conn);
-      if (version < 5) await createSessionTable(conn);
-      await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)]);
+      await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)", [String(target)]);
     } finally {
       await conn.query("SELECT RELEASE_LOCK('oys_migrate')");
     }
   });
 }
 
-async function addColumn(conn: PoolConnection, table: string, column: string, definition: string): Promise<void> {
-  const r = await rows(conn, `SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
+// ---------------------------------------------------------------- Hilfen für wiederholbare Schritte
+
+// Namen von Tabellen, Spalten und Indizes stehen im Code, nie aus Eingaben – trotzdem nur einfache Namen
+function ident(name: string): string {
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) throw new Error(`invalid identifier for a schema step: ${name}`);
+  return name;
+}
+
+// Tabelle vorhanden? (z. B. Rückfüllen aus der Tabelle eines anderen Schritts, falls es sie schon gibt)
+export async function hasTable(conn: PoolConnection, table: string): Promise<boolean> {
+  return (await rows(conn, 'SHOW TABLES LIKE ?', [ident(table).replace(/_/g, '\\_')])).length > 0;
+}
+
+// Index vorhanden?
+export async function hasIndex(conn: PoolConnection, table: string, name: string): Promise<boolean> {
+  return (await rows(conn, `SHOW INDEX FROM \`${ident(table)}\` WHERE Key_name = ?`, [ident(name)])).length > 0;
+}
+
+// Index anlegen, falls es ihn noch nicht gibt. definition nennt den Namen selbst, z. B. 'KEY idx_user_id (user_id, id)'
+// oder 'UNIQUE KEY uq_slug (slug)' – sonst wäre der Schritt nicht wiederholbar.
+export async function addIndex(conn: PoolConnection, table: string, name: string, definition: string): Promise<void> {
+  if (!new RegExp(`^(UNIQUE |FULLTEXT )?(KEY|INDEX) \`?${ident(name)}\`? \\(`, 'i').test(definition)) {
+    throw new Error(`index definition must name ${name}: ${definition}`);
+  }
+  if (!(await hasIndex(conn, table, name))) await run(conn, `ALTER TABLE \`${ident(table)}\` ADD ${definition}`);
+}
+
+// Index entfernen, falls vorhanden
+export async function dropIndex(conn: PoolConnection, table: string, name: string): Promise<void> {
+  if (await hasIndex(conn, table, name)) await run(conn, `ALTER TABLE \`${ident(table)}\` DROP INDEX \`${ident(name)}\``);
+}
+
+// Spalte vorhanden und NOT NULL? (z. B. ein MODIFY … NULL nur einmal ausführen)
+export async function columnIsNotNull(conn: PoolConnection, table: string, column: string): Promise<boolean> {
+  const r = await rows(conn, `SHOW COLUMNS FROM \`${ident(table)}\` WHERE Field = ?`, [ident(column)]);
+  return r.length > 0 && r[0].Null === 'NO';
+}
+
+// Spalte anlegen, falls es sie noch nicht gibt
+export async function addColumn(conn: PoolConnection, table: string, column: string, definition: string): Promise<void> {
+  const r = await rows(conn, `SHOW COLUMNS FROM \`${ident(table)}\` WHERE Field = ?`, [ident(column)]);
   if (!r.length) await run(conn, `ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
 }
 
@@ -412,6 +505,12 @@ async function createSessionTable(conn: PoolConnection): Promise<void> {
         last_seen INT UNSIGNED NOT NULL,
         KEY idx_seen (last_seen)
     ) ${OPTS}`);
+}
+
+// V_NOTIFICATIONS_INDEX (braucht nur die Tabelle aus V_PAGES): Index für die Glocke – die letzten Einträge eines
+// Kontos und „gelesen bis id“. idx_user (user_id, is_read) bleibt für die Zahl der ungelesenen.
+async function notificationsIndex(conn: PoolConnection): Promise<void> {
+  await addIndex(conn, 'notifications', 'idx_user_id', 'KEY idx_user_id (user_id, id)');
 }
 
 type Seed = [string | null, string, string, string, string];

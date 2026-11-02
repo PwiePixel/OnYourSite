@@ -9,7 +9,7 @@ import { ROOT_DIR, loadConfig, setConfigForTests, configString, type ConfigData 
 import { closePool } from '../src/db.js';
 import { encryptData } from '../src/crypto.js';
 import { strtotime, time } from '../src/php.js';
-import { ensureSchema, SCHEMA_VERSION } from '../src/schema.js';
+import { ensureSchema, SCHEMA_VERSION, V_SESSIONS } from '../src/schema.js';
 
 const BASE = loadConfig();
 const DBS = { phpFresh: 'oys_test_schema_pf', nodeFresh: 'oys_test_schema_nf', phpLegacy: 'oys_test_schema_pl', nodeLegacy: 'oys_test_schema_nl' };
@@ -70,11 +70,12 @@ function phpEnsure(db: string): void {
   assert.equal(execFileSync('php', ['-r', script], { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR }).toString(), 'ok');
 }
 
-async function nodeEnsure(db: string): Promise<void> {
+// upTo: bis zu diesem Schritt (der Vergleich mit PHP gilt für den Stand der portierten Seite, V_SESSIONS)
+async function nodeEnsure(db: string, upTo?: number): Promise<void> {
   setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: db } });
   await closePool();
   try {
-    await ensureSchema();
+    await ensureSchema(upTo === undefined ? {} : { upTo });
   } finally {
     await closePool();
     setConfigForTests(BASE);
@@ -130,7 +131,7 @@ async function assertSame(phpDb: string, nodeDb: string): Promise<void> {
   const meta = async (db: string) => (await dump(db, 'oys_meta')).filter((r) => (r as { meta_key: string }).meta_key !== 'schema_version');
   assert.deepEqual(await meta(nodeDb), await meta(phpDb));
   assert.equal(await version(phpDb), '4');
-  assert.equal(await version(nodeDb), String(SCHEMA_VERSION));
+  assert.equal(await version(nodeDb), String(V_SESSIONS));
 }
 
 before(async () => {
@@ -150,7 +151,7 @@ test('a fresh install creates the same tables and seeds as PHP', async () => {
   await freshDb(DBS.phpFresh, false);
   await freshDb(DBS.nodeFresh, false);
   phpEnsure(DBS.phpFresh);
-  await nodeEnsure(DBS.nodeFresh);
+  await nodeEnsure(DBS.nodeFresh, V_SESSIONS);
   await assertSame(DBS.phpFresh, DBS.nodeFresh);
   assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
 });
@@ -159,7 +160,7 @@ test('old profiles are taken over exactly like PHP does it', async () => {
   await freshDb(DBS.phpLegacy, true);
   await freshDb(DBS.nodeLegacy, true);
   phpEnsure(DBS.phpLegacy);
-  await nodeEnsure(DBS.nodeLegacy);
+  await nodeEnsure(DBS.nodeLegacy, V_SESSIONS);
   await assertSame(DBS.phpLegacy, DBS.nodeLegacy);
   // Stichproben: Seiten nur für Nutzer mit Adresse, „Story“ nach den Links bei bento-grid, fremde Adressen im CSS entfernt
   const pages = (await dump(DBS.nodeLegacy, 'pages')) as Array<Record<string, unknown>>;
@@ -179,4 +180,16 @@ test('Node upgrades a database PHP has migrated, and a second run changes nothin
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.phpLegacy);
   assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t))), before);
+});
+
+test('the feature steps give a database PHP installed the same tables as a fresh Node install', async () => {
+  // Beide bis zum letzten Schritt: PHP-Neuinstallation (Version 4) + Node gegen Node allein
+  await nodeEnsure(DBS.phpFresh);
+  await nodeEnsure(DBS.nodeFresh);
+  assert.equal(await version(DBS.phpFresh), String(SCHEMA_VERSION));
+  assert.equal(await version(DBS.nodeFresh), String(SCHEMA_VERSION));
+  const all = await tables(DBS.nodeFresh);
+  assert.deepEqual(await tables(DBS.phpFresh), all);
+  for (const t of all) assert.equal(await ddl(DBS.phpFresh, t), await ddl(DBS.nodeFresh, t), `table ${t}`);
+  assert.match(await ddl(DBS.nodeFresh, 'notifications'), /KEY `idx_user_id` \(`user_id`,`id`\)/);
 });

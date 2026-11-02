@@ -14,7 +14,8 @@ import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
-import { deleteUser, resetPassword, toggleAdmin } from './users.js';
+import { resetPassword, toggleAdmin } from './users.js';
+import { deleteAccount } from './accountDeletion.js';
 import { emailTemplates, ensureEmailDir, saveSmtp, sendNewsletter, smtpConfig } from './newsletter.js';
 import { adminView, CutOffPage, type AdminViewData } from './views/admin.js';
 import { adminStorageData, adminStorageView } from './views/storage.js';
@@ -84,8 +85,13 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     if (sameId(id, session.get('user_id'))) {
       session.set('admin_error', 'You cannot delete your own admin account!');
     } else {
-      await deleteUser(id);
-      session.set('admin_success', 'User successfully deleted.');
+      try {
+        await deleteAccount(ctx, id);
+        session.set('admin_success', 'User successfully deleted.');
+      } catch {
+        // Alles zurückgerollt (Grund steht im Protokoll)
+        session.set('admin_error', 'The user couldn’t be deleted – please try again.');
+      }
     }
     ctx.redirect('/admin');
   }

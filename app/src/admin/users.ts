@@ -1,32 +1,12 @@
 // Admin: Konten löschen, Admin-Rechte umschalten, Passwort neu setzen (views/admin.php, Nutzerverwaltung)
-import { unlinkSync } from 'node:fs';
 import { exec, value, type Param } from '../db.js';
 import { passwordHash } from '../crypto.js';
 import { phpTruthy } from '../php.js';
-import { deletePage, userPages } from '../content/pages.js';
-import { codeDeleteUser } from '../code/sites.js';
-import { userUploadFiles } from '../content/uploads.js';
-import { uploadPath } from '../content/storage.js';
+import { deleteAccount } from './accountDeletion.js';
 
-// Konto mit allem löschen: Seiten (samt Blöcken, Statistik, Nachrichten und Dateien), Benachrichtigungen, alte
-// Tabellen, Code-Seite und Honigwaben, übrige Uploads, zuletzt das Konto. Community-Daten bleiben (wie in PHP).
+// Konto mit allem löschen – alles oder nichts (accountDeletion.ts). Wirft, wenn nichts gelöscht werden konnte.
 export async function deleteUser(id: number): Promise<void> {
-  for (const page of await userPages(id)) {
-    await deletePage(page);
-  }
-  for (const table of ['notifications', 'messages', 'user_links', 'user_bookings', 'user_certificates']) {
-    await exec(`DELETE FROM ${table} WHERE user_id = ?`, [id]);
-  }
-  await codeDeleteUser(id);
-  // Was danach noch im Upload-Ordner liegt (z. B. Bilder der Code-Seite), gehört niemandem mehr
-  for (const name of userUploadFiles(id).keys()) {
-    try {
-      unlinkSync(uploadPath(name));
-    } catch {
-      // wie @unlink: Fehler still übergehen
-    }
-  }
-  await exec('DELETE FROM users WHERE id = ?', [id]);
+  await deleteAccount(null, id);
 }
 
 // Admin-Rolle umschalten; ein unbekanntes Konto gilt als „kein Admin“ (wird also „befördert“, ändert aber nichts).

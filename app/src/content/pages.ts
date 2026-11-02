@@ -2,7 +2,7 @@
 // Eigenes CSS (oys_clean_css, oys_css_unescape, oys_css_external) steht in src/css.ts.
 import { unlinkSync } from 'node:fs';
 import type { ResultSetHeader } from 'mysql2/promise';
-import { q, one, exec, value, transaction, type Param, type Row } from '../db.js';
+import { q, one, exec, value, transaction, type Db, type Param, type Row } from '../db.js';
 import { cleanCss } from '../css.js';
 import { cleanText, cleanUrl, pageUrl, pageUrls, type PageLike } from '../helpers.js';
 import { safeEqual } from '../crypto.js';
@@ -431,18 +431,26 @@ export async function cleanupFiles(userId: number, candidates: readonly unknown[
   }
 }
 
-// oys_delete_page(): Seite mit Blöcken, Statistik und Nachrichten löschen, danach ungenutzte Dateien
-export async function deletePage(page: Row): Promise<void> {
+// oys_delete_page(): Seite mit Blöcken, Statistik und Nachrichten löschen, danach ungenutzte Dateien.
+// Mit db (z. B. beim Löschen eines Kontos): nur die Zeilen, auf dieser Verbindung und ohne eigene Transaktion – die
+// Dateien der Seite kommen zurück, der Aufrufer räumt sie nach seinem Commit mit cleanupFiles() auf.
+export async function deletePage(page: Row, db?: Db): Promise<unknown[]> {
   const id = intval(page.id);
   const files = pageFiles(page, await loadBlocks(id));
-  await transaction(async (conn) => {
-    await conn.query('DELETE FROM block_clicks_daily WHERE page_id = ?', [id]);
-    await conn.query('DELETE FROM stats_daily WHERE page_id = ?', [id]);
-    await conn.query('DELETE FROM page_blocks WHERE page_id = ?', [id]);
-    await conn.query('DELETE FROM messages WHERE page_id = ?', [id]);
-    await conn.query('DELETE FROM pages WHERE id = ?', [id]);
-  });
+  const rows = async (sql: Db): Promise<void> => {
+    await sql.exec('DELETE FROM block_clicks_daily WHERE page_id = ?', [id]);
+    await sql.exec('DELETE FROM stats_daily WHERE page_id = ?', [id]);
+    await sql.exec('DELETE FROM page_blocks WHERE page_id = ?', [id]);
+    await sql.exec('DELETE FROM messages WHERE page_id = ?', [id]);
+    await sql.exec('DELETE FROM pages WHERE id = ?', [id]);
+  };
+  if (db) {
+    await rows(db);
+    return files;
+  }
+  await transaction(async (_conn, sql) => rows(sql));
   await cleanupFiles(intval(page.user_id), files);
+  return files;
 }
 
 // oys_sync_username(): hält users.username (für Admin & alte Mail-Vorlagen) auf der ersten Seite
