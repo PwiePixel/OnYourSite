@@ -247,8 +247,9 @@ export interface PageSettings {
   auto_incident: number; // 0 = aus, 300, 900
   notify_auto: boolean;
   alerts: { owner: boolean; admins: boolean; events: AlertEvent[] };
-  // nur OnYourSites eigene Seite: Kanäle des Bots (aus seinem Bericht gewählt)
-  bot?: { status_channel_id: string; alerts_channel_id: string };
+  // nur OnYourSites eigene Seite: Kanäle des Bots (aus seinem Bericht gewählt). saved = vom Admin gewählt (dann gilt ''
+  // als „aus“); sonst gelten die Vorschläge aus dem Bericht des Bots (#status, #alerts vom Installer)
+  bot?: { status_channel_id: string; alerts_channel_id: string; saved: boolean };
 }
 
 export function pageSettingsDefaults(): PageSettings {
@@ -308,7 +309,11 @@ export function statusPageSettings(row: { settings?: unknown; is_system?: unknow
   };
   if (row && (row.is_system === 1 || row.is_system === '1' || row.is_system === true)) {
     const bot = field(data, 'bot');
-    s.bot = { status_channel_id: snowflake(field(bot, 'status_channel_id')), alerts_channel_id: snowflake(field(bot, 'alerts_channel_id')) };
+    s.bot = {
+      status_channel_id: snowflake(field(bot, 'status_channel_id')),
+      alerts_channel_id: snowflake(field(bot, 'alerts_channel_id')),
+      saved: field(bot, 'saved') === true,
+    };
   }
   return s;
 }

@@ -1,8 +1,9 @@
 'use strict';
-// Bericht an die Webseite (POST /_/bot/hello): Version, Funktionen, wie der Bot läuft, der Server, alle Text-,
-// Ankündigungs- und Forenkanäle mit den eigenen Rechten (ohne die privaten Ticket-Kanäle), aktive Threads (ohne die
-// Vorschläge), Rollen und der Kanal #updates. Daraus wählt die Webseite, wo Updates erscheinen. Der Bericht bleibt
-// unter 48 KB: erst fallen die Threads weg, dann Kanäle, in denen der Bot nicht posten darf, dann der Rest der Liste.
+// Bericht an die Webseite (POST /_/bot/hello): Version, Funktionen, wie der Bot läuft, die Verbindung zu Discord
+// (gateway: bereit, Ping), der Server, alle Text-, Ankündigungs- und Forenkanäle mit den eigenen Rechten (ohne die
+// privaten Ticket-Kanäle), aktive Threads (ohne die Vorschläge), Rollen und die Kanäle #updates, #status und #alerts.
+// Daraus wählt die Webseite, wo Updates, Vorfälle und Meldungen ans Team erscheinen. Der Bericht bleibt unter 48 KB:
+// erst fallen die Threads weg, dann Kanäle, in denen der Bot nicht posten darf, dann der Rest der Liste.
 const { ChannelType, Events, PermissionFlagsBits: P } = require('discord.js');
 const { version } = require('../package.json');
 
@@ -26,7 +27,13 @@ function byPosition(a, b) {
   return (a.rawPosition || 0) - (b.rawPosition || 0) || String(a.id).localeCompare(String(b.id));
 }
 
-function buildReport(guild, me, cfg, features) {
+// Verbindung zu Discord: bereit und der letzte Ping (vor dem ersten Herzschlag -1 → 0)
+function gatewayOf(client) {
+  const ping = client && client.ws ? Number(client.ws.ping) : NaN;
+  return { ready: Boolean(client && typeof client.isReady === 'function' && client.isReady()), ping_ms: Number.isFinite(ping) && ping > 0 ? Math.round(ping) : 0 };
+}
+
+function buildReport(guild, me, cfg, features, gateway = null) {
   const all = [...guild.channels.cache.values()];
   const inTickets = (c) => Boolean(cfg.supportCategoryId) && c.parentId === cfg.supportCategoryId;
   const categories = new Map();
@@ -67,10 +74,17 @@ function buildReport(guild, me, cfg, features) {
     truncated = true;
     return list.slice(0, max);
   };
-  // #updates bleibt in der gekürzten Liste (statt des letzten Kanals)
-  const keepUpdates = (list, full) => {
-    const updates = full.find((c) => c.id === cfg.updatesChannelId);
-    if (updates && !list.includes(updates)) list[list.length - 1] = updates;
+  // #updates, #status und #alerts bleiben in der gekürzten Liste (statt der letzten Kanäle)
+  const kept = [cfg.updatesChannelId, cfg.statusChannelId, cfg.alertsChannelId].filter(Boolean);
+  const keepOwn = (list, full) => {
+    let slot = list.length - 1;
+    for (const id of kept) {
+      const ch = full.find((c) => c.id === id);
+      if (!ch || list.includes(ch)) continue;
+      while (slot >= 0 && kept.includes(list[slot].id)) slot--;
+      if (slot < 0) break;
+      list[slot--] = ch;
+    }
     return list;
   };
   const report = {
@@ -79,12 +93,15 @@ function buildReport(guild, me, cfg, features) {
     features,
     guild: { id: guild.id, name: String(guild.name || ''), community: Array.isArray(guild.features) && guild.features.includes('COMMUNITY') },
     updates_channel_id: cfg.updatesChannelId || '',
+    status_channel_id: cfg.statusChannelId || '',
+    alerts_channel_id: cfg.alertsChannelId || '',
     categories: cap([...categories].map(([id, name]) => ({ id, name })), CAPS.categories),
-    channels: keepUpdates(cap(channels, CAPS.channels), channels),
+    channels: keepOwn(cap(channels, CAPS.channels), channels),
     threads: cap(threads, CAPS.threads),
     roles: cap(roles, CAPS.roles),
     truncated: false,
   };
+  if (gateway) report.gateway = gateway;
   const size = () => Buffer.byteLength(JSON.stringify({ ...report, truncated: true }));
   if (size() > BUDGET && report.threads.length) {
     report.threads = [];
@@ -95,7 +112,7 @@ function buildReport(guild, me, cfg, features) {
     report.channels = report.channels.filter((c) => c.can_post);
     truncated = truncated || report.channels.length !== before;
   }
-  // Dann vom Ende her kürzen: erst Rollen, dann Kanäle – #updates bleibt drin
+  // Dann vom Ende her kürzen: erst Rollen, dann Kanäle – #updates, #status und #alerts bleiben drin
   while (size() > BUDGET) {
     if (report.roles.length) {
       report.roles.pop();
@@ -103,7 +120,7 @@ function buildReport(guild, me, cfg, features) {
       continue;
     }
     let i = report.channels.length - 1;
-    while (i >= 0 && report.channels[i].id === report.updates_channel_id) i--;
+    while (i >= 0 && kept.includes(report.channels[i].id)) i--;
     if (i < 0) break;
     report.channels.splice(i, 1);
     truncated = true;
@@ -112,8 +129,9 @@ function buildReport(guild, me, cfg, features) {
   return report;
 }
 
-// Bericht senden: beim Start, alle 10 Minuten, nach Änderungen an Kanälen, Threads und Rollen (gesammelt, 5 s) und auf
-// Wunsch der Webseite (Auftrag bot.report). Die Antwort nennt die Funktionen der Webseite.
+// Bericht senden: beim Start, alle 10 Minuten, nach Änderungen an Kanälen, Threads und Rollen (gesammelt, 5 s), wenn die
+// Verbindung zu Discord abreißt oder wiederkommt (die Webseite zeigt dann „Discord bot“ als gestört bzw. wieder in
+// Ordnung) und auf Wunsch der Webseite (Auftrag bot.report). Die Antwort nennt die Funktionen der Webseite.
 function setupReport(client, cfg, site, log, features) {
   let siteFeatures = null;
   let soonTimer = null;
@@ -122,7 +140,7 @@ function setupReport(client, cfg, site, log, features) {
   async function send() {
     const guild = client.guilds.cache.get(cfg.guildId);
     if (!guild || !guild.members.me) return null;
-    const res = await site.post('/_/bot/hello', buildReport(guild, guild.members.me, cfg, features));
+    const res = await site.post('/_/bot/hello', buildReport(guild, guild.members.me, cfg, features, gatewayOf(client)));
     if (res.ok) siteFeatures = Array.isArray(res.features) ? res.features : [];
     else if (res.httpStatus === 404) siteFeatures = []; // ältere Webseite: kennt den Bericht nicht
     else log(`Report to the website failed: ${res.error}`);
@@ -145,6 +163,10 @@ function setupReport(client, cfg, site, log, features) {
   for (const ev of [Events.ChannelUpdate, Events.ThreadUpdate, Events.GuildRoleUpdate]) {
     client.on(ev, (_old, x) => { if (mine(x)) soon(); });
   }
+  // Verbindung zu Discord: abgerissen (der Bericht geht trotzdem, er läuft über die Webseite) und wieder da
+  for (const ev of [Events.ShardDisconnect, Events.ShardReconnecting, Events.ShardResume, Events.ShardReady]) {
+    client.on(ev, () => soon());
+  }
 
   function start() {
     send().catch((err) => log(`Report failed: ${err.message}`));
@@ -158,4 +180,4 @@ function setupReport(client, cfg, site, log, features) {
   return { send, start, stop, siteFeatures: () => siteFeatures };
 }
 
-module.exports = { buildReport, setupReport, runtime, BUDGET };
+module.exports = { buildReport, setupReport, runtime, gatewayOf, BUDGET };

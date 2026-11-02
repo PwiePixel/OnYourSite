@@ -11,8 +11,9 @@ import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
-import { dbReachable } from './db.js';
+import { DbUnavailableError, dbReachable } from './db.js';
 import { statusHealth, statusHeartbeat } from './status/endpoints.js';
+import { statusDbDownHost } from './status/routes.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -67,8 +68,14 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // Nur für die eigenen Adressen: ein fremder Host (eigene Domains nicht eingerichtet) bekommt die 404-Seite ohne jede
   // Abfrage (premium-domains PD-2)
   if (isMainHost(ctx.host) || ctx.host.endsWith('.' + baseHost())) {
-    await ensureSchemaOnce();
-    await dbReachable();
+    try {
+      await ensureSchemaOnce();
+      await dbReachable();
+    } catch (err) {
+      // Statusseiten: ohne Datenbank ihre letzte Ausgabe bzw. die Notfall-Seite statt der allgemeinen 503-Seite
+      if (err instanceof DbUnavailableError && !isMainHost(ctx.host)) statusDbDownHost(ctx, ctx.host.slice(0, ctx.host.length - baseHost().length - 1));
+      throw err;
+    }
   }
   // Frühere PHP-Einstiege unter derselben Adresse
   if (ctx.path === '/api.php') return api(ctx);

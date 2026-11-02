@@ -7,7 +7,7 @@
 #
 #   sudo bash install.sh              Einrichten oder Einstellungen ändern (fragt nach der Art)
 #   sudo bash install.sh --update     Neue Version übernehmen, Einstellungen bleiben; Kanäle, die die neue Version
-#                                     kennt (z. B. #updates), werden einmal angelegt oder übernommen
+#                                     kennt (z. B. #updates, #status, #alerts), werden einmal angelegt oder übernommen
 #   sudo bash install.sh --channel KEY  Einen dieser Kanäle noch einmal versuchen (z. B. UPDATES_CHANNEL_ID)
 #
 # Die Einstellungen (Token, IDs, Geheimnis) liegen in einer Datei, die nur root lesen kann – nie im Webordner
@@ -170,7 +170,8 @@ bot_tool() {
   else
     DISCORD_TOKEN=$TOKEN "${COMPOSE[@]}" run --rm --no-deps -T -e DISCORD_TOKEN -e DISCORD_API_BASE -e TEAM_ROLE_ID \
       -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e TAG_ACCEPTED_ID \
-      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID -e UPDATES_CHANNEL_ID bot node index.js "$@" </dev/null
+      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID -e UPDATES_CHANNEL_ID -e STATUS_CHANNEL_ID -e ALERTS_CHANNEL_ID \
+      bot node index.js "$@" </dev/null
   fi
 }
 
@@ -210,7 +211,9 @@ add_channel() {
   name=${name:-$key}
   info "Adding the #$name channel …"
   err=$(mktemp)
-  if out=$(UPDATES_CHANNEL_ID=$(current UPDATES_CHANNEL_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
+  # Die bisherige ID dieses Kanals (z. B. nach --channel) und die Rolle des Teams (für private Kanäle wie #alerts) – nur
+  # in der Umgebung dieses einen Aufrufs (die Befehlsersetzung läuft in einer eigenen Shell)
+  if out=$(export "$key=$(current "$key")"; TEAM_ROLE_ID=$(current TEAM_ROLE_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
       SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) bot_tool --discord-channel "$key" "$(current GUILD_ID)" 2>"$err") \
       && id=$(sed -n "s/^$key=//p" <<< "$out" | tail -n 1) && [[ $id =~ ^[0-9]{15,22}$ ]]; then
     env_set "$key" "$id"
@@ -344,14 +347,15 @@ else
     RULES_CHANNEL_ID=$(current RULES_CHANNEL_ID) SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) \
     SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) TAG_ACCEPTED_ID=$(current TAG_ACCEPTED_ID) \
     TAG_DECLINED_ID=$(current TAG_DECLINED_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
-    UPDATES_CHANNEL_ID=$(current UPDATES_CHANNEL_ID) bot_tool --discord-setup "$guild_id" 2>"$errf") \
+    UPDATES_CHANNEL_ID=$(current UPDATES_CHANNEL_ID) STATUS_CHANNEL_ID=$(current STATUS_CHANNEL_ID) \
+    ALERTS_CHANNEL_ID=$(current ALERTS_CHANNEL_ID) bot_tool --discord-setup "$guild_id" 2>"$errf") \
     || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – if the bot is missing permissions, open this link, choose the server and authorize again: $invite"
   rm -f "$errf"
   while IFS='=' read -r key value; do
     case $key in
       DONE) info "  $value" ;;
       WARN) info "  Note: $value" ;;
-      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID|UPDATES_CHANNEL_ID)
+      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID|UPDATES_CHANNEL_ID|STATUS_CHANNEL_ID|ALERTS_CHANNEL_ID)
         printf -v "VAL_$key" '%s' "$value" ;;
     esac
   done <<< "$setup"
@@ -383,7 +387,8 @@ else
   {
     echo "# OnYourSite Discord bot – written by install.sh on $(date -u +%Y-%m-%d). Keep this file private."
     for key in DISCORD_TOKEN DISCORD_CLIENT_ID GUILD_ID TEAM_ROLE_ID WELCOME_CHANNEL_ID WELCOME_ROLE_ID RULES_CHANNEL_ID SUPPORT_CHANNEL_ID \
-               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID UPDATES_CHANNEL_ID SITE_URL BOT_SECRET POLL_SECONDS; do
+               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID UPDATES_CHANNEL_ID STATUS_CHANNEL_ID ALERTS_CHANNEL_ID \
+               SITE_URL BOT_SECRET POLL_SECONDS; do
       var="VAL_$key"
       echo "$key=${!var:-}"
     done

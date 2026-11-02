@@ -29,6 +29,9 @@ export interface BotReport {
   features: string[];
   guild: { id: string; name: string; community: boolean };
   updates_channel_id: string;
+  // Vorschläge des Bots für die Statusseite von OnYourSite (#status, #alerts) – ab Bot 0.3.0, sonst leer
+  status_channel_id?: string;
+  alerts_channel_id?: string;
   categories: Array<{ id: string; name: string }>;
   channels: ReportChannel[];
   threads: ReportThread[];
@@ -120,6 +123,10 @@ export function validateReport(body: unknown, known: readonly string[], now = ti
       reported_at: now, version, runtime, features, guild, updates_channel_id: optionalId(body.updates_channel_id),
       categories, channels, threads, roles, truncated: bool(body.truncated, false),
     };
+    const statusId = optionalId(body.status_channel_id);
+    const alertsId = optionalId(body.alerts_channel_id);
+    if (statusId !== '') report.status_channel_id = statusId;
+    if (alertsId !== '') report.alerts_channel_id = alertsId;
     if (body.gateway !== undefined) {
       const g = body.gateway;
       if (!isObject(g) || typeof g.ping_ms !== 'number' || !Number.isSafeInteger(g.ping_ms) || g.ping_ms < 0) throw new Invalid();

@@ -1,6 +1,7 @@
 'use strict';
-// OnYourSite Discord-Bot: Begrüßung, Vorschläge (Forum → Webseite), Support-Tickets und die Updates der Webseite
-// (in #updates) – verbunden mit der Webseite.
+// OnYourSite Discord-Bot: Begrüßung, Vorschläge (Forum → Webseite), Support-Tickets, die Updates der Webseite
+// (in #updates) und OnYourSites Statusseite (Vorfälle in #status, Meldungen ans Team in #alerts) – verbunden mit der
+// Webseite.
 // Start: npm start · Verbindung zur Webseite prüfen: npm run check (Anleitung: README.md)
 const { Client, GatewayIntentBits, Events, MessageFlags } = require('discord.js');
 const { readConfig } = require('./src/config');
@@ -13,9 +14,10 @@ const { startOutbox } = require('./src/outbox');
 const { registerCommands, setupCommands } = require('./src/commands');
 const { setupUpdates } = require('./src/updates');
 const { setupReport } = require('./src/report');
+const { setupStatus } = require('./src/status');
 
 // Funktionen dieser Version: die Webseite gibt dem Bot nur Aufträge, die er kann
-const FEATURES = ['updates.v1', 'suggestions.v2'];
+const FEATURES = ['updates.v1', 'suggestions.v2', 'status.v1'];
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -60,6 +62,7 @@ const suggestions = setupSuggestions(client, cfg, site, log, { siteFeatures: () 
 const support = setupSupport(client, cfg, site, log);
 const commands = setupCommands(cfg, site, support);
 const updates = setupUpdates(client, log);
+const status = setupStatus(client, updates);
 let outbox = null;
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -102,6 +105,10 @@ client.once(Events.ClientReady, async (ready) => {
     'update.delete': (d) => updates.remove(d),
     'update.test': (d, item) => updates.test(d, item),
     'suggestions.notice': (d) => suggestions.applyNotice(d),
+    'status.post': (d, item) => status.post(d, item),
+    'status.edit': (d) => status.edit(d),
+    'status.delete': (d) => status.remove(d),
+    'status.alert': (d, item) => status.alert(d, item),
     'bot.report': async () => {
       await report.send();
       return {};

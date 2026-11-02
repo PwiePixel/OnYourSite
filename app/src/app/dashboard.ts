@@ -17,6 +17,7 @@ import { bellMarkup } from '../views/partials/ui.js';
 import { currentPage, flash, hasPremium } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
+import { statusAdmin } from '../status/editorApi.js';
 
 export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
@@ -71,6 +72,7 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const allowance = await pageAllowance(ctx, user);
   // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)
   const premiumNow = await premiumState(userId);
+  const isStatusAdmin = statusAdmin(ctx, user);
 
   // views/dashboard.php: Daten für static/js/editor.js (Reihenfolge der Schlüssel wie in PHP)
   let slugDaysLeft = 0;
@@ -120,6 +122,10 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     },
     // Beim Öffnen verdiente Honigwaben als Hinweise (nur, was bei diesem Aufruf verdient wurde; höchstens 12)
     notices: notices(honeycombs.earned.map((x) => ({ tone: 'hc' as const, text: x.text, amount: x.amount })), BOOTSTRAP_NOTICES_MAX),
+    // OnYourSites Statusseite: der Bereich „Status“ nur für Admins (nicht im Admin-Modus); Skript und Stil lädt der
+    // Editor erst beim ersten Öffnen
+    statusAdmin: isStatusAdmin,
+    ...(isStatusAdmin ? { statusManage: { js: asset('/static/js/status-manage.js'), css: asset('/static/css/status-manage.css') } } : {}),
   };
   const flashSuccess = ctx.session?.take('success') ?? null;
   const flashError = ctx.session?.take('error') ?? null;
@@ -134,5 +140,6 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     isImpersonating,
     balance: honeycombs.balance,
     bellHtml: await bellMarkup(ctx),
+    statusAdmin: isStatusAdmin,
   }));
 }

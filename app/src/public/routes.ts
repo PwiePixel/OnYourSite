@@ -27,6 +27,7 @@ import { controlResponse } from '../domains/answers.js';
 import { forwardingDomain, hostnameForPage } from '../domains/store.js';
 import { notFound } from './notFound.js';
 import { kalender } from './views/kalender.js';
+import { statusPathRedirect, statusSubdomain } from '../status/routes.js';
 
 // Block mit dem Ergebnis der Zeitsteuerung (active)
 export type PublicBlock = Block & { active: boolean };
@@ -339,6 +340,8 @@ export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<
     if (page.address_mode !== 'path') ctx.redirect(addressUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
     return servePage(ctx, page, sub);
   }
+  // Statusseiten gibt es nur unter ihrer eigenen Subdomain
+  if (sub === '') await statusPathRedirect(ctx, slug);
   return notFound(ctx);
 }
 
@@ -364,5 +367,7 @@ export async function subdomain(ctx: Ctx, slug: string, sub: string): Promise<vo
     await codeServe(ctx, site, ctx.path);
     ctx.halt();
   }
+  // Statusseite (oder eine alte Adresse davon) – nach Link- und Code-Seiten
+  await statusSubdomain(ctx, slug);
   return notFound(ctx);
 }

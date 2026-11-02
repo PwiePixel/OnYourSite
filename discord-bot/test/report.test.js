@@ -4,7 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ChannelType } = require('discord.js');
-const { buildReport, runtime, BUDGET } = require('../src/report');
+const { buildReport, runtime, gatewayOf, BUDGET } = require('../src/report');
 const { perms, ALL } = require('./fakes');
 
 const GUILD = '920000000000000001';
@@ -100,4 +100,31 @@ test('report: the runtime comes from OYS_BOT_RUNTIME (service, docker), else "ot
     if (old === undefined) delete process.env.OYS_BOT_RUNTIME;
     else process.env.OYS_BOT_RUNTIME = old;
   }
+});
+
+test('report 0.3.0: the connection to Discord (gateway) and the suggested #status and #alerts – both stay in a cut list', () => {
+  const channels = [
+    chan(ID(10), 'updates', ChannelType.GuildText, { position: 1 }),
+    chan(ID(20), 'status', ChannelType.GuildAnnouncement, { position: 900 }),
+    chan(ID(21), 'alerts', ChannelType.GuildText, { position: 901 }),
+  ];
+  for (let i = 0; i < 230; i++) channels.push(chan(ID(1000 + i), 'c' + i, ChannelType.GuildText, { position: 10 + i }));
+  const own = { ...cfg, statusChannelId: ID(20), alertsChannelId: ID(21) };
+  const r = buildReport(guild(channels), me, own, ['updates.v1', 'suggestions.v2', 'status.v1'], { ready: true, ping_ms: 42 });
+  assert.deepEqual(r.gateway, { ready: true, ping_ms: 42 });
+  assert.equal(r.status_channel_id, ID(20));
+  assert.equal(r.alerts_channel_id, ID(21));
+  assert.equal(r.channels.length, 200);
+  for (const id of [ID(10), ID(20), ID(21)]) assert.ok(r.channels.some((c) => c.id === id), `${id} stays in the list`);
+  // Ohne Angaben: leere IDs und kein gateway (ältere Aufrufer)
+  const plain = buildReport(guild(channels.slice(0, 3)), me, cfg, []);
+  assert.equal(plain.status_channel_id, '');
+  assert.equal(plain.alerts_channel_id, '');
+  assert.equal('gateway' in plain, false);
+});
+
+test('gateway: ready from discord.js, the ping rounded; before the first heartbeat (-1) it is 0', () => {
+  assert.deepEqual(gatewayOf({ isReady: () => true, ws: { ping: 41.6 } }), { ready: true, ping_ms: 42 });
+  assert.deepEqual(gatewayOf({ isReady: () => false, ws: { ping: -1 } }), { ready: false, ping_ms: 0 });
+  assert.deepEqual(gatewayOf(null), { ready: false, ping_ms: 0 });
 });

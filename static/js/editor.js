@@ -1058,10 +1058,12 @@
   // ================================================================
   // Tabs
   // ================================================================
-  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', settings: 'Settings' };
+  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', status: 'Status', settings: 'Settings' };
   function switchTab(name) {
-    if (!TAB_TITLES[name]) name = 'content';
+    // Den Bereich „Status“ gibt es nur für Admins: ohne seinen Container bleibt alles beim Inhalt
+    if (!TAB_TITLES[name] || !$('#tab-' + name)) name = 'content';
     var wasCode = activeTab === 'code';
+    var wasStatus = activeTab === 'status';
     activeTab = name;
     $$('.tab-content').forEach(function (t) { t.classList.add('hidden'); });
     $('#tab-' + name).classList.remove('hidden');
@@ -1070,8 +1072,10 @@
     if (history.replaceState) history.replaceState(null, '', '#' + name);
     $('#editorScroll').scrollTop = 0;
     document.body.classList.toggle('code-mode', name === 'code');
-    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code';
-    if (wasCode !== (name === 'code')) fitPhone();
+    // Statusseite: ohne Vorschau des Profils und ohne den Speichern-Knopf (der Bereich speichert jede Änderung selbst)
+    document.body.classList.toggle('status-mode', name === 'status');
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status';
+    if (wasCode !== (name === 'code') || wasStatus !== (name === 'status')) fitPhone();
     paintSave(name === 'code' ? code.state : pageSaveState);
     if (name === 'code') loadCode();
     if (wasCode && name !== 'code' && state.page) {
@@ -1081,12 +1085,49 @@
     }
     // Nachrichten und Termine gehören zum Konto: auch ohne Seite
     if (name === 'messages') loadMessages();
+    if (name === 'status') loadStatus();
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
     if (name === 'settings') renderSettings();
   }
   $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
+  // Telefone: „OnYourSite status“ in den Einstellungen öffnet den Bereich
+  document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('[data-open-status]')) switchTab('status');
+  });
+
+  // ================================================================
+  // OnYourSites eigene Statusseite (nur Admins): static/js/status-manage.js, erst beim ersten Öffnen geladen
+  // ================================================================
+  var statusLoading = null;
+  function loadStatus() {
+    var root = $('#tab-status');
+    if (!root || !E.statusManage) return;
+    if (!statusLoading) {
+      statusLoading = new Promise(function (resolve, reject) {
+        var css = document.createElement('link');
+        css.rel = 'stylesheet';
+        css.href = E.statusManage.css;
+        document.head.appendChild(css);
+        var js = document.createElement('script');
+        js.src = E.statusManage.js;
+        js.onload = resolve;
+        js.onerror = reject;
+        document.head.appendChild(js);
+      });
+    }
+    statusLoading.then(function () {
+      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: 'system', baseHost: E.baseHost, user: E.user || {} });
+    }, function () {
+      statusLoading = null;
+      root.textContent = '';
+      var box = document.createElement('div');
+      box.className = 'panel max-w-3xl mx-auto';
+      box.textContent = 'The status page manager couldn’t load. Please reload the page.';
+      root.appendChild(box);
+    });
+  }
   $('#tab-design').addEventListener('click', function (ev) { onDesignClick(ev); });
 
   // ================================================================
@@ -3037,7 +3078,9 @@
     messages: function () { switchTab('messages'); },
     code: function () { switchTab('code'); },
     settings: function () { if (state.page) switchTab('settings'); },
-    honeycombs: function () { openHoneycombs(); }
+    honeycombs: function () { openHoneycombs(); },
+    // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
+    status: function () { if ($('#tab-status')) switchTab('status'); }
   };
   // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
   var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' };
@@ -3321,6 +3364,7 @@
     $('#psLabel').textContent = 'No page yet';
     if (startHash === '#code') switchTab('code');
     else if (/^#messages\b/.test(startHash)) switchTab('messages');
+    else if (/^#status\b/.test(startHash) && $('#tab-status')) switchTab('status');
   }
   draft.start();
   startBell();

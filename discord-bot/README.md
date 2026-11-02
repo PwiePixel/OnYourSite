@@ -6,6 +6,7 @@ A small bot for the OnYourSite Discord server, connected to the website:
 - **Suggestions** – every new post in the suggestion forum is saved on the website. The team accepts or declines it either in Discord (buttons on the post) or on the website (**Admin → Community**). Both stay in sync: the post shows the status, an optional note and a forum tag.
 - **Support** – a panel with an “Open a ticket” button. Each ticket is a private channel that only the person and the team can see. Messages are saved on the website; replies written on the website appear in the channel. Tickets can be closed in Discord or on the website.
 - **Updates** – updates published on the website are posted in **#updates** (an embed with a link to the update). Edits on the website change the post in place without a new ping; moving an update back to drafts or deleting it removes the post. The website never needs the bot token for this – see below.
+- **Status** – incidents and maintenance of OnYourSite's status page (`status.on-your.site`) are posted in **#status**; every new update on the website edits that post. When one of OnYourSite's checks fails or recovers, the team gets a short alert in **#alerts**, a private channel only Staff and the bot can see.
 
 All messages are embeds in English.
 
@@ -16,6 +17,8 @@ The bot calls the website at `/_/bot/…`. Every request is signed with a shared
 Without `bot_secret` in `config.json`, the endpoints don’t exist (404). The endpoints and the admin panel are excluded from search engines (`robots.txt`, `noindex`). Tickets are never public; suggestions the team has decided can be shown on the website at `/suggestions`, without names, once the admin turns that page on under *Admin → Community* (it starts off).
 
 **Updates on Discord.** When the bot starts (and every 10 minutes, and after channels or roles change) it sends the website a short report: its version, what it can do, and the channels and roles of the server with its own permissions there – no messages and no member data. As soon as the report names **#updates** and neither a webhook nor an old bot token is set up under *Admin → Discord*, the website hands new updates to the bot: it posts them in #updates, edits them and removes them again. When it picks up its jobs, the bot tells the website what it can do (`updates.v1`), so an older bot never gets a job it doesn’t know. If the bot is offline, updates wait for it; an update the bot hasn’t picked up within 24 hours isn’t posted any more (no surprise pings for old news). If the website is unreachable while the bot reports a result, the bot keeps the result and sends it again; before posting an update a second time it looks for its own earlier post, so nothing shows up twice.
+
+**Status on Discord.** From version 0.3.0 the bot tells the website it can post status messages (`status.v1`); an older bot never gets these jobs. In *Editor → Status → Alerts* an admin picks the two channels from the bot's report – until then the website uses the bot's suggestions **#status** and **#alerts**. Each incident or maintenance window gets one post in #status with a link to its page; every update on the website edits that post (no new ping), deleting the incident removes it. Alerts for the team (check down, back up, slow, certificate, heartbeat missed) go to #alerts; alerts the bot hasn't picked up within 2 hours are dropped. The report also says whether the bot is connected to Discord (`gateway`); when the connection breaks or comes back, the bot reports at once, so the status page shows the Discord bot as disrupted only while it really is.
 
 **Suggestions on the website.** When the admin turns on the page `/suggestions` (*Admin → Community*, it starts off), the bot adds the field *Website – “Once decided, this idea is shown on …/suggestions, without your name.”* to the status message of every new post and tells the website that the author got this note – only such posts appear there by themselves once the team decides them. It also adds the sentence “Decided ideas are shown on …/suggestions without your name.” to the forum’s guidelines and removes it again when the page is turned off; the rest of the guidelines stays as it is. If a post (or its first message) is deleted in Discord, its text disappears from the website within seconds; a check 10 minutes after the start and then once a day (at most one request to Discord per second) catches deletions that happened while the bot was offline. The bot does all this only when the website supports it (`suggestions.v2`).
 
@@ -28,7 +31,7 @@ Without `bot_secret` in `config.json`, the endpoints don’t exist (404). The en
    - Tab *General Information*: copy the **Application ID**.
 2. **Run the installer** (on your own server: `server/install.sh` asks for the bot – see below). It only asks for the token and the Application ID; everything else happens by itself:
    - if the bot isn’t on a Discord server yet, it shows the invite link and waits until you added it (with several servers it asks which one),
-   - it creates the role **Staff** (you as the server owner get it), a category **OnYourSite** with **#welcome**, **#rules**, **#support** and **#updates** (read-only for members; #updates is an announcement channel on community servers), the forum **#suggestions** with the tags *Accepted* and *Declined* (only the team can set them) and a private category **Tickets** – what already exists (same name or the saved ID) is used again and nothing is created twice; an existing channel only gets the bot’s own access added if it lacks it (an existing #updates is used exactly as it is),
+   - it creates the role **Staff** (you as the server owner get it), a category **OnYourSite** with **#welcome**, **#rules**, **#support**, **#updates** and **#status** (read-only for members; #updates and #status are announcement channels on community servers), the private channel **#alerts** (only Staff and the bot), the forum **#suggestions** with the tags *Accepted* and *Declined* (only the team can set them) and a private category **Tickets** – what already exists (same name or the saved ID) is used again and nothing is created twice; an existing channel only gets the bot’s own access added if it lacks it (an existing #updates is used exactly as it is),
    - it saves all IDs, creates the shared secret with the website and starts the bot,
    - the bot posts the ticket panel in **#support** by itself.
 3. Give your team members the **Staff** role – they can then accept or decline suggestions and see every ticket.
@@ -68,9 +71,9 @@ Both ask only for the **bot token** and the **Application ID** (Enter takes the 
 | Stop | `sudo systemctl stop onyoursite-bot` | `docker compose down` |
 | Change settings | `sudo bash install.sh` (Enter keeps the current values) | the same |
 | Update | `git pull && sudo bash install.sh --update` | the same |
-| Add a channel again | `sudo bash install.sh --channel UPDATES_CHANNEL_ID` | the same |
+| Add a channel again | `sudo bash install.sh --channel UPDATES_CHANNEL_ID` (or `STATUS_CHANNEL_ID`, `ALERTS_CHANNEL_ID`) | the same |
 
-**Updating from an older version** adds what the new version needs and changes nothing else: `--update` looks for a channel named **updates** (text, announcement or forum) and uses it unchanged, or creates **#updates** in the OnYourSite category; it saves its ID in the settings file (only that one line changes) and doesn’t touch roles or other channels. If that fails, it says why, stores an empty value and doesn’t try again by itself – `--channel UPDATES_CHANNEL_ID` tries again. `npm run check` (or `node index.js --check`) shows whether the website is reachable and what it supports.
+**Updating from an older version** adds what the new version needs and changes nothing else: `--update` looks for each channel the new version knows and the settings file doesn’t have yet – **updates**, **status** and **alerts** (text, announcement or forum) – and uses an existing one unchanged (an existing #alerts that everyone can see only gets a note), or creates it in the OnYourSite category (#alerts private for Staff and the bot); it saves its ID in the settings file (only that one line changes) and doesn’t touch roles or other channels. If that fails, it says why, stores an empty value and doesn’t try again by itself – `--channel <KEY>` tries again. `npm run check` (or `node index.js --check`) shows whether the website is reachable and what it supports.
 
 **Keep the settings out of the website folder.** The website never serves `/discord-bot/` or any `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
 
@@ -85,7 +88,8 @@ src/suggestions.js  Suggestion forum, accept/decline
 src/support.js      Support panel, ticket channels, closing
 src/outbox.js       Picks up changes made on the website (only jobs it can do) and reports the results
 src/updates.js      Posts, edits and removes updates in #updates
-src/report.js       Report for the website: channels, permissions, roles, #updates
+src/status.js       Incident posts in #status and alerts for the team in #alerts
+src/report.js       Report for the website: connection to Discord, channels, permissions, roles, #updates, #status, #alerts
 src/commands.js     /support-panel and /bot-status
 src/setup.js        Sets up the Discord server for the installer (Staff role, channels, forum, IDs)
 test/               Tests (npm test – no Discord account needed)

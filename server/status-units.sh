@@ -1,5 +1,5 @@
 # shellcheck shell=bash disable=SC2153,SC2034
-# OnYourSite – Statusseiten: Dienste auf dem eigenen Server (Prüfdienst und Sensor). Diese Datei lädt server/install.sh
+# OnYourSite – Statusseiten: Dienste auf dem eigenen Server (Prüfdienst, Benachrichtigungsdienst und Sensor). Diese Datei lädt server/install.sh
 # mit „. "$CODE/server/status-units.sh"“ (server/backup.sh für status_backup_dump und status_ping) – beim Laden passiert
 # nichts, sie definiert nur Funktionen und zwei Werte.
 #
@@ -7,7 +7,8 @@
 # Funktionen write_if_changed, info, warn.
 #
 #   write_status_units [update]   config.json → status schreiben, die Units schreiben, daemon-reload, enable --now,
-#                                 den Schutz im Kernel testen; mit „update“ den Prüfdienst neu starten (neuer Code).
+#                                 den Schutz im Kernel testen; mit „update“ Prüf- und Benachrichtigungsdienst neu
+#                                 starten (neuer Code).
 #                                 Aufruf in jedem Modus, der die Topologie ändern kann: Einrichtung (step_services),
 #                                 --update, --https und --tunnel.
 #   status_units_stop             vor DROP DATABASE (--reset): alle Status-Units anhalten
@@ -160,6 +161,51 @@ PrivateTmp=true
 MemoryMax=192M
 EOF
 
+  # Der Benachrichtigungsdienst: E-Mails, Glocke, Aufträge für den Discord-Bot. Er spricht nur mit festen Diensten (der
+  # Mail-Server – vielleicht auf diesem Server –, discord.com) und nie mit Zielen der Nutzer: darum ohne IPAddressDeny.
+  write_if_changed "$UNITS/onyoursite-status-notify.service" <<EOF || true
+# OnYourSite – written by server/install.sh
+[Unit]
+Description=OnYourSite status notifier (alerts by email, bell and Discord)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$WEB
+Group=$WEB
+WorkingDirectory=$CODE/app
+Environment=NODE_ENV=production
+Environment=OYS_DB_POOL_SIZE=3
+ExecStart=$NODE --max-old-space-size=192 $CODE/app/dist/status/notify.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   write_if_changed "$UNITS/onyoursite-status-local.timer" <<EOF || true
 # OnYourSite – written by server/install.sh
 [Unit]
@@ -175,8 +221,9 @@ WantedBy=timers.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now onyoursite-status.service onyoursite-status-local.timer >/dev/null 2>&1 || warn "The status services couldn’t be started – see: journalctl -u onyoursite-status"
-  if [ "$mode" = update ]; then systemctl restart onyoursite-status.service >/dev/null 2>&1 || true; fi
+  systemctl enable --now onyoursite-status.service onyoursite-status-notify.service onyoursite-status-local.timer >/dev/null 2>&1 \
+    || warn "The status services couldn’t be started – see: journalctl -u onyoursite-status -u onyoursite-status-notify"
+  if [ "$mode" = update ]; then systemctl restart onyoursite-status.service onyoursite-status-notify.service >/dev/null 2>&1 || true; fi
 
   kernel=$(status_kernel_guard_test)
   if [ "$kernel" = no ]; then
@@ -236,5 +283,5 @@ status_ping() {
 }
 
 status_summary_line() {
-  echo "Status page: https://status.$1 · checks: systemctl status onyoursite-status onyoursite-status-local.timer"
+  echo "Status page: https://status.$1 · services: systemctl status onyoursite-status onyoursite-status-notify onyoursite-status-local.timer"
 }

@@ -9,6 +9,7 @@ import { updatesView } from './views/updatesView.js';
 import { roadmapView } from './views/roadmapView.js';
 import { feedView } from './views/feedView.js';
 import { suggestionsPageOn } from '../community/suggestions.js';
+import { systemStatusLink } from '../status/links.js';
 
 // Einladungslink für „Get updates on Discord“ und „Join the Discord“
 export async function invite(): Promise<string> {
@@ -25,7 +26,7 @@ export async function updatesPage(ctx: Ctx, user: Row | null): Promise<void> {
   // Öffentliche Meilensteine: Chips im Changelog verlinken auf ihre Karte auf /roadmap
   const milestoneTitles = new Map<number, string>();
   for (const row of await q('SELECT id, title FROM milestones WHERE is_public = 1')) milestoneTitles.set(intval(row.id), phpStr(row.title));
-  ctx.write(updatesView({ loggedIn: phpTruthy(user), pageNo, lastPage, updates, milestoneTitles, invite: await invite(), suggestions: await suggestionsPageOn() }));
+  ctx.write(updatesView({ loggedIn: phpTruthy(user), pageNo, lastPage, updates, milestoneTitles, invite: await invite(), suggestions: await suggestionsPageOn(), statusUrl: await systemStatusLink() }));
 }
 
 // GET /roadmap: Spalten (jetzt, als Nächstes, geplant) und fertige Meilensteine; jede Abfrage (?from=updates) wird
@@ -43,7 +44,7 @@ export async function roadmapPage(ctx: Ctx, user: Row | null): Promise<void> {
       if (!updateForMilestone.has(mid)) updateForMilestone.set(mid, intval(row.id));
     }
   }
-  ctx.write(roadmapView({ loggedIn: phpTruthy(user), columns, updateForMilestone, invite: await invite(), suggestions: await suggestionsPageOn() }));
+  ctx.write(roadmapView({ loggedIn: phpTruthy(user), columns, updateForMilestone, invite: await invite(), suggestions: await suggestionsPageOn(), statusUrl: await systemStatusLink() }));
 }
 
 // GET /updates/feed.xml: die 30 neuesten veröffentlichten Updates

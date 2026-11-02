@@ -1,7 +1,9 @@
-// Admin, Bereich „Status pages“ (#status): vorerst die Karte „Health“ – Prüfdienst, Benachrichtigungsdienst und Sensor
-// (läuft / angehalten), Prüfungen je Minute, Verzögerung, aktive und ruhende Bestandteile, die Plattform-Sperre mit
-// den Kanarienvögeln, der Schutz im Kernel (Test des Installers), E-Mails je Klasse und das Alter der lokalen Messung –
-// dazu der Zustand von OnYourSites eigenen Bestandteilen. Nur lesen; Aktionen kommen mit den Seiten der Nutzer.
+// Admin, Bereich „Status pages“ (#status): die Karte „OnYourSite status page“ (Adresse, online/offline, Link in den
+// Editor /dashboard#status/system – dort werden Vorfälle, Wartungen und Bestandteile gepflegt), die Karte „Health“ –
+// Prüfdienst, Benachrichtigungsdienst und Sensor (läuft / angehalten), Prüfungen je Minute, Verzögerung, aktive und
+// ruhende Bestandteile, die Plattform-Sperre mit den Kanarienvögeln, der Schutz im Kernel (Test des Installers),
+// E-Mails je Klasse, wartende Nachrichten und das Alter der lokalen Messung – dazu der Zustand von OnYourSites eigenen
+// Bestandteilen. Nur lesen; Aktionen kommen mit den Seiten der Nutzer.
 // Aussehen wie die anderen Bereiche (Karten bg-card, Abzeichen wie bei den Code-Seiten).
 import type { Ctx } from '../web/ctx.js';
 import { q } from '../db.js';
@@ -10,6 +12,8 @@ import { date } from '../php.js';
 import { schemaAtLeast, V_STATUS_TABLES } from '../schema.js';
 import { errorText } from './errors.js';
 import { statusServerConfig } from './settings.js';
+import { statusPageUrl, SYSTEM_SLUG } from './model.js';
+import { editorLink } from './links.js';
 
 const BADGE = 'text-[10px] font-bold uppercase px-1.5 py-0.5 rounded';
 const OK = `${BADGE} bg-emerald-500/15 text-emerald-400`;
@@ -88,7 +92,7 @@ export async function adminStatusView(ctx: Ctx): Promise<string> {
 
   const services: ServiceLine[] = [
     service('Checker', worker, now, 'It hasn’t reported yet – see journalctl -u onyoursite-status', 'onyoursite-status'),
-    service('Notifier', notifier, now, 'Not installed yet', 'onyoursite-status-notify'),
+    service('Notifier', notifier, now, 'It hasn’t reported yet – see journalctl -u onyoursite-status-notify', 'onyoursite-status-notify'),
   ];
   const probeAt = num(probe?.at);
   services.push(probeAt === null
@@ -125,8 +129,24 @@ export async function adminStatusView(ctx: Ctx): Promise<string> {
     ['Platform gate', gateLine],
     ['Kernel guard', kernel],
     ['Emails today', e(mailText)],
+    ['Waiting messages', e(String(num(notifier?.outbox) ?? 0))],
     ['Version', e(typeof worker?.version === 'string' ? worker.version : '—')],
   ];
+
+  // OnYourSites eigene Statusseite: gepflegt wird sie im Editor
+  const sys = (await q('SELECT slug, title, is_published FROM status_pages WHERE is_system = 1 LIMIT 1'))[0];
+  if (sys) {
+    const url = statusPageUrl(String(sys.slug ?? SYSTEM_SLUG));
+    const online = Number(sys.is_published) === 1;
+    o += `                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4" id="statusSystemPage">
+                    <div class="min-w-0 flex-1">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2 flex-wrap"><i class='bx bx-broadcast text-xl text-lime-400'></i> OnYourSite status page <span class="${online ? OK : OFF}">${online ? 'Online' : 'Offline'}</span></h2>
+                        <p class="text-sm text-gray-400 mt-1">Incidents, maintenance and components are managed in the editor. <a href="${e(url)}" target="_blank" rel="noopener" class="text-lime-400 hover:underline break-all">${e(url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</a></p>
+                    </div>
+                    <a href="${e(editorLink(true))}" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-5 rounded-lg transition-all flex items-center justify-center gap-2 shrink-0"><i class='bx bx-edit-alt'></i> Open in the editor</a>
+                </div>
+`;
+  }
 
   o += `                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
                     <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">

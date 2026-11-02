@@ -145,6 +145,7 @@ One certificate covers `on-your.site` and `*.on-your.site`, so every profile and
 | Website: restart | `sudo systemctl restart onyoursite-web` (needed after changing `config.json` by hand) |
 | Tunnel | `journalctl -u onyoursite-tunnel -f` |
 | Bot | `journalctl -u onyoursite-bot -f` · `sudo systemctl restart onyoursite-bot` |
+| Status page: checks and alerts | `journalctl -u onyoursite-status -u onyoursite-status-notify -f` · the page itself: `https://status.<your domain>` |
 | Backup right now | `sudo systemctl start onyoursite-backup` |
 | When the timers run next | `systemctl list-timers 'onyoursite-*'` |
 | Blocked addresses | `sudo fail2ban-client status sshd` · firewall: `sudo ufw status` |
@@ -211,6 +212,7 @@ When it asks for the folder with the files from the old server, enter `/root/imp
 | Certificate | `/etc/ssl/onyoursite/` – issued and renewed by acme.sh (`/root/.acme.sh`) |
 | Apache | `/etc/apache2/sites-available/onyoursite.conf` (HTTPS and the way to the website; with the tunnel also `conf-available/onyoursite-tunnel.conf`) |
 | Timers | `onyoursite-weekly-report` (Mondays 8:00), `onyoursite-backup` (nightly), `onyoursite-certs` (daily) in `/etc/systemd/system` |
+| Status page services | `onyoursite-status` (the checks, locked out of this server and private networks), `onyoursite-status-notify` (alerts by email, bell and Discord), `onyoursite-status-local.timer` (local probes every minute) – written by the installer from `server/status-units.sh`. Incidents and maintenance are posted in the editor (*Status*, admins only). Backups leave out the raw check results (`status_checks`); the daily and hourly sums stay. |
 | Discord bot | `/opt/onyoursite-bot`, settings in `/etc/onyoursite-bot.env` (only root) |
 
 The installer rewrites the Apache, service, firewall, tunnel and timer settings every time it runs, so change the installer instead of these files.

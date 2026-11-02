@@ -33,6 +33,7 @@ import { claimAddress, isTakenError, releaseAddress } from '../content/addresses
 import { currentPage, hasPremium } from './context.js';
 import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
+import { statusEditorApi } from '../status/editorApi.js';
 
 // Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
 const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
@@ -151,6 +152,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   // Glocke, Nachrichten und Termine ebenso (auch ohne gezeigte Profilseite)
   await accountApi(ctx, userId, action, isPost, input);
   if (action.startsWith('code')) await codeApi(ctx, user, action, isPost, input);
+  // Statusseiten (status*): gehören zum Konto bzw. zu OnYourSites eigener Seite, nie zu einer Profilseite
+  if (action === 'status' || action.startsWith('status-')) await statusEditorApi(ctx, user, action, isPost, input);
 
   // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
   if (action === 'upload' && isPost) {

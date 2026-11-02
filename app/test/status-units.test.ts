@@ -1,6 +1,7 @@
 // Statusseiten, server/status-units.sh in einer Attrappen-Umgebung: systemctl, systemd-run, curl, ip, runuser,
 // mariadb und mysqldump sind kleine Skripte, die ihre Aufrufe aufschreiben; config.mjs ist ein Ersatz mit get/set.
-// Geprüft: die Units mit und ohne Tunnel (eigene Adressen in IPAddressDeny), config.json → status (Resolver von Hand
+// Geprüft: die Units mit und ohne Tunnel (eigene Adressen in IPAddressDeny), der Benachrichtigungsdienst (ST-3: ohne
+// IPAddressDeny, er spricht nur mit dem Mail-Server und Discord), config.json → status (Resolver von Hand
 // bleiben), der Test des Schutzes im Kernel (wirkt / wirkt nicht / nicht prüfbar), Neustart bei --update, kein
 // Einrichten mit TCP-Datenbank, Anhalten bei --reset, Puffer von MariaDB, Sicherung ohne Rohdaten, ping und planned.
 import { test, before, after } from 'node:test';
@@ -105,7 +106,17 @@ test('with the tunnel: own addresses are denied, config.json gets the status blo
   assert.match(unit('onyoursite-status-local.service'), /^StateDirectory=onyoursite-status$/m);
   assert.match(unit('onyoursite-status-local.timer'), /^OnUnitActiveSec=60s$/m);
   assert.ok(r.calls.includes('systemctl daemon-reload'));
-  assert.ok(r.calls.includes('systemctl enable --now onyoursite-status.service onyoursite-status-local.timer'));
+  assert.ok(r.calls.includes('systemctl enable --now onyoursite-status.service onyoursite-status-notify.service onyoursite-status-local.timer'));
+  // Der Benachrichtigungsdienst: eigener Einstieg, eigener Pool, keine Sperre der Adressen (Mail-Server vielleicht lokal)
+  const notifier = unit('onyoursite-status-notify.service');
+  assert.match(notifier, /^User=www-data$/m);
+  assert.match(notifier, new RegExp(`^ExecStart=${process.execPath.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} --max-old-space-size=192 ${code.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/app/dist/status/notify\\.js$`, 'm'));
+  assert.match(notifier, /^Environment=OYS_DB_POOL_SIZE=3$/m);
+  assert.match(notifier, /^Restart=always$/m);
+  assert.match(notifier, /^NoNewPrivileges=true$/m);
+  assert.match(notifier, /^ProtectSystem=strict$/m);
+  assert.doesNotMatch(notifier, /^IPAddressDeny=/m);
+  assert.match(notifier, /^WantedBy=multi-user\.target$/m);
   assert.ok(!r.calls.some((c) => c.startsWith('systemctl restart')), 'no restart outside --update');
   const status = config().status as Record<string, unknown>;
   assert.equal(status.tunnel, true);
@@ -127,7 +138,7 @@ test('without the tunnel and on --update: no own addresses denied, hand-edited r
   const status = config().status as Record<string, unknown>;
   assert.equal(status.tunnel, false);
   assert.deepEqual(status.dns, ['9.9.9.9']);
-  assert.ok(r.calls.includes('systemctl restart onyoursite-status.service'));
+  assert.ok(r.calls.includes('systemctl restart onyoursite-status.service onyoursite-status-notify.service'));
 });
 
 test('the kernel guard: ignored → warning and false; not testable → the old value stays', () => {
@@ -170,7 +181,7 @@ test('--reset and removal stop the status units; planned windows and pings go th
   r = run('status_ping backup; echo done');
   assert.deepEqual(r.calls, [`runuser -u www-data -- env NODE_ENV=production ${process.execPath} ${code}/app/dist/status/ctl.js ping backup`]);
   assert.match(r.out, /done/);
-  assert.equal(run('status_summary_line on-your.site').out.trim(), 'Status page: https://status.on-your.site · checks: systemctl status onyoursite-status onyoursite-status-local.timer');
+  assert.equal(run('status_summary_line on-your.site').out.trim(), 'Status page: https://status.on-your.site · services: systemctl status onyoursite-status onyoursite-status-notify onyoursite-status-local.timer');
 });
 
 test('the MariaDB buffer: a quarter of the memory, 512 MB to 16 GB, unless set elsewhere', () => {
