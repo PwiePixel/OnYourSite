@@ -2,11 +2,10 @@
 // Muster, das in PHP harmlos ist, kann den Server minutenlang blockieren. Jede gefundene Stelle ist ersetzt; hier:
 // 1. feindliche Eingaben ab 100 KB brauchen nur Millisekunden (vorher Sekunden bis Minuten),
 // 2. die neue Fassung liefert für Zufallseingaben genau dasselbe wie der frühere Ausdruck,
-// 3. und dasselbe wie die PHP-Funktion, die sie nachbaut.
+// 3. und dasselbe wie die PHP-Funktion, die sie nachbaut (mit der PHP-Version, siehe support/phpRef.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR } from '../src/config.js';
 import { cleanText, cleanUrl, normalizeSlug, prettyUrl, initials } from '../src/helpers.js';
 import * as compat from '../src/compat/core.js';
 import { cleanCss, urlArg } from '../src/css.js';
@@ -14,6 +13,7 @@ import { emphasis, markdown, mdEmphasis, mdInline, mdPlain } from '../src/update
 import { externLine, fileMime } from '../src/content/fileMime.js';
 import { ogFit, ogFont, ogWidth } from '../src/content/share.js';
 import { phpRtrim } from '../src/php.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 // Kleinste Zeit aus fünf Läufen (die Maschine ist oft ausgelastet)
 function fastest(fn: () => unknown): number {
@@ -44,11 +44,11 @@ const randomStrings = (seed: number, count: number, alphabet: readonly string[],
 };
 
 function php(code: string, input: unknown): unknown {
-  const script = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
-    + `require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/pages.php'; require '${ROOT_DIR}/lib/updates.php';`
+  const script = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
+    + `require '${phpFile('blacklist.php')}'; require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/pages.php')}'; require '${phpFile('lib/updates.php')}';`
     + `$in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in);`
     + 'echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);';
-  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(input), cwd: ROOT_DIR, maxBuffer: 256 * 1024 * 1024 }).toString());
+  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(input), cwd: phpRoot(), maxBuffer: 256 * 1024 * 1024 }).toString());
 }
 const phpEach = (fn: string, inputs: unknown[]): unknown => php(`return array_map(function ($v) { return ${fn}; }, $in);`, inputs);
 
@@ -100,7 +100,7 @@ test('trim, slash trimming and mb_substr give the same results as before', () =>
   }
 });
 
-test('long whitespace and slash runs are cleaned exactly like PHP', () => {
+test('long whitespace and slash runs are cleaned exactly like PHP', { skip: PHP_SKIP }, () => {
   const texts = ['a' + ' '.repeat(3000) + 'b', '  \t\n x \r\n\0 ', ' '.repeat(5000), '\x0B\x0Bx\x0B\x0B', 'x' + '\n'.repeat(4000) + 'y\n\n'];
   assert.deepEqual(texts.map((t) => cleanText(t, 9000)), phpEach('oys_clean_text($v, 9000)', texts));
   assert.deepEqual(texts.map((t) => cleanText(t, 9000, true)), phpEach('oys_clean_text($v, 9000, true)', texts));
@@ -137,7 +137,7 @@ test('url() arguments are found exactly like before', () => {
   }
 });
 
-test('custom CSS with whitespace in url() is cleaned exactly like PHP', () => {
+test('custom CSS with whitespace in url() is cleaned exactly like PHP', { skip: PHP_SKIP }, () => {
   const inputs = [
     'a{background:url(  https://evil.example/x' + ' '.repeat(2000) + 'y  )}', 'a{background:url(/img/a.png' + '\n'.repeat(500) + ')}',
     'b{background:url( a b c )}', 'c{background:url(\t//evil.example/x\t', 'd{background:url(' + ' '.repeat(300) + ')}',
@@ -196,7 +196,7 @@ test('emphasis pairs are found exactly like the former expressions', () => {
   }
 });
 
-test('emphasis-heavy update texts render exactly like PHP', () => {
+test('emphasis-heavy update texts render exactly like PHP', { skip: PHP_SKIP }, () => {
   const alphabet = ['**', '~~', '*', '_', ' ', 'a', 'b', '1', '\n', '<', '&', 'ü', '`', '\t'];
   const inputs = randomStrings(6, 400, alphabet, 30);
   inputs.push(pump('**a ', 3000), pump('_a.', 3000), '**' + 'a '.repeat(1500) + '**', pump('*a<', 3000) + '*');
@@ -223,7 +223,7 @@ test('the extern rule matches exactly like the former expression', () => {
   for (const s of randomStrings(7, 40000, alphabet, 8)) assert.equal(externLine(s), OLD_EXTERN.test(s), JSON.stringify(s));
 });
 
-test('text uploads with C markers are detected like PHP', () => {
+test('text uploads with C markers are detected like PHP', { skip: PHP_SKIP }, () => {
   const texts = ['\n\n\n  extern int x;\n', 'a\n \t extern void f(void);', 'externx', 'intern\nextern\n', ' \n\r\n extern\tx', 'x extern y\n',
     '\n'.repeat(9000) + 'extern x', '\r\rextern x', 'hello\n\n\textern  \n'];
   const theirs = php('$fi = finfo_open(FILEINFO_MIME_TYPE); return array_map(fn ($v) => finfo_buffer($fi, $v), $in);', texts) as string[];

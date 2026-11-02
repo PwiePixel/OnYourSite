@@ -7,6 +7,7 @@ import { jsonDecode, isArr, type PhpArr } from '../src/content/util.js';
 import { parseStr } from '../src/php.js';
 import { jsonValueText, previewBlockId, requestedPageId, sliceEntries } from '../src/app/editorApi.js';
 import { O, Raw, diffs, jsonText, rng, runPhp } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const r = rng(4242);
 
@@ -20,7 +21,7 @@ const SCALARS = ['null', '0', '-1', '1', '2', '2.9', '-0', '-0.0', '1e3', '1E2',
 // 9223372036854775807 (PHP_INT_MAX, Seite angegeben): bekannte Grenze von jsonDecode()/intval(), hier ausgelassen.
 const maxed = (json: string): string => (/^-?\d+$/.test(json) && Math.abs(Number(json)) >= 2 ** 53 ? 'BIG' : json);
 
-test('the requested page id follows PHP ?? and (int) rules', () => {
+test('the requested page id follows PHP ?? and (int) rules', { skip: PHP_SKIP }, () => {
   const SCALARS_ = SCALARS.filter((x) => x !== '9223372036854775808');
   const cases: Array<{ json: string; post: string; get: string }> = [];
   for (let i = 0; i < 1500; i++) {
@@ -61,7 +62,7 @@ test('the requested page id follows PHP ?? and (int) rules', () => {
 // ausgelassen und im Bericht genannt.
 const NO_BIG = SCALARS.filter((x) => !/^-?\d{16,}$/.test(x));
 
-test('preview block ids keep only letters and digits like preg_match without /u (and a final newline)', () => {
+test('preview block ids keep only letters and digits like preg_match without /u (and a final newline)', { skip: PHP_SKIP }, () => {
   const ALPHA = ['a', 'Z', '0', '9', '-', '_', ' ', '\n', '\r', 'ä', 'ſ', 'K', 'İ', 'ı', '😀', '\u0000', 'x'];
   const cases: Array<{ key: string; block: string }> = [];
   for (let i = 0; i < 2000; i++) {
@@ -93,7 +94,7 @@ test('preview block ids keep only letters and digits like preg_match without /u 
   assert.ok(node.some((x) => x === '"Array"') && node.some((x) => x.endsWith('\\n"') && !x.startsWith('"n')));
 });
 
-test('array_slice keeps text keys and renumbers integer keys', () => {
+test('array_slice keeps text keys and renumbers integer keys', { skip: PHP_SKIP }, () => {
   const KEYS = ['0', '1', '2', '5', '-3', '05', '-0', 'x', 'a b', '9223372036854775807', '9223372036854775808', '-9223372036854775808', '1.5', '', '00', '__proto__'];
   const cases: Array<{ json: string; len: number }> = [];
   for (let i = 0; i < 1000; i++) {
@@ -114,7 +115,7 @@ test('array_slice keeps text keys and renumbers integer keys', () => {
   assert.deepEqual(diffs(cases, node, php), []);
 });
 
-test('a discord id sent as a JSON number keeps every digit like PHP (string) on json_decode', () => {
+test('a discord id sent as a JSON number keeps every digit like PHP (string) on json_decode', { skip: PHP_SKIP }, () => {
   const cases: string[] = [];
   const digits = (n: number): string => {
     let s = String(1 + r.next(9));

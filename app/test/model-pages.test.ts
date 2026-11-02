@@ -1,5 +1,6 @@
-// Seiten gegen PHP (lib/pages.php, lib/share.php): Einstellungen prüfen und lesen, Blöcke und Seiten für den Editor
-// (mit den Zeilen der Test-Datenbank und erfundenen Zeilen), verwendete Dateien, Kennung und Adresse des Vorschaubilds
+// Seiten gegen PHP (lib/pages.php, lib/share.php der PHP-Version, siehe support/phpRef.ts): Einstellungen prüfen und
+// lesen, Blöcke und Seiten für den Editor (mit den Zeilen der Test-Datenbank und erfundenen Zeilen), verwendete
+// Dateien, Kennung und Adresse des Vorschaubilds; dazu feste Werte ohne PHP
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { q, closePool } from '../src/db.js';
@@ -10,6 +11,7 @@ import {
 import { ogHash, ogUrl } from '../src/content/share.js';
 import { jsonDecode, type PhpArr } from '../src/content/util.js';
 import { runPhp, PHP_EACH, nodeEach, diffs, jsonText, rng, O, Raw, enc, jsFloats } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 after(() => closePool());
 
@@ -67,7 +69,19 @@ const settingsInput = (r: R): unknown => (r.chance(0.95)
   ? obj(r, SETTINGS_KEYS, { entrance: (x) => obj(x, ENTRANCE_KEYS), seo: (x) => obj(x, SEO_KEYS) })
   : anyValue(r));
 
-test('editor settings are checked exactly like PHP (premium and free)', () => {
+// Eine Block-Zeile mit dem Nötigsten und was daraus für den Editor wird (aus dem Vergleich mit PHP)
+const MINIMAL_ROW = (): O => new O([['id', '7'], ['type', 'link'], ['is_visible', 1], ['data', '[]'], ['schedule', null], ['protection', ''], ['password_hash', null],
+  ['effect', null], ['clicks', 3]]);
+const MINIMAL_ROW_READ = [{ id: 7, type: 'link', is_visible: 1, data: [], schedule: null, protection: 'none', has_password: false, password_hash: null, effect: 'none', clicks: 3 },
+  { id: 7, type: 'link', visible: true, data: {}, schedule: { enabled: false, days: [], from: '', to: '', start: '', end: '' }, protection: 'none', has_password: false, password: '', effect: 'none', clicks: 3 }];
+
+test('missing settings are the defaults, and a minimal block row is read for the editor', () => {
+  assert.equal(enc(pageSettings({})), enc(defaultSettings()));
+  const row = jsonDecode(jsonText(MINIMAL_ROW())) as never;
+  assert.equal(enc([blockFromRow(row), blockForEditor(blockFromRow(row))]), enc(MINIMAL_ROW_READ));
+});
+
+test('editor settings are checked exactly like PHP (premium and free)', { skip: PHP_SKIP }, () => {
   const r = rng(808);
   const cases: unknown[] = [
     // Testvektor aus der Beschreibung
@@ -99,7 +113,7 @@ function storedSettings(r: R): unknown {
   return jsonText(settingsInput(r));
 }
 
-test('stored settings are read like PHP, with unknown keys kept in their order', () => {
+test('stored settings are read like PHP, with unknown keys kept in their order', { skip: PHP_SKIP }, () => {
   const r = rng(909);
   const cases: unknown[] = ['{"zzz":1,"entrance":{"volume":"30","foo":2},"accent":"#fff","seo":"bad"}', '{"b":1,"5":2,"accent":"#000000","3":{"x":[]}}',
     '{"custom_css":"a{background:url(https://evil.com/x)}","entrance":{"music":"music_5_1.mp3"}}', '{"entrance":{"loop":false,"zz":1,"0":2},"seo":{"keywords":null}}',
@@ -110,8 +124,6 @@ test('stored settings are read like PHP, with unknown keys kept in their order',
   const php = (JSON.parse(runPhp(PHP_EACH(`oys_page_settings(['settings' => $c])`), text)) as string[]).map(jsFloats);
   const node = nodeEach(jsonDecode(text) as unknown[], (c) => pageSettings({ settings: c }));
   assert.deepEqual(diffs(cases, node, php), []);
-  // Fehlende Einstellungen = Vorgaben
-  assert.equal(enc(pageSettings({})), enc(defaultSettings()));
 });
 
 function pageRow(r: R): O {
@@ -152,17 +164,15 @@ function blockRow(r: R): O {
   ]);
 }
 
-test('blocks for the editor match PHP for test-database rows and odd rows', async () => {
+test('blocks for the editor match PHP for test-database rows and odd rows', { skip: PHP_SKIP }, async () => {
   const r = rng(1234);
-  const rows: unknown[] = [new O([['id', '7'], ['type', 'link'], ['is_visible', 1], ['data', '[]'], ['schedule', null], ['protection', ''], ['password_hash', null],
-    ['effect', null], ['clicks', 3]])];
+  const rows: unknown[] = [MINIMAL_ROW()];
   for (let i = 0; i < 1200; i++) rows.push(blockRow(r));
   const text = jsonText(rows);
   const php = (JSON.parse(runPhp(PHP_EACH('[oys_block_from_row($c), oys_block_for_editor(oys_block_from_row($c))]'), text)) as string[]).map(jsFloats);
   const node = nodeEach(jsonDecode(text) as unknown[], (c) => [blockFromRow(c as never), blockForEditor(blockFromRow(c as never))]);
   assert.deepEqual(diffs(rows.map((x) => jsonText(x)), node, php), []);
-  assert.equal(php[0], enc([{ id: 7, type: 'link', is_visible: 1, data: [], schedule: null, protection: 'none', has_password: false, password_hash: null, effect: 'none', clicks: 3 },
-    { id: 7, type: 'link', visible: true, data: {}, schedule: { enabled: false, days: [], from: '', to: '', start: '', end: '' }, protection: 'none', has_password: false, password: '', effect: 'none', clicks: 3 }]));
+  assert.equal(php[0], enc(MINIMAL_ROW_READ));
 
   // Die echten Zeilen: PHP liest mit PDO, Node mit mysql2
   const phpDb = JSON.parse(runPhp(`$out = [];
@@ -182,7 +192,7 @@ test('blocks for the editor match PHP for test-database rows and odd rows', asyn
   assert.deepEqual(nodeDb, phpDb);
 });
 
-test('pages for the editor, page files and preview image addresses match PHP for odd rows', () => {
+test('pages for the editor, page files and preview image addresses match PHP for odd rows', { skip: PHP_SKIP }, () => {
   const r = rng(4711);
   const cases: unknown[] = [
     // aus reference/php-generators/hash.php

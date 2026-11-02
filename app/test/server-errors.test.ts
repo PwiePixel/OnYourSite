@@ -1,11 +1,12 @@
 // Fehler beim Senden und Ausfall der Datenbank: der Server läuft immer weiter. Ohne Datenbank antwortet Node wie PHP
 // (db.php: 503-Hinweisseite vor allem anderen) – auch dann, wenn die Datenbank erst im laufenden Betrieb wegfällt.
+// Der Vergleich mit PHP braucht die PHP-Version (support/phpRef.ts); die Hinweisseite selbst prüft ein Test ohne PHP.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { copyFileSync, cpSync, createReadStream, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -13,6 +14,7 @@ import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src
 import { closePool } from '../src/db.js';
 import { buildServer } from '../src/server.js';
 import type { Ctx } from '../src/web/ctx.js';
+import { PHP_SKIP, phpTree, removePhpTree } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const MISSING = String((BASE.db as ConfigData).name ?? 'oys_test') + '_missing_db';
@@ -44,7 +46,8 @@ function request(port: number, method: string, path: string, opts: { host?: stri
 
 // ---------------------------------------------------------------- Datenbank nicht erreichbar
 
-// Die PHP-Seite mit eigener config.php (Datenbank, die es nicht gibt): Kopie der PHP-Dateien, statische Ordner verlinkt
+// Die PHP-Seite mit eigener config.php (Datenbank, die es nicht gibt): Code-Ordner der PHP-Version (support/phpRef.ts)
+// mit einem Router für php -S, der wie die .htaccess der PHP-Version die privaten Ordner sperrt
 const ROUTER = `<?php
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 if (preg_match('#^/(lib|cron|email|PHPMailer|tests|scripts|views|discord-bot|server)(/|$)#i', $path) || preg_match('#^/config(\\.example)?\\.php$#', $path)) {
@@ -60,15 +63,8 @@ $_SERVER['SCRIPT_NAME'] = '/index.php';
 require __DIR__ . '/index.php';
 `;
 
-function phpTree(config: ConfigData): string {
-  const dir = mkdtempSync(join(tmpdir(), 'oys-dbdown-'));
-  for (const f of ['index.php', 'api.php', 'admin_impersonate.php', 'admin_return.php', 'db.php', 'security.php', 'mail.php', 'blacklist.php', 'robots.txt']) {
-    copyFileSync(join(ROOT_DIR, f), join(dir, f));
-  }
-  for (const d of ['lib', 'views', 'email']) cpSync(join(ROOT_DIR, d), join(dir, d), { recursive: true });
-  for (const d of ['PHPMailer', 'static']) symlinkSync(join(ROOT_DIR, d), join(dir, d));
-  const json = Buffer.from(JSON.stringify(config)).toString('base64');
-  writeFileSync(join(dir, 'config.php'), `<?php return json_decode(base64_decode('${json}'), true);\n`, { mode: 0o600 });
+function phpWithoutDb(): string {
+  const dir = phpTree(withoutDb);
   writeFileSync(join(dir, 'router.php'), ROUTER);
   return dir;
 }
@@ -112,7 +108,7 @@ const REQUESTS: Array<[string, string, { host?: string; body?: string; type?: st
   ['POST', '/track-click', { body: '{"link_id":1}', type: 'application/json' }], ['GET', '/api.php?user=mia'], ['GET', '/api.php'],
   ['GET', '/admin_return.php'], ['GET', '/admin_impersonate.php?id=5'],
   // ohne Datenbank (vor db.php): Dateien und Uploads
-  ['GET', '/robots.txt'], ['GET', '/static/uploads/none.png'], ['GET', '/lib/config.php'],
+  ['GET', '/robots.txt'], ['GET', '/static/uploads/none.png'], ['GET', '/server/install.sh'],
 ];
 
 // db.php nennt config.php, die Node-Version config.json (dort stehen die Zugangsdaten jetzt) – sonst gleich
@@ -124,57 +120,99 @@ async function answers(port: number): Promise<Array<ReturnType<typeof normalize>
   return out;
 }
 
+type Answers = Array<ReturnType<typeof normalize>>;
+
+// Antworten von Node ohne Datenbank, einmal je Testlauf beim ersten Aufruf ermittelt (im ersten Test dieser Datei):
+// 1. Datenbank schon beim Start nicht erreichbar – das Schema wurde in diesem Prozess noch nie geprüft
+// 2. Datenbank fällt im Betrieb weg – Schema schon geprüft, Verbindungen im Pool
+let nodeDown: Promise<{ atStart: Answers; whileRunning: Answers }> | null = null;
+const nodeWithoutDb = () => (nodeDown ??= measureNodeWithoutDb());
+
+async function measureNodeWithoutDb(): Promise<{ atStart: Answers; whileRunning: Answers }> {
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    setConfigForTests(withoutDb);
+    await closePool();
+    let app = await buildServer();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    // Immer schließen: ein offener Server hielte den Testlauf bei einem Fehlschlag fest
+    let atStart: Answers;
+    try {
+      atStart = await answers((app.server.address() as net.AddressInfo).port);
+    } finally {
+      await app.close();
+    }
+
+    setConfigForTests(BASE);
+    await closePool();
+    app = await buildServer();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    let whileRunning: Answers;
+    try {
+      const port = (app.server.address() as net.AddressInfo).port;
+      assert.equal((await request(port, 'GET', '/imprint')).status, 200);
+      setConfigForTests(withoutDb);
+      await closePool();
+      whileRunning = await answers(port);
+    } finally {
+      await app.close();
+    }
+    return { atStart, whileRunning };
+  } finally {
+    console.error = quiet;
+    setConfigForTests(BASE);
+    await closePool();
+  }
+}
+
 function compare(node: Array<ReturnType<typeof normalize>>, php: Array<ReturnType<typeof normalize>>, label: string): void {
   // Dateien liefert sonst Apache – php -S setzt andere Content-Types, darum dort nur Status und Inhalt
   const diffs = REQUESTS.map(([m, p, o], i) => ({ req: `${m} ${o?.host ?? ''}${p}`, node: node[i], php: php[i] }))
     .map((d) => (d.req.includes('/robots.txt') ? { ...d, node: { ...d.node, type: '' }, php: { ...d.php, type: '' } } : d));
   // Gesperrte Ordner beantwortet im Betrieb Apache selbst (403 mit Apaches Seite) – Node antwortet genauso, php -S nicht
-  for (const d of diffs.filter((x) => x.req.endsWith('/lib/config.php'))) assert.equal(d.node.status, 403, `${label}: ${d.req}`);
+  for (const d of diffs.filter((x) => x.req.endsWith('/server/install.sh'))) assert.equal(d.node.status, 403, `${label}: ${d.req}`);
   // Fremde Hosts berühren die Datenbank nie (premium-domains PD-2): die 404-Seite statt der Hinweisseite von PHP
   for (const d of diffs.filter((x) => x.req.includes('other.example'))) assert.equal(d.node.status, 404, `${label}: ${d.req}`);
-  assert.deepEqual(diffs.filter((d) => !d.req.endsWith('/lib/config.php') && !d.req.includes('other.example') && JSON.stringify(d.node) !== JSON.stringify(d.php)), [], label);
+  assert.deepEqual(diffs.filter((d) => !d.req.endsWith('/server/install.sh') && !d.req.includes('other.example') && JSON.stringify(d.node) !== JSON.stringify(d.php)), [], label);
 }
 
-test('without the database Node answers every request like PHP – at start and when it fails later', async () => {
-  const dir = phpTree(withoutDb);
+test('without the database Node shows the notice page for everything but files – at start and when it fails later', async () => {
+  const { atStart, whileRunning } = await nodeWithoutDb();
+  for (const [label, got] of [['database down at start', atStart], ['database gone while running', whileRunning]] as const) {
+    REQUESTS.forEach(([method, path, opts], i) => {
+      const req = `${label}: ${method} ${opts?.host ?? ''}${path}`;
+      const r = got[i];
+      if (path === '/robots.txt') assert.deepEqual([r.status, r.body], [200, readFileSync(join(ROOT_DIR, 'robots.txt'), 'utf8')], req);
+      else if (path === '/static/uploads/none.png') assert.equal(r.status, 404, req);
+      else if (path === '/server/install.sh') assert.equal(r.status, 403, req);
+      // Fremde Hosts berühren die Datenbank nie (premium-domains PD-2): 404 statt der Hinweisseite
+      else if (opts?.host === 'other.example') assert.equal(r.status, 404, req);
+      else {
+        assert.deepEqual([r.status, r.type], [503, 'text/html'], req);
+        // HEAD ohne Inhalt, sonst die Hinweisseite (mit dem Verweis auf config.php statt config.json, siehe normalize)
+        if (method === 'HEAD') assert.equal(r.body, '', req);
+        else assert.match(r.body, /Database connection failed\.[\s\S]*config\.php/, req);
+      }
+    });
+  }
+  assert.deepEqual(whileRunning, atStart);
+});
+
+test('without the database Node answers every request like PHP – at start and when it fails later', { skip: PHP_SKIP }, async () => {
+  const dir = phpWithoutDb();
   const php = await startPhp(dir);
-  const quiet = console.error;
-  console.error = () => {};
   try {
     const expected = await answers(php.port);
     // Sicherstellen, dass PHP wirklich die Hinweisseite zeigt (sonst prüft der Test nichts)
     assert.equal(expected[0].status, 503);
     assert.match(expected[0].body, /Database connection failed\./);
-
-    // 1. Datenbank schon beim Start nicht erreichbar (dieser Test läuft als erster: das Schema wurde in diesem Prozess
-    // noch nie geprüft)
-    setConfigForTests(withoutDb);
-    await closePool();
-    let app = await buildServer();
-    await app.listen({ port: 0, host: '127.0.0.1' });
-    // Erst schließen, dann vergleichen: ein offener Server hielte den Testlauf bei einem Fehlschlag fest
-    const atStart = await answers((app.server.address() as net.AddressInfo).port);
-    await app.close();
+    const { atStart, whileRunning } = await nodeWithoutDb();
     compare(atStart, expected, 'database down at start');
-
-    // 2. Datenbank fällt im Betrieb weg (Schema schon geprüft, Verbindungen im Pool)
-    setConfigForTests(BASE);
-    await closePool();
-    app = await buildServer();
-    await app.listen({ port: 0, host: '127.0.0.1' });
-    const port = (app.server.address() as net.AddressInfo).port;
-    assert.equal((await request(port, 'GET', '/imprint')).status, 200);
-    setConfigForTests(withoutDb);
-    await closePool();
-    const whileRunning = await answers(port);
-    await app.close();
     compare(whileRunning, expected, 'database gone while running');
   } finally {
-    console.error = quiet;
     php.stop();
-    setConfigForTests(BASE);
-    await closePool();
-    rmSync(dir, { recursive: true, force: true });
+    removePhpTree(dir);
   }
 });
 

@@ -1,13 +1,12 @@
 // Honigwaben gegen PHP: Einstellungen, Kontostand, Buchungen, Verdienen, Bezahlen, Editor-Daten und der Admin-Teil.
-// Dieselben Aufrufe laufen mit lib/honeycombs.php auf Datenbank A und mit der Node-Version auf Datenbank B;
-// nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im Admin stehen die Aktionen
-// und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) – verglichen wird mit
-// denselben Teilen von PHP.
+// Dieselben Aufrufe laufen mit lib/honeycombs.php (PHP-Version, siehe support/phpRef.ts) auf Datenbank A und mit der
+// Node-Version auf Datenbank B; nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im
+// Admin stehen die Aktionen und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) –
+// verglichen wird mit denselben Teilen von PHP.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR } from '../src/config.js';
 import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
@@ -15,8 +14,9 @@ import { phpInt, phpJsonDecode } from '../src/honeycombs/util.js';
 import { adminHoneycombsView } from '../src/honeycombs/adminView.js';
 import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
-import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
+import { phpBoot, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 const DB = { php: testDbName('hcu_hc_php'), node: testDbName('hcu_hc_node') };
 let admin: Connection;
@@ -91,7 +91,12 @@ async function same(ops: Op[], label: string): Promise<unknown[]> {
 
 const deep = (n: number, inner: string) => '['.repeat(n) + inner + ']'.repeat(n);
 
-test('settings: defaults and merging of stored values', async () => {
+test('settings without stored values are the defaults; broken JSON reads as null', () => {
+  assert.deepEqual(hcSettingsFrom(''), hcDefaults());
+  assert.equal(phpJsonDecode('{"a":"\\ud800"}'), null);
+});
+
+test('settings: defaults and merging of stored values', { skip: PHP_SKIP }, async () => {
   const metas = ['', 'null', '[]', '[1,2,3]', '5', '"str"', '{}', '{"daily":7}', ' {"daily":4} ',
     '{"daily":"7","profile":" 30","views":"1e1","views_step":"0","code_page":"12.9"}',
     '{"daily":-5,"profile":100001,"views":1e400,"views_step":-1,"code_page":9223372036854775807}',
@@ -111,12 +116,9 @@ test('settings: defaults and merging of stored values', async () => {
     ['save_settings', { daily: '\t7 ', profile: '+3', views: '-0', views_step: '.9', code_page: '100000', extra: '1' }],
     ['meta_delete']];
   await same(ops, 'settings');
-  // Die reine Fassung (ohne Datenbank) rechnet gleich
-  assert.deepEqual(hcSettingsFrom(''), hcDefaults());
-  assert.equal(phpJsonDecode('{"a":"\\ud800"}'), null);
 });
 
-test('balance, add (unique key), history and describe', async () => {
+test('balance, add (unique key), history and describe', { skip: PHP_SKIP }, async () => {
   const rows = [
     { reason: 'daily', ref: '2026-10-01', note: '', amount: 5 }, { reason: 'profile', ref: 'complete', note: '', amount: 20 },
     { reason: 'views', note: '1000', amount: 10 }, { reason: 'views', note: 'abc', amount: 10 }, { reason: 'views', note: '1234567', amount: 10 },
@@ -137,12 +139,12 @@ test('balance, add (unique key), history and describe', async () => {
     ['profile_complete', 3], ['profile_complete', 5], ['profile_complete', 6], ['profile_complete', 7], ['profile_complete', 8], ['profile_complete', 9]];
   await same(ops, 'ledger');
   // describe() ohne Datenbank: dieselben Texte wie die echte Funktion
-  const php = JSON.parse(execFileSync('php', ['-r', `${PHP_BOOT} echo json_encode(array_map('oys_hc_describe', json_decode(stream_get_contents(STDIN), true)), JSON_UNESCAPED_UNICODE);`],
-    { input: JSON.stringify(rows), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }).toString());
+  const php = JSON.parse(execFileSync('php', ['-r', `${phpBoot()} echo json_encode(array_map('oys_hc_describe', json_decode(stream_get_contents(STDIN), true)), JSON_UNESCAPED_UNICODE);`],
+    { input: JSON.stringify(rows), env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }).toString());
   assert.deepEqual(rows.map((r) => hcDescribe(r)), php);
 });
 
-test('earn: daily, profile and views (one level a day, at most 20)', async () => {
+test('earn: daily, profile and views (one level a day, at most 20)', { skip: PHP_SKIP }, async () => {
   const ops: Op[] = [
     ['earn', 5], ['earn', 5], ['for_editor', 5], ['for_editor', 5, [{ amount: 5, text: 'for being active today' }]],
     ['earn', 6], ['earn', 3], ['earn', 9],
@@ -160,7 +162,7 @@ test('earn: daily, profile and views (one level a day, at most 20)', async () =>
   assert.deepEqual(php[1], []);
 });
 
-test('spend: price, once per ref, not below 0', async () => {
+test('spend: price, once per ref, not below 0', { skip: PHP_SKIP }, async () => {
   const ops: Op[] = [
     ['spend', 9, 100, 'code_page'], ['spend', 5, 50, 'theme'], ['spend', 5, 50, 'theme'], ['spend', 5, 0, 'free'], ['spend', 5, 100000, 'big'],
     ['spend', 999, 0, 'code_page'], ['spend', 7, -5, 'neg'], ['spend', 5, 1, 'THEME'], ['spend', 6, 1000, 'code_page'],
@@ -169,7 +171,7 @@ test('spend: price, once per ref, not below 0', async () => {
   assert.match(String(php[0]), /^You need 100 honeycombs – you have \d+\.$/);
 });
 
-test('admin handler: every action incl. invalid input', async () => {
+test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, async () => {
   const g = (o: Record<string, unknown>) => ({ hc_action: 'grant', ...o });
   const ops: Op[] = [
     ['admin', {}, 3], ['admin', { hc_action: 'nope' }, 3], ['admin', { hc_action: ['settings'] }, 3], ['admin', { hc_action: 'Settings' }, 3], ['admin', { hc_action: '' }, 3],
@@ -260,7 +262,7 @@ test('locked: busy message while the account is locked, and parallel spends neve
   await restoreDb();
 });
 
-test('(int) of form and JSON values matches PHP 8.3', () => {
+test('(int) of form and JSON values matches PHP 8.3', { skip: PHP_SKIP }, () => {
   const inputs: unknown[] = ['1e400', '-1e400', '1e300', '-1e300', '99999999999999999999', '9223372036854775807', '12abc', ' 12', '\n-7', '0x1A', '.5', '5.', '-0', '',
     'abc', '+3', '1e3', '1.9e2', 9.9e18, -9.9e18, 1e19, 2 ** 63, -(2 ** 63), 1e300, 12.7, -12.7, true, false, null, ['a'], [], { a: 1 }];
   const php = JSON.parse(execFileSync('php', ['-r', 'echo json_encode(array_map(function ($v) { return (int) $v; }, json_decode(stream_get_contents(STDIN), true)));'],
@@ -269,7 +271,7 @@ test('(int) of form and JSON values matches PHP 8.3', () => {
   assert.deepEqual(inputs.map((v) => phpInt(v)), php.map((n) => Number(n)));
 });
 
-test('kb() rounds like the PHP view', () => {
+test('kb() rounds like the PHP view', { skip: PHP_SKIP }, () => {
   const sizes = [0, 1, 511, 512, 1023, 1024, 1535, 1536, 2047, 2048, 1048575, 1048576, 1101004, 1101005, 1310720, 1572864, 2097152, 5242879, 10485760, 123456789];
   const php = JSON.parse(execFileSync('php', ['-r', '$kb = function (int $b) { return $b >= 1048576 ? round($b / 1048576, 1) . \' MB\' : max(1, round($b / 1024)) . \' KB\'; };'
     + 'echo json_encode(array_map($kb, json_decode(stream_get_contents(STDIN), true)));'], { input: JSON.stringify(sizes) }).toString());
@@ -279,11 +281,11 @@ test('kb() rounds like the PHP view', () => {
 // views/admin_honeycombs.php mit den Variablen aus views/admin.php
 async function phpView(db: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile('php', ['-r', `${PHP_BOOT} $_SESSION = ['csrf' => 'CSRFTOKEN'];
+    const child = execFile('php', ['-r', `${phpBoot()} $_SESSION = ['csrf' => 'CSRFTOKEN'];
       $all_users = $pdo->query("SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
       foreach ($all_users as &$u) { $u['discord_id'] = decryptData($u['discord_id']); } unset($u);
-      ob_start(); require '${ROOT_DIR}/views/admin_honeycombs.php'; echo ob_get_clean();`],
-    { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR, maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(out)));
+      ob_start(); require '${phpFile('views/admin_honeycombs.php')}'; echo ob_get_clean();`],
+    { env: { ...process.env, OYS_TEST_DB: db }, cwd: phpRoot(), maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => (err ? reject(new Error(errOut || err.message)) : resolve(out)));
     child.stdin?.end();
   });
 }
@@ -340,7 +342,7 @@ const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(blo
 const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text-brand-400'></i>", "<i class='bx bx-hive text-2xl text-yellow-400'></i>")
   .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
 
-test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', async () => {
+test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
   // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
   // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
   // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
@@ -368,7 +370,7 @@ test('admin view: Honeycombs identical apart from the moved parts and the yellow
   }
 });
 
-test('date() of today matches (earn refs use the site time zone)', () => {
-  const php = execFileSync('php', ['-r', `${PHP_BOOT} echo date('Y-m-d');`], { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }).toString();
+test('date() of today matches (earn refs use the site time zone)', { skip: PHP_SKIP }, () => {
+  const php = execFileSync('php', ['-r', `${phpBoot()} echo date('Y-m-d');`], { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }).toString();
   assert.equal(date('Y-m-d', time()), php);
 });

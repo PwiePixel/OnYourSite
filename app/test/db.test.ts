@@ -1,9 +1,11 @@
-// Datenbank-Regeln gegen PDO: geänderte Zeilen, Typen, Zeitzone je Verbindung, Sperren, Socket für 'localhost'
+// Datenbank-Regeln gegen PDO: geänderte Zeilen, Typen, Zeitzone je Verbindung, Sperren, Socket für 'localhost' (der
+// Vergleich mit PDO braucht die PHP-Version, siehe support/phpRef.ts)
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool, exec, one, q, value, withNamedLock, withConnection, transaction, outsidePinned, LockBusyError, DbUnavailableError, tzOffset } from '../src/db.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const withDb = (patch: Record<string, unknown>) => setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), ...patch } as ConfigData });
@@ -15,33 +17,39 @@ after(async () => {
 
 // Dieselben Anweisungen in PHP (PDO wie db.php) – rowCount() nach jeder
 function phpRowCounts(statements: string[]): number[] {
-  const script = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
+  const script = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
     $pdo = new PDO('mysql:host=' . oys_config('db.host') . ';dbname=' . oys_config('db.name') . ';charset=utf8mb4', oys_config('db.user'), oys_config('db.pass'),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $out = []; foreach (json_decode(stream_get_contents(STDIN), true) as $sql) { $out[] = $pdo->exec($sql); } echo json_encode($out);`;
-  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(statements), cwd: ROOT_DIR }).toString());
+  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(statements), cwd: phpRoot() }).toString());
 }
 
-test('affected rows count only changed rows, like PDO rowCount()', async () => {
-  const steps = [
-    'CREATE TEMPORARY TABLE oys_t (id INT PRIMARY KEY, v INT)',
-    'INSERT INTO oys_t VALUES (1, 1), (2, 2), (3, 3)',
-    'UPDATE oys_t SET v = 1 WHERE id = 1',
-    'UPDATE oys_t SET v = 5 WHERE id IN (1, 2)',
-    'UPDATE oys_t SET v = v WHERE id > 0',
-    'INSERT INTO oys_t VALUES (1, 9) ON DUPLICATE KEY UPDATE v = VALUES(v)',
-    'INSERT IGNORE INTO oys_t VALUES (1, 9)',
-    'DELETE FROM oys_t WHERE id = 3',
-  ];
-  const php = phpRowCounts(steps);
-  // Temporäre Tabellen gelten je Verbindung: alles auf einer Verbindung ausführen
-  const { withConnection } = await import('../src/db.js');
-  const node = await withConnection(async (db) => {
-    const out: number[] = [];
-    for (const sql of steps) out.push((await db.exec(sql)).affectedRows);
-    return out;
-  });
-  assert.deepEqual(node, php);
+const ROW_STEPS = [
+  'CREATE TEMPORARY TABLE oys_t (id INT PRIMARY KEY, v INT)',
+  'INSERT INTO oys_t VALUES (1, 1), (2, 2), (3, 3)',
+  'UPDATE oys_t SET v = 1 WHERE id = 1',
+  'UPDATE oys_t SET v = 5 WHERE id IN (1, 2)',
+  'UPDATE oys_t SET v = v WHERE id > 0',
+  'INSERT INTO oys_t VALUES (1, 9) ON DUPLICATE KEY UPDATE v = VALUES(v)',
+  'INSERT IGNORE INTO oys_t VALUES (1, 9)',
+  'DELETE FROM oys_t WHERE id = 3',
+];
+
+// Temporäre Tabellen gelten je Verbindung: alles auf einer Verbindung ausführen (und die Tabelle danach wieder weg,
+// die Verbindung bleibt im Pool)
+const nodeRowCounts = (): Promise<number[]> => withConnection(async (db) => {
+  const out: number[] = [];
+  for (const sql of ROW_STEPS) out.push((await db.exec(sql)).affectedRows);
+  await db.exec('DROP TEMPORARY TABLE oys_t');
+  return out;
+});
+
+test('affected rows count only changed rows (an unchanged UPDATE is 0, ON DUPLICATE KEY UPDATE 2)', async () => {
+  assert.deepEqual(await nodeRowCounts(), [0, 3, 0, 2, 0, 2, 0, 1]);
+});
+
+test('affected rows count only changed rows, like PDO rowCount()', { skip: PHP_SKIP }, async () => {
+  assert.deepEqual(await nodeRowCounts(), phpRowCounts(ROW_STEPS));
 });
 
 test('value types match PDO', async () => {

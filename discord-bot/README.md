@@ -72,7 +72,7 @@ Both ask only for the **bot token** and the **Application ID** (Enter takes the 
 
 **Updating from an older version** adds what the new version needs and changes nothing else: `--update` looks for a channel named **updates** (text, announcement or forum) and uses it unchanged, or creates **#updates** in the OnYourSite category; it saves its ID in the settings file (only that one line changes) and doesn’t touch roles or other channels. If that fails, it says why, stores an empty value and doesn’t try again by itself – `--channel UPDATES_CHANNEL_ID` tries again. `npm run check` (or `node index.js --check`) shows whether the website is reachable and what it supports.
 
-**Keep the settings out of the website folder.** The `.htaccess` blocks `/discord-bot/` and every `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
+**Keep the settings out of the website folder.** The website never serves `/discord-bot/` or any `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
 
 ## Files
 

@@ -6,15 +6,17 @@
 // 2. Der Lauf über alle Nutzer (oys_run_weekly_reports) samt weekly_report_sent_at.
 // 3. Der Befehl selbst: PHP aus einer Kopie des Codes (eigene config.php) und Node, beide über einen kleinen SMTP-Server
 //    mit STARTTLS – verglichen werden Ausgabe, Rückgabewert, Datenbank und die zugestellten Mails.
+// Die Vergleiche brauchen die PHP-Version (OYS_PHP_REF, siehe support/phpRef.ts); ohne sie prüfen eigene Tests, dass
+// die Node-Seite mit denselben Daten jeden Zweig erreicht.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tls from 'node:tls';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, configString, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
+import { configString, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool, exec, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { setMailDirForTests } from '../src/mail.js';
@@ -24,6 +26,7 @@ import { enc, rng, runPhp } from './modelHarness.js';
 import { SmtpSink } from './support/smtpSink.js';
 import { decodeWords, header, leaves, parseMessage } from './support/mime.js';
 import { ensureSchema } from '../src/schema.js';
+import { PHP_SKIP, phpFile, phpTree as phpCodeTree } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const SOURCE = configString('db.name');
@@ -146,7 +149,7 @@ function php(body: string, input: unknown): unknown {
   const out = runPhp(`
     $GLOBALS['calls'] = [];
     function sendCustomEmail(...$args) { $GLOBALS['calls'][] = $args; return strpos((string) $args[0], 'fail') === false; }
-    require '${ROOT_DIR}/lib/report.php';
+    require '${phpFile('lib/report.php')}';
     ${body}`, JSON.stringify(input), { config: CONFIG, db: true });
   return JSON.parse(out);
 }
@@ -163,8 +166,27 @@ function recordMails(): void {
 
 // ---------------------------------------------------------------- 1. Daten, HTML, Mail
 
-test('report data and HTML match PHP for every generated user', async () => {
-  const ids = [...USERS, 3, 5, 6, 7, 8, 9];
+const REPORT_IDS = (): number[] => [...USERS, 3, 5, 6, 7, 8, 9];
+async function nodeReports(ids: number[]): Promise<string[]> {
+  const nodeOut: string[] = [];
+  for (const uid of ids) {
+    const r = await weeklyReportData(uid);
+    nodeOut.push(enc({ from: dayYmd(r.from), to: dayYmd(r.to), views: r.views, clicks: r.clicks,
+      pages: r.pages.map((p) => ({ id: Number(p.page.id), views: p.views, clicks: p.clicks, prev: p.prev_views, best: p.best })),
+      html: weeklyReportHtml(r) }));
+  }
+  return nodeOut;
+}
+
+test('report data and HTML reach every branch with the generated users', async () => {
+  const all = (await nodeReports(REPORT_IDS())).join('\n');
+  for (const s of ['No links were clicked this week.', '🏆 Best link', '(1 click)', ' clicks)', '+13%', '-13%', '-50%', '+0%', 'Instagram', 'Book a meeting', '<strong style=\\"color:#ffffff;\\">Link</strong>', '&lt;b&gt;Shop&lt;/b&gt;']) {
+    assert.ok(all.includes(s), 'covers ' + s);
+  }
+});
+
+test('report data and HTML match PHP for every generated user', { skip: PHP_SKIP }, async () => {
+  const ids = REPORT_IDS();
   const phpOut = php(`
     $out = [];
     foreach ($in as $uid) {
@@ -174,19 +196,8 @@ test('report data and HTML match PHP for every generated user', async () => {
         'html' => oys_weekly_report_html($r)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
     echo json_encode($out);`, ids) as string[];
-  const nodeOut: string[] = [];
-  for (const uid of ids) {
-    const r = await weeklyReportData(uid);
-    nodeOut.push(enc({ from: dayYmd(r.from), to: dayYmd(r.to), views: r.views, clicks: r.clicks,
-      pages: r.pages.map((p) => ({ id: Number(p.page.id), views: p.views, clicks: p.clicks, prev: p.prev_views, best: p.best })),
-      html: weeklyReportHtml(r) }));
-  }
+  const nodeOut = await nodeReports(ids);
   for (let i = 0; i < ids.length; i++) assert.equal(nodeOut[i], phpOut[i], 'user ' + ids[i]);
-  // Die Daten treffen die Zweige, für die sie gedacht sind
-  const all = nodeOut.join('\n');
-  for (const s of ['No links were clicked this week.', '🏆 Best link', '(1 click)', ' clicks)', '+13%', '-13%', '-50%', '+0%', 'Instagram', 'Book a meeting', '<strong style=\\"color:#ffffff;\\">Link</strong>', '&lt;b&gt;Shop&lt;/b&gt;']) {
-    assert.ok(all.includes(s), 'covers ' + s);
-  }
 });
 
 // Gleichstand beim besten Link – nur Node (PHP überlässt die Wahl MariaDB): Es gewinnt der Block mit der kleinsten ID,
@@ -219,8 +230,28 @@ test('a tie for the best link goes to the first block, then to the first platfor
   assert.deepEqual(report.pages.map((p) => p.best), [{ title: 'Older', clicks: 7 }, { title: 'Instagram', clicks: 5 }]);
 });
 
-test('the mail gets the same values, subject and order of placeholders as in PHP', async () => {
-  const ids = [...USERS, 3, 5, 8];
+const MAIL_IDS = (): number[] => [...USERS, 3, 5, 8];
+async function nodeMailCalls(ids: number[]): Promise<string[]> {
+  recordMails();
+  const nodeOut: string[] = [];
+  for (const uid of ids) {
+    calls.length = 0;
+    const user = (await q('SELECT * FROM users WHERE id = ?', [uid]))[0];
+    const ok = await sendWeeklyReport(user);
+    nodeOut.push(enc({ ok, calls }));
+  }
+  return nodeOut;
+}
+
+test('the mail values reach every branch with the generated users', async () => {
+  const nodeOut = await nodeMailCalls(MAIL_IDS());
+  assert.ok(nodeOut.some((x) => x.includes('"ok":false,"calls":[]')), 'a user without pages sends nothing');
+  assert.ok(nodeOut.some((x) => x.includes('view, ')), 'singular view');
+  assert.ok(nodeOut.some((x) => x.includes('"full_name":"there"')), 'fallback name');
+});
+
+test('the mail gets the same values, subject and order of placeholders as in PHP', { skip: PHP_SKIP }, async () => {
+  const ids = MAIL_IDS();
   const phpOut = php(`
     $out = [];
     foreach ($in as $uid) {
@@ -230,18 +261,8 @@ test('the mail gets the same values, subject and order of placeholders as in PHP
       $out[] = json_encode(['ok' => $ok, 'calls' => $GLOBALS['calls']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
     echo json_encode($out);`, ids) as string[];
-  recordMails();
-  const nodeOut: string[] = [];
-  for (const uid of ids) {
-    calls.length = 0;
-    const user = (await q('SELECT * FROM users WHERE id = ?', [uid]))[0];
-    const ok = await sendWeeklyReport(user);
-    nodeOut.push(enc({ ok, calls }));
-  }
+  const nodeOut = await nodeMailCalls(ids);
   for (let i = 0; i < ids.length; i++) assert.equal(nodeOut[i], phpOut[i], 'user ' + ids[i]);
-  assert.ok(nodeOut.some((x) => x.includes('"ok":false,"calls":[]')), 'a user without pages sends nothing');
-  assert.ok(nodeOut.some((x) => x.includes('view, ')), 'singular view');
-  assert.ok(nodeOut.some((x) => x.includes('"full_name":"there"')), 'fallback name');
 });
 
 // ---------------------------------------------------------------- 2. Lauf über alle Nutzer
@@ -255,7 +276,21 @@ async function restoreSent(state: Array<{ id: number; s: string | null }>): Prom
   for (const row of state) await exec('UPDATE users SET weekly_report_sent_at = ? WHERE id = ?', [row.s, row.id]);
 }
 
-test('running all reports sends, counts and marks the same users as PHP', async () => {
+test('running all reports sends, counts and marks users', async () => {
+  const before = (await q('SELECT id, weekly_report_sent_at AS s FROM users')) as Array<{ id: number; s: string | null }>;
+  recordMails();
+  const result = await runWeeklyReports();
+  const state = await sentState();
+  await restoreSent(before);
+  assert.ok(result.sent > 3 && result.failed > 3, JSON.stringify(result));
+  // Neu in Node: übersprungene Konten (alle Plätze zeigen Code-Seiten) – hier gibt es keine
+  assert.equal(result.skipped, 0);
+  // Jeder gesendete Bericht ging an den Versand, fehlgeschlagen sind auch Nutzer ohne Seiten (ohne Mail)
+  assert.ok(calls.length >= result.sent && calls.length <= result.sent + result.failed, String(calls.length));
+  assert.ok(state.filter((s) => s.endsWith(':NOW')).length >= result.sent, 'sent reports are marked');
+});
+
+test('running all reports sends, counts and marks the same users as PHP', { skip: PHP_SKIP }, async () => {
   const before = (await q('SELECT id, weekly_report_sent_at AS s FROM users')) as Array<{ id: number; s: string | null }>;
   const phpOut = php(`
     $r = oys_run_weekly_reports($pdo);
@@ -275,18 +310,10 @@ test('running all reports sends, counts and marks the same users as PHP', async 
 
 // ---------------------------------------------------------------- 3. Der Befehl (PHP-Skript gegen Node)
 
-// Kopie des PHP-Codes mit eigener config.php (Datenbank der Tests) und eigenem email/-Ordner. Kopiert statt verlinkt:
-// __DIR__ zeigt in PHP auf das echte Verzeichnis einer verlinkten Datei.
+// Kopie der PHP-Version mit eigener config.php (Datenbank der Tests) und eigenem email/-Ordner (support/phpRef.ts)
 function phpTree(cfg: ConfigData, smtp: Record<string, unknown> | null): string {
-  const root = mkdtempSync(join(dir, 'php-'));
-  for (const d of ['lib', 'cron', 'email']) mkdirSync(join(root, d));
-  for (const f of readdirSync(join(ROOT_DIR, 'lib'))) copyFileSync(join(ROOT_DIR, 'lib', f), join(root, 'lib', f));
-  copyFileSync(join(ROOT_DIR, 'cron/weekly_report.php'), join(root, 'cron/weekly_report.php'));
-  for (const f of ['db.php', 'security.php', 'mail.php', 'blacklist.php']) copyFileSync(join(ROOT_DIR, f), join(root, f));
-  symlinkSync(join(ROOT_DIR, 'PHPMailer'), join(root, 'PHPMailer'));
-  for (const f of readdirSync(join(ROOT_DIR, 'email'))) if (f.endsWith('.json') && f !== 'smtp.json') copyFileSync(join(ROOT_DIR, 'email', f), join(root, 'email', f));
+  const root = phpCodeTree(cfg, dir);
   if (smtp) writeFileSync(join(root, 'email/smtp.json'), JSON.stringify(smtp));
-  execFileSync('php', ['-r', 'file_put_contents($argv[1], "<?php\\nreturn " . var_export(json_decode($argv[2], true), true) . ";\\n");', '--', join(root, 'config.php'), JSON.stringify(cfg)]);
   return root;
 }
 
@@ -334,7 +361,7 @@ function mailSummary(raw: Buffer | null) {
   };
 }
 
-test('the command prints the same line, sends the same mails and marks the same users as cron/weekly_report.php', async () => {
+test('the command prints the same line, sends the same mails and marks the same users as cron/weekly_report.php', { skip: PHP_SKIP }, async () => {
   // Zertifikate für STARTTLS (PHPMailer verlangt es bei jedem Port außer 465)
   const run = (...args: string[]) => execFileSync('openssl', args, { cwd: dir, stdio: 'pipe' });
   run('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj', '/CN=OnYourSite Report CA');
@@ -399,7 +426,17 @@ test('the command prints the same line, sends the same mails and marks the same 
   }
 });
 
-test('without a database the command prints the setup page and ends with 0 like PHP', async () => {
+test('without a database the command prints the setup page and ends with 0', async () => {
+  const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
+  await closePool();
+  const nodeRun = await runNodeCli(broken, null);
+  await closePool();
+  assert.equal(nodeRun.code, 0);
+  assert.match(nodeRun.stdout, /^<!DOCTYPE html>.*Database connection failed\..*<code>config\.json<\/code>/s);
+  assert.match(nodeRun.stderr, /^DB connection failed: /);
+});
+
+test('without a database the command prints the setup page and ends with 0 like PHP', { skip: PHP_SKIP }, async () => {
   const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
   const root = phpTree(broken, null);
   const phpRun = await runPhpCli(root, '/dev/null');

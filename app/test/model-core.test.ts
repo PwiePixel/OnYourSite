@@ -1,5 +1,6 @@
 // Die Korrekturen am Kern, die das Inhalts-Paket braucht: (int) mit Überlauf wie PHP und Feldnamen aus
-// Formularen/Adressen wie parse_str() (nie Object.prototype, Nullbyte, Klammern, Ebenen, max_input_vars)
+// Formularen/Adressen wie parse_str() (nie Object.prototype, Nullbyte, Klammern, Ebenen, max_input_vars) – die
+// Vergleiche mit der PHP-Version (support/phpRef.ts), dazu feste Werte ohne PHP
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -10,8 +11,16 @@ import { join } from 'node:path';
 import { intval, parseStr, rawurldecode, setPhpVar, type PhpArray } from '../src/php.js';
 import { jsonDecode } from '../src/content/util.js';
 import { runPhp, jsonText, Raw, rng } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
-test('(int) overflows like PHP on 64 bit', () => {
+test('(int) overflows at the 64-bit limits', () => {
+  assert.equal(intval(1e19), -8446744073709551616);
+  assert.equal(intval('1e400'), 0);
+  assert.equal(intval({}), 0);
+  assert.equal(intval(jsonDecode('9223372036854775808')), 2 ** 63);
+});
+
+test('(int) overflows like PHP on 64 bit', { skip: PHP_SKIP }, () => {
   const values: unknown[] = [new Raw('1e19'), new Raw('-1e19'), new Raw('1e20'), new Raw('3.3e22'), new Raw('-3.3e22'), new Raw('1e300'), new Raw('9223372036854775807'),
     new Raw('9223372036854775808'), new Raw('-9223372036854775808'), new Raw('1.5'), new Raw('-0.5'), '1e19', '-1e19', '9999999999999999999', '-9999999999999999999',
     '1e400', '-1e400', '1e3', ' 12', '12abc', '0x1A', '1.9e1', '.5', '5.', '+7', '\n8', '\f9', '1e', '-', '', 'abc', true, false, null, [], [0], {}, { a: 1 }];
@@ -24,15 +33,20 @@ test('(int) overflows like PHP on 64 bit', () => {
   const AMBIGUOUS = values.findIndex((v) => v instanceof Raw && v.text === '9223372036854775808');
   assert.equal(node[AMBIGUOUS], 2 ** 63);
   assert.deepEqual(node.filter((_, i) => i !== AMBIGUOUS), php.filter((_, i) => i !== AMBIGUOUS));
-  // Geprüft sind auch die Grenzen selbst
-  assert.equal(intval(1e19), -8446744073709551616);
-  assert.equal(intval('1e400'), 0);
-  assert.equal(intval({}), 0);
 });
 
-test('form and query names never touch Object.prototype and stop at a NUL byte like parse_str', () => {
-  const inputs = ['__proto__[polluted]=yes', 'a[__proto__][b]=1&__proto__=str', 'constructor[prototype][x]=1&toString=2', 'v%00=abc&w%00x=1', 'x[%00]=1',
-    '__proto__[]=1&__proto__[]=2', 'hasOwnProperty=1&a=2'];
+const PROTO_INPUTS = ['__proto__[polluted]=yes', 'a[__proto__][b]=1&__proto__=str', 'constructor[prototype][x]=1&toString=2', 'v%00=abc&w%00x=1', 'x[%00]=1',
+  '__proto__[]=1&__proto__[]=2', 'hasOwnProperty=1&a=2'];
+
+test('form and query names never touch Object.prototype and stop at a NUL byte', () => {
+  for (const s of PROTO_INPUTS) parseStr(s);
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  assert.equal(({} as Record<string, unknown>).x, undefined);
+  assert.deepEqual(Object.keys(parseStr('v%00=abc&w%00x=1')), ['v', 'w']);
+});
+
+test('form and query names never touch Object.prototype and stop at a NUL byte like parse_str', { skip: PHP_SKIP }, () => {
+  const inputs = PROTO_INPUTS;
   const php = JSON.parse(runPhp('echo json_encode(array_map(function ($s) { parse_str($s, $o); return $o; }, $in));', JSON.stringify(inputs))) as unknown[];
   // PHP-Listen (0, 1, …) kommen als JSON-Arrays – zum Vergleich in Objekte umwandeln
   const norm = (v: unknown): unknown => Array.isArray(v) ? Object.fromEntries(v.map((x, i) => [String(i), norm(x)]))
@@ -49,7 +63,7 @@ test('form and query names never touch Object.prototype and stop at a NUL byte l
 const asObjects = (v: unknown): unknown => Array.isArray(v) ? Object.fromEntries(v.map((x, i) => [String(i), asObjects(x)]))
   : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, asObjects(x)])) : v;
 
-test('parse_str: names, brackets, nesting and appends match PHP 8.3', () => {
+test('parse_str: names, brackets, nesting and appends match PHP 8.3', { skip: PHP_SKIP }, () => {
   const r = rng(5);
   // Nur Teile, die gültiges UTF-8 ergeben: ungültige Bytes (%E9) kann ein JavaScript-Text nicht wie PHP halten
   const parts = ['a', 'v', '0', '1', '-1', '-5', '05', '9223372036854775807', '9223372036854775806', '99999999999999999999', '[', ']', '[]', '[a]', '[0]',
@@ -85,7 +99,7 @@ test('parse_str: names, brackets, nesting and appends match PHP 8.3', () => {
 
 // $_GET und $_POST über PHPs eingebauten Server: dort gelten max_input_vars und die Regeln von php_default_treat_data
 // (Adresse: die ersten 1000 nicht leeren Stücke) bzw. des POST-Lesers (die ersten 1001 Stücke, leere zählen mit)
-test('query strings and form posts keep as many variables as PHP (max_input_vars)', async () => {
+test('query strings and form posts keep as many variables as PHP (max_input_vars)', { skip: PHP_SKIP }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oys-probe-'));
   writeFileSync(join(dir, 'p.php'), '<?php header("Content-Type: application/json"); echo json_encode(["get" => $_GET, "post" => $_POST]);');
   const port = await new Promise<number>((resolve) => {

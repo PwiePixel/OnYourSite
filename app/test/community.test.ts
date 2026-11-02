@@ -1,6 +1,7 @@
 // Community (lib/community.php, views/admin_community.php) gegen PHP: Textregeln, Discord-IDs, Signatur, JSON wie
 // json_decode/json_encode, die Admin-Aktionen und die Admin-Ansicht – beide Seiten auf derselben eigenen Test-Datenbank.
-// PHP läuft aus einer unveränderten Kopie der Dateien, damit es auch ohne bot_secret geprüft werden kann.
+// PHP läuft aus einer unveränderten Kopie der Dateien der PHP-Version (support/phpRef.ts), damit es auch ohne
+// bot_secret geprüft werden kann.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -10,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
 import { closePool } from '../src/db.js';
 import { decrypt } from '../src/crypto.js';
 import { strtotime, time, date } from '../src/php.js';
@@ -23,6 +24,7 @@ import { adminCommunityHandle, adminCommunityPost } from '../src/community/admin
 import { adminCommunityView } from '../src/community/adminView.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 import { withoutPublicPage, withoutWeb } from './support/suggestionsParity.js';
+import { PHP_SKIP, phpRef, writePhpConfig } from './support/phpRef.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung), damit zwei
@@ -35,14 +37,14 @@ let phpRoots: { withSecret: string; noSecret: string };
 // ---------------------------------------------------------------- PHP
 
 // Unveränderte Kopie der PHP-Dateien mit eigener config.php (z. B. ohne bot_secret)
-function phpTree(config: string): string {
+function phpTree(config: ConfigData): string {
   const root = mkdtempSync(join(tmpdir(), 'oys-community-'));
   for (const dir of ['lib', 'views']) mkdirSync(join(root, dir));
   for (const file of ['lib/config.php', 'lib/helpers.php', 'lib/community.php', 'security.php', 'views/admin_community.php']) {
-    copyFileSync(join(ROOT_DIR, file), join(root, file));
-    assert.equal(readFileSync(join(root, file), 'utf8'), readFileSync(join(ROOT_DIR, file), 'utf8'));
+    copyFileSync(phpRef(file), join(root, file));
+    assert.equal(readFileSync(join(root, file), 'utf8'), readFileSync(phpRef(file), 'utf8'));
   }
-  writeFileSync(join(root, 'config.php'), config);
+  writePhpConfig(root, config);
   writeFileSync(join(root, 'harness.php'), `<?php
     $root = __DIR__;
     require $root . '/lib/config.php';
@@ -178,11 +180,10 @@ before(async () => {
   await admin.query(`CREATE DATABASE \`${DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await useTestDb();
   await ensureSchema();
-  const config = readFileSync(join(ROOT_DIR, 'config.php'), 'utf8');
-  phpRoots = {
-    withSecret: phpTree(config),
-    noSecret: phpTree(config.replace(/^\s*'bot_secret'\s*=>.*$/m, '')),
-  };
+  if (!PHP_SKIP) {
+    const { bot_secret: _secret, ...noSecret } = BASE;
+    phpRoots = { withSecret: phpTree(BASE), noSecret: phpTree(noSecret) };
+  }
 });
 
 after(async () => {
@@ -200,7 +201,14 @@ const JSON_VALUES = ['"  Hi\\r\\nthere\\u0000  "', '"a\\rb\\r\\n\\nc"', '"\\r\\u
   '"1234567890123456789012"', '"12345678901234567890123"', '"12345678901234\\n"', '"123456789012345\\n"', '"123456789012345\\n\\n"', '" 123456789012345"', '"１２３４５６７８９０１２３４５"',
   '"é😀 \\u2028 x"', '"' + 'ü'.repeat(250) + '"', '"\\ud83d\\ude00' + 'x'.repeat(10) + '"', '"\\t tab \\u000b vt \\f ff "', '"\\u00a0nbsp\\u00a0"'];
 
-test('community text and Discord IDs match PHP', () => {
+test('fixed values: community text, invalid UTF-8 in JSON, -0 and INF', () => {
+  assert.equal(communityText('  Hi\r\nthere\0  ', 7), 'Hi\nther');
+  assert.equal(phpJsonDecode(Buffer.from([0x22, 0xff, 0x22])), null);
+  assert.equal(phpFloatString(-0), '-0');
+  assert.equal(phpJsonFloat(Infinity), null);
+});
+
+test('community text and Discord IDs match PHP', { skip: PHP_SKIP }, () => {
   const maxes = [0, 1, 5, 7, 100, 200, 4000];
   const ref = php(`return array_map(function ($s) { $v = json_decode($s, true); $o = ['sf' => oys_snowflake($v)];
       foreach ([0, 1, 5, 7, 100, 200, 4000] as $m) $o['t' . $m] = @oys_community_text($v, $m); return $o; }, $in['values']);`, { values: JSON_VALUES });
@@ -211,11 +219,9 @@ test('community text and Discord IDs match PHP', () => {
     return o;
   });
   assert.deepEqual(mine, ref);
-  // Golden aus der Beschreibung
-  assert.equal(communityText('  Hi\r\nthere\0  ', 7), 'Hi\nther');
 });
 
-test('sealed ticket messages open in PHP and back', () => {
+test('sealed ticket messages open in PHP and back', { skip: PHP_SKIP }, () => {
   const texts = ['', 'x', 'ENC: looks encrypted', 'Ümlaut 😀\n\nline', '\x01starts with the marker'];
   const sealedByPhp: string[] = php('return array_map("oys_community_seal", $in["t"]);', { t: texts });
   assert.deepEqual(sealedByPhp.map(communityOpen), texts);
@@ -225,7 +231,7 @@ test('sealed ticket messages open in PHP and back', () => {
   assert.deepEqual(odd.map(communityOpen), php('return array_map("oys_community_open", $in["t"]);', { t: odd }));
 });
 
-test('request signatures are checked like PHP', () => {
+function signatureCases(): Array<{ ts: string; sig: string; method: string; uri: string; body: Buffer }> {
   const secret = configString('bot_secret');
   assert.ok(secret.length >= 32, 'the test settings need a bot_secret');
   const now = time();
@@ -251,6 +257,18 @@ test('request signatures are checked like PHP', () => {
   add(t, 'z'.repeat(64));
   add(t, sign(t, 'POST', '/_/bot/suggestions?x=1&y=%20', body).slice(0, 63));
   add(t, sign(t, 'GET', '/_/bot/ping\xe4', Buffer.alloc(0)), 'GET', '/_/bot/ping\xe4', Buffer.alloc(0));
+  return cases;
+}
+
+test('request signatures are checked: time window, exact method, path and body', () => {
+  const results = signatureCases().map((c) => botVerify(c.method, c.uri, c.body, c.ts, c.sig));
+  assert.ok(results.filter(Boolean).length >= 5 && results.filter((x) => !x).length >= 10, 'both outcomes are covered');
+  assert.equal(results[0], true);
+  assert.equal(results[4], false, 'another body');
+});
+
+test('request signatures are checked like PHP', { skip: PHP_SKIP }, () => {
+  const cases = signatureCases();
   const ref = php(`return array_map(function ($c) {
       $_SERVER['HTTP_X_OYS_TIMESTAMP'] = $c['ts']; $_SERVER['HTTP_X_OYS_SIGNATURE'] = $c['sig'];
       return oys_bot_verify($c['method'], base64_decode($c['uri']), base64_decode($c['body'])); }, $in['cases']);`,
@@ -259,7 +277,7 @@ test('request signatures are checked like PHP', () => {
   assert.ok(ref.filter(Boolean).length >= 5 && ref.filter((x: boolean) => !x).length >= 10, 'both outcomes are covered');
 });
 
-test('JSON is decoded and encoded like PHP', () => {
+test('JSON is decoded and encoded like PHP', { skip: PHP_SKIP }, () => {
   let seed = 4242;
   const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
   const scalars = ['0', '-0', '1', '-1', '1.5', '-0.0', '0.0', '1e400', '1E2', '9223372036854775807', '9223372036854775808', '-9223372036854775808', '-9223372036854775809',
@@ -290,11 +308,10 @@ test('JSON is decoded and encoded like PHP', () => {
   // Als Text vergleichen: deepEqual stößt bei 500 Ebenen an die Grenze des Stapels
   mine.forEach((m, i) => assert.equal(JSON.stringify(m), JSON.stringify(ref[i]), inputs[i].slice(0, 200)));
   // Ungültiges UTF-8 lehnt json_decode ab
-  assert.equal(phpJsonDecode(Buffer.from([0x22, 0xff, 0x22])), null);
   assert.equal(php('return json_decode(base64_decode("Iv8i"), true);'), null);
 });
 
-test('float formatting matches PHP (string casts and json_encode)', () => {
+test('float formatting matches PHP (string casts and json_encode)', { skip: PHP_SKIP }, () => {
   let seed = 7;
   const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
   const vals: number[] = [10000000000000.5, 10000000000001.5, 1000000000000.25, 70368744177664.5, 1e-5, 1e-4, 9.99999999999999e-5, 9.999999999999999e-5,
@@ -307,8 +324,6 @@ test('float formatting matches PHP (string casts and json_encode)', () => {
     return [phpFloatString(f), phpJsonFloat(f)];
   });
   assert.deepEqual(mine, ref);
-  assert.equal(phpFloatString(-0), '-0');
-  assert.equal(phpJsonFloat(Infinity), null);
 });
 
 // ---------------------------------------------------------------- Admin-Aktionen
@@ -344,7 +359,7 @@ const HANDLER_CASES: Array<{ name: string; post: Post; adminName?: string }> = [
   { name: 'close missing', post: { community_action: 'ticket_close', id: 'abc' } },
 ];
 
-test('admin actions change the same rows and answer like PHP', async () => {
+test('admin actions change the same rows and answer like PHP', { skip: PHP_SKIP }, async () => {
   await useTestDb();
   for (const c of HANDLER_CASES) {
     const adminName = c.adminName ?? 'Pixel Admin';
@@ -401,7 +416,14 @@ const VIEW_CASES: Array<{ name: string; query: string; get: unknown; variant?: '
   { name: 'empty, other filter', query: '?suggestions=all', get: { suggestions: 'all' }, variant: 'empty' },
 ];
 
-test('admin view renders the same HTML as PHP', async () => {
+test('admin view offers a fresh bot secret while the bot isn’t set up', async () => {
+  await useTestDb({ bot_secret: null });
+  await fixtures('full', String(time() - 10));
+  assert.match(await adminCommunityView(fakeCtx('')), /'bot_secret' =&gt; '[0-9a-f]{64}'/);
+  await useTestDb();
+});
+
+test('admin view renders the same HTML as PHP', { skip: PHP_SKIP }, async () => {
   for (const c of VIEW_CASES) {
     await useTestDb(c.noSecret ? { bot_secret: null } : {});
     await fixtures(c.variant ?? 'full', c.meta === undefined ? String(time() - 10) : c.meta);
@@ -417,6 +439,19 @@ test('admin view renders the same HTML as PHP', async () => {
 });
 
 test('the view shows a pending count only for open work', async () => {
+  // Einzahl/Mehrzahl und das Datum „last seen“
+  await useTestDb();
+  const seen = time() - 7200;
+  await fixtures('full', String(seen));
+  await admin.query(`UPDATE \`${DB}\`.community_outbox SET done_at = NOW() WHERE id <> 4`);
+  const ctx = fakeCtx('');
+  ctx.session = { get: () => 'x', set: () => undefined } as unknown as Session;
+  const html = await adminCommunityView(ctx);
+  assert.match(html, /1 change waiting for the bot/);
+  assert.match(html, new RegExp('Offline – last seen ' + date('M j, Y H:i', seen)));
+});
+
+test('the view shows a pending count only for open work like PHP', { skip: PHP_SKIP }, async () => {
   // Einzahl/Mehrzahl und das Datum „last seen“ wie PHP
   await useTestDb();
   await fixtures('full', String(time() - 7200));
@@ -431,9 +466,9 @@ test('the view shows a pending count only for open work', async () => {
 
 // ---------------------------------------------------------------- POST /admin (Community-Teil)
 
-test('the community branch of POST /admin redirects and flashes like views/admin.php', async () => {
+test('the community branch of POST /admin redirects and flashes like views/admin.php', { skip: PHP_SKIP }, async () => {
   // Genau der Block aus views/admin.php, nur header()/exit für den Test abgefangen
-  const src = readFileSync(join(ROOT_DIR, 'views/admin.php'), 'utf8');
+  const src = readFileSync(phpRef('views/admin.php'), 'utf8');
   const start = src.indexOf("if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['community_action'])) {");
   const end = src.indexOf('\n}\n', start) + 2;
   assert.ok(start > 0 && end > start);

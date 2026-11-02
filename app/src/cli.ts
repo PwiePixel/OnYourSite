@@ -2,16 +2,13 @@
 //   node app/dist/cli.js migrate [--pending]      Datenbank auf den Stand dieser Version bringen, Schema-Version ausgeben
 //                                                 (--pending: nur prüfen – Rückgabe 2, wenn Schritte ausstehen)
 //   node app/dist/cli.js check --native           sharp und @napi-rs/canvas laden und ein kleines Bild erzeugen
-//   node app/dist/cli.js check --crypto [--php] [--php-config DATEI]
-//                                                 je verschlüsselter Spalte bis zu 50 Werte mit aes_key entschlüsseln;
-//                                                 --php vergleicht zusätzlich mit PHP (nur solange PHP noch da ist)
-//   node app/dist/cli.js create-admin             erstes Admin-Konto (wie server/create-admin.php der PHP-Version)
-//   node app/dist/cli.js cert-alert <tage>        Mail an alle Admins, wenn das Zertifikat bald abläuft (cert-alert.php)
+//   node app/dist/cli.js check --crypto           je verschlüsselter Spalte bis zu 50 Werte mit aes_key entschlüsseln
+//   node app/dist/cli.js create-admin             erstes Admin-Konto (wie server/create-admin.php in 2.x)
+//   node app/dist/cli.js cert-alert <tage>        Mail an alle Admins, wenn das Zertifikat bald abläuft (cert-alert.php in 2.x)
 //   node app/dist/cli.js weekly-report            Wochenbericht (src/cli/weekly-report.ts)
 // Rückgabe 0 = in Ordnung, 1 = Fehler (mit Meldung auf stderr). Entwicklung: node --import tsx src/cli.ts …
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { ConfigMissingError, ROOT_DIR, configString, loadConfig } from './config.js';
+import { ConfigMissingError, ROOT_DIR, loadConfig } from './config.js';
 import { DbUnavailableError, closePool, exec, one, q, timeZone, value, withConnection } from './db.js';
 import { SCHEMA_VERSION, ensureSchema, ensureSchemaOnce, schemaVersion } from './schema.js';
 import { decryptData, passwordHash } from './crypto.js';
@@ -44,7 +41,7 @@ export async function runCli(argv: string[], io: CliIo = processIo()): Promise<n
     'weekly-report': () => weeklyReport(io),
   };
   if (!command || !Object.hasOwn(commands, command)) {
-    io.err('Usage: node app/dist/cli.js migrate [--pending] | check --native | check --crypto [--php] | create-admin | cert-alert <days> | weekly-report\n');
+    io.err('Usage: node app/dist/cli.js migrate [--pending] | check --native | check --crypto | create-admin | cert-alert <days> | weekly-report\n');
     return 1;
   }
   // Wie der Server: ohne config.json geht nichts (Meldung, Rückgabe 1). check --native prüft nur die Pakete – das geht
@@ -100,21 +97,8 @@ async function migrate(args: string[], io: CliIo): Promise<number> {
 
 async function check(args: string[], io: CliIo): Promise<number> {
   if (args[0] === '--native' && args.length === 1) return checkNative(io);
-  if (args[0] === '--crypto') {
-    const rest = args.slice(1);
-    let php = false;
-    let phpConfig = '';
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '--php') php = true;
-      else if (rest[i] === '--php-config' && i + 1 < rest.length) phpConfig = rest[++i];
-      else {
-        io.err('Usage: node app/dist/cli.js check --crypto [--php] [--php-config FILE]\n');
-        return 1;
-      }
-    }
-    return checkCrypto(io, php, phpConfig);
-  }
-  io.err('Usage: node app/dist/cli.js check --native | check --crypto [--php]\n');
+  if (args[0] === '--crypto' && args.length === 1) return checkCrypto(io);
+  io.err('Usage: node app/dist/cli.js check --native | check --crypto\n');
   return 1;
 }
 
@@ -173,29 +157,7 @@ const ENCRYPTED: Array<{ table: string; column: string; key: string; where?: str
 ];
 const SAMPLE = 50;
 
-// decryptData() aus security.php der PHP-Version, Wort für Wort, mit dem Schlüssel als Argument – für den Vergleich
-const PHP_DECRYPT = `
-function oys_check_decrypt($encryptedString, $key) {
-    if (empty($encryptedString)) return $encryptedString;
-    if (strpos($encryptedString, 'ENC:') !== 0) return $encryptedString;
-    $base64 = substr($encryptedString, 4);
-    $data = base64_decode($base64, true);
-    if ($data === false) return $encryptedString;
-    $iv_length = openssl_cipher_iv_length('aes-256-cbc');
-    if (strlen($data) <= $iv_length) return $encryptedString;
-    $iv = substr($data, 0, $iv_length);
-    $ciphertext = substr($data, $iv_length);
-    $decrypted = openssl_decrypt($ciphertext, 'aes-256-cbc', $key, 0, $iv);
-    return $decrypted !== false ? $decrypted : $encryptedString;
-}
-$in = json_decode(stream_get_contents(STDIN), true);
-$key = $in['key'];
-if ($in['config'] !== '') { $c = include $in['config']; $key = (string) (is_array($c) ? ($c['aes_key'] ?? '') : ''); }
-$out = [];
-foreach ($in['values'] as $v) $out[] = bin2hex((string) oys_check_decrypt($v, $key));
-echo json_encode($out);`;
-
-async function checkCrypto(io: CliIo, withPhp: boolean, phpConfig: string): Promise<number> {
+async function checkCrypto(io: CliIo): Promise<number> {
   const all: Array<{ label: string; id: string; value: string; plain: string }> = [];
   let failures = 0;
   const failedIds: string[] = [];
@@ -243,33 +205,6 @@ async function checkCrypto(io: CliIo, withPhp: boolean, phpConfig: string): Prom
     io.err(`${failures} encrypted values can’t be read with the aes_key in config.json (${failedIds.slice(0, 5).join('; ')}${failedIds.length > 5 ? ' …' : ''}).\n`);
     io.err('The key must be exactly the one that encrypted this database – check aes_key.\n');
     return 1;
-  }
-  if (withPhp) {
-    if (spawnSync('php', ['-v'], { stdio: 'ignore' }).status !== 0) {
-      io.out('PHP isn’t installed – checked with Node only.\n');
-    } else if (all.length) {
-      // Der Schlüssel geht über stdin an PHP, nie über die Befehlszeile
-      const r = spawnSync('php', ['-d', 'display_errors=stderr', '-r', PHP_DECRYPT], {
-        input: JSON.stringify({ key: configString('aes_key', ''), config: phpConfig, values: all.map((x) => x.value) }),
-        maxBuffer: 64 << 20,
-      });
-      let php: string[] | null = null;
-      try {
-        php = r.status === 0 ? (JSON.parse(r.stdout.toString()) as string[]) : null;
-      } catch {
-        php = null;
-      }
-      if (!php || php.length !== all.length) {
-        io.err(`The comparison with PHP didn’t work: ${firstLine(r.stderr?.toString() || `exit code ${r.status}`)}\n`);
-        return 1;
-      }
-      const differ = all.filter((x, i) => Buffer.from(x.plain, 'utf8').toString('hex') !== php![i]);
-      if (differ.length) {
-        io.err(`${differ.length} of ${all.length} values decrypt differently in PHP (${differ.slice(0, 5).map((x) => `${x.label} ${x.id}`).join('; ')}).\n`);
-        return 1;
-      }
-      io.out(`PHP decrypts all ${all.length} values the same way${phpConfig ? ` (with the key from ${phpConfig})` : ''}.\n`);
-    }
   }
   io.out(all.length ? `All ${all.length} checked values can be read with this key.\n` : 'There is no encrypted data yet.\n');
   return 0;

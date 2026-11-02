@@ -1,6 +1,7 @@
 // Statistik und Kontaktformular gegen PHP: dieselben Aufrufe (Aufrufe/Klicks zählen, Auswertung, eigene Seite?,
-// Kontakt prüfen, Nachricht speichern, Benachrichtigung) laufen in PHP und Node auf je einer frischen Kopie der
-// Test-Datenbank. Rückgaben, versandte E-Mails und alle betroffenen Tabellen müssen übereinstimmen.
+// Kontakt prüfen, Nachricht speichern, Benachrichtigung) laufen in PHP (PHP-Version, siehe support/phpRef.ts) und Node
+// auf je einer frischen Kopie der Test-Datenbank. Rückgaben, versandte E-Mails und alle betroffenen Tabellen müssen
+// übereinstimmen.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig, setConfigForTests } from '../src/config.js';
@@ -15,6 +16,7 @@ import { jsonDecode } from '../src/content/util.js';
 import type { PhpArray } from '../src/php.js';
 import { copyDatabase, configWith, runPhp, type DbCopies } from './filesHarness.js';
 import { enc, FLAGS, jsonText } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const TABLES = ['pages', 'page_blocks', 'stats_daily', 'block_clicks_daily', 'messages', 'notifications', 'rate_limits'];
@@ -22,11 +24,13 @@ let dbs: DbCopies;
 let started = 0;
 
 before(async () => {
+  if (PHP_SKIP) return;
   dbs = await copyDatabase('f');
   started = time();
 });
 
 after(async () => {
+  if (PHP_SKIP) return;
   setConfigForTests(BASE);
   await closePool();
   await dbs.drop();
@@ -207,7 +211,7 @@ function normalize(json: string): string {
     .replace(/ENC:[A-Za-z0-9+/=]+/g, (m) => 'DEC(' + String(decryptData(m)) + ')');
 }
 
-test('stats, contact checks, messages and notifications write exactly what PHP writes', async () => {
+test('stats, contact checks, messages and notifications write exactly what PHP writes', { skip: PHP_SKIP }, async () => {
   const phpOut = JSON.parse(runPhp(PHP_SCENARIO, jsonText(OPS), { config: configWith(BASE, dbs.names.php), db: true })) as string[];
   setConfigForTests(configWith(BASE, dbs.names.node));
   await closePool();
