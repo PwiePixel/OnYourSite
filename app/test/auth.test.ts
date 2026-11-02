@@ -15,6 +15,7 @@ import { registerOld } from '../src/app/auth.js';
 import { passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
 import { date } from '../src/php.js';
 import type { PhpArray } from '../src/php.js';
+import { withoutDialogs } from './support/dialogParity.js';
 
 // PHP mit den echten Hilfsfunktionen; $in kommt als JSON, das Ergebnis geht als JSON zurück
 function php(code: string, input: unknown): unknown {
@@ -43,7 +44,7 @@ test('login view matches views/login.php for every flash value', () => {
   const out = renderPhp('login.php', cases);
   cases.forEach((c, i) => {
     const html = loginView({ flashError: c.session.error ?? null, flashSuccess: c.session.success ?? null, csrfField: field });
-    assert.equal(html, out[i].html, `case ${i}: ${JSON.stringify(c.session)}`);
+    assert.equal(withoutDialogs(html), out[i].html, `case ${i}: ${JSON.stringify(c.session)}`);
     // Die Hinweise sind danach aus der Sitzung entfernt, das Token bleibt
     assert.deepEqual(out[i].session, { csrf: TOKEN });
   });
@@ -67,7 +68,12 @@ test('register view and its head match views/register.php', () => {
   cases.forEach((c, i) => {
     const old = registerOld(c.session.old, c.get as PhpArray);
     const html = registerView({ flashError: c.session.error ?? null, old, csrfField: field });
-    assert.equal(html, out[i].html, `case ${i}: ${JSON.stringify(c)}`);
+    // Die Adresse prüft der Browser jetzt auch auf die Mindestlänge (wie der Server: 2–30 Zeichen)
+    // und das Feld wird beim Tippen nur noch neu gesetzt, wenn sich etwas ändert (sonst prüft der Browser minlength nicht)
+    const node = withoutDialogs(html).replace(' required minlength="2" maxlength="30"', ' required maxlength="30"')
+      .replace("var v = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');\n                // Nur bei einer Änderung neu setzen: sonst prüft der Browser die Mindestlänge nicht mehr\n                if (v !== input.value) input.value = v;",
+        "input.value = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');");
+    assert.equal(node, out[i].html, `case ${i}: ${JSON.stringify(c)}`);
     assert.deepEqual(out[i].session, { csrf: TOKEN });
   });
 });
@@ -79,7 +85,7 @@ test('static pages match the PHP views byte for byte', () => {
     const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${ROOT_DIR}/views/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
     // Um Mitternacht kann sich das Datum zwischen PHP und Node ändern: dann noch einmal
     if (date('Y-m-d') !== day && attempt < 2) continue;
-    views.forEach(([name, fn], i) => assert.equal(fn(), res[i], name));
+    views.forEach(([name, fn], i) => assert.equal(withoutDialogs(fn()), res[i], name));
     break;
   }
 });

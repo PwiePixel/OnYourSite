@@ -11,6 +11,7 @@ import {
 } from './updates.js';
 import { discordConfigured, discordSettings, type DiscordSettings } from './discord.js';
 import { discordTabData, discordTabView } from '../discord/adminView.js';
+import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 
 export interface AdminUpdatesData {
   // oys_csrf_field() – überall dasselbe Feld
@@ -91,7 +92,7 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += uf.id;
   o += "\">\n                        <div>\n                            <label class=\"";
   o += lbl;
-  o += "\" for=\"uTitle\">Title</label>\n                            <input id=\"uTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" value=\"";
+  o += "\" for=\"uTitle\">Title</label>\n                            <input id=\"uTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" data-error-required=\"Please enter a title.\" value=\"";
   o += e(uf.title);
   o += "\" placeholder=\"e.g. New themes and a faster editor\" class=\"";
   o += inp;
@@ -121,7 +122,7 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += e(ufDate);
   o += "\" max=\"";
   o += e(date('Y-m-d'));
-  o += "\" class=\"";
+  o += "\" data-error-max=\"The date can’t be in the future.\" class=\"";
   o += inp;
   o += "\">\n                                <input type=\"hidden\" name=\"date_default\" value=\"";
   o += e(ufDate);
@@ -243,10 +244,10 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
       o += btn;
       o += " text-[#8b93ff]\"><i class='bx bxl-discord-alt'></i> Remove from Discord</button></form>\n                                ";
     }
-    o += "                                <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Delete this update";
-    o += u.discord_message_id !== '' ? ' and its Discord post' : '';
-    o += "?');\">";
-    o += csrf;
+    o += "                                <form action=\"/admin\" method=\"POST\" class=\"m-0\"";
+    o += confirmAttrs({ title: 'Delete this update?', text: u.discord_message_id !== '' ? 'Its Discord post is deleted too.' : undefined, ok: 'Delete', tone: 'danger' });
+    o += ">";
+    o += csrf + confirmField();
     o += "<input type=\"hidden\" name=\"oys_action\" value=\"update_delete\"><input type=\"hidden\" name=\"id\" value=\"";
     o += u.id;
     o += "\">\n                                    <button type=\"submit\" class=\"";
@@ -261,7 +262,7 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += mf.id;
   o += "\">\n                        <div class=\"grid grid-cols-1 sm:grid-cols-[1fr_180px_160px] gap-4\">\n                            <div>\n                                <label class=\"";
   o += lbl;
-  o += "\" for=\"mTitle\">Title</label>\n                                <input id=\"mTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" value=\"";
+  o += "\" for=\"mTitle\">Title</label>\n                                <input id=\"mTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" data-error-required=\"Please enter a title.\" value=\"";
   o += e(mf.title);
   o += "\" placeholder=\"e.g. Custom domains\" class=\"";
   o += inp;
@@ -362,8 +363,10 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
           o += t.is_done ? 'line-through' : '';
           o += " min-w-0 break-words\">";
           o += e(t.title);
-          o += "</span></button></form>\n                                        <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Remove this task?');\">";
-          o += csrf;
+          o += "</span></button></form>\n                                        <form action=\"/admin\" method=\"POST\" class=\"m-0\"";
+          o += confirmAttrs({ title: 'Remove this task?', ok: 'Remove', tone: 'danger' });
+          o += ">";
+          o += csrf + confirmField();
           o += "<input type=\"hidden\" name=\"oys_action\" value=\"task_delete\"><input type=\"hidden\" name=\"id\" value=\"";
           o += t.id;
           o += "\">\n                                            <button type=\"submit\" class=\"w-8 h-8 inline-flex items-center justify-center text-gray-600 hover:text-red-400\" title=\"Remove task\"><i class='bx bx-x'></i></button></form>\n                                    </li>\n                                    ";
@@ -408,8 +411,10 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
       o += m.id;
       o += "#roadmap\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Edit\"><i class='bx bx-edit-alt'></i></a>\n                                    <a href=\"/admin?new_update_for=";
       o += m.id;
-      o += "#updates\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Write an update about it\"><i class='bx bx-news'></i></a>\n                                    <form action=\"/admin\" method=\"POST\" class=\"m-0 ml-auto\" onsubmit=\"return confirm('Delete this milestone and its tasks?');\">";
-      o += csrf;
+      o += "#updates\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Write an update about it\"><i class='bx bx-news'></i></a>\n                                    <form action=\"/admin\" method=\"POST\" class=\"m-0 ml-auto\"";
+      o += confirmAttrs({ title: 'Delete this milestone?', text: 'Its tasks are deleted too.', ok: 'Delete', tone: 'danger' });
+      o += ">";
+      o += csrf + confirmField();
       o += "<input type=\"hidden\" name=\"oys_action\" value=\"milestone_delete\"><input type=\"hidden\" name=\"id\" value=\"";
       o += m.id;
       o += "\">\n                                        <button type=\"submit\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-500 hover:text-red-400\" title=\"Delete\"><i class='bx bx-trash'></i></button></form>\n                                </div>\n                            </div>\n                            ";

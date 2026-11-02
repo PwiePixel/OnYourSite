@@ -72,7 +72,14 @@ function seed() {
     INSERT INTO code_files (site_id, path, content, updated_at) SELECT id, 'index.html', '<p>Hello</p>', NOW() FROM code_sites WHERE user_id IN (5, 6);`);
 }
 
-const flash = async (p) => (await p.locator('.animate-fade-in').first().innerText()).trim();
+// Meldungen: ui.js macht aus den Bannern Toasts (ohne ui.js bleiben die Banner)
+const flash = async (p) => (await p.locator('.animate-fade-in, .ui-toast').first().innerText()).trim();
+// Eigener Bestätigungsdialog (ui.js): Titel merken und mit OK bestätigen
+const confirmUi = async (p, titles) => {
+  await p.waitForSelector('.ui-dialog');
+  titles.push((await p.locator('.ui-dialog .ui-title').innerText()).trim());
+  await p.click('.ui-dialog .ui-foot .ui-btn:not(.is-ghost)');
+};
 const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, name + '.png'), fullPage: false });
 
 (async () => {
@@ -85,8 +92,8 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const p = await context.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
-    // Bis die eigenen Dialoge kommen, fragen die Formulare noch mit confirm() nach
-    p.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
+    // Jeder native Dialog (alert/confirm/prompt) ist ein Fehler – die Formulare fragen mit den eigenen Dialogen nach
+    p.on('dialog', (d) => { errors.push('native ' + d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });
 
     await p.goto(BASE + '/login');
     await p.fill('input[name=email]', 'admin@test.de');
@@ -127,8 +134,9 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     // Sperren mit Grund → Meldung im Bereich Code pages
     const mia = p.locator('#tab-code-pages form:has(input[name=site_id])').filter({ has: p.locator('input[name=reason]') }).first();
     await mia.locator('input[name=reason]').fill('Phishing');
-    await Promise.all([p.waitForNavigation(), mia.locator('button[type=submit]').click()]);
-    ok(dialogs.includes('Block this code page? Visitors will only see a notice.'), 'Block asks first');
+    await mia.locator('button[type=submit]').click();
+    await Promise.all([p.waitForNavigation(), confirmUi(p, dialogs)]);
+    ok(dialogs.includes('Block this code page?'), 'Block asks first (own dialog)');
     ok(p.url().endsWith('/admin#code-pages') && await p.locator('#tab-code-pages').isVisible(), 'After the action: back on #code-pages');
     ok((await flash(p)).includes('is blocked.'), 'Flash after blocking');
     ok(sql("SELECT CONCAT(is_blocked, '|', blocked_reason) FROM code_sites WHERE slug = 'miacode'") === '1|Phishing', 'Blocked with the reason');
@@ -139,7 +147,9 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
 
     // Code-Zugang ohne Honigwaben
     await p.selectOption('#codeUser', '7');
-    await Promise.all([p.waitForNavigation(), p.click('#codeAccessForm button[type=submit]')]);
+    await p.click('#codeAccessForm button[type=submit]');
+    await Promise.all([p.waitForNavigation(), confirmUi(p, dialogs)]);
+    ok(dialogs.includes('Unlock the code page for free?'), 'Give code access asks first (own dialog)');
     ok((await flash(p)).includes('Code page unlocked for Lea.'), 'Give code access: flash');
     ok(sql("SELECT CONCAT(amount, '|', note) FROM honeycomb_ledger WHERE user_id = 7 AND reason = 'unlock' AND ref = 'code_page'") === '0|Unlocked by the team', 'Give code access: free unlock booked');
     ok((await p.locator('#codeAccessRows').innerText()).includes('lea@test.de'), 'Access table lists the new unlock');

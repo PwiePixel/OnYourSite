@@ -1,8 +1,8 @@
 // /admin (views/admin.php mit admin_updates, admin_community, admin_honeycombs, admin_storage) – nur für Admins.
 // Honigwaben und Code-Seiten sind getrennte Bereiche (#honeycombs, #code-pages).
-// POST: zuerst CSRF, dann genau in dieser Reihenfolge Speicher → Community → Honigwaben → Code-Seiten → Updates
-// (null: weiter) → Mail-Server → Konto löschen → Admin-Rolle → Passwort → Newsletter. Passt nichts, wird die Seite
-// (200) angezeigt.
+// POST: zuerst CSRF und die Bestätigung (_confirmed), dann genau in dieser Reihenfolge Speicher → Community →
+// Honigwaben → Code-Seiten → Updates (null: weiter) → Mail-Server → Konto löschen → Admin-Rolle → Passwort →
+// Newsletter. Passt nichts, wird die Seite (200) angezeigt.
 import type { Ctx } from '../web/ctx.js';
 import { q, type Row } from '../db.js';
 import { Session } from '../web/session.js';
@@ -23,6 +23,7 @@ import { deleteAccount } from './accountDeletion.js';
 import { emailTemplates, ensureEmailDir, saveSmtp, sendNewsletter, smtpConfig } from './newsletter.js';
 import { adminView, CutOffPage, type AdminViewData } from './views/admin.js';
 import { adminStorageData, adminStorageView } from './views/storage.js';
+import { adminBackUrl, refuseUnconfirmed } from './confirm.js';
 
 export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   const session = await Session.start(ctx);
@@ -34,6 +35,8 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     session.set('admin_error', 'Session expired – please try again.');
     ctx.redirect('/admin');
   }
+  // Formulare mit eigenem Bestätigungsdialog: ohne „1“ wird nichts ausgeführt (fällt ui.js aus, passiert nichts)
+  if (isPost) refuseUnconfirmed(ctx, session, adminBackUrl(post));
 
   // Speicherort und Backups der Uploads (lib/storage.php)
   if (isPost && post.storage_action !== undefined) {

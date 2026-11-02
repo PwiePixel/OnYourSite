@@ -21,6 +21,7 @@ import { PhpArr, PhpFloat, PhpInt, phpCastString, phpFloatString, phpJsonDecode,
 import { botVerify, communitySeal, communityText, snowflake, communityOpen } from '../src/community/community.js';
 import { adminCommunityHandle, adminCommunityPost } from '../src/community/admin.js';
 import { adminCommunityView } from '../src/community/adminView.js';
+import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung), damit zwei
@@ -390,7 +391,7 @@ test('admin view renders the same HTML as PHP', async () => {
     const mine = await adminCommunityView(fakeCtx(c.query));
     // Nur das frisch erzeugte Geheimnis im Hinweis „Connect the Discord bot“ ist zufällig
     const norm = (h: string) => h.replace(/('bot_secret' =&gt; ')[0-9a-f]{64}'/, '$1SECRET\'');
-    assert.equal(norm(mine), norm(ref), c.name);
+    assert.equal(withoutDialogs(norm(mine)), withoutNativeConfirms(norm(ref)), c.name);
     if (c.noSecret) assert.match(mine, /'bot_secret' =&gt; '[0-9a-f]{64}'/);
   }
   await useTestDb();
@@ -404,7 +405,7 @@ test('the view shows a pending count only for open work', async () => {
   const ref = php(`$_SESSION = ['csrf' => 'x']; $_GET = []; ob_start(); include $root . '/views/admin_community.php'; return ob_get_clean();`, { db: DB });
   const ctx = fakeCtx('');
   ctx.session = { get: () => 'x', set: () => undefined } as unknown as Session;
-  assert.equal(await adminCommunityView(ctx), ref);
+  assert.equal(withoutDialogs(await adminCommunityView(ctx)), withoutNativeConfirms(ref));
   assert.match(ref, /1 change waiting for the bot/);
   assert.match(ref, new RegExp('Offline – last seen ' + date('M j, Y H:i', time() - 7200)));
 });

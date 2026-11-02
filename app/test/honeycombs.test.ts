@@ -17,6 +17,7 @@ import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
 import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
 import type { ConfigData } from '../src/config.js';
+import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 
 // Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
 const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
@@ -351,10 +352,11 @@ test('admin view: Honeycombs identical apart from the moved parts and the yellow
     const php = splitPhpView(viewNorm(await phpView(DB.php)));
     const node = viewNorm(await nodeView(DB.node));
     assert.ok(php.honeycombs.length > 1000, label);
-    assert.equal(node, yellowIcons(php.honeycombs), label);
+    // Eigene Dialoge (custom-dialogs): Node ohne data-confirm/_confirmed/data-error-*, PHP ohne confirm()
+    assert.equal(withoutDialogs(node), withoutNativeConfirms(yellowIcons(php.honeycombs)), label);
     assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
     assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
-    assert.equal(nodeCodeList(await nodeCodeView(DB.node)), asCodeAction(php.codeList), label);
+    assert.equal(withoutDialogs(nodeCodeList(await nodeCodeView(DB.node))), withoutNativeConfirms(asCodeAction(php.codeList)), label);
   }
 });
 

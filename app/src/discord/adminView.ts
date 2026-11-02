@@ -10,6 +10,7 @@ import { botLastSeen, botSecret } from '../community/community.js';
 import { WEBHOOK_KEEP } from './admin.js';
 import { activeDestination, discordSettings, displayNameProblem, type DiscordSettings } from './settings.js';
 import { maskedWebhook, parseWebhookLink } from './webhook.js';
+import { confirmAttrs as uiConfirmAttrs, confirmField as uiConfirmField } from '../views/partials/ui.js';
 
 export interface DiscordTabData {
   csrf: string;
@@ -54,9 +55,10 @@ const when = (dt: string): string => {
 };
 // Bestätigung: Attribute für den Dialog und das Feld, das erst nach dem Bestätigen 1 ist (ohne Bestätigung ändert
 // der Server nichts)
+// Bestätigungen über die Dialog-Bibliothek der Seite (views/partials/ui.ts) – derselbe Server-Schutz wie überall im Admin
 const confirmAttrs = (title: string, text: string, okLabel: string, tone: 'warn' | 'danger'): string =>
-  ` data-confirm="${e(title)}" data-confirm-text="${e(text)}" data-confirm-ok="${e(okLabel)}" data-confirm-tone="${tone}"`;
-const confirmField = '<input type="hidden" name="_confirmed" value="0" autocomplete="off">';
+  uiConfirmAttrs({ title, text, ok: okLabel, tone });
+const confirmField = uiConfirmField();
 
 export function discordTabView(d: DiscordTabData): string {
   const { csrf, s, bot } = d;
@@ -310,17 +312,6 @@ ${storedNameProblem !== null ? `                                <p class="text-x
                         input.value = text.trim();
                         fromLink(input.value);
                         input.focus();
-                    });
-                    // Bestätigungen (data-confirm), solange es die eigenen Dialoge der Seite (OYSUI) hier noch nicht gibt
-                    tab.addEventListener('submit', function (ev) {
-                        if (window.OYSUI) return;
-                        var f = ev.target, b = ev.submitter;
-                        var src = b && b.hasAttribute('data-confirm') ? b : f.hasAttribute('data-confirm') ? f : null;
-                        if (!src) return;
-                        var text = src.getAttribute('data-confirm-text');
-                        if (!window.confirm(src.getAttribute('data-confirm') + (text ? '\\n\\n' + text : ''))) { ev.preventDefault(); return; }
-                        var c = f.querySelector('input[name=_confirmed]');
-                        if (c) c.value = '1';
                     });
                     sync();
                 })();

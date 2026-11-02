@@ -18,6 +18,7 @@ import { milestoneGet, milestones, taskGet, updateGet, updatePageOf, updatesCoun
 import { startDiscordStandIn, GOOD_TOKEN, type StandIn } from './fixtures/updates/discordStandIn.js';
 import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type TestEnv } from './fixtures/updates/harness.js';
 import { random } from './fixtures/updates/random.js';
+import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 
 let env: TestEnv;
 let standIn: StandIn | null = null;
@@ -436,7 +437,7 @@ test('admin view: the HTML of admin_updates.php for every state (Updates and Roa
         await ctx.session?.close();
       }
     }
-    assert.equal(beforeDiscordTab(html.node), beforeDiscordTab(html.php), JSON.stringify(v.get));
+    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), JSON.stringify(v.get));
   }
 });
 
@@ -496,7 +497,7 @@ test('public pages: the changelog, the roadmap columns, the feed and permalinks 
       } else {
         const ctx = new Ctx({ method: 'GET', url: c.url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
         await updatesPage(ctx, c.user as never);
-        html.node = String(ctx.body);
+        html.node = withoutDialogs(String(ctx.body));
         html.roadmap = await nodeRoadmap(c.user);
       }
     }
@@ -592,7 +593,7 @@ test('random data: the changelog, the roadmap columns and the feed render the sa
         } else {
           const ctx = new Ctx({ method: 'GET', url, headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
           await (feed ? updatesFeed(ctx) : updatesPage(ctx, null));
-          out.node = String(ctx.body);
+          out.node = withoutDialogs(String(ctx.body));
           if (!feed) out.roadmap = await nodeRoadmap(null);
         }
       }
@@ -645,6 +646,6 @@ test('random data: the admin view renders the same HTML as PHP (Updates and Road
         await ctx.session?.close();
       }
     }
-    assert.equal(beforeDiscordTab(html.node), beforeDiscordTab(html.php), `round ${round} ${JSON.stringify(get)}`);
+    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), `round ${round} ${JSON.stringify(get)}`);
   }
 });

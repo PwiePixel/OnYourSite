@@ -6,13 +6,13 @@
                             <i class='bx bx-key text-2xl text-brand-400'></i>
                             <h2 class="text-base font-semibold text-white">Give code access</h2>
                         </div>
-                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" onsubmit="return confirm('Unlock the code page for this user for free?')">
-                            <input type="hidden" name="csrf" value="CSRFTOKEN">
+                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
+                            <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off">
                             <input type="hidden" name="code_action" value="unlock">
                             <input type="hidden" name="item" value="code_page">
                             <div>
                                 <label class="block text-sm font-medium text-gray-300 mb-1.5" for="codeUser">User</label>
-                                <select id="codeUser" name="user_id" required class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
+                                <select id="codeUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
                                     <option value="">Choose a user …</option>
                                     <option value="10">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de</option>
                                     <option value="7">lea@test.de · lea@test.de</option>
@@ -56,8 +56,8 @@
                                                                     </div>
                                 <p class="text-xs text-gray-500 mt-1">Mia Code · Mia Müller (mia@test.de) · 2 files · 1 KB · 1,234 views · changed Oct 5, 2026</p>
                                                             </div>
-                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" onsubmit="return confirm('Block this code page? Visitors will only see a notice.')">
-                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="1">
+                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="1">
                                 <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
                                 <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
                             </form>
@@ -84,8 +84,8 @@
                                                                     </div>
                                 <p class="text-xs text-gray-500 mt-1">&lt;script&gt;alert(1)&lt;/script&gt; · O&#039;Brien &lt;b&gt;&amp; “Co” (Quote@Test.de) · 0 files · 1 KB · 0 views · changed Oct 3, 2026</p>
                                                             </div>
-                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" onsubmit="return confirm('Block this code page? Visitors will only see a notice.')">
-                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="3">
+                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="3">
                                 <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
                                 <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
                             </form>
@@ -108,8 +108,8 @@
                                     <td class="px-5 py-3"><span class="text-white">O&#039;Brien &lt;b&gt;&amp; “Co”</span><span class="block text-xs text-gray-500 break-all">Quote@Test.de</span></td>
                                     <td class="px-4 py-3"><a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">quotecode.oys.test:8080</a></td>
                                     <td class="px-4 py-3"><span class="text-gray-500">—</span></td>
-                                    <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0" onsubmit="return confirm('Unlock the code page for this user for free?')">
-                                            <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="10">
+                                    <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
+                                            <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="10">
                                             <button type="submit" class="text-xs text-gray-400 hover:text-white underline underline-offset-2 py-1">Unlock for free</button>
                                         </form></td>
                                 </tr>

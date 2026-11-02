@@ -10,6 +10,7 @@ import { baseAuthority } from '../helpers.js';
 import { csrfField } from '../web/security.js';
 import { hcSettings } from '../honeycombs/honeycombs.js';
 import { codeUrl } from './sites.js';
+import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 
 const IN = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
 const LBL = 'block text-sm font-medium text-gray-300 mb-1.5';
@@ -65,13 +66,13 @@ export async function adminCodePagesView(ctx: Ctx, allUsers: Row[]): Promise<str
                             <i class='bx bx-key text-2xl text-brand-400'></i>
                             <h2 class="text-base font-semibold text-white">Give code access</h2>
                         </div>
-                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" onsubmit="return confirm('Unlock the code page for this user for free?')">
-                            ${csrf}
+                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm"${raw(confirmAttrs({ title: 'Unlock the code page for free?', text: 'This user gets the code page without paying honeycombs.', ok: 'Unlock' }))}>
+                            ${csrf}${raw(confirmField())}
                             <input type="hidden" name="code_action" value="unlock">
                             <input type="hidden" name="item" value="code_page">
                             <div>
                                 <label class="${LBL}" for="codeUser">User</label>
-                                <select id="codeUser" name="user_id" required class="${IN}">
+                                <select id="codeUser" name="user_id" required data-error-required="Please choose a user." class="${IN}">
                                     <option value="">Choose a user …</option>
 ${join(allUsers.map((u) => html`                                    <option value="${intval(u.id)}">${phpStr(userName(u))} · ${phpStr(u.email)}${unlocks.has(intval(u.id)) ? ' · unlocked' : ''}</option>\n`))}                                </select>
                             </div>
@@ -150,8 +151,10 @@ ${join(allUsers.map((u) => html`                                    <option valu
         o += BTN;
         o += "\"><i class='bx bx-check-circle'></i> Unblock</button>\n                            </form>\n                            ";
       } else {
-        o += "                            <form action=\"/admin\" method=\"POST\" class=\"m-0 shrink-0 flex gap-2\" onsubmit=\"return confirm('Block this code page? Visitors will only see a notice.')\">\n                                ";
-        o += csrf;
+        o += "                            <form action=\"/admin\" method=\"POST\" class=\"m-0 shrink-0 flex gap-2\"";
+        o += confirmAttrs({ title: 'Block this code page?', text: 'Visitors will only see a notice.', ok: 'Block', tone: 'danger' });
+        o += ">\n                                ";
+        o += csrf + confirmField();
         o += "<input type=\"hidden\" name=\"code_action\" value=\"block\"><input type=\"hidden\" name=\"site_id\" value=\"";
         o += intval(cs.id);
         o += "\">\n                                <input type=\"text\" name=\"reason\" maxlength=\"200\" placeholder=\"Reason (the user sees it)\" class=\"";
@@ -217,8 +220,8 @@ function accessRow(u: Row, unlocks: Map<number, number>, sites: Row[], csrf: Saf
     ? html`<span class="text-gray-500">—</span>`
     : html`<span class="${BADGE} bg-emerald-500/15 text-emerald-400">${paid < 0 ? 'Paid ' + numberFormat(-paid) : 'Free'}</span>`;
   const action = paid === undefined
-    ? html`<form action="/admin" method="POST" class="m-0" onsubmit="return confirm('Unlock the code page for this user for free?')">
-                                            ${csrf}<input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="${uid}">
+    ? html`<form action="/admin" method="POST" class="m-0"${raw(confirmAttrs({ title: 'Unlock the code page for free?', text: 'This user gets the code page without paying honeycombs.', ok: 'Unlock' }))}>
+                                            ${csrf}${raw(confirmField())}<input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="${uid}">
                                             <button type="submit" class="text-xs text-gray-400 hover:text-white underline underline-offset-2 py-1">Unlock for free</button>
                                         </form>`
     : raw('');

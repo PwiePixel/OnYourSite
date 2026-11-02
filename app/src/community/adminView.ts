@@ -8,6 +8,7 @@ import { randomHex } from '../crypto.js';
 import { csrfField } from '../web/security.js';
 import { date, intval, phpStr, phpTruthy, strtotime, time, ucfirst } from '../php.js';
 import { botLastSeen, botSecret, ticketGet, ticketMessages } from './community.js';
+import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 
 const FILTERS = ['open', 'accepted', 'declined', 'all'];
 const FILTER_LABELS: Array<[string, string]> = [['open', 'Open'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['all', 'All']];
@@ -185,14 +186,14 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
     o += "                        </div>\n                        ";
     if (ticketView.status === 'open') {
       o += "                        <form action=\"/admin\" method=\"POST\" class=\"mt-4 space-y-3\">\n                            ";
-      o += await csrfField(ctx);
+      o += await csrfField(ctx) + confirmField();
       o += "<input type=\"hidden\" name=\"id\" value=\"";
       o += String(intval(ticketView.id));
       o += "\">\n                            <textarea name=\"body\" rows=\"3\" maxlength=\"2000\" placeholder=\"Write a reply – it’s posted in the ticket channel on Discord.\" class=\"";
       o += inputClass;
       o += "\"></textarea>\n                            <div class=\"flex flex-wrap gap-2 justify-end\">\n                                <button type=\"submit\" name=\"community_action\" value=\"ticket_close\" class=\"";
       o += btn;
-      o += " !text-red-400 hover:!bg-red-500/10\" onclick=\"return confirm('Close this ticket?')\"><i class='bx bx-lock-alt'></i> Close ticket</button>\n                                <button type=\"submit\" name=\"community_action\" value=\"ticket_reply\" class=\"bg-white text-black hover:bg-gray-200 font-bold py-2 px-5 rounded-lg transition-all flex items-center gap-2 text-sm\"><i class='bx bx-send'></i> Send reply</button>\n                            </div>\n                        </form>\n                        ";
+      o += " !text-red-400 hover:!bg-red-500/10\"" + confirmAttrs({ title: 'Close this ticket?', ok: 'Close ticket', tone: 'warn' }) + "><i class='bx bx-lock-alt'></i> Close ticket</button>\n                                <button type=\"submit\" name=\"community_action\" value=\"ticket_reply\" class=\"bg-white text-black hover:bg-gray-200 font-bold py-2 px-5 rounded-lg transition-all flex items-center gap-2 text-sm\"><i class='bx bx-send'></i> Send reply</button>\n                            </div>\n                        </form>\n                        ";
     }
     o += "                    </div>\n                    ";
   }

@@ -1,0 +1,93 @@
+/* OnYourSite – eigene Dialoge und Hinweise (App-Seiten). Gleiche Werte wie .modal und .toast im Editor (editor.css).
+   Die Grundregeln (Stapel, Scroll-Sperre, Toast-Leiste) fügt ui.js selbst ein; hier steht nur das Aussehen.
+   Ausdrückliche Werte überall, weil Tailwinds Preflight button, h2 und ul auf diesen Seiten zurücksetzt. */
+:root {
+  --ui-toast-top: 76px;
+  /* Honigwaben-Farben – einmal hier für alle App-Seiten (Editor, Admin, Anmeldung …) */
+  --hc: #facc15; --hc-2: #fde047; --hc-text: #fef08a; --hc-soft: rgba(250, 204, 21, .12); --hc-line: rgba(250, 204, 21, .35);
+}
+.ui-layer { background: rgba(0, 0, 0, .7); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); animation: ui-in .15s; }
+.ui-dialog {
+  max-width: 440px; background: #0c0c0e; border: 1px solid #27272a; border-radius: 16px; box-shadow: 0 40px 80px -20px #000;
+  color: #d4d4d8; font-family: inherit; font-size: 14px; text-align: left;
+}
+.ui-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid #27272a; }
+.ui-ico {
+  width: 34px; height: 34px; border-radius: 9px; flex: none; display: grid; place-items: center; font-size: 18px;
+  background: rgba(99, 102, 241, .14); color: #818cf8;
+}
+.ui-dialog.is-danger .ui-ico { background: rgba(239, 68, 68, .14); color: #f87171; }
+.ui-dialog.is-warn .ui-ico { background: rgba(245, 158, 11, .14); color: #fbbf24; }
+.ui-dialog.is-hc .ui-ico { background: var(--hc-soft); color: var(--hc); }
+.ui-title { flex: 1; min-width: 0; margin: 0; color: #fff; font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.ui-x {
+  width: 34px; height: 34px; border-radius: 8px; flex: none; display: grid; place-items: center; color: #71717a; font-size: 22px;
+  background: transparent; border: 0; cursor: pointer; transition: all .15s;
+}
+.ui-x:hover { background: rgba(255, 255, 255, .06); color: #fff; }
+.ui-x:disabled { opacity: .55; cursor: not-allowed; }
+.ui-body { padding: 18px; }
+.ui-text { margin: 0; color: #a1a1aa; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+.ui-list { margin: 10px 0 0; padding-left: 18px; list-style: disc; color: #a1a1aa; line-height: 1.55; }
+.ui-text[hidden] + .ui-list { margin-top: 0; }
+.ui-content { margin-top: 14px; }
+.ui-text[hidden] + .ui-list:empty + .ui-content { margin-top: 0; }
+.ui-label { display: block; margin: 14px 0 0; font-size: 13px; font-weight: 500; color: #d4d4d8; }
+.ui-body > .ui-label:first-child { margin-top: 0; }
+.ui-input {
+  display: block; width: 100%; margin-top: 6px; background: #121212; border: 1px solid #27272a; border-radius: 8px;
+  padding: 9px 13px; color: #fff; font-size: 14px; font-family: inherit; outline: none; box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s;
+}
+.ui-input:focus { border-color: #6366f1; box-shadow: 0 0 0 1px #6366f1; }
+.ui-input::placeholder { color: #52525b; }
+.ui-msg { flex-basis: 100%; margin: 0; font-size: 13px; color: #a5b4fc; }
+.ui-msg.is-err { color: #f87171; }
+.ui-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; padding: 14px 18px; border-top: 1px solid #27272a; }
+.ui-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; border-radius: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1.3; border: 1px solid transparent; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.ui-btn.is-primary { background: #fff; color: #000; }
+.ui-btn.is-primary:hover { background: #e5e7eb; }
+.ui-btn.is-ghost { background: transparent; color: #a1a1aa; }
+.ui-btn.is-ghost:hover { color: #fff; background: rgba(255, 255, 255, .05); }
+.ui-btn.is-danger { background: rgba(239, 68, 68, .1); color: #f87171; border-color: rgba(239, 68, 68, .25); }
+.ui-btn.is-danger:hover { background: rgba(239, 68, 68, .18); }
+.ui-btn.is-hc { background: var(--hc); color: #000; }
+.ui-btn.is-hc:hover { background: var(--hc-2); }
+.ui-btn:disabled, .ui-btn:disabled:hover { opacity: .55; cursor: not-allowed; }
+.ui-btn:focus-visible, .ui-x:focus-visible, .ui-toast button:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+
+/* Hinweise – wie .toast im Editor */
+.ui-toast {
+  padding: 9px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; line-height: 1.4;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .8); cursor: default;
+}
+.ui-toast > i { font-size: 18px; flex: none; }
+.ui-toast b { display: block; color: #fff; font-weight: 600; }
+.ui-toast.ok { background: rgba(16, 185, 129, .14); border: 1px solid rgba(16, 185, 129, .3); color: #34d399; }
+.ui-toast.err { background: rgba(239, 68, 68, .14); border: 1px solid rgba(239, 68, 68, .3); color: #f87171; }
+.ui-toast.info { background: rgba(99, 102, 241, .14); border: 1px solid rgba(99, 102, 241, .35); color: #a5b4fc; }
+.ui-toast.warn { background: rgba(245, 158, 11, .14); border: 1px solid rgba(245, 158, 11, .35); color: #fbbf24; }
+.ui-toast.hc { background: var(--hc-soft); border: 1px solid var(--hc-line); color: var(--hc-2); }
+.ui-amt {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 999px; font-weight: 700;
+  font-variant-numeric: tabular-nums; background: var(--hc-soft); color: var(--hc); white-space: nowrap;
+}
+.ui-toast-act {
+  margin-left: 4px; padding: 3px 9px; border-radius: 7px; font-family: inherit; font-size: 12px; font-weight: 600; color: inherit;
+  background: rgba(255, 255, 255, .06); border: 1px solid currentColor; cursor: pointer; white-space: nowrap;
+}
+.ui-toast-x {
+  width: 22px; height: 22px; margin-right: -6px; border-radius: 6px; flex: none; display: grid; place-items: center;
+  color: inherit; background: transparent; border: 0; opacity: .7; cursor: pointer; font-size: 17px;
+}
+.ui-toast-x:hover { opacity: 1; background: rgba(255, 255, 255, .06); }
+
+/* Meldungen unter Feldern (statt der Blasen des Browsers) */
+.ui-field-err { display: flex; gap: 4px; align-items: center; margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: #f87171; }
+.ui-field-err i { font-size: 14px; flex: none; }
+[aria-invalid="true"], [data-field][data-invalid] { border-color: rgba(239, 68, 68, .6) !important; box-shadow: 0 0 0 1px rgba(239, 68, 68, .35) !important; }
+@media (max-width: 639px) { .ui-input { font-size: 16px; } .ui-foot .ui-btn { flex: 1 1 auto; } }

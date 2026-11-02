@@ -14,6 +14,7 @@ import { brands, brandSvg, iconHtml, iconUsesBoxicons, socialUrl, uiIcon } from 
 import { DEFAULT_THEME, layoutKey, themeKey, themes } from './themes.js';
 import { idx, JsonEncodeError, nullableStrArg, PhpFloat, phpFloatStr, phpNumber, phpRound, strArg, withPhpFloats } from './phpValues.js';
 import { basename, entries, isArr, own, parseLocalDateTime, values } from './util.js';
+import { uiAssets } from '../views/partials/ui.js';
 
 type Rec = Record<string, unknown>;
 
@@ -407,7 +408,9 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   } catch (err) {
     if (!(err instanceof JsonEncodeError)) throw err;
   }
-  o += "</script>\n<script src=\"";
+  o += "</script>\n";
+  // Eigene Dialoge und Formularprüfungen im Design der Seite (vor page.js; beide defer, die Reihenfolge bleibt)
+  o += uiAssets('page') + "\n<script src=\"";
   o += e(asset('/static/js/page.js'));
   o += "\" defer></script>\n</body>\n</html>\n";
   return o;
@@ -777,6 +780,7 @@ export function renderSimple(pageIn: object, title: string, bodyHtml: string | S
     + '<link rel="stylesheet" href="' + e(asset('/static/css/fonts.css')) + '">'
     + '<link rel="stylesheet" href="' + e(asset('/static/css/themes.css')) + '">'
     + '<link rel="stylesheet" href="' + e(asset('/static/css/page.css')) + '">'
+    + uiAssets('page')
     + '</head><body class="' + e(classes.join(' ')) + '"' + style + '>'
     + '<div class="oys-bg" aria-hidden="true"><span class="oys-deco oys-deco-1"></span><span class="oys-deco oys-deco-2"></span><span class="oys-deco oys-deco-3"></span></div>'
     + '<main class="oys-main oys-simple">' + String(bodyHtml) + '</main></body></html>';

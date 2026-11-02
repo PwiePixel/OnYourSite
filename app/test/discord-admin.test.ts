@@ -12,6 +12,7 @@ import { decryptData, encryptData } from '../src/crypto.js';
 import { isHalt, makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 import { adminPage } from '../src/admin/page.js';
+import { UNCONFIRMED_MESSAGE } from '../src/views/partials/ui.js';
 import { appRoutes } from '../src/app/dispatch.js';
 import { adminUpdatesHandle, ALREADY_POSTING } from '../src/updates/admin.js';
 import { adminUpdatesView } from '../src/updates/adminView.js';
@@ -385,7 +386,8 @@ test('forum webhook: updates become forum posts; edits and removal reach them th
   assert.ok(calls('DELETE', '/webhooks/' + FORUM + '/')[0].path.endsWith('?thread_id=' + row.discord_message_id));
   // Test-Beitrag: erst nach Bestätigung, danach in denselben Beitrag; ist er weg, fragt der nächste Test neu
   t = await post({ oys_action: 'discord_webhook_test', _confirmed: '0' });
-  assert.equal(t.error, 'Please confirm the test post – in a forum it creates a post “OnYourSite test”.');
+  // Unbestätigt fängt schon der gemeinsame Schutz des Admin-Bereichs die Sendung ab
+  assert.equal(t.error, UNCONFIRMED_MESSAGE);
   t = await post({ oys_action: 'discord_webhook_test', _confirmed: '1' });
   assert.equal(t.ok, 'Test message sent – check your Discord channel.');
   const testThread = String((await stored())?.test_thread_id);
@@ -439,7 +441,7 @@ test('tests are limited to 5 a minute per admin, checks to 10', async () => {
 test('no webhook yet: the test says what to do; removing needs the confirmation', async () => {
   assert.equal((await post({ oys_action: 'discord_webhook_test' })).error, 'There is no webhook to test yet – paste a webhook link under “Post with a webhook” and save it.');
   await save({ webhook_link: link(HOOK) });
-  assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '0' })).error, 'Please confirm removing the webhook.');
+  assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '0' })).error, UNCONFIRMED_MESSAGE);
   assert.equal((await stored())?.webhook_url, link(HOOK));
   assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '1' })).ok, 'Webhook removed. Its earlier posts stay in Discord.');
   assert.equal((await stored())?.webhook_url, '');
@@ -457,7 +459,7 @@ test('the old bot token keeps posting until a webhook is saved or it is deleted;
   // Ein neuer Token kommt über kein Formular mehr herein
   await post({ oys_action: 'discord_defaults_save', bot_token: 'x'.repeat(70), auto_post: '1' });
   assert.equal((await stored())?.bot_token, GOOD_TOKEN);
-  assert.equal((await post({ oys_action: 'discord_token_remove' , _confirmed: '0' })).error, 'Please confirm deleting the old bot token.');
+  assert.equal((await post({ oys_action: 'discord_token_remove' , _confirmed: '0' })).error, UNCONFIRMED_MESSAGE);
   // Ein gespeicherter Webhook löst den Token ab
   const r = await save({ webhook_link: link(HOOK) });
   assert.equal(r.ok, 'Webhook saved and checked – Discord knows it as “Captain Hook” (channel 1200000000000000001). The old bot token is deleted from the website.');

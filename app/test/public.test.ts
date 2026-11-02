@@ -16,6 +16,7 @@ import { notFoundData, notFoundView } from '../src/public/notFound.js';
 import { checkdate, kalender } from '../src/public/views/kalender.js';
 import { diffs, rng, runPhp } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
+import { withoutDialogs } from './support/dialogParity.js';
 
 after(() => closePool());
 
@@ -113,7 +114,7 @@ test('renderGate() matches oys_render_gate() byte for byte (age, password, with 
   const php = runPhpList(`${PHP_FROM_ROUTES('oys_render_gate')}
     foreach ($in as $c) { $out[] = oys_render_gate($c['page'], oys_block_from_row($c['row']), $c['kind'], $c['error']); }`, JSON.stringify(cases));
   cases.forEach((c, i) => {
-    const node = renderGate(c.page, blockFromRow(c.row), c.kind as 'age' | 'password', c.error);
+    const node = withoutDialogs(renderGate(c.page, blockFromRow(c.row), c.kind as 'age' | 'password', c.error));
     assert.equal(node, php[i], `case ${i} ${JSON.stringify(c).slice(0, 200)}: ${firstDiff(php[i], node)}`);
   });
 });
@@ -142,7 +143,7 @@ test('the 404 page matches views/404.php for every host and path form (taken, fr
   for (let i = 0; i < cases.length; i++) {
     const data = await notFoundData(makeTestCtx({ url: cases[i].uri, host: cases[i].host }));
     if (data.isFree) free++;
-    const node = notFoundView(data);
+    const node = withoutDialogs(notFoundView(data));
     assert.equal(node, php[i], `case ${JSON.stringify(cases[i])}: ${firstDiff(php[i], node)}`);
   }
   assert.ok(free > 0 && free < cases.length, 'both variants of the page are compared');
@@ -200,7 +201,7 @@ test('the calendar page matches views/kalender.php (form, success notice, every 
     const ctx = await run(makeTestCtx({ method: c.method, url: '/kalender' + (c.query !== '' ? '?' + c.query : ''), host: 'mia.oys.test:8080',
       post: c.method === 'POST' ? parseStr(c.body, true) : {} }), (x) => kalender(x, c.page, c.key));
     assert.equal(ctx.status, 200, `case ${i}`);
-    const node = bookingTokens(String(ctx.body), Number(c.page.id));
+    const node = bookingTokens(withoutDialogs(String(ctx.body)), Number(c.page.id));
     const want = bookingTokens(php[i], Number(c.page.id));
     assert.equal(node, want, `case ${i} ${JSON.stringify(c).slice(0, 300)}: ${firstDiff(want, node)}`);
   }

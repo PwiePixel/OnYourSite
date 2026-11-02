@@ -49,7 +49,7 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   o += randomHex(8);
   o += "\">\n                            <div>\n                                <label class=\"";
   o += LBL;
-  o += "\" for=\"hcUser\">User</label>\n                                <select id=\"hcUser\" name=\"user_id\" required class=\"";
+  o += "\" for=\"hcUser\">User</label>\n                                <select id=\"hcUser\" name=\"user_id\" required data-error-required=\"Please choose a user.\" class=\"";
   o += IN;
   o += "\">\n                                    <option value=\"\">Choose a user …</option>\n                                    ";
   for (const u of allUsers) {

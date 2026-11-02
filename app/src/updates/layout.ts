@@ -4,6 +4,7 @@
 import { e } from '../html.js';
 import { asset, mainUrl } from '../helpers.js';
 import { date } from '../php.js';
+import { uiAssets } from '../views/partials/ui.js';
 
 export type Section = 'updates' | 'roadmap';
 
@@ -115,6 +116,7 @@ ${o.headScript ? `    <script>${o.headScript}</script>\n` : ''}    <meta name="d
         details > summary::-webkit-details-marker { display: none; }
         @media (max-width: 639px) { .timeline-line { display: none; } }
     </style>
+    ${uiAssets('app', { toastTop: 96 })}
 </head>
 <body class="bg-background text-gray-300 font-sans antialiased overflow-x-hidden selection:bg-brand-500/30">
 
