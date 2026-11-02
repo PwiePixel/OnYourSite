@@ -190,14 +190,16 @@ function defaultJson(v: unknown): string {
   return JSON.stringify(v).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
-// $_COOKIE: bei doppelten Namen gilt der erste; Werte werden dekodiert
+// $_COOKIE: bei doppelten Namen gilt der erste; Werte werden dekodiert. Ohne Prototyp: Namen wie constructor oder
+// toString sind gewöhnliche Cookies wie in PHP (mit „in“ fielen sie weg), __proto__ wird ein eigener Eintrag, und
+// cookie() liest nie etwas aus Object.prototype
 export function parseCookies(header: string): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out = Object.create(null) as Record<string, string>;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
     const name = part.slice(0, i).trim();
-    if (!name || name in out) continue;
+    if (!name || Object.hasOwn(out, name)) continue;
     let value = part.slice(i + 1).trim();
     try {
       value = decodeURIComponent(value);

@@ -468,3 +468,77 @@ export function gdTextWidth(font: TtFont, s: string, pt: number): number {
   const scalex = GD_RESOLUTION / (64 * METRIC_RES);
   return Math.abs(Math.trunc(maxX * scalex) - Math.trunc(minX * scalex));
 }
+
+// gdTextWidth(erste k Zeichen von s + suffix) für jedes k von 0 bis zur Zahl der Zeichen (Codepoints wie Array.from) in
+// einem Durchlauf – dieselben Werte wie einzeln gemessen, solange s kein & (Entity, liest voraus) und kein Nullbyte
+// enthält: dann zerlegt gdChars() den ganzen Text Zeichen für Zeichen gleich (ein Zeichen über U+FFFF sind vier Bytes,
+// jedes andere eines). Einzeln gemessen wäre das Kürzen in ogFit() quadratisch.
+export function gdPrefixWidths(font: TtFont, s: string, suffix: string, pt: number): number[] {
+  const scale = font.scaleFor(pt, METRIC_RES);
+  const scalex = GD_RESOLUTION / (64 * METRIC_RES);
+  const all = gdChars(s);
+  const tail = gdChars(suffix);
+  const metrics = new Map<number, GlyphMetrics>();
+  const glyphOf = (ch: number): GlyphMetrics => {
+    let m = metrics.get(ch);
+    if (!m) {
+      m = font.glyph(font.glyphIndex(ch), scale);
+      metrics.set(ch, m);
+    }
+    return m;
+  };
+  // Stand nach den ersten Zeichen (wie gdLayout(): index zählt auch Zeilenumbrüche mit)
+  let pen = 0;
+  let minX = 0;
+  let maxX = 0;
+  let index = 0;
+  const out: number[] = [];
+  const measure = (): void => {
+    let p = pen;
+    let lo = minX;
+    let hi = maxX;
+    let i = index;
+    for (const ch of tail) {
+      if (ch === 13 || ch === 10) {
+        p = 0;
+      } else {
+        const m = glyphOf(ch);
+        if (i === 0) {
+          lo = p + m.bearingX;
+          hi = p + m.advance;
+        } else {
+          lo = Math.min(lo, p + m.bearingX);
+          hi = Math.max(hi, p + m.advance);
+        }
+        p += m.advance;
+      }
+      i++;
+    }
+    out.push(Math.abs(Math.trunc(hi * scalex) - Math.trunc(lo * scalex)));
+  };
+  measure();
+  let at = 0;
+  for (let u = 0; u < s.length; ) {
+    const cp = s.codePointAt(u) as number;
+    u += cp > 0xffff ? 2 : 1;
+    for (let n = cp > 0xffff ? 4 : 1; n > 0; n--) {
+      const ch = all[at++];
+      if (ch === 13 || ch === 10) {
+        pen = 0;
+      } else {
+        const m = glyphOf(ch);
+        if (index === 0) {
+          minX = pen + m.bearingX;
+          maxX = pen + m.advance;
+        } else {
+          minX = Math.min(minX, pen + m.bearingX);
+          maxX = Math.max(maxX, pen + m.advance);
+        }
+        pen += m.advance;
+      }
+      index++;
+    }
+    measure();
+  }
+  return out;
+}

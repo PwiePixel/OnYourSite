@@ -294,6 +294,10 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
   }
   for (const r of ['bytes=0-', 'bytes=-1']) reqs.push(['GET', '/static/uploads/empty.txt', { Range: r }]);
   const mismatches: unknown[] = [];
+  const APACHE_OWN: Record<string, number> = {
+    '/static/uploads/': 403, '/static/uploads/%2e%2e%2fconfig.php': 404, '/static/uploads/%2e%2e%2f%2e%2e%2findex.php': 404,
+    '/static/uploads/%00.jpg': 404, '/static/uploads/notes.txt%00': 404, '/static/uploads/per%2': 400,
+  };
   let compared = 0;
   try {
     for (const [method, path, headers] of reqs) {
@@ -314,6 +318,14 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
         // Bekannt: der Router von Node sperrt Pfade mit einem Abschnitt, der mit einem Punkt beginnt, vorher mit 403
         // (web/static.ts: isDenied) – PHP antwortet hier 404
         if (path.includes('/..%2F')) continue;
+        // Was im Betrieb Apache selbst beantwortet (php -S kennt es nicht): der Ordner selbst 403 (Options -Indexes),
+        // kodierter Schrägstrich oder Nullbyte 404, kaputte %-Folge 400 – Node wie Apache (gemessen, test/static.test.ts)
+        if (Object.hasOwn(APACHE_OWN, path)) {
+          if (n.status !== APACHE_OWN[path] || n.headers[n.headers.findIndex((x, i) => i % 2 === 0 && x.toLowerCase() === 'content-type') + 1] !== 'text/html; charset=iso-8859-1') {
+            mismatches.push({ method, path, h, expected: APACHE_OWN[path], node: n.status });
+          }
+          continue;
+        }
         // Bekannt: static/uploads/.htaccess sperrt Skripte, HTML und SVG schon über den Namen – im Betrieb antwortet Apache
         // 403, auch wenn die Datei fehlt (Node genauso, web/static.ts). php -S kennt keine .htaccess: oys_serve_upload() → 404
         if (!path.includes('%') && /^\/static\/uploads\/[^/]*\.(php[0-9]?|phtml|phar|pl|py|cgi|sh|html?|svg|js)$/.test(path)) {
@@ -326,12 +338,19 @@ test('serving uploads matches PHP byte for byte (headers, ranges, 304, denied an
       }
     }
     // Dekodierte ../ zu gesperrten Dateien (config.json enthält alle Schlüssel): Node sperrt wie Apache nach dem Bereinigen
-    // des Pfads mit 403 (web/static.ts) – php -S ohne diese Regeln kommt bis oys_serve_upload() und antwortet 404
+    // des Pfads mit 403 (web/static.ts) – php -S ohne diese Regeln kommt bis oys_serve_upload() und antwortet 404. Ein
+    // kodierter Schrägstrich (%2F) ist bei Apache (AllowEncodedSlashes Off) schon vorher ein 404. Beides mit der
+    // Fehlerseite von Apache.
+    const apachePage = (code: number, title: string, text: string): string =>
+      `<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n<html><head>\n<title>${code} ${title}</title>\n</head><body>\n<h1>${title}</h1>\n<p>${text}</p>\n</body></html>\n`;
     for (const path of ['/static/%2e%2e/config.json', '/static/%2E%2E/config.json', '/static/css/%2e%2e/%2e%2e/config.json',
       '/static/uploads/%2E%2E%2F%2E%2E%2Fconfig.json', '/static/uploads/%2e%2e%2f%2e%2e%2fconfig.json', '/static/uploads/%2e%2e/%2e%2e/config.json',
       '/static/uploads/%2E%2E/%2E%2E/config.php', '/static/%2e%2e/lib/storage.php', '/static/uploads/%2e%2e/%2e%2e/.git/config']) {
       const n = await request(nodePort, 'GET', path);
-      assert.deepEqual([n.status, n.body.toString('latin1')], [403, 'Forbidden'], path);
+      const expected = /%2F/i.test(path)
+        ? [404, apachePage(404, 'Not Found', 'The requested URL was not found on this server.')]
+        : [403, apachePage(403, 'Forbidden', "You don't have permission to access this resource.")];
+      assert.deepEqual([n.status, n.body.toString('latin1')], expected, path);
     }
   } finally {
     await app.close();

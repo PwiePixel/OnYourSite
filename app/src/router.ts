@@ -1,6 +1,6 @@
 // Verteilung der Anfragen – dieselbe Reihenfolge wie index.php (und davor die Regeln aus .htaccess)
 import type { Ctx } from './web/ctx.js';
-import { isDenied, serveStatic } from './web/static.js';
+import { apacheError, apachePath, apacheRequestUri, isDenied, serveStatic } from './web/static.js';
 import { configString } from './config.js';
 import { strtolower, phpTrim } from './php.js';
 import { serveUpload } from './content/storage.js';
@@ -32,15 +32,17 @@ export function isMainHost(host: string): boolean {
 const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap']);
 
 export async function dispatch(ctx: Ctx): Promise<void> {
-  // .htaccess: immer https (auch hinter dem Tunnel: dort steht das Protokoll des Besuchers in X-Forwarded-Proto)
+  // Apache prüft die Adresse vor allem anderen: kaputte %-Folge oder /../ über die Wurzel hinaus 400, kodierter
+  // Schrägstrich (%2F) oder Nullbyte 404 – mit seiner eigenen Fehlerseite
+  const target = apachePath(ctx.rawUrl);
+  if ('status' in target) apacheError(ctx, target.status);
+  // Interne Ordner und Zugangsdaten (<FilesMatch>/<DirectoryMatch> von install.sh und .htaccess): 403, geprüft wird
+  // wie bei Apache der bereinigte Pfad – und zwar vor der https-Weiterleitung der .htaccess
+  if (isDenied(target.path)) apacheError(ctx, 403);
+  // .htaccess: immer https (auch hinter dem Tunnel: dort steht das Protokoll des Besuchers in X-Forwarded-Proto).
+  // %{REQUEST_URI} ist bei Apache der bereinigte Pfad; die Anfrage-Parameter bleiben unverändert.
   if (scheme() === 'https' && String(ctx.headers['x-forwarded-proto'] ?? '') === 'http') {
-    ctx.redirect('https://' + ctx.hostHeader + ctx.path + (ctx.queryString !== '' ? '?' + ctx.queryString : ''), 301);
-  }
-  // .htaccess: interne Ordner und Zugangsdaten
-  if (isDenied(ctx.path)) {
-    ctx.status = 403;
-    ctx.write('Forbidden');
-    ctx.halt();
+    apacheError(ctx, 301, 'https://' + ctx.hostHeader + apacheRequestUri(ctx, target.path));
   }
   // 0. Hochgeladene Dateien (vor allem anderen, ohne Datenbank)
   if (ctx.path.startsWith('/static/uploads/')) {

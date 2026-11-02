@@ -344,6 +344,17 @@ const CASES: Array<[string, Req]> = [
   ['outbox done', post('/_/bot/outbox/2/done', '{}')],
   ['outbox error', post('/_/bot/outbox/2/done', J({ error: 'Unknown action “x”.' }))],
   ['multipart body is not read', post('/_/bot/outbox/2/done', '--b\r\nContent-Disposition: form-data; name="error"\r\n\r\nx\r\n--b--\r\n', { type: 'multipart/form-data; boundary=b', signedBody: '' })],
+  // Ob php://input leer ist, entscheidet der Kern wie PHP (server.ts, web/multipart.ts): nur wenn PHP den Inhalt selbst liest
+  ['multipart without boundary is read', post('/_/bot/outbox/2/done', J({ error: 'no boundary' }), { type: 'multipart/form-data' })],
+  ['multipart with an unclosed quoted boundary is read', post('/_/bot/outbox/2/done', J({ error: 'unclosed' }), { type: 'multipart/form-data; boundary="b' })],
+  ['multipart boundary without = is read', post('/_/bot/outbox/2/done', J({ error: 'no equals' }), { type: 'multipart/form-data; boundary' })],
+  ['multipart with an empty boundary is not read', post('/_/bot/outbox/2/done', J({ error: 'empty' }), { type: 'multipart/form-data; boundary=', signedBody: '' })],
+  ['multipart type with a tab is no multipart', post('/_/bot/outbox/2/done', J({ error: 'tab' }), { type: 'multipart/form-data\t; boundary=b' })],
+  ['multipart in capitals is not read', post('/_/bot/outbox/2/done', J({ error: 'caps' }), { type: 'MULTIPART/FORM-DATA; BOUNDARY=b', signedBody: '' })],
+  ['multipart behind a comma is not read', post('/_/bot/outbox/2/done', J({ error: 'comma' }), { type: 'multipart/form-data, boundary=b', signedBody: '' })],
+  ['multipart signed over the body is refused', post('/_/bot/outbox/2/done', J({ error: 'signed' }), { type: 'multipart/form-data; boundary=b' })],
+  ['hostile multipart body is not read', post('/_/bot/outbox/2/done', ('--' + 'b'.repeat(300) + '\r\nContent-Disposition: form-data; name="a[]"\r\n\r\n' + '\n--'.repeat(50) + '\r\n').repeat(40),
+    { type: 'multipart/form-data; boundary=' + 'b'.repeat(300), signedBody: '' })],
   ['plain text body is read', post('/_/bot/outbox/2/done', J({ error: 'plain' }), { type: 'text/plain' })],
 ];
 
