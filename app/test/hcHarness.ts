@@ -10,6 +10,7 @@ import { ensureSchema } from '../src/schema.js';
 import { strtotime, time, type PhpArray } from '../src/php.js';
 import * as hc from '../src/honeycombs/honeycombs.js';
 import * as code from '../src/code/sites.js';
+import { adminCodeHandle, legacyCodePost } from '../src/code/admin.js';
 
 export const BASE = loadConfig();
 export const started = time();
@@ -74,6 +75,9 @@ const PHP_OPS = `${PHP_BOOT}
         case 'spend': $r = oys_hc_spend($pdo, $a[0], $a[1], $a[2]); break;
         case 'for_editor': $r = oys_hc_for_editor($pdo, $a[0], $a[1] ?? []); break;
         case 'admin': $r = oys_admin_hc_handle($pdo, $a[0], $a[1]); break;
+        // Bereich Code-Seiten (Node: code_action) – in PHP waren es dieselben Aktionen als hc_action=code_*
+        case 'code_admin': $p = $a[0]; if (isset($p['code_action'])) { $p['hc_action'] = is_string($p['code_action']) ? 'code_' . $p['code_action'] : $p['code_action']; unset($p['code_action']); }
+          $r = oys_admin_hc_handle($pdo, $p, $a[1]); break;
         case 'sql': $pdo->exec($a[0]); $r = true; break;
         case 'code_site': $r = oys_code_site($pdo, $a[0]); break;
         case 'code_site_by_id': $r = oys_code_site_by_id($pdo, $a[0]); break;
@@ -143,7 +147,13 @@ export async function nodeRun(db: string, ops: Op[]): Promise<unknown[]> {
           case 'earn': r = await hc.hcEarn(a[0] as number); break;
           case 'spend': r = await hc.hcSpend(a[0] as number, a[1] as number, a[2] as string); break;
           case 'for_editor': r = await hc.hcForEditor(a[0] as number, (a[1] as hc.HcEarned[]) ?? []); break;
-          case 'admin': r = await hc.adminHcHandle(a[0] as PhpArray, a[1] as number); break;
+          // Wie der Admin-Verteiler (admin/page.ts): alte Formulare hc_action=code_* gehen an den Bereich Code-Seiten
+          case 'admin': {
+            const legacy = legacyCodePost(a[0] as PhpArray);
+            r = legacy ? await adminCodeHandle(legacy) : await hc.adminHcHandle(a[0] as PhpArray, a[1] as number);
+            break;
+          }
+          case 'code_admin': r = await adminCodeHandle(a[0] as PhpArray); break;
           case 'sql': await exec(a[0] as string); r = true; break;
           case 'code_site': r = await code.codeSite(a[0] as number); break;
           case 'code_site_by_id': r = await code.codeSiteById(a[0] as number); break;

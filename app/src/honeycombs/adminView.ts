@@ -1,13 +1,13 @@
-// Admin: Honigwaben vergeben, Regeln einstellen, Code-Seiten prüfen und sperren (views/admin_honeycombs.php, eingebunden
-// in views/admin.php). Der Text außerhalb der PHP-Teile ist Byte für Byte übernommen (view2ts).
+// Admin, Bereich „Honeycombs“: Honigwaben vergeben, Regeln einstellen, Kontostände und letzte Buchungen
+// (views/admin_honeycombs.php, eingebunden in views/admin.php). Der Text außerhalb der PHP-Teile ist Byte für Byte
+// übernommen (view2ts). Die Liste der Code-Seiten und die Spalte „Code page“ stehen seit der Trennung im eigenen
+// Bereich „Code pages“ (code/adminView.ts), und die Honigwaben-Symbole sind gelb; sonst ist die Ausgabe unverändert.
 import type { Ctx } from '../web/ctx.js';
 import { q, type Row } from '../db.js';
-import { date, intval, numberFormat, phpFloatToString, phpStr, phpTruthy, strtolower, strtotime } from '../php.js';
+import { date, intval, numberFormat, phpStr, strtolower, strtotime } from '../php.js';
 import { e } from '../html.js';
 import { randomHex } from '../crypto.js';
-import { baseAuthority } from '../helpers.js';
 import { csrfField } from '../web/security.js';
-import { codeUrl } from '../code/sites.js';
 import { HC_MAX_VIEW_REWARDS, hcDescribe, hcSettings, type HcSettings } from './honeycombs.js';
 
 const IN = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
@@ -16,12 +16,6 @@ const BTN = 'inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg 
 
 // $userName: Name, sonst E-Mail (null und '' zählen als leer)
 const userName = (u: Row): unknown => (u.full_name !== '' && u.full_name !== null && u.full_name !== undefined ? u.full_name : u.email);
-
-// $kb: Größe mit PHP-round() (positive Werte: halb auf) und PHP-Zahlentext
-export function kb(b: number): string {
-  if (b >= 1048576) return phpFloatToString(Math.round((b / 1048576) * 10) / 10) + ' MB';
-  return phpFloatToString(Math.max(1, Math.round(b / 1024))) + ' KB';
-}
 
 // strtotime() eines Datums aus der Datenbank; leer/ungültig → 0 wie date(…, false)
 function stamp(v: unknown): number {
@@ -36,13 +30,8 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   for (const row of await q('SELECT user_id, SUM(amount) AS balance, SUM(GREATEST(amount, 0)) AS earned, SUM(GREATEST(-amount, 0)) AS spent FROM honeycomb_ledger GROUP BY user_id')) {
     balances.set(intval(row.user_id), row);
   }
-  const unlocked = new Set((await q("SELECT user_id FROM honeycomb_ledger WHERE reason = 'unlock' AND ref = 'code_page'")).map((r) => intval(r.user_id)));
   const balanceOf = (u: Row): number => intval(balances.get(intval(u.id))?.balance ?? 0);
   const hcUsers = [...allUsers].sort((a, b) => Math.sign(balanceOf(b) - balanceOf(a)) || Math.sign(intval(b.id) - intval(a.id)));
-  const codeSites = await q(`SELECT s.*, u.full_name, u.email,
-        (SELECT COUNT(*) FROM code_files f WHERE f.site_id = s.id) AS file_count,
-        (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id) AS bytes
-    FROM code_sites s JOIN users u ON u.id = s.user_id ORDER BY s.updated_at DESC`);
   const recent = await q('SELECT l.*, u.full_name, u.email FROM honeycomb_ledger l JOIN users u ON u.id = l.user_id ORDER BY l.id DESC LIMIT 25');
   const ruleFields: Array<[keyof HcSettings, [string, string]]> = [
     ['daily', ['Active day', 'For opening the editor (once a day)']],
@@ -54,7 +43,7 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   const csrf = await csrfField(ctx);
 
   let o = '';
-  o += "            <!-- ===================== Honigwaben ===================== -->\n            <div id=\"tab-honeycombs\" class=\"admin-tab-content max-w-5xl mx-auto space-y-8 hidden\">\n                <div class=\"grid grid-cols-1 lg:grid-cols-2 gap-8\">\n                    <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                        <div class=\"flex items-center gap-3 mb-5 border-b border-bordercolor pb-4\">\n                            <i class='bx bx-hive text-2xl text-brand-400'></i>\n                            <h2 class=\"text-base font-semibold text-white\">Give honeycombs</h2>\n                        </div>\n                        <form action=\"/admin\" method=\"POST\" class=\"space-y-4\" id=\"hcGrantForm\">\n                            ";
+  o += "            <!-- ===================== Honigwaben ===================== -->\n            <div id=\"tab-honeycombs\" class=\"admin-tab-content max-w-5xl mx-auto space-y-8 hidden\">\n                <div class=\"grid grid-cols-1 lg:grid-cols-2 gap-8\">\n                    <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                        <div class=\"flex items-center gap-3 mb-5 border-b border-bordercolor pb-4\">\n                            <i class='bx bx-hive text-2xl text-yellow-400'></i>\n                            <h2 class=\"text-base font-semibold text-white\">Give honeycombs</h2>\n                        </div>\n                        <form action=\"/admin\" method=\"POST\" class=\"space-y-4\" id=\"hcGrantForm\">\n                            ";
   o += csrf;
   o += "                            <input type=\"hidden\" name=\"hc_action\" value=\"grant\">\n                            <input type=\"hidden\" name=\"grant_ref\" value=\"";
   o += randomHex(8);
@@ -104,74 +93,9 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
     o += IN;
     o += " !w-28 text-right\">\n                            </div>\n                            ";
   }
-  o += "                            <p class=\"text-xs text-gray-500 pt-1\">0 switches a reward off. Changes count from now on – nobody loses honeycombs they already have.</p>\n                            <button type=\"submit\" class=\"bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2\"><i class='bx bx-save'></i> Save</button>\n                        </form>\n                    </div>\n                </div>\n\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-code-alt text-xl text-brand-400'></i> Code pages <span class=\"text-gray-500 text-sm font-normal\">";
-  o += codeSites.length;
-  o += "</span></h2>\n                        <a href=\"/terms/code-pages\" target=\"_blank\" rel=\"noopener\" class=\"text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2\">Rules for code pages <i class='bx bx-link-external'></i></a>\n                    </div>\n                    ";
-  if (!codeSites.length) {
-    o += "                    <p class=\"p-6 text-sm text-gray-500\">No code pages yet.</p>\n                    ";
-  } else {
-    o += "                    <div class=\"divide-y divide-bordercolor\">\n                        ";
-    for (const cs of codeSites) {
-      const csUrl = codeUrl(cs);
-      o += "                        <div class=\"p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3\">\n                            <div class=\"min-w-0 flex-1\">\n                                <div class=\"flex items-center gap-2 flex-wrap\">\n                                    <a href=\"";
-      o += e(csUrl);
-      o += "/\" target=\"_blank\" rel=\"noopener\" class=\"text-white font-medium hover:text-brand-400 break-all\">";
-      o += e(phpStr(cs.slug) + '.' + baseAuthority());
-      o += "</a>\n                                    ";
-      if (phpTruthy(cs.is_blocked)) {
-        o += "                                    <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-400\">Blocked</span>\n                                    ";
-      } else if (!phpTruthy(cs.is_published)) {
-        o += "                                    <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-white/10 text-gray-400\">Offline</span>\n                                    ";
-      } else {
-        o += "                                    <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400\">Online</span>\n                                    ";
-      }
-      o += "                                </div>\n                                <p class=\"text-xs text-gray-500 mt-1\">";
-      o += e(cs.title);
-      o += " · ";
-      o += e(userName(cs));
-      o += " (";
-      o += e(cs.email);
-      o += ") · ";
-      o += intval(cs.file_count);
-      o += " files · ";
-      o += e(kb(intval(cs.bytes)));
-      o += " · ";
-      o += numberFormat(intval(cs.views));
-      o += " views · changed ";
-      o += e(date('M j, Y', stamp(cs.updated_at)));
-      o += "</p>\n                                ";
-      if (phpTruthy(cs.is_blocked) && phpTruthy(cs.blocked_reason)) {
-        o += "                                <p class=\"text-xs text-red-300 mt-1\">Reason: ";
-        o += e(cs.blocked_reason);
-        o += "</p>\n                                ";
-      }
-      o += "                            </div>\n                            ";
-      if (phpTruthy(cs.is_blocked)) {
-        o += "                            <form action=\"/admin\" method=\"POST\" class=\"m-0 shrink-0\">\n                                ";
-        o += csrf;
-        o += "<input type=\"hidden\" name=\"hc_action\" value=\"code_unblock\"><input type=\"hidden\" name=\"site_id\" value=\"";
-        o += intval(cs.id);
-        o += "\">\n                                <button type=\"submit\" class=\"";
-        o += BTN;
-        o += "\"><i class='bx bx-check-circle'></i> Unblock</button>\n                            </form>\n                            ";
-      } else {
-        o += "                            <form action=\"/admin\" method=\"POST\" class=\"m-0 shrink-0 flex gap-2\" onsubmit=\"return confirm('Block this code page? Visitors will only see a notice.')\">\n                                ";
-        o += csrf;
-        o += "<input type=\"hidden\" name=\"hc_action\" value=\"code_block\"><input type=\"hidden\" name=\"site_id\" value=\"";
-        o += intval(cs.id);
-        o += "\">\n                                <input type=\"text\" name=\"reason\" maxlength=\"200\" placeholder=\"Reason (the user sees it)\" class=\"";
-        o += IN;
-        o += " !py-2 lg:!w-56\">\n                                <button type=\"submit\" class=\"";
-        o += BTN;
-        o += " !text-red-400 hover:!bg-red-500/10\"><i class='bx bx-block'></i> Block</button>\n                            </form>\n                            ";
-      }
-      o += "                        </div>\n                        ";
-    }
-    o += "                    </div>\n                    ";
-  }
-  o += "                </div>\n\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>\n                        <input type=\"search\" id=\"hcFilter\" placeholder=\"Search users …\" class=\"";
+  o += "                            <p class=\"text-xs text-gray-500 pt-1\">0 switches a reward off. Changes count from now on – nobody loses honeycombs they already have.</p>\n                            <button type=\"submit\" class=\"bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2\"><i class='bx bx-save'></i> Save</button>\n                        </form>\n                    </div>\n                </div>\n\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>\n                        <input type=\"search\" id=\"hcFilter\" placeholder=\"Search users …\" class=\"";
   o += IN;
-  o += " sm:!w-64\">\n                    </div>\n                    <div class=\"overflow-x-auto\">\n                        <table class=\"w-full text-sm text-left\">\n                            <thead class=\"text-xs text-gray-500 uppercase bg-inputbg\">\n                                <tr><th class=\"px-5 py-3 font-medium\">User</th><th class=\"px-4 py-3 font-medium text-right\">Balance</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Earned</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Spent</th><th class=\"px-4 py-3 font-medium\">Code page</th><th class=\"px-5 py-3\"></th></tr>\n                            </thead>\n                            <tbody class=\"divide-y divide-bordercolor\" id=\"hcRows\">\n                                ";
+  o += " sm:!w-64\">\n                    </div>\n                    <div class=\"overflow-x-auto\">\n                        <table class=\"w-full text-sm text-left\">\n                            <thead class=\"text-xs text-gray-500 uppercase bg-inputbg\">\n                                <tr><th class=\"px-5 py-3 font-medium\">User</th><th class=\"px-4 py-3 font-medium text-right\">Balance</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Earned</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Spent</th><th class=\"px-5 py-3\"></th></tr>\n                            </thead>\n                            <tbody class=\"divide-y divide-bordercolor\" id=\"hcRows\">\n                                ";
   for (const u of hcUsers) {
     const uid = intval(u.id);
     const b = balances.get(uid) ?? null;
@@ -183,21 +107,11 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
     o += e(u.email);
     o += "</span></td>\n                                    <td class=\"px-4 py-3 text-right font-bold text-white whitespace-nowrap\">";
     o += numberFormat(intval(b?.balance ?? 0));
-    o += " <i class='bx bx-hive text-brand-400'></i></td>\n                                    <td class=\"px-4 py-3 text-right text-gray-400 hidden sm:table-cell\">";
+    o += " <i class='bx bx-hive text-yellow-400'></i></td>\n                                    <td class=\"px-4 py-3 text-right text-gray-400 hidden sm:table-cell\">";
     o += numberFormat(intval(b?.earned ?? 0));
     o += "</td>\n                                    <td class=\"px-4 py-3 text-right text-gray-400 hidden sm:table-cell\">";
     o += numberFormat(intval(b?.spent ?? 0));
-    o += "</td>\n                                    <td class=\"px-4 py-3\">\n                                        ";
-    if (unlocked.has(uid)) {
-      o += "                                        <span class=\"text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400\">Unlocked</span>\n                                        ";
-    } else {
-      o += "                                        <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Unlock the code page for this user for free?')\">\n                                            ";
-      o += csrf;
-      o += "<input type=\"hidden\" name=\"hc_action\" value=\"code_unlock\"><input type=\"hidden\" name=\"user_id\" value=\"";
-      o += uid;
-      o += "\">\n                                            <button type=\"submit\" class=\"text-xs text-gray-400 hover:text-white underline underline-offset-2 py-1\">Unlock for free</button>\n                                        </form>\n                                        ";
-    }
-    o += "                                    </td>\n                                    <td class=\"px-5 py-3 text-right\"><button type=\"button\" class=\"";
+    o += "</td>\n                                    <td class=\"px-5 py-3 text-right\"><button type=\"button\" class=\"";
     o += BTN;
     o += "\" data-hc-give=\"";
     o += uid;

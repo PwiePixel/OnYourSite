@@ -1,6 +1,8 @@
 // Honigwaben gegen PHP: Einstellungen, Kontostand, Buchungen, Verdienen, Bezahlen, Editor-Daten und der Admin-Teil.
 // Dieselben Aufrufe laufen mit lib/honeycombs.php auf Datenbank A und mit der Node-Version auf Datenbank B;
-// nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein.
+// nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im Admin stehen die Aktionen
+// und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) – verglichen wird mit
+// denselben Teilen von PHP.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
@@ -10,11 +12,15 @@ import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
 import { phpInt, phpJsonDecode } from '../src/honeycombs/util.js';
-import { kb, adminHoneycombsView } from '../src/honeycombs/adminView.js';
+import { adminHoneycombsView } from '../src/honeycombs/adminView.js';
+import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
-import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import type { ConfigData } from '../src/config.js';
 
-const DB = { php: 'oys_test_hcu_hc_php', node: 'oys_test_hcu_hc_node' };
+// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
+const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
+const DB = { php: SOURCE + '_hcphp', node: SOURCE + '_hcnode' };
 let admin: Connection;
 
 function fixture(): Array<[string, unknown[]]> {
@@ -209,7 +215,17 @@ test('admin handler: every action incl. invalid input', async () => {
     ['admin', { hc_action: 'code_unlock', user_id: '9' }, 3], ['admin', { hc_action: 'code_unlock', user_id: '9' }, 3],
     ['admin', { hc_action: 'code_unlock', user_id: '6' }, 3], ['admin', { hc_action: 'code_unlock', user_id: '7' }, 3],
     ['admin', { hc_action: 'code_unlock', user_id: '10' }, 3], ['admin', { hc_action: 'code_unlock', user_id: ['10'] }, 3],
-    ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30]];
+    // Dieselben Aktionen als code_action (Bereich Code-Seiten): Ergebnis und Tabellen wie die alten PHP-Aktionen
+    ['code_admin', {}, 3], ['code_admin', { code_action: 'nope' }, 3], ['code_admin', { code_action: ['block'] }, 3], ['code_admin', { code_action: 'Block', site_id: '1' }, 3],
+    ['code_admin', { code_action: 'block', site_id: '999' }, 3], ['code_admin', { code_action: 'block' }, 3],
+    ['code_admin', { code_action: 'block', site_id: '2', reason: '  Phishing\t<b>x</b>  ' + 'z'.repeat(250) }, 3],
+    ['code_admin', { code_action: 'block', site_id: '3', reason: '' }, 3],
+    ['code_admin', { code_action: 'unblock', site_id: '2', reason: 'ignored' }, 3], ['code_admin', { code_action: 'unblock', site_id: ' 1x' }, 3],
+    ['code_admin', { code_action: 'unblock', site_id: '999' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '0', item: 'code_page' }, 3], ['code_admin', { code_action: 'unlock' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '8', item: 'code_page' }, 3], ['code_admin', { code_action: 'unlock', user_id: '8', item: 'code_page' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '5' }, 3], ['code_admin', { code_action: 'unlock', user_id: ['8'] }, 3],
+    ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30], ['history', 8, 5]];
   const php = await same(ops, 'admin');
   assert.deepEqual(php[0], null);
   assert.deepEqual(php[5], { ok: 'Honeycomb settings saved.' });
@@ -287,16 +303,58 @@ async function nodeView(db: string): Promise<string> {
     await restoreDb();
   }
 }
+async function nodeCodeView(db: string): Promise<string> {
+  await useDb(db);
+  try {
+    const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+    ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
+    const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
+    return await adminCodePagesView(ctx, users);
+  } finally {
+    await restoreDb();
+  }
+}
 const viewNorm = (s: string) => s.replace(/name="grant_ref" value="[0-9a-f]{16}"/, 'name="grant_ref" value="REF"');
 
-test('admin view: byte-identical HTML (with data, after changes, and empty)', async () => {
+// Die Ausgabe von views/admin_honeycombs.php geteilt wie im Admin seit der Trennung: die Karte mit der Liste der
+// Code-Seiten und die Spalte „Code page“ (Kopf und je Zeile eine Zelle) gehören zum Bereich Code-Seiten
+const CARD = '                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">\n';
+const CODE_CARD = CARD + '                    <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">\n'
+  + '                        <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class=\'bx bx-code-alt';
+function splitPhpView(php: string): { honeycombs: string; codeList: string } {
+  const start = php.indexOf(CODE_CARD);
+  assert.ok(start > 0, 'code pages card in the PHP view');
+  const end = php.indexOf(CARD, start + CARD.length);
+  const rest = php.slice(0, start) + php.slice(end);
+  assert.equal(rest.split('<th class="px-4 py-3 font-medium">Code page</th>').length, 2, 'one "Code page" column');
+  return {
+    honeycombs: rest.replace('<th class="px-4 py-3 font-medium">Code page</th>', '').replace(/ {36}<td class="px-4 py-3">\n[\s\S]*? {36}<\/td>\n/g, ''),
+    codeList: php.slice(start, end),
+  };
+}
+// Die Liste im Bereich Code-Seiten (bis zur nächsten Karte „Access“)
+function nodeCodeList(node: string): string {
+  const start = node.indexOf(CODE_CARD);
+  assert.ok(start > 0, 'code pages card in the Node section');
+  return node.slice(start, node.indexOf(CARD, start + CARD.length));
+}
+// Die Formulare senden jetzt code_action statt hc_action=code_*
+const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(block|unblock)"/g, 'name="code_action" value="$1"');
+// Gelbe Honigwaben-Symbole (honeycomb-shop §5.1): Kopf von „Give honeycombs“ und das Symbol bei jedem Kontostand
+const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text-brand-400'></i>", "<i class='bx bx-hive text-2xl text-yellow-400'></i>")
+  .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
+
+test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', async () => {
   for (const [label, prep] of [['current data', ''], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
     ['ledger only', 'DELETE FROM code_sites'], ['empty', 'DELETE FROM honeycomb_ledger']] as const) {
     if (prep) for (const db of Object.values(DB)) await admin.query(`USE \`${db}\``).then(() => admin.query(prep));
-    const php = viewNorm(await phpView(DB.php));
+    const php = splitPhpView(viewNorm(await phpView(DB.php)));
     const node = viewNorm(await nodeView(DB.node));
-    assert.ok(php.length > 1000, label);
-    assert.equal(node, php, label);
+    assert.ok(php.honeycombs.length > 1000, label);
+    assert.equal(node, yellowIcons(php.honeycombs), label);
+    assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
+    assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
+    assert.equal(nodeCodeList(await nodeCodeView(DB.node)), asCodeAction(php.codeList), label);
   }
 });
 

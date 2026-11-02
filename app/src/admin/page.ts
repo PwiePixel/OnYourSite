@@ -1,17 +1,21 @@
 // /admin (views/admin.php mit admin_updates, admin_community, admin_honeycombs, admin_storage) – nur für Admins.
-// POST: zuerst CSRF, dann genau in dieser Reihenfolge Speicher → Community → Honigwaben → Updates (null: weiter) →
-// Mail-Server → Konto löschen → Admin-Rolle → Passwort → Newsletter. Passt nichts, wird die Seite (200) angezeigt.
+// Honigwaben und Code-Seiten sind getrennte Bereiche (#honeycombs, #code-pages).
+// POST: zuerst CSRF, dann genau in dieser Reihenfolge Speicher → Community → Honigwaben → Code-Seiten → Updates
+// (null: weiter) → Mail-Server → Konto löschen → Admin-Rolle → Passwort → Newsletter. Passt nichts, wird die Seite
+// (200) angezeigt.
 import type { Ctx } from '../web/ctx.js';
 import { q, type Row } from '../db.js';
 import { Session } from '../web/session.js';
 import { csrfCheck, csrfField } from '../web/security.js';
 import { decryptData } from '../crypto.js';
-import { intval, phpTruthy } from '../php.js';
+import { intval, phpTruthy, type PhpArray } from '../php.js';
 import { storageDownloadZip, storageMoveToDataDir, uploadsDir } from '../content/storage.js';
 import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
+import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
+import { adminCodePagesView } from '../code/adminView.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
 import { resetPassword, toggleAdmin } from './users.js';
@@ -53,11 +57,19 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     await adminCommunityPost(ctx, user);
   }
 
-  // Honigwaben vergeben/einstellen, Code-Seiten sperren
+  // Honigwaben vergeben/einstellen
   if (isPost && post.hc_action !== undefined) {
+    // Formulare der Code-Seiten von vor der Trennung (hc_action=code_*) gehen an den Bereich Code-Seiten
+    const legacy = legacyCodePost(post);
+    if (legacy) await codeAction(ctx, session, legacy);
     const result = await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
     ctx.redirect('/admin#honeycombs');
+  }
+
+  // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
+  if (isPost && post.code_action !== undefined) {
+    await codeAction(ctx, session, post);
   }
 
   // Updates, Roadmap und Discord – nur weiterleiten, wenn die Aktion dorthin gehört
@@ -138,6 +150,13 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   ctx.write(page);
 }
 
+// Aktion im Bereich Code-Seiten: Meldung merken und zurück zum Bereich (beendet die Anfrage)
+async function codeAction(ctx: Ctx, session: Session, post: PhpArray): Promise<never> {
+  const result = await adminCodeHandle(post);
+  if (result) flashResult(session, result);
+  ctx.redirect('/admin#code-pages');
+}
+
 // $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok']
 function flashResult(session: Session, result: { ok?: string; error?: string }): void {
   if (result.error !== undefined && result.error !== null) session.set('admin_error', result.error);
@@ -207,6 +226,7 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     updatesHtml: await adminUpdatesView(ctx),
     communityHtml: await adminCommunityView(ctx),
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
+    codePagesHtml: await adminCodePagesView(ctx, allUsers),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };
 }

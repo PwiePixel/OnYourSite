@@ -2128,7 +2128,7 @@
       }).join('') + '</div>' +
       '<h4 class="hc-h">What you can unlock</h4>' +
       '<div class="hc-rule"><span class="ri"><i class="bx bx-code-alt"></i></span><span class="min-w-0"><b>Your own code page</b><small>Host a website you build yourself with HTML, CSS and JavaScript</small></span>' +
-        '<button type="button" class="btn-secondary" data-action="open-code">' + (hc.codeUnlocked ? 'Open' : fmtNum(r.code_page) + ' <i class="bx bx-hive"></i>') + '</button></div>' +
+        '<button type="button" class="btn-secondary" data-action="open-code">' + (hc.codeUnlocked ? 'Open' : fmtNum(r.code_page) + ' <i class="bx bx-hive hc-icon"></i>') + '</button></div>' +
       '<h4 class="hc-h">History</h4>';
     if (!hc.history || !hc.history.length) return html + '<p class="hint">Nothing yet – your first honeycombs are on their way.</p>';
     return html + '<div>' + hc.history.map(function (x) {
@@ -2254,7 +2254,7 @@
     var pct = st.cost > 0 ? Math.min(100, Math.round(st.balance / st.cost * 100)) : 100;
     return '<div class="panel code-hero">' +
       '<div class="code-hero-ico"><i class="bx bx-code-alt"></i></div>' +
-      '<span class="bdg brand"><i class="bx bx-hive"></i> Unlock with honeycombs</span>' +
+      '<span class="bdg hc"><i class="bx bx-hive"></i> Unlock with honeycombs</span>' +
       '<h2>Your own website on OnYourSite</h2>' +
       '<p>Build your own page with HTML, CSS and JavaScript and host it at <b class="text-white">yourname.' + esc(E.baseHost) + '</b> – for everyone who wants more than a link page.</p>' +
       '<ul class="code-feats">' +
@@ -2264,11 +2264,11 @@
         '<li><i class="bx bx-check"></i> Use the images you upload</li>' +
       '</ul>' +
       '<div class="code-price">' +
-        '<div class="flex items-center justify-between text-sm mb-2"><span class="text-gray-400">Your honeycombs</span><b class="text-white">' + fmtNum(st.balance) + ' / ' + fmtNum(st.cost) + ' <i class="bx bx-hive text-brand-400"></i></b></div>' +
+        '<div class="flex items-center justify-between text-sm mb-2"><span class="text-gray-400">Your honeycombs</span><b class="text-white">' + fmtNum(st.balance) + ' / ' + fmtNum(st.cost) + ' <i class="bx bx-hive hc-icon"></i></b></div>' +
         '<div class="hc-bar"><span style="width:' + pct + '%"></span></div>' +
         '<button type="button" class="btn-primary w-full justify-center mt-4" data-code="unlock"' + (enough ? '' : ' disabled') + '><i class="bx bx-lock-open-alt"></i> ' +
           (enough ? 'Unlock for ' + fmtNum(st.cost) + ' honeycombs' : fmtNum(st.cost - st.balance) + ' more honeycombs needed') + '</button>' +
-        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs"><i class="bx bx-hive"></i> How to earn honeycombs</button>' +
+        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>' +
       '</div>' +
       '<p class="hint mt-6">Code pages are for personal, informational and promotional pages – no shops and no selling. <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener" class="text-brand-400 hover:text-white">Rules for code pages</a></p>' +
     '</div>';

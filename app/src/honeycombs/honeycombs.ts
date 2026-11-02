@@ -5,7 +5,6 @@ import { date, field, intval, mbSubstr, numberFormat, phpStr, ucfirst, type PhpA
 import { cleanText } from '../helpers.js';
 import { phpJson } from '../html.js';
 import { randomHex } from '../crypto.js';
-import { codeSiteById } from '../code/sites.js';
 import { PhpNumber, jsonInt, jsonIsNumeric, phpInt, phpJsonDecode, poolDb } from './util.js';
 
 export interface HcSettings {
@@ -190,10 +189,11 @@ export async function hcForEditor(userId: number, earned: HcEarned[] = [], sql: 
 }
 
 // ---------------------------------------------------------------
-// Admin: Einstellungen, vergeben/abziehen, Code-Seiten sperren
+// Admin: Einstellungen, vergeben/abziehen
 // ---------------------------------------------------------------
 
 // oys_admin_hc_handle(): $post wie $_POST, adminId = angemeldeter Admin. null = keine bekannte Aktion.
+// Sperren, Entsperren und Freischalten der Code-Seiten gehören zum eigenen Bereich (code/admin.ts).
 export async function adminHcHandle(post: PhpArray, adminId: number): Promise<AdminResult> {
   const action = field(post, 'hc_action');
   switch (action) {
@@ -220,28 +220,6 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
       if (booked !== true) return { error: booked };
       const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
       return { ok: (amount > 0 ? '+' : '−') + Math.abs(amount) + ' honeycombs for ' + name + '. New balance: ' + (await hcBalance(userId)) + '.' };
-    }
-
-    case 'code_block':
-    case 'code_unblock': {
-      const site = await codeSiteById(phpInt(post.site_id ?? 0));
-      if (!site) return { error: 'Code page not found.' };
-      const block = action === 'code_block';
-      const reason = block ? cleanText(post.reason ?? '', 200) : '';
-      await poolDb.exec('UPDATE code_sites SET is_blocked = ?, blocked_reason = ?, updated_at = ? WHERE id = ?',
-        [block ? 1 : 0, reason !== '' ? reason : null, date('Y-m-d H:i:s'), intval(site.id)]);
-      return { ok: block ? '“' + phpStr(site.slug) + '” is blocked.' : '“' + phpStr(site.slug) + '” is online again.' };
-    }
-
-    case 'code_unlock': {
-      // Code-Seite ohne Honigwaben freischalten (z. B. für Tester)
-      const user = await poolDb.one('SELECT id, full_name, email FROM users WHERE id = ?', [phpInt(post.user_id ?? 0)]);
-      if (!user) return { error: 'Please choose a user.' };
-      const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
-      if (!(await hcAdd(intval(user.id), 0, 'unlock', 'code_page', 'Unlocked by the team'))) {
-        return { ok: name + ' had already unlocked the code page.' };
-      }
-      return { ok: 'Code page unlocked for ' + name + '.' };
     }
   }
   return null;
