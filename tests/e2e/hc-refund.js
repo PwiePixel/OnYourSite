@@ -1,6 +1,7 @@
 // Ende-zu-Ende: Admin, Bereich „Honeycombs“, Details eines Nutzers (honeycomb-shop HC-6a). Der Admin erstattet einen Kauf
 // über den eigenen Bestätigungsdialog (Betrag vorgegeben, „Also remove“ vorgewählt) → Meldung, Abzeichen „Refunded“,
-// genau eine Buchung und eine Glocke; dann schenkt er die Code-Seite wieder und nimmt sie über den Dialog weg.
+// genau eine Buchung und eine Glocke; dann schenkt er die Code-Seite wieder und nimmt sie über den Dialog weg. Zuletzt
+// „Give honeycombs“: normale Gaben ohne Rückfrage, Abziehen und große Gaben nur über den eigenen Dialog.
 // Jeder native Dialog (alert/confirm/prompt) lässt den Lauf scheitern.
 //   node tests/e2e/hc-refund.js
 // Startet die Seite selbst (Port OYS_E2E_PORT, Vorgabe 14216) und legt ein eigenes Testkonto an (id 9403), das am Ende
@@ -111,6 +112,39 @@ const toast = async (page, part) => {
       ok(count(`SELECT quantity FROM hc_entitlements WHERE user_id = ${U} AND feature = 'code_page'`) === 0, 'the code page is locked again');
       ok(count(`SELECT COUNT(*) FROM notifications WHERE user_id = ${U} AND type = 'unlock'`) === 2, 'one bell each for give and remove');
       await shot(page, 'hc-refund-removed');
+      await ctx.close();
+    });
+
+    await step('give honeycombs: a normal gift without a dialog, taking away and a large gift only through the dialog', async () => {
+      const { ctx, page } = await newPage();
+      await login(page, 'admin@test.de');
+      await page.goto(B + '/admin?hc_tab=users#honeycombs');
+      const send = async (amount) => {
+        await page.selectOption('#hcUser', String(U));
+        await page.fill('#hcAmount', String(amount));
+        await page.click('#hcGrantForm button[type=submit]');
+      };
+      const entries = () => count(`SELECT COUNT(*) FROM honeycomb_ledger WHERE user_id = ${U} AND reason = 'admin'`);
+      const before = entries();
+      await Promise.all([page.waitForNavigation(), send(10)]);
+      const given = await toast(page, 'honeycombs for');
+      ok(given.includes('+10 honeycombs for Refund <i>Tester</i>.'), 'a normal gift goes out without a dialog (' + given + ')');
+      ok(entries() === before + 1, 'one entry for the gift');
+      await send(-5);
+      await page.waitForSelector('.ui-dialog');
+      ok((await page.locator('.ui-dialog').innerText()).includes('Take 5 honeycombs from Refund <i>Tester</i>?'), 'the dialog names the amount and the user as text');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.ui-dialog', { state: 'detached' });
+      ok(entries() === before + 1, 'cancelled: nothing is taken');
+      await send(-5);
+      await confirmDialog(page, 'Take 5 honeycombs from Refund <i>Tester</i>?');
+      const taken = await toast(page, 'honeycombs for');
+      ok(taken.includes('−5 honeycombs for Refund <i>Tester</i>.'), 'taken after the dialog (' + taken + ')');
+      await send(5000);
+      await confirmDialog(page, 'Give 5,000 honeycombs to Refund <i>Tester</i>?');
+      const big = await toast(page, 'honeycombs for');
+      ok(big.includes('+5000 honeycombs for Refund <i>Tester</i>.'), 'a large gift after the dialog (' + big + ')');
+      ok(entries() === before + 3, 'three entries in all');
       await ctx.close();
     });
   } finally {

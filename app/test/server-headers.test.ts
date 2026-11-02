@@ -79,3 +79,18 @@ test('static files: same order, Content-Length also for HEAD, 304 without a body
   assert.equal(again.body.length, 0);
   assert.equal(again.headers['content-length'], undefined);
 });
+
+test('editor and admin refuse to be framed; public pages keep their headers', async () => {
+  // Editor, Admin und ihre JSON-Pfade (auch die Weiterleitung zum Login): kein fremder Rahmen
+  for (const path of ['/dashboard', '/admin', '/dashboard/api/shop', '/admin/api/discord-status']) {
+    const res = await request('GET', path);
+    assert.equal(res.headers['x-frame-options'], 'DENY', path);
+    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'none'", path);
+  }
+  // Öffentliche Seiten bleiben, wie sie sind
+  for (const path of ['/', '/login', '/register', '/updates', '/terms', '/_/nope']) {
+    const res = await request('GET', path);
+    assert.equal(res.headers['x-frame-options'], undefined, path);
+    assert.equal(res.headers['content-security-policy'], undefined, path);
+  }
+});

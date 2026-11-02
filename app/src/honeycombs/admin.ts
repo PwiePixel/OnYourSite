@@ -211,7 +211,13 @@ async function offerCreate(post: PhpArray, adminId: number): Promise<AdminResult
   });
 }
 
+// Formulare, die etwas wegnehmen oder Honigwaben bewegen, kommen nur mit bestätigtem Dialog an (_confirmed=1). Der
+// Verteiler lehnt _confirmed ≠ 1 schon ab; hier fehlt das Feld zusätzlich nicht (ein selbst gebautes Formular ohne
+// Feld bleibt wirkungslos).
+const confirmed = (post: PhpArray): boolean => post._confirmed === '1';
+
 async function offerCancel(post: PhpArray, adminId: number): Promise<AdminResult> {
+  if (!confirmed(post)) return { error: UNCONFIRMED_MESSAGE };
   const f = textFields(post, ['offer_id']);
   if (!f) return { error: BAD };
   const id = wholeNumber(f.offer_id, 1, 2147483647);
@@ -220,11 +226,6 @@ async function offerCancel(post: PhpArray, adminId: number): Promise<AdminResult
 }
 
 // ---------------------------------------------------------------- Nutzer: Freischaltungen und Erstattungen (HC-6a)
-
-// Formulare, die etwas wegnehmen oder Honigwaben bewegen, kommen nur mit bestätigtem Dialog an (_confirmed=1). Der
-// Verteiler lehnt _confirmed ≠ 1 schon ab; hier fehlt das Feld zusätzlich nicht (ein selbst gebautes Formular ohne
-// Feld bleibt wirkungslos).
-const confirmed = (post: PhpArray): boolean => post._confirmed === '1';
 
 async function featureGrantAction(post: PhpArray, adminId: number): Promise<AdminResult> {
   const f = textFields(post, ['user_id', 'feature', 'mode', 'days', 'units', 'lot', 'note', 'form_ref']);

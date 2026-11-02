@@ -299,7 +299,7 @@ test('races: the same request twice books once; money for three of five buys; a 
   const hold2 = holdAt('before-debit', 13);
   const p = buy(null, 13, 'hc_t_p4', rid(), 50, { via: 'shop' });
   await hold2.reached;
-  const d = adminHcHandle({ hc_action: 'grant', user_id: '13', amount: '-80', grant_ref: randomHex(8) }, 3);
+  const d = adminHcHandle({ hc_action: 'grant', user_id: '13', amount: '-80', grant_ref: randomHex(8), _confirmed: '1' }, 3);
   await sleep(300);
   hold2.release();
   const [rp, rd] = await Promise.all([p, d]);

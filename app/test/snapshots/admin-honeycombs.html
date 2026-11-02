@@ -13,18 +13,19 @@
                         <i class='bx bx-hive text-2xl text-yellow-400'></i>
                         <h2 class="text-base font-semibold text-white">Give honeycombs</h2>
                     </div>
-                    <form action="/admin" method="POST" class="space-y-4" id="hcGrantForm">
-                        <input type="hidden" name="csrf" value="CSRFTOKEN">                        <input type="hidden" name="hc_action" value="grant">
+                    <form action="/admin" method="POST" class="space-y-4" id="hcGrantForm" data-hc-ask-above="1000" data-confirm="Send these honeycombs?" data-confirm-text="Please check the user and the amount. A negative amount takes honeycombs away." data-confirm-ok="Send" data-confirm-tone="warn">
+                        <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off">
+                        <input type="hidden" name="hc_action" value="grant">
                         <input type="hidden" name="grant_ref" value="REF">
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcUser">User</label>
                             <select id="hcUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
                                 <option value="">Choose a user …</option>
-                                <option value="10">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de (0)</option>
-                                <option value="7">lea@test.de · lea@test.de (5)</option>
-                                <option value="6">tom@test.de · tom@test.de (0)</option>
-                                <option value="5">Mia Müller · mia@test.de (50)</option>
-                                <option value="3">Pixel Admin · admin@test.de (500)</option>
+                                <option value="10" data-name="O&#039;Brien &lt;b&gt;&amp; “Co”">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de (0)</option>
+                                <option value="7" data-name="lea@test.de">lea@test.de · lea@test.de (5)</option>
+                                <option value="6" data-name="tom@test.de">tom@test.de · tom@test.de (0)</option>
+                                <option value="5" data-name="Mia Müller">Mia Müller · mia@test.de (50)</option>
+                                <option value="3" data-name="Pixel Admin">Pixel Admin · admin@test.de (500)</option>
                             </select>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -104,6 +105,21 @@
                         document.getElementById('hcGrantForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
                         setTimeout(() => document.getElementById('hcAmount').focus(), 300);
                     }));
+                    // Abziehen und Gaben über der Grenze fragen im eigenen Dialog (Name und Betrag als Text); normale Gaben ohne Rückfrage
+                    document.addEventListener('DOMContentLoaded', () => {
+                        const grant = document.getElementById('hcGrantForm');
+                        if (!window.OYSUI || !grant) return;
+                        const above = parseInt(grant.dataset.hcAskAbove, 10) || 0;
+                        const fmt = (n) => n.toLocaleString('en-US');
+                        OYSUI.beforeSubmit(grant, (form) => {
+                            const n = parseInt(form.amount.value, 10) || 0;
+                            const opt = form.user_id.options[form.user_id.selectedIndex];
+                            const who = opt && opt.value !== '' ? opt.dataset.name : 'this user';
+                            if (n < 0) return { title: 'Take ' + fmt(-n) + ' honeycombs from ' + who + '?', text: 'They’re taken from the balance right away, and ' + who + ' gets a notification.', ok: 'Take honeycombs', tone: 'danger' };
+                            if (n > above) return { title: 'Give ' + fmt(n) + ' honeycombs to ' + who + '?', text: 'That’s more than ' + fmt(above) + ' – please check the amount.', ok: 'Give honeycombs', tone: 'warn' };
+                            return null;
+                        });
+                    });
                     document.getElementById('hcFilter').addEventListener('input', e => {
                         const q = e.target.value.trim().toLowerCase();
                         document.querySelectorAll('#hcRows tr').forEach(tr => { tr.hidden = q !== '' && !tr.dataset.search.includes(q); });

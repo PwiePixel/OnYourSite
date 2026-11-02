@@ -45,6 +45,13 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   if (path === '/register') return register(ctx);
   if (path === '/login') return login(ctx);
 
+  // Editor und Admin nie in einem fremden Rahmen (Schutz vor untergeschobenen Klicks): CSP für aktuelle Browser,
+  // X-Frame-Options für ältere. Öffentliche Seiten bleiben, wie sie sind.
+  if (/^\/(dashboard|admin)(\/|$)/.test(path)) {
+    ctx.header('Content-Security-Policy', "frame-ancestors 'none'");
+    ctx.header('X-Frame-Options', 'DENY');
+  }
+
   // Ab hier nur mit Login
   const user = await currentUser(ctx);
   if (!user) {

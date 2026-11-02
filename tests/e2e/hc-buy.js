@@ -30,7 +30,7 @@ function cleanup() {
     DELETE FROM hc_entitlements WHERE user_id = ${U}; DELETE FROM hc_purchases WHERE user_id = ${U}; DELETE FROM hc_accounts WHERE user_id = ${U};
     DELETE FROM rate_limits WHERE rl_key IN ('hcbuy:${U}', 'hchist:${U}');
     DELETE FROM users WHERE id = ${U};
-    UPDATE hc_items SET price = 100 WHERE item_key = 'code_page';`);
+    UPDATE hc_items SET price = 100 WHERE item_key = 'code_page'; UPDATE hc_items SET price = 0 WHERE item_key = 'code_more';`);
 }
 // Konto ohne Freischaltung, Regeln nicht akzeptiert; die Tagesbelohnung ist schon vergeben (gestern bis morgen, damit
 // das Öffnen des Editors nichts dazu verdient und der Kontostand genau stimmt)
@@ -193,6 +193,25 @@ const okButton = (page) => page.locator('.ui-dialog .ui-foot .ui-btn.is-hc');
       await page.waitForFunction(() => document.querySelectorAll('#shopHist .hc-hist-row').length > 20);
       // 24 Geschenke, Startguthaben und 3 Tagesbelohnungen
       ok(await hist.count() === 28 && await page.locator('#shopHist [data-shop-more]').count() === 0, 'all 28 entries, no more button');
+      await ctx.close();
+    });
+
+    await step('more code pages without accepted rules: the dialog shows the rules for code pages, not the general terms', async () => {
+      fixtures(150);
+      // Code-Seite vom Team (Regeln nie angenommen); weitere Code-Seiten kosten etwas
+      sql(`INSERT INTO hc_entitlements (user_id, feature, lot, quantity, permanent, source, created_at, updated_at) VALUES (${U}, 'code_page', 0, 1, 1, 'grant', NOW(), NOW());
+        UPDATE hc_items SET price = 40 WHERE item_key = 'code_more';`);
+      const { ctx, page } = await newPage();
+      await login(page, 'hc-buy@test.de');
+      await shopTab(page);
+      await page.click('#shop-code_more [data-shop-buy]');
+      await dlg(page).waitFor();
+      const terms = page.locator('.ui-dialog label.code-terms');
+      ok((await terms.innerText()).includes('rules for code pages'), 'the checkbox names the rules for code pages (' + (await terms.innerText()) + ')');
+      ok((await terms.locator('a').getAttribute('href')) === '/terms/code-pages', 'the link opens the rules for code pages');
+      await page.keyboard.press('Escape');
+      await dlg(page).waitFor({ state: 'detached' });
+      ok(sql(`SELECT code_terms_at IS NULL FROM users WHERE id = ${U}`) === '1', 'nothing is accepted without buying');
       await ctx.close();
     });
 

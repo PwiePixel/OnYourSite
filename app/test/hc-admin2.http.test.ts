@@ -13,6 +13,7 @@ import { hcBackUrl } from '../src/honeycombs/admin.js';
 import { buy, refund } from '../src/honeycombs/shop.js';
 import { grantFeature } from '../src/honeycombs/grants.js';
 import { UNCONFIRMED_MESSAGE } from '../src/views/partials/ui.js';
+import { GRANT_ASK_ABOVE } from '../src/honeycombs/honeycombs.js';
 import type { PhpArray } from '../src/php.js';
 import '../src/code/shop.js';
 import { CSRF, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
@@ -300,7 +301,7 @@ test('give honeycombs writes one audit line (amount only) that the details list 
   const form = { hc_action: 'grant', user_id: '8', amount: '12', note: 'Private note', grant_ref: randomHex(8) };
   assert.ok(String(flash(await post(form)).ok).startsWith('+12 honeycombs for Lea.'));
   assert.equal(flash(await post(form)).error, 'This was already booked – the form was sent twice.');
-  assert.ok(String(flash(await post({ ...form, amount: '-2', grant_ref: randomHex(8) })).ok).startsWith('−2 honeycombs for Lea.'));
+  assert.ok(String(flash(await post({ ...form, amount: '-2', grant_ref: randomHex(8), _confirmed: '1' })).ok).startsWith('−2 honeycombs for Lea.'));
   assert.deepEqual((await lines()).slice(before.length), [{ admin_id: 3, target: '', details: '{"amount":12}' }, { admin_id: 3, target: '', details: '{"amount":-2}' }]);
   const audit = section(await page('?hc_tab=users&hc_user=8'));
   assert.match(audit.slice(audit.indexOf('id="hcUserAudit"')), /<li>[^<]* · Pixel Admin · grant · <\/li>/);
@@ -332,4 +333,43 @@ test('grants at the same time: one form_ref books once, the bell rings once', as
   assert.equal(Number((await ent(7, 'test_passes'))?.quantity), quantityBefore + 1);
   assert.equal(await bells(7, 'unlock'), bellsBefore + 1);
   assert.equal(await num("SELECT COUNT(*) FROM `DB`.honeycomb_ledger WHERE user_id = 7 AND reason = 'grant' AND ref = ?", ['g3-' + ref]), 1);
+});
+
+test('give honeycombs: deductions and large gifts only after the dialog (_confirmed=1), normal gifts as before', async () => {
+  const form = (amount: string, extra: PhpArray = {}): PhpArray => ({ hc_action: 'grant', user_id: '7', amount, note: '', grant_ref: randomHex(8), ...extra });
+  // Normale Gabe ohne Feld (altes Formular) und mit _confirmed=1 (ui.js ohne Dialog): gebucht wie bisher
+  assert.ok(String(flash(await post(form('50'))).ok).startsWith('+50 honeycombs for Tom.'));
+  assert.ok(String(flash(await post(form(String(GRANT_ASK_ABOVE), { _confirmed: '1' }))).ok).startsWith('+' + GRANT_ASK_ABOVE + ' honeycombs for Tom.'));
+  const before = await balance(7);
+  const audits = await num("SELECT COUNT(*) FROM `DB`.hc_audit WHERE action = 'grant' AND user_id = 7");
+  // Abziehen und große Gaben ohne bestätigten Dialog (selbst gebautes Formular, ui.js fehlt): nichts gebucht
+  for (const f of [form('-20'), form(String(GRANT_ASK_ABOVE + 1)), form('-20', { _confirmed: '0' }), form('100000', { _confirmed: '0' }), form('-1', { _confirmed: ['1'] })]) {
+    assert.equal(flash(await post(f)).error, UNCONFIRMED_MESSAGE, JSON.stringify(f));
+  }
+  assert.equal(await balance(7), before);
+  assert.equal(await num("SELECT COUNT(*) FROM `DB`.hc_audit WHERE action = 'grant' AND user_id = 7"), audits);
+  // Bestätigt: gebucht
+  assert.ok(String(flash(await post(form('-20', { _confirmed: '1' }))).ok).startsWith('−20 honeycombs for Tom.'));
+  assert.ok(String(flash(await post(form(String(GRANT_ASK_ABOVE + 1), { _confirmed: '1' }))).ok).startsWith('+' + (GRANT_ASK_ABOVE + 1) + ' honeycombs for Tom.'));
+  assert.equal(await balance(7), before + GRANT_ASK_ABOVE - 19);
+  // Das Formular fragt über den eigenen Dialog: confirmField, Rückfrage-Attribute, Grenze und Namen für beforeSubmit
+  const list = section(await page('?hc_tab=users'));
+  const start = list.lastIndexOf('<form', list.indexOf('id="hcGrantForm"'));
+  const grantForm = list.slice(start, list.indexOf('</form>', start));
+  assert.ok(grantForm.includes('<input type="hidden" name="_confirmed" value="0" autocomplete="off">'), grantForm.slice(0, 400));
+  assert.match(grantForm, / data-confirm="[^"]+"/);
+  assert.ok(grantForm.includes('data-hc-ask-above="' + GRANT_ASK_ABOVE + '"'));
+  assert.ok(grantForm.includes('<option value="5" data-name="Mia &lt;img src=x onerror=alert(1)&gt;">'));
+  assert.ok(list.includes("OYSUI.beforeSubmit(grant, (form) => {"));
+});
+
+test('notes that reach the user say so: refund and give unlock', async () => {
+  await give(5, 50);
+  await buyItem(5, 'test_passes_x1');
+  const d = section(await page('?hc_tab=users&hc_user=5'));
+  const seen = 'Note <span class="text-gray-500 font-normal">(the user sees it)</span></label>';
+  const refundForm = d.slice(d.indexOf('name="hc_action" value="refund"'));
+  assert.ok(refundForm.slice(0, refundForm.indexOf('</form>')).includes(seen), 'refund note');
+  assert.ok(d.includes('for="hcGiveNote">' + seen), 'give unlock note');
+  assert.ok(!d.includes('>Note</label>'));
 });

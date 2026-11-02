@@ -289,6 +289,11 @@ test('offer_create and offer_cancel: checks, the double submit, the limit of 20,
   assert.equal(flash(ctx).error, UNCONFIRMED_MESSAGE);
   assert.equal((await rows('SELECT cancelled_at FROM `DB`.hc_offers WHERE id = ?', [offer.id]))[0].cancelled_at, null);
   assert.equal(await auditCount(), n);
+  // Ohne das Feld (selbst gebautes Formular): ebenso nichts – wie refund und feature_revoke
+  ctx = await post({ hc_action: 'offer_cancel', offer_id: String(offer.id) });
+  assert.equal(flash(ctx).error, UNCONFIRMED_MESSAGE);
+  assert.equal((await rows('SELECT cancelled_at FROM `DB`.hc_offers WHERE id = ?', [offer.id]))[0].cancelled_at, null);
+  assert.equal(await auditCount(), n);
   ctx = await post({ hc_action: 'offer_cancel', offer_id: String(offer.id), _confirmed: '1' });
   assert.deepEqual(flash(ctx), { ok: 'Offer cancelled. Purchases made with it keep their price.', error: undefined });
   assert.notEqual((await rows('SELECT cancelled_at FROM `DB`.hc_offers WHERE id = ?', [offer.id]))[0].cancelled_at, null);

@@ -16,6 +16,7 @@ import { shopPrice } from './catalogue.js';
 import { adminShopHandle } from './admin.js';
 import { reconcileNow } from './reconcile.js';
 import { audit } from './audit.js';
+import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export interface HcSettings {
   daily: number;
@@ -245,6 +246,9 @@ export async function hcForEditor(userId: number, earned: HcEarned[] = [], sql: 
 // Admin: Einstellungen, vergeben/abziehen
 // ---------------------------------------------------------------
 
+// Gaben über dieser Grenze und jedes Abziehen fragen erst im eigenen Dialog (adminView.ts) und brauchen _confirmed=1
+export const GRANT_ASK_ABOVE = 1000;
+
 // oys_admin_hc_handle(): $post wie $_POST, adminId = angemeldeter Admin. null = keine bekannte Aktion.
 // Sperren, Entsperren und Freischalten der Code-Seiten gehören zum eigenen Bereich (code/admin.ts). Regeln, Katalog
 // und Angebote (Unterbereiche des Shops) erledigt admin.ts; die Preise stehen nur noch im Katalog.
@@ -257,6 +261,8 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
       const user = await poolDb.one('SELECT id, full_name, email FROM users WHERE id = ?', [userId]);
       if (!user) return { error: 'Please choose a user.' };
       if (amount === 0 || Math.abs(amount) > 100000) return { error: 'Enter an amount between −100,000 and 100,000 (not 0).' };
+      // Abziehen und große Gaben nur nach dem Dialog: ohne _confirmed=1 (Formular ohne ui.js, selbst gebaut) nichts buchen
+      if ((amount < 0 || amount > GRANT_ASK_ABOVE) && post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
       const note = cleanText(post.note ?? '', 150);
       // Jedes Formular hat einen eigenen Schlüssel: doppelt abgeschickt wird nur einmal gebucht
       const formRef = field(post, 'grant_ref');

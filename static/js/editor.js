@@ -2474,9 +2474,10 @@
     });
   }
 
-  // Regeln zum Ankreuzen im Kaufdialog (Funktionen mit needsTerms)
+  // Regeln zum Ankreuzen im Kaufdialog (Funktionen mit needsTerms). Code-Seite und weitere Code-Seiten speichern beim
+  // Kauf die Zustimmung zu den Regeln für Code-Seiten (code_terms_at) – darum zeigen beide genau diese Regeln.
   function shopTermsHtml(feature, checked) {
-    var text = feature === 'code_page'
+    var text = feature === 'code_page' || feature === 'code_more'
       ? 'I’ve read the <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener">rules for code pages</a>. My page won’t sell anything or make money – it’s only there to inform or to promote something.'
       : 'I’ve read and accept the <a href="/terms" target="_blank" rel="noopener">rules</a> for this.';
     return '<label class="code-terms"><input type="checkbox" name="terms"' + (checked ? ' checked' : '') + '><span>' + text + '</span></label>';
