@@ -12,7 +12,8 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:seed": "node --import tsx test/seed.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",

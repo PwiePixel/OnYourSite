@@ -1267,7 +1267,8 @@ const LAYOUT_MAP: Record<string, string> = {
 // Übernimmt alte Profile (users + user_links) als erste Seite mit Blöcken
 async function migrateLegacyUsers(conn: PoolConnection): Promise<void> {
   const now = date('Y-m-d H:i:s');
-  const users = await rows(conn, "SELECT * FROM users WHERE username IS NOT NULL AND username <> ''");
+  // Feste Reihenfolge (nach id): sonst hinge die Nummer jeder Seite und jedes Blocks vom Plan der Datenbank ab
+  const users = await rows(conn, "SELECT * FROM users WHERE username IS NOT NULL AND username <> '' ORDER BY id");
 
   for (const user of users) {
     // Alte Installationen haben evtl. nicht alle Spalten – daher defensiv lesen
