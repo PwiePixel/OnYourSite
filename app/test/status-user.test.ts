@@ -14,6 +14,7 @@ import { statusLimits } from '../src/status/limits.js';
 import '../src/status/shop.js';
 import { CSRF, jsonBody, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 import { randomHex } from '../src/crypto.js';
+import { deleteAccount } from '../src/admin/accountDeletion.js';
 
 let t: TestDb;
 const OLD = '2026-01-01 10:00:00';
@@ -208,4 +209,29 @@ test('race: two accounts create a page with the same address at once – exactly
   const owner = Number((await sql("SELECT user_id FROM `DB`.status_pages WHERE slug = 'race-status'"))[0].user_id);
   const addr = await sql("SELECT kind, user_id FROM `DB`.site_addresses WHERE slug = 'race-status'");
   assert.deepEqual({ kind: addr[0].kind, user: Number(addr[0].user_id) }, { kind: 'status', user: owner });
+});
+
+test('deleting an account removes its status page with everything on it; OnYourSite\u2019s page stays', async () => {
+  const GONE = 8;
+  await sql('INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, 0, ?)', [GONE, 'gone@test.de', 'Gone User', OLD]);
+  await give(GONE, 500);
+  assert.equal((await buy(GONE)).status, 200);
+  let ctx = await api('status-create', { userId: GONE, json: { title: 'Gone status', slug: 'gone-status' } });
+  assert.equal(ctx.status, 200, JSON.stringify(body(ctx)));
+  const page = Number((await sql('SELECT id FROM `DB`.status_pages WHERE user_id = ?', [GONE]))[0].id);
+  ctx = await api('status-monitor-save', { userId: GONE, json: { type: 'manual', name: 'API', manual_status: 'operational' } });
+  assert.equal(ctx.status, 200, JSON.stringify(body(ctx)));
+  const monitor = Number((await sql('SELECT id FROM `DB`.status_monitors WHERE page_id = ?', [page]))[0].id);
+  const t0 = Math.floor(Date.now() / 1000);
+  // Eine offene Benachrichtigung an die Besitzerin (darf das Konto nicht überleben)
+  await sql("INSERT INTO `DB`.status_outbox (page_id, monitor_id, kind, channel, event, payload, next_at, created_at) VALUES (?, ?, 'alert', 'owner', 'down', '{}', ?, ?)", [page, monitor, t0, t0]);
+  const system = await sql('SELECT COUNT(*) AS n FROM `DB`.status_pages WHERE is_system = 1');
+  await deleteAccount(null, GONE);
+  for (const [table, where] of [['status_pages', 'id'], ['status_monitors', 'page_id'], ['status_outbox', 'page_id'], ['status_channels', 'page_id'], ['status_incidents', 'page_id']] as const) {
+    assert.equal(Number((await sql(`SELECT COUNT(*) AS n FROM \`DB\`.${table} WHERE ${where} = ?`, [page]))[0].n), 0, table);
+  }
+  assert.ok(Number((await sql("SELECT COUNT(*) AS n FROM `DB`.status_purge WHERE kind = 'monitor' AND ref_id = ?", [monitor]))[0].n) >= 1);
+  assert.ok(Number((await sql("SELECT COUNT(*) AS n FROM `DB`.status_purge WHERE kind = 'page' AND ref_id = ?", [page]))[0].n) >= 1);
+  assert.deepEqual(await sql('SELECT COUNT(*) AS n FROM `DB`.status_pages WHERE is_system = 1'), system);
+  assert.equal(Number((await sql('SELECT COUNT(*) AS n FROM `DB`.users WHERE id = ?', [GONE]))[0].n), 0);
 });
