@@ -611,12 +611,13 @@
     return null;
   }
 
-  // Editor neu laden – auch wenn das Ziel nur im Anker von der aktuellen Adresse abweicht (das lädt sonst nicht neu)
+  // Editor neu laden – auch wenn das Ziel nur im Anker von der aktuellen Adresse abweicht (das lädt sonst nicht neu).
+  // keep: Ungespeichertes ohne Entwurf (z. B. Code bei vollem Speicher) schützt weiter das Fenster des Browsers
   function reloadTo(url) {
     var u = new URL(url, location.href);
-    if (u.pathname !== location.pathname || u.search !== location.search) return guard.navigate(u.href, { force: true });
+    if (u.pathname !== location.pathname || u.search !== location.search) return guard.navigate(u.href, { force: true, keep: true });
     if (history.replaceState) history.replaceState(null, '', u.hash || location.pathname + location.search);
-    return guard.reload({ force: true });
+    return guard.reload({ force: true, keep: true });
   }
 
   function goToPage(id) {
@@ -3666,12 +3667,16 @@
   // ================================================================
   // Entwürfe: ungespeicherte Arbeit bleibt im Browser (Absturz, geschlossener Tab, abgelaufene Sitzung)
   // ================================================================
-  // oys.draft.<Konto>.<Seite> = {v: 1, at, base, page} (payload() ohne Passwörter) und oys.draft.<Konto>.code.<Code-Seite>
-  // = {v: 1, at, base, site, files, deleted} (nur geänderte und gelöschte Dateien). base: Prüfsumme des Stands vom
+  // oys.draft.<Konto>.<Seite> = {v: 1, at, tab, base, page} (payload() ohne Passwörter) und oys.draft.<Konto>.code.<Code-Seite>
+  // = {v: 1, at, tab, base, site, files, deleted} (nur geänderte und gelöschte Dateien). base: Prüfsumme des Stands vom
   // Server, auf dem die Änderungen aufbauen. Nach 7 Tagen weg; nie an den Server geschickt; je Konto getrennt.
+  // tab: der Tab, der ihn geschrieben hat. Ein Tab überschreibt und löscht nur seine eigenen Entwürfe; einen fremden
+  // (anderer offener Tab, früherer Besuch) erst, wenn der Nutzer ihn wiederhergestellt oder verworfen hat. Solange
+  // fragt beim Schließen der Browser (die Arbeit dieses Tabs liegt dann in keinem Entwurf).
   var draft = (function () {
     var uid = E.user && /^\d+$/.test(String(E.user.id)) ? String(E.user.id) : '';
     var PREFIX = 'oys.draft.', MAX_AGE = 7 * 864e5;
+    var TAB = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     var timer = null, pageKept = true, codeKept = true, discarded = false, pageGone = false;
     // Stand vom Server, auf dem die Änderungen der Seite aufbauen (bei der Code-Seite ist das code.saved)
     var pageBase = '';
@@ -3688,6 +3693,11 @@
       try { s.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
     }
     function drop(key) { var s = store(); if (s) { try { s.removeItem(key); } catch (e) { /* egal */ } } }
+    // Der Platz ist frei oder hält einen Entwurf dieses Tabs
+    function mine(key) { var d = get(key); return !d || d.tab === TAB; }
+    function dropMine(key) { if (mine(key)) drop(key); }
+    // Wiederhergestellt: der Entwurf gehört ab jetzt diesem Tab (die nächste Änderung schreibt ihn neu)
+    function claim(key, d) { put(key, Object.assign({}, d, { tab: TAB })); }
     function keys() {
       var s = store(), out = [];
       if (!s) return out;
@@ -3718,13 +3728,15 @@
     function codeSiteId() { return code.st && code.st.site ? code.st.site.id : 0; }
 
     // Seite: payload() ohne Passwörter (geschützte Links fragen beim Speichern wieder danach).
-    // 'ok' gesichert (oder nichts zu sichern) · 'squeezed' erst nach dem Löschen der Code-Entwürfe · 'fail'
+    // 'ok' gesichert (oder nichts zu sichern) · 'squeezed' erst nach dem Löschen der Code-Entwürfe · 'taken' der Platz
+    // hält einen fremden Entwurf · 'fail'
     function writePage() {
       if (!state.page || pageGone) return 'ok';
-      if (!dirty) { drop(pageKey(state.page.id)); return 'ok'; }
+      if (!dirty) { dropMine(pageKey(state.page.id)); return 'ok'; }
+      if (!mine(pageKey(state.page.id))) return 'taken';
       var p = payload();
       p.blocks.forEach(function (b) { b.password = ''; });
-      var value = { v: 1, at: Date.now(), base: pageBase, page: p };
+      var value = { v: 1, at: Date.now(), tab: TAB, base: pageBase, page: p };
       if (put(pageKey(state.page.id), value)) return 'ok';
       // Speicher voll: zuerst die Code-Entwürfe dieses Kontos opfern, dann aufgeben
       keys().forEach(function (k) { if (k.indexOf(PREFIX + uid + '.code.') === 0) drop(k); });
@@ -3733,19 +3745,20 @@
     function writeCode() {
       var id = codeSiteId();
       if (!id) return true;
-      if (!codeUnsaved()) { drop(codeKey(id)); return true; }
+      if (!codeUnsaved()) { dropMine(codeKey(id)); return true; }
+      if (!mine(codeKey(id))) return false;
       var files = {}, deleted = [];
       Object.keys(code.files).forEach(function (p) { if (code.files[p] !== code.saved[p]) files[p] = code.files[p]; });
       Object.keys(code.saved).forEach(function (p) { if (!has(code.files, p)) deleted.push(p); });
-      return put(codeKey(id), { v: 1, at: Date.now(), base: codeHash(code.saved), site: id, files: files, deleted: deleted });
+      return put(codeKey(id), { v: 1, at: Date.now(), tab: TAB, base: codeHash(code.saved), site: id, files: files, deleted: deleted });
     }
     function write() {
       clearTimeout(timer);
       timer = null;
       if (!uid || discarded) return;
       var r = writePage();
-      pageKept = r !== 'fail';
-      codeKept = r === 'ok' ? writeCode() : !codeUnsaved();
+      pageKept = r === 'ok' || r === 'squeezed';
+      codeKept = r === 'ok' || r === 'taken' ? writeCode() : !codeUnsaved();
     }
 
     // Nach jeder Änderung (gebündelt, 800 ms nach der letzten)
@@ -3757,10 +3770,11 @@
       timer = setTimeout(write, 800);
     }
     // Sofort sichern (Tab wird verlassen oder versteckt). true: alles Ungespeicherte liegt im Browser – dann ist
-    // das Fenster des Browsers beim Schließen nicht nötig (D19)
+    // das Fenster des Browsers beim Schließen nicht nötig (D19). Immer neu schreiben: ein anderer Tab kann den Entwurf
+    // inzwischen gelöscht haben (Discard im Dialog „Restore unsaved changes?“)
     function flush() {
       if (!uid || discarded) return false;
-      if (timer || !pageKept || !codeKept) write();
+      write();
       return pageKept && codeKept;
     }
     // „Leave without saving“ und Ähnliches: die Entwürfe dieser Seite und der Code-Seite verwerfen
@@ -3769,8 +3783,8 @@
       timer = null;
       discarded = true;
       if (!uid) return;
-      if (state.page) drop(pageKey(state.page.id));
-      if (codeSiteId()) drop(codeKey(codeSiteId()));
+      if (state.page) dropMine(pageKey(state.page.id));
+      if (codeSiteId()) dropMine(codeKey(codeSiteId()));
     }
     function dropPage(id) {
       if (!uid) return;
@@ -3781,11 +3795,11 @@
     function pageSaved(page, blocks) {
       pageBase = pageHash(page, blocks.map(function (b) { return normBlock(clone(b)); }));
       if (!uid || !state.page) return;
-      if (!dirty) { drop(pageKey(state.page.id)); pageKept = true; } else later();
+      if (!dirty) { dropMine(pageKey(state.page.id)); pageKept = true; } else later();
     }
     function codeSaved() {
       if (!uid || !codeSiteId()) return;
-      if (!codeUnsaved()) { drop(codeKey(codeSiteId())); codeKept = true; } else later();
+      if (!codeUnsaved()) { dropMine(codeKey(codeSiteId())); codeKept = true; } else later();
     }
 
     function when(at) {
@@ -3793,7 +3807,8 @@
       var hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
       return d.toDateString() === now.toDateString() ? hm : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + hm;
     }
-    // 'restore' · 'discard' · null (✕, Escape: der Entwurf bleibt bis zur nächsten Änderung)
+    // 'restore' · 'discard' · null (✕, Escape: der Entwurf bleibt, bis der Nutzer entscheidet – dieser Tab überschreibt
+    // ihn nicht, seine eigene Arbeit schützt bis dahin das Fenster des Browsers)
     function askRestore(at, changedSince) {
       return UI.choice({
         title: 'Restore unsaved changes?',
@@ -3829,6 +3844,7 @@
       askRestore(d.at, d.base !== pageBase).then(function (how) {
         if (!state.page || state.page.id !== pageId || !how) return;
         if (how === 'discard') { drop(pageKey(pageId)); return; }
+        claim(pageKey(pageId), d);
         applyPage(d.page);
       });
     }
@@ -3860,6 +3876,7 @@
       askRestore(d.at, d.base !== codeHash(code.saved)).then(function (how) {
         if (codeSiteId() !== id || !how) return;
         if (how === 'discard') { drop(codeKey(id)); return; }
+        claim(codeKey(id), d);
         Object.keys(d.files).forEach(function (p) { if (typeof d.files[p] === 'string' && codeCheckPath(p).path === p) code.files[p] = d.files[p]; });
         d.deleted.forEach(function (p) { if (p !== 'index.html') delete code.files[p]; });
         code.docs = {};

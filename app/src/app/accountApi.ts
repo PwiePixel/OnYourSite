@@ -14,6 +14,9 @@ export async function accountApi(ctx: Ctx, userId: number, action: string, isPos
   const inp = (key: string): unknown => own(input, key);
   switch (action) {
     case 'notifications':
+      // Die Abfrage der Glocke im Hintergrund (X-OYS-Poll: 1, jede Minute) hält die Sitzung nicht wach: ein offener
+      // Tab ohne Bedienung wird nach session_idle_seconds abgemeldet wie ohne Glocke
+      if (ctx.headers['x-oys-poll'] === '1') ctx.session?.keepIdle();
       ctx.json(await bellList(userId));
 
     case 'notifications-read': {

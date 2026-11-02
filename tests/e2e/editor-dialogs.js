@@ -524,6 +524,122 @@ const sessionId = async (ctx) => ((await ctx.cookies()).find((c) => c.name === '
       await shared.close();
     });
 
+    await step('4 drafts: two tabs on one page – the other tab never drops or overwrites this tab’s draft', async () => {
+      resetContent();
+      const shared = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      const ta = { expectBeforeUnload: true }, tb = { expectBeforeUnload: true };
+      const a = await newPage({ ctx: shared, t: ta });
+      await login(a.page, 'ed-one@test.de');
+      await editor(a.page, P1);
+      const b = await newPage({ ctx: shared, t: tb });
+      await editor(b.page, P1);
+      const key = `oys.draft.${U1}.${P1}`;
+      const stored = (p) => p.evaluate((k) => localStorage.getItem(k) || '', key);
+      // Tab A: ungespeichert → Entwurf. Tab B ändert und speichert etwas anderes.
+      await makeDirty(a.page, 'Title from tab A');
+      await sleep(1100);
+      ok((await stored(a.page)).includes('Title from tab A'), 'tab A keeps its work as a draft');
+      await makeDirty(b.page, 'Title from tab B');
+      await sleep(1100);
+      ok((await stored(b.page)).includes('Title from tab A'), 'tab B does not overwrite the draft of tab A');
+      await b.page.click('#saveBtn');
+      await b.page.waitForFunction(() => document.getElementById('saveLabel').textContent === 'Saved');
+      await sleep(200);
+      ok((await stored(b.page)).includes('Title from tab A'), 'saving in tab B keeps the draft of tab A');
+      // Ein dritter Tab verwirft den angebotenen Entwurf; Tab A ist noch offen und sichert seine Arbeit beim Schließen neu
+      const c = await newPage({ ctx: shared });
+      await editor(c.page, P1);
+      await dlg(c.page).waitFor();
+      await button(c.page, 'Discard').click();
+      await sleep(200);
+      ok(!(await stored(c.page)), 'Discard in a third tab deletes the offered draft');
+      await c.page.close();
+      await a.page.close({ runBeforeUnload: true });
+      await sleep(800);
+      ok(!ta.sawBeforeUnload && (await stored(b.page)).includes('Title from tab A'), 'closing tab A: its work is stored again, no browser dialog');
+      // Tab B kann seine Arbeit nicht als Entwurf ablegen (der Platz gehört Tab A): beim Schließen fragt der Browser
+      await makeDirty(b.page, 'Another title from tab B');
+      await sleep(1100);
+      ok((await stored(b.page)).includes('Title from tab A'), 'tab B still leaves the draft of tab A alone');
+      await b.page.close({ runBeforeUnload: true });
+      await sleep(800);
+      ok(tb.sawBeforeUnload === 1, 'closing tab B: its work is in no draft, so the browser asks');
+      await shared.close();
+    });
+
+    await step('4 drafts: Escape on “Restore unsaved changes?” keeps the old draft until the user decides', async () => {
+      resetContent();
+      const t = { expectBeforeUnload: true };
+      const { ctx, page } = await newPage({ t });
+      await login(page, 'ed-one@test.de');
+      const key = `oys.draft.${U1}.${P1}`;
+      await page.evaluate((k) => localStorage.setItem(k, JSON.stringify({ v: 1, at: Date.now() - 3600e3, base: '', page: { page: { title: 'Written yesterday' }, blocks: [] } })), key);
+      await editor(page, P1);
+      await dlg(page).waitFor();
+      ok(await dialogTitle(page) === 'Restore unsaved changes?', 'the draft is offered');
+      await page.keyboard.press('Escape');
+      await sleep(200);
+      ok(await dlg(page).count() === 0, 'Escape closes the dialog');
+      await makeDirty(page, 'Typed today');
+      await sleep(1100);
+      ok((await page.evaluate((k) => localStorage.getItem(k) || '', key)).includes('Written yesterday'), 'the next change does not overwrite the old draft');
+      await page.close({ runBeforeUnload: true });
+      await sleep(800);
+      ok(t.sawBeforeUnload === 1, 'today’s work is in no draft, so the browser asks when the tab is closed');
+      const again = await newPage({ ctx });
+      await editor(again.page, P1);
+      await dlg(again.page).waitFor();
+      ok(await dialogTitle(again.page) === 'Restore unsaved changes?', 'the old draft is offered again');
+      await button(again.page, 'Discard').click();
+      await sleep(200);
+      ok((await draftKeys(again.page)).length === 0, 'Discard deletes it');
+      await ctx.close();
+    });
+
+    await step('4 session without a draft: “Log in” leaves the browser’s leave dialog in place', async () => {
+      resetContent();
+      const t = { expectBeforeUnload: true };
+      const init = () => { Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); }; };
+      const { ctx, page } = await newPage({ t, init, allowConsole: /status of 4(01|19)/ });
+      await login(page, 'ed-one@test.de');
+      await editor(page, P1);
+      await makeDirty(page, 'Not storable');
+      await sleep(1000);
+      sql(`DELETE FROM oys_sessions WHERE id = '${(await sessionId(ctx)).replace(/[^A-Za-z0-9,-]/g, '')}'`);
+      await page.click('#saveBtn');
+      await dlg(page).waitFor();
+      ok(await dialogText(page) === 'Log in again to continue.', 'no promise of kept changes');
+      await Promise.all([page.waitForURL(/\/login$/), button(page, 'Log in').click()]);
+      ok(t.sawBeforeUnload === 1, 'the browser asks before the unsaved work is lost');
+      // 419 → „Reload“: ebenso
+      await page.fill('input[name=email]', 'ed-one@test.de');
+      await page.fill('input[name=password]', PASSWORD);
+      await Promise.all([page.waitForNavigation(), page.click('form[action="/login"] button[type=submit]')]);
+      await editor(page, P1);
+      await page.evaluate(() => { window.OYS_EDITOR.csrf = 'x'.repeat(64); });
+      await makeDirty(page, 'Still not storable');
+      await dlg(page).waitFor();
+      ok(await dialogText(page) === 'Reload the editor to continue.', '419 dialog without the promise');
+      await Promise.all([page.waitForNavigation(), button(page, 'Reload').click()]);
+      ok(t.sawBeforeUnload === 2, 'Reload: the browser asks as well');
+      await ctx.close();
+    });
+
+    await step('4 drafts: logging out removes the account’s drafts, other accounts’ stay', async () => {
+      resetContent();
+      const { ctx, page } = await newPage();
+      await login(page, 'ed-one@test.de');
+      await editor(page, P1);
+      await page.evaluate((ks) => {
+        const d = { v: 1, at: Date.now(), base: '', page: { page: { title: 'Left behind' }, blocks: [] } };
+        ks.forEach((k) => localStorage.setItem(k, JSON.stringify(d)));
+      }, [`oys.draft.${U1}.${P2}`, `oys.draft.${U1}.code.${SITE}`, `oys.draft.${U2}.${P3}`]);
+      await Promise.all([page.waitForNavigation(), page.locator('form[action="/logout"] button[type=submit]').first().click()]);
+      const left = await draftKeys(page);
+      ok(!left.some((k) => k.indexOf(`oys.draft.${U1}.`) === 0) && left.includes(`oys.draft.${U2}.${P3}`), 'only the drafts of the account that logged out are gone: ' + left.join(', '));
+      await ctx.close();
+    });
+
     await step('7 editor without ui.js: an in-page notice, no editing', async () => {
       const { ctx, page } = await newPage({ blockUi: true });
       await login(page, 'ed-one@test.de');

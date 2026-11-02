@@ -946,7 +946,9 @@ adapter during a PHP rollback (§11.2).
 - **Mark all as read** sends `{upTo: latest}` from the last poll (§5.3).
 - Polling: every 60 s while visible (as `editor.js:2872`), immediately when the tab becomes visible again (if the last
   poll is > 15 s old), also without a page, and on the admin page. Answers go through `opts.handle` (normally
-  `OYSUI.handle()`: session dialogs, notices).
+  `OYSUI.handle()`: session dialogs, notices). These automatic polls send `X-OYS-Poll: 1`: the server reads the
+  session but keeps its time of last activity, so an open tab without input is still logged out after
+  `session_idle_seconds`. Opening the bell counts as activity.
 - New items: on the first poll only a baseline is taken (as today, `lastUnread = -1`). Afterwards unread items with
   `id >` the last toasted id get a toast (type icon, title; body as second line; click = `openLink`), at most 3, then
   "+N more notifications". The last toasted id is stored per user in `localStorage` (`oys.notify.<userId>`, wrapped in
@@ -958,14 +960,20 @@ adapter during a PHP rollback (§11.2).
 
 Unsaved changes survive a closed tab, a crash, a reload and an expired session:
 
-- **What:** `{v: 1, at, base, page}` under `oys.draft.<userId>.<pageId>` – `page` = `payload()` (`editor.js:336-352`)
+- **What:** `{v: 1, at, tab, base, page}` under `oys.draft.<userId>.<pageId>` – `page` = `payload()` (`editor.js:336-352`)
   with every `password` emptied (protected-link passwords are never stored; restored blocks ask for them again via the
   existing save check, `editor.js:358-367`); `base` = a short hash of the server state the edits started from. Code
-  pages: `oys.draft.<userId>.code.<siteId>` with the changed and deleted files only.
+  pages: `oys.draft.<userId>.code.<siteId>` with the changed and deleted files only. `tab` names the tab (page load)
+  that wrote it.
+- **Tabs:** a tab overwrites and deletes only its own draft. A draft of another tab (still open, or an earlier visit
+  whose restore dialog was closed with ✕/Escape) stays until the user restores or discards it; until then this tab's
+  work is in no draft and the browser's leave dialog protects it. Flushing always writes again, so a draft that
+  another tab removed (*Discard* in its restore dialog) is stored again before the tab closes.
 - **When:** written 800 ms after the last change (`markDirty`, `codeChanged`), flushed on `pagehide` and
   `visibilitychange → hidden`; deleted after a successful save, after *Leave without saving*/*Discard*, and on load
   when older than 7 days. Every access is wrapped in try/catch; a quota error drops the code part first, then gives up
-  (the browser's leave dialog stays the safety net).
+  (the browser's leave dialog stays the safety net – also after *Log in*/*Reload* in the session dialogs and the
+  reload after deleting a page). Logging out (editor, admin) and *Back to admin panel* remove the account's drafts.
 - **Restore:** when a page (or the code tab) loads and a draft exists: dialog "Restore unsaved changes?" · "You have
   changes from 14:02 that weren’t saved." (+ "This page was saved again after that – restoring replaces that version
   when you save." when `base` differs) · *Discard* / *Restore*. *Restore* applies the draft and marks the editor dirty;

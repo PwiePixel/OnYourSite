@@ -7,11 +7,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT_DIR } from '../src/config.js';
-import { makeTestCtx } from '../src/web/ctx.js';
+import { makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
 import { appRoutes } from '../src/app/dispatch.js';
 import { bellMarkup } from '../src/views/partials/ui.js';
-import { CSRF, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
+import { exec, value } from '../src/db.js';
+import { CSRF, jsonBody, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 // @ts-ignore – reines ES-Modul ohne Typen
 import { checkText, targetFiles } from '../../tools/check-native-dialogs.mjs';
 
@@ -104,6 +105,46 @@ test('the admin page: bell in the header before “View Live Site”, bell.js af
   assert.ok(html.includes('if (!Object.prototype.hasOwnProperty.call(ADMIN_TABS, tab)) return false;'));
   assert.match(html, /<meta name="robots" content="noindex, nofollow">/);
   assert.deepEqual(checkText(html), []);
+});
+
+// Abfrage der Glocke für ein Konto; poll: die Abfrage im Hintergrund (jede Minute, Tab wieder sichtbar)
+async function bellPoll(sid: string, poll: boolean): Promise<Ctx> {
+  const ctx = makeTestCtx({ url: '/dashboard/api/notifications', cookies: { PHPSESSID: sid }, headers: poll ? { 'x-oys-poll': '1' } : {} });
+  return runRequest(ctx, appRoutes);
+}
+const lastSeen = async (sid: string): Promise<number> => Number(await value('SELECT last_seen FROM oys_sessions WHERE id = ?', [sid]));
+
+test('the bell’s background poll reads the session but does not keep it alive; opening the bell and other requests do', async () => {
+  const sid = await loginSession(3);
+  const idle = Math.floor(Date.now() / 1000) - 1000;
+  await exec('UPDATE oys_sessions SET last_seen = ? WHERE id = ?', [idle, sid]);
+  const polled = await bellPoll(sid, true);
+  assert.equal(polled.status, 200);
+  assert.equal(jsonBody(polled).ok, true);
+  assert.equal(await lastSeen(sid), idle, 'the poll leaves the idle clock alone');
+  // Ändert die Abfrage etwas in der Sitzung, wird es gespeichert – die Zeit der letzten Aktivität bleibt
+  await exec("UPDATE oys_sessions SET data = JSON_REMOVE(data, '$.page_id') WHERE id = ?", [sid]);
+  await bellPoll(sid, true);
+  assert.equal(await lastSeen(sid), idle);
+  // Nach 24 Minuten ohne Aktivität ist die Sitzung trotz der Abfragen abgelaufen
+  await exec('UPDATE oys_sessions SET last_seen = ? WHERE id = ?', [Math.floor(Date.now() / 1000) - 1441, sid]);
+  assert.equal((await bellPoll(sid, true)).status, 401);
+  // Die Glocke öffnen (ohne Kopfzeile) zählt wie jede andere Anfrage
+  const sid2 = await loginSession(3);
+  await exec('UPDATE oys_sessions SET last_seen = ? WHERE id = ?', [idle, sid2]);
+  assert.equal((await bellPoll(sid2, false)).status, 200);
+  assert.ok(await lastSeen(sid2) >= Math.floor(Date.now() / 1000) - 5, 'a request without the header counts as activity');
+  const page = makeTestCtx({ url: '/dashboard/api/messages', cookies: { PHPSESSID: sid2 }, headers: { 'x-oys-poll': '1' } });
+  await exec('UPDATE oys_sessions SET last_seen = ? WHERE id = ?', [idle, sid2]);
+  await runRequest(page, appRoutes);
+  assert.ok(await lastSeen(sid2) >= Math.floor(Date.now() / 1000) - 5, 'the header only matters for the bell');
+});
+
+test('bell.js: the minute poll and the poll on returning to the tab are marked as background polls', () => {
+  const js = readFileSync(join(ROOT_DIR, 'static/js/bell.js'), 'utf8');
+  assert.ok(js.includes("if (bg) o.headers['X-OYS-Poll'] = '1';"));
+  assert.ok(js.includes('setInterval(function () { if (!document.hidden) poll(true); }, POLL_MS);'));
+  assert.ok(js.includes("if (document.visibilityState === 'visible' && Date.now() - lastPoll > REFRESH_MS) poll(true);"));
 });
 
 test('bell.js: no browser pop-ups, escaped texts, listed icons and colours, reads only what was shown', () => {

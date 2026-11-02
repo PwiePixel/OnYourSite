@@ -672,14 +672,14 @@
     if (kind === 'login') {
       c = { title: 'You’re logged out', ok: 'Log in', note: 'You’re logged out.',
         text: 'Log in again to continue.' + (kept ? ' Your unsaved changes are kept in this browser and offered again after you log in.' : ''),
-        go: function () { go('/login', true, false); } };
+        go: function () { go('/login', true, false, true); } };
     } else if (kind === 'expired') {
       c = { title: 'Your session has expired', ok: 'Reload', note: 'Your session has expired.',
         text: drafts ? 'Reload the editor to continue.' + (kept ? ' Your unsaved changes are kept in this browser.' : '') : 'Reload the page to continue.',
-        go: function () { go(null, true, true); } };
+        go: function () { go(null, true, true, true); } };
     } else {
       var t = data && typeof data.error === 'string' && data.error ? data.error : 'This page was changed elsewhere. Reload it to continue.';
-      c = { title: drafts ? 'Reload the editor' : 'Reload the page', ok: 'Reload', note: t, text: t, go: function () { go(null, true, true); } };
+      c = { title: drafts ? 'Reload the editor' : 'Reload the page', ok: 'Reload', note: t, text: t, go: function () { go(null, true, true, true); } };
     }
     sess.open = true;
     sess.kind = kind;
@@ -1031,11 +1031,13 @@
     var p = assign({}, LEAVE, o || {});
     return dialog('confirm', p).then(function (ok) { if (ok) discard(); return ok; });
   }
-  function go(url, force, reload) {
+  // force: ohne eigene Frage · keep: dann schützt das Fenster des Browsers weiter, was ungespeichert in keinem Entwurf liegt
+  // (Speicher voll oder gesperrt) – nur nach „Leave without saving“ und Ähnlichem ist es überflüssig
+  function go(url, force, reload, keep) {
     var p = force || !G ? Promise.resolve(true) : guardConfirm();
     return p.then(function (ok) {
       if (!ok) return false;
-      bypass();
+      if (!keep || !isDirty() || draftsKept()) bypass();
       if (reload) location.reload(); else location.href = url;
       return true;
     });
@@ -1048,8 +1050,8 @@
     G = {
       isDirty: isDirty,
       confirm: guardConfirm,
-      navigate: function (url, p) { return go(url, !!(p && p.force), false); },
-      reload: function (p) { return go(null, !!(p && p.force), true); }
+      navigate: function (url, p) { return go(url, !!(p && p.force), false, !!(p && p.keep)); },
+      reload: function (p) { return go(null, !!(p && p.force), true, !!(p && p.keep)); }
     };
     window.addEventListener('beforeunload', function (ev) {
       var b = bypassUntil > Date.now();
@@ -1091,6 +1093,25 @@
     });
     return G;
   }
+
+  // ================================================================
+  // Abmelden (auch „Back to admin panel“): die Entwürfe des Kontos verlassen den Browser – auf einem geteilten Rechner
+  // bleibt nichts Ungespeichertes zurück. Das Konto steht an der Glocke (data-user, im Nutzer-Modus das des Nutzers).
+  // Am Fenster, also nach der Wache: fragt sie („Leave without saving?“), erst beim erneuten Absenden.
+  // ================================================================
+  window.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (ev.defaultPrevented || !form || form.tagName !== 'FORM') return;
+    var to = form.getAttribute('action');
+    if (to !== '/logout' && to !== '/admin_return.php') return;
+    var bell = d.querySelector('[data-bell][data-user]'), id = bell ? bell.getAttribute('data-user') : '';
+    if (!/^\d+$/.test(id)) return;
+    try {
+      var s = window.localStorage, gone = [];
+      for (var i = 0; i < s.length; i++) { var k = s.key(i); if (k && k.indexOf('oys.draft.' + id + '.') === 0) gone.push(k); }
+      gone.forEach(function (k) { s.removeItem(k); });
+    } catch (e) { /* kein Speicher im Browser */ }
+  });
 
   // ================================================================
   // Eigene Links (Hinweise, Glocke): nur eigene Pfade derselben Herkunft

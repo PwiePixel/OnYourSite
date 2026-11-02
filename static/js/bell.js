@@ -44,8 +44,10 @@
       try { if (id > (stored() || 0)) localStorage.setItem(KEY, String(id)); } catch (e) { /* ohne Speicher: nur in diesem Tab */ }
     }
 
-    function request(path, body) {
+    // bg: Abfrage im Hintergrund – der Server zählt sie nicht als Aktivität (ohne Bedienung läuft die Sitzung ab)
+    function request(path, body, bg) {
       var o = { credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } };
+      if (bg) o.headers['X-OYS-Poll'] = '1';
       if (body !== undefined) {
         o.method = 'POST';
         o.headers['Content-Type'] = 'application/json';
@@ -137,10 +139,10 @@
       if (notes.length > 20) notes.splice(0, notes.length - 20);
     }
 
-    function poll() {
+    function poll(bg) {
       if (busy) return busy;
       lastPoll = Date.now();
-      busy = request('notifications').then(function (res) {
+      busy = request('notifications', undefined, bg).then(function (res) {
         busy = null;
         if (!res || !res.ok || !Array.isArray(res.items)) return res;
         ok = true;
@@ -196,10 +198,10 @@
     document.addEventListener('click', function (ev) { if (isOpen() && !root.contains(ev.target)) close(); });
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && isOpen() && !UI.isOpen()) { close(); btn.focus(); } });
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible' && Date.now() - lastPoll > REFRESH_MS) poll();
+      if (document.visibilityState === 'visible' && Date.now() - lastPoll > REFRESH_MS) poll(true);
     });
-    setInterval(function () { if (!document.hidden) poll(); }, POLL_MS);
-    poll();
+    setInterval(function () { if (!document.hidden) poll(true); }, POLL_MS);
+    poll(true);
     return { poll: poll, open: open, close: close };
   }
 
