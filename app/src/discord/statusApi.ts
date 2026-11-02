@@ -33,9 +33,11 @@ export async function discordStatusApi(ctx: Ctx): Promise<never> {
   const rows = [...posts.values()].flat();
   const jobs = await openJobsOf(rows.map((r) => r.id));
   const titles = new Map<number, string>();
+  const published = new Set<number>();
   if (ids.length) {
-    for (const r of await q(`SELECT id, title, version FROM updates WHERE id IN (${ids.map(() => '?').join(', ')})`, ids)) {
+    for (const r of await q(`SELECT id, title, version, is_published FROM updates WHERE id IN (${ids.map(() => '?').join(', ')})`, ids)) {
       titles.set(intval(r.id), (phpStr(r.version) !== '' ? phpStr(r.version) + ' – ' : '') + phpStr(r.title));
+      if (intval(r.is_published) === 1) published.add(intval(r.id));
     }
   }
   const now = time();
@@ -58,7 +60,7 @@ export async function discordStatusApi(ctx: Ctx): Promise<never> {
     },
     webhook: { enabled: !!activeWebhook(s), checked_at: s.webhook.checked_at, error: s.webhook.check_error },
     posts: rows.map((row) => {
-      const c = chipOf(row, jobs.get(row.id), installed, now);
+      const c = chipOf(row, jobs.get(row.id), installed, now, published.has(row.update_id));
       return {
         id: c.id, update_id: c.update_id, via: c.via, state: c.state, error: row.error ?? '', forget: c.forget, retry: c.retry, busy: c.busy,
         label: c.label, tone: c.tone, title: c.error, update_title: titles.get(c.update_id) ?? '',

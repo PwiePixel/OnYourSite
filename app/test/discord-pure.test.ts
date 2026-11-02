@@ -6,9 +6,12 @@ import { discordBase, discordError, walkErrors, type DiscordResponse } from '../
 import { cleanWebhookLink, maskedWebhook, parseWebhookLink } from '../src/discord/webhook.js';
 import {
   activeDestination, discordDefaults, discordDefaultsV1, discordSettingsFromV1, displayNameProblem, normalizeSettings, normalizeV1, parseMention,
+  siteDestinations, tokenUsable,
 } from '../src/discord/settings.js';
 import { discordWithMention, threadName } from '../src/updates/discord.js';
 import { legacyPostRow } from '../src/discord/legacy.js';
+import { chipOf } from '../src/discord/chips.js';
+import type { PostRow } from '../src/discord/posts.js';
 import type { Update } from '../src/updates/updates.js';
 
 // Token zur Laufzeit zusammengesetzt (kein tokenförmiger Text im Repository)
@@ -236,8 +239,32 @@ test('v1 → v2: webhook (active or kept off), the old token with its channel an
   assert.equal(t.webhook.url, hook);
   assert.equal(t.webhook.display_name, '', 'a name Discord refuses (the login e-mail) is dropped');
   assert.deepEqual(t.bot, { enabled: false, channel_id: '1301234567890123456', channel_type: '', mention: '1301234567890123457', saved_at: '' });
+  // Webhook gewählt, ein früher gespeicherter Token mit Kanal ist liegen geblieben: in v1 postete nur der Webhook – so bleibt es
+  // (sonst zwei Beiträge je Update und der Ping zweimal)
+  const left = conv({ mode: 'webhook', webhook_url: hook, bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', mention: 'everyone' });
+  assert.equal(left.webhook.enabled, true);
+  assert.equal(left.webhook.mention, 'everyone');
+  assert.deepEqual([left.bot_token, left.channel_id, left.mention], ['', '', '']);
+  assert.equal(tokenUsable(left), false);
+  assert.deepEqual(siteDestinations(left), ['webhook']);
+  assert.equal(left.bot.channel_id, '', 'the bot is not prefilled from a token that wasn’t chosen');
   // Unbrauchbarer Link: kein Webhook
   assert.equal(conv({ webhook_url: 'https://evil.example/hook' }).webhook.url, '');
   // Rundreise: v2 bleibt v2
   assert.deepEqual(normalizeSettings(JSON.parse(JSON.stringify(t))), t);
+});
+
+test('chips: a draft gets no Retry that would post or edit it – removing again stays possible', () => {
+  const row = (state: PostRow['state'], via: PostRow['via'] = 'webhook'): PostRow => ({
+    id: 1, update_id: 1, via, target: via === 'bot' ? 'bot' : 'webhook:123456', kind: 'message', channel_id: null, message_id: '1300000000000000001', state,
+    dirty: false, legacy: false, error: 'Missing Access (50001)', created_at: '2026-11-01 10:00:00', updated_at: '2026-11-01 10:00:00',
+  });
+  for (const via of ['webhook', 'token', 'bot'] as const) {
+    assert.equal(chipOf(row('failed', via), undefined, true).retry, true, via + ': published, failed → Retry');
+    assert.equal(chipOf(row('posted', via), undefined, true).retry, true, via + ': published, not updated → Retry');
+    assert.equal(chipOf(row('failed', via), undefined, true, undefined, false).retry, false, via + ': draft, failed → no Retry');
+    assert.equal(chipOf(row('posted', via), undefined, true, undefined, false).retry, false, via + ': draft, not updated → no Retry');
+    assert.equal(chipOf(row('remove_failed', via), undefined, true, undefined, false).retry, true, via + ': draft, couldn’t remove → Retry removes');
+    assert.equal(chipOf(row('failed', via), undefined, true, undefined, false).forget, true, via + ': Forget stays');
+  }
 });

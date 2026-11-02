@@ -102,6 +102,11 @@ function setupUpdates(client, log = () => {}) {
     return { message_id: sent.id, channel_id: channel.id };
   }
 
+  // Discord lehnt Änderungen in einem archivierten Thread oder Forenbeitrag ab (50083): erst wieder öffnen, wie beim Posten
+  async function reopen(channel, reason) {
+    if (isThread(channel) && channel.archived) await channel.setArchived(false, reason);
+  }
+
   // update.post: recheck → erst nach einem eigenen Beitrag sehen; only_if_posted → nur einen schon vorhandenen melden
   async function post(data, item) {
     const channel = await channelOf(data.channel_id);
@@ -129,6 +134,7 @@ function setupUpdates(client, log = () => {}) {
     }
     try {
       const msg = await channel.messages.fetch(String(data.message_id || ''));
+      await reopen(channel, 'OnYourSite update edited');
       await msg.edit({ embeds: messageOf(data.message).embeds });
       if (data.kind === 'forum_post' && isThread(channel) && data.thread_name && channel.name !== data.thread_name) {
         await channel.setName(String(data.thread_name).slice(0, 100), 'OnYourSite update edited');
@@ -160,6 +166,7 @@ function setupUpdates(client, log = () => {}) {
         }
       }
       const msg = await channel.messages.fetch(String(data.message_id || ''));
+      await reopen(channel, 'OnYourSite update removed');
       await msg.delete();
       return {};
     } catch (err) {

@@ -548,6 +548,32 @@ test('Discord posts and the chips of the update list: Retry and Forget per state
   assert.equal((await one('SELECT state FROM update_discord_posts WHERE id = ?', [gone]))!.state, 'removing');
 });
 
+test('a draft’s Discord posts offer no Retry that would post or edit it – in the list, the card and the status JSON; the server refuses it too', async () => {
+  await onlineBot();
+  await addUpdate(20, { title: 'Twenty', is_published: 0, published_at: null });
+  await addUpdate(21, { title: 'Twenty-one', is_published: 0, published_at: null });
+  await addUpdate(22, { title: 'Twenty-two', is_published: 0, published_at: null });
+  const failed = await addPost(20, { state: 'failed', error: 'Missing Access (50001)' });
+  const notRemoved = await addPost(21, { state: 'posted', message_id: ID(2100), error: 'Missing Access (50001)' });
+  const removeFailed = await addPost(22, { state: 'remove_failed', message_id: ID(2200), error: 'Missing Access (50001)' });
+  const { html, tab } = await adminPage();
+  const updatesTab = html.slice(html.indexOf('id="tab-updates"'), html.indexOf('id="tab-roadmap"'));
+  for (const id of [failed, notRemoved]) {
+    assert.match(updatesTab, new RegExp(`<form action="/admin" method="POST" class="m-0" data-post-retry="${id}" hidden>`), 'no Retry in the list');
+    assert.match(tab, new RegExp(`data-post-retry="${id}" hidden>`), 'no Retry in the Discord posts card');
+  }
+  // Noch einmal entfernen geht
+  assert.match(updatesTab, new RegExp(`<form action="/admin" method="POST" class="m-0" data-post-retry="${removeFailed}">`));
+  const st = await statusJson('?updates=20,21,22');
+  assert.deepEqual(st.json.posts.map((p: Record<string, unknown>) => [p.id, p.retry]), [[failed, false], [notRemoved, false], [removeFailed, true]]);
+  const r = await adminPost({ oys_action: 'discord_post_retry', id: String(failed) });
+  assert.equal(r.error, 'Only published updates can be posted to Discord.');
+  assert.equal((await one('SELECT state FROM update_discord_posts WHERE id = ?', [failed]))!.state, 'failed');
+  assert.deepEqual(await openJobs('update.post'), [], 'nothing queued for the bot');
+  assert.equal((await adminPost({ oys_action: 'discord_post_retry', id: String(notRemoved) })).error, 'Only published updates can be posted to Discord.');
+  assert.deepEqual(await openJobs('update.edit'), [], 'no edit with the draft text');
+});
+
 test('failed bot jobs are listed in the Discord tab, not in the Community banner; dead ones without a post can be dismissed', async () => {
   await onlineBot();
   await addUpdate(20);
@@ -658,6 +684,65 @@ test('Community card: the bot’s version and a link to the Discord settings', a
   assert.match(community, /<p class="text-xs text-gray-500 mt-1" data-bot-extra>Version 0\.2\.1 · <a href="#discord" class="text-brand-400 hover:text-white">Discord settings<\/a><\/p>/);
   await exec("DELETE FROM oys_meta WHERE meta_key = 'discord_bot_report'");
   assert.match((await adminPage()).html, /data-bot-extra><a href="#discord"/, 'without a report: only the link');
+});
+
+test('saving the webhook without a new link while another admin removes or replaces it brings nothing back', async () => {
+  assert.match(String((await adminPost({ oys_action: 'discord_webhook_save', webhook_link: hookLink() })).ok), /^Webhook saved and checked/);
+  const later = (ms: number, form: Record<string, string>) => new Promise((r) => setTimeout(r, ms)).then(() => adminPost(form));
+  // Admin A ändert nur den Namen (Link leer), Discord prüft 1,5 s; Admin B entfernt den Webhook in der Zeit
+  discord.restart();
+  discord.delayNext(1500);
+  const [renamed, removed] = await Promise.all([
+    adminPost({ oys_action: 'discord_webhook_save', webhook_link: '', display_name: 'News' }),
+    later(200, { oys_action: 'discord_webhook_remove', _confirmed: '1' }),
+  ]);
+  assert.equal(removed.ok, 'Webhook removed. Its earlier posts stay in Discord.');
+  assert.equal(renamed.error, 'This form is out of date – please reload the page.');
+  let s = (await stored())!;
+  assert.deepEqual([s.webhook.enabled ?? false, s.webhook.url ?? ''], [false, ''], 'the removed webhook stays removed');
+  // Admin B ersetzt den Link in der Zeit: der neue bleibt
+  assert.match(String((await adminPost({ oys_action: 'discord_webhook_save', webhook_link: hookLink() })).ok), /^Webhook saved and checked/);
+  const other = `${discord.base}/webhooks/1301234567890123999/${token('x9')}`;
+  discord.restart();
+  discord.delayNext(1500);
+  const [renamed2, replaced] = await Promise.all([
+    adminPost({ oys_action: 'discord_webhook_save', webhook_link: '', display_name: 'News' }),
+    later(200, { oys_action: 'discord_webhook_save', webhook_link: other }),
+  ]);
+  assert.match(String(replaced.ok), /^Webhook saved and checked/);
+  assert.equal(renamed2.error, 'This form is out of date – please reload the page.');
+  s = (await stored())!;
+  assert.equal(s.webhook.url, other);
+});
+
+test('a test message or the first post into the thread doesn’t bring back a webhook another admin removed meanwhile', async () => {
+  const db = '`' + t.name + '`';
+  // Admin B entfernt den Webhook in einer Transaktion, die die Einstellungen gesperrt hält, bis A gerade schreiben will
+  const removeWhile = async (run: () => Promise<unknown>): Promise<unknown> => {
+    const before = (await stored())!;
+    await t.admin.query('START TRANSACTION');
+    await t.admin.query(`SELECT meta_value FROM ${db}.oys_meta WHERE meta_key = 'discord' FOR UPDATE`);
+    await t.admin.query(`UPDATE ${db}.oys_meta SET meta_value = ? WHERE meta_key = 'discord'`, [String(encryptData(JSON.stringify({ ...before, webhook: {} })))]);
+    let running: Promise<unknown>;
+    try {
+      // A sendet an Discord (der Ersatz antwortet sofort) und will dann die Einstellungen schreiben
+      running = run();
+      await new Promise((r) => setTimeout(r, 1500));
+    } finally {
+      await t.admin.query('COMMIT');
+    }
+    return running;
+  };
+  // Test in einen noch nicht bestätigten Thread
+  assert.match(String((await adminPost({ oys_action: 'discord_webhook_save', webhook_link: hookLink(), post_in: 'thread', thread_id: THREAD })).ok), /^Webhook saved and checked/);
+  assert.equal((await stored())!.webhook.thread_verified, false);
+  assert.equal(((await removeWhile(() => adminPost({ oys_action: 'discord_webhook_test' }))) as Posted).ok, 'Test message sent – check your Discord channel.');
+  assert.equal((await stored())!.webhook.url ?? '', '', 'the removal stays');
+  // Der erste Beitrag eines Updates in den Thread
+  assert.match(String((await adminPost({ oys_action: 'discord_webhook_save', webhook_link: hookLink(), post_in: 'thread', thread_id: THREAD })).ok), /^Webhook saved and checked/);
+  await addUpdate(30);
+  assert.equal(((await removeWhile(() => adminPost({ oys_action: 'update_discord', id: '30' }))) as Posted).ok, 'Posted to Discord.');
+  assert.equal((await stored())!.webhook.url ?? '', '', 'the removal stays');
 });
 
 test('saving at the same time: nothing is lost, and the same channel can’t slip in while Discord checks the webhook', async () => {

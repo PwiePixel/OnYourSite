@@ -142,6 +142,32 @@ test('update.delete removes the message or the whole forum post (without the rig
   assert.equal(logs.length, 1);
 });
 
+test('update.edit and update.delete reopen an archived forum post or thread first (Discord refuses changes there)', async () => {
+  // Forenbeitrag, den Discord nach einer Weile archiviert hat: Embed und Titel ändern
+  const forum = new FakeForum();
+  const r = await setupUpdates(fakeClient([forum])).post({ channel_id: forum.id, thread_name: 'Old title', message: message() }, job());
+  const post = forum.posts[0];
+  post.archived = true;
+  assert.deepEqual(await setupUpdates(fakeClient([post])).edit({ channel_id: r.channel_id, message_id: r.message_id, kind: 'forum_post', thread_name: 'New title', message: { embeds: [{ title: 'New', url: URL }] } }), {});
+  assert.equal(post.archived, false);
+  assert.deepEqual(post.sent[0].edits, [{ embeds: [{ title: 'New', url: URL }] }]);
+  assert.deepEqual(post.renamed, ['New title']);
+  // Nachricht in einem archivierten Thread: bearbeiten und entfernen
+  const thread = new FakeThread();
+  const u = setupUpdates(fakeClient([thread]));
+  const sent = await u.post({ channel_id: thread.id, kind: 'thread', message: message() }, job());
+  thread.archived = true;
+  assert.deepEqual(await u.edit({ channel_id: thread.id, message_id: sent.message_id, kind: 'thread_msg', message: { embeds: [{ title: 'Fixed', url: URL }] } }), {});
+  assert.equal(thread.archived, false);
+  thread.archived = true;
+  assert.deepEqual(await u.remove({ channel_id: thread.id, message_id: sent.message_id, kind: 'thread_msg' }), {});
+  assert.equal(thread.sent.length, 0);
+  // Eine schon gelöschte Nachricht öffnet den Thread nicht
+  thread.archived = true;
+  assert.deepEqual(await u.edit({ channel_id: thread.id, message_id: sent.message_id, kind: 'thread_msg', message: { embeds: [] } }), { missing: true });
+  assert.equal(thread.archived, true);
+});
+
 test('update.test posts the test message (in a forum as a post "OnYourSite test")', async () => {
   const ch = new FakeChannel();
   const r = await setupUpdates(fakeClient([ch])).test({ channel_id: ch.id, kind: 'text', message: { embeds: [{ title: 'Discord is connected' }], allowed_mentions: { parse: [] } } }, job(5, 'update.test'));

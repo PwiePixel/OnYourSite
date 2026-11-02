@@ -139,7 +139,9 @@ export function normalizeSettings(data: unknown): DiscordSettings {
 // discordSettingsFromV1(): die alte Form umwandeln.
 // - Ein gültiger Webhook-Link wird zum Webhook – eingeschaltet, solange nicht der alte Token gewählt war (mode=bot mit
 //   Token); sonst bleibt er ausgeschaltet gespeichert.
-// - Der alte Token bleibt mit Kanal und Ping das Ziel „token“, bis der Admin den Bot oder einen Webhook speichert.
+// - Der alte Token bleibt mit Kanal und Ping das Ziel „token“, bis der Admin den Bot oder einen Webhook speichert – nur
+//   wenn er gewählt war (mode=bot). Ein liegen gebliebener Token bei mode=webhook postete in v1 nie; er fällt weg (sonst
+//   ginge jedes Update zweimal hinaus, mit doppeltem Ping).
 // - Ein Anzeigename, den Discord ablehnt (z. B. die Login-E-Mail aus einem Passwort-Manager), fällt weg.
 // - mode=bot: Kanal und Ping werden für den Bot vorgemerkt; eingeschaltet ist der Bot damit nicht.
 export function discordSettingsFromV1(v1: DiscordSettingsV1): DiscordSettings {
@@ -165,7 +167,7 @@ export function discordSettingsFromV1(v1: DiscordSettingsV1): DiscordSettings {
       hook_guild_id: v1.hook_guild_id,
     };
   }
-  if (v1.bot_token !== '') {
+  if (v1.mode === 'bot' && v1.bot_token !== '') {
     s.bot_token = v1.bot_token;
     s.channel_id = v1.channel_id;
     s.mention = v1.mention;

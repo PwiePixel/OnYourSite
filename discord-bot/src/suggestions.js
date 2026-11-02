@@ -100,6 +100,8 @@ function setupSuggestions(client, cfg, site, log, { siteFeatures = () => null, p
 
   client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
     if (!newlyCreated || !cfg.suggestionForumId || thread.parentId !== cfg.suggestionForumId || thread.guildId !== cfg.guildId) return;
+    // Ein Beitrag des Bots selbst (z. B. ein Update) ist kein Vorschlag
+    if (client.user && thread.ownerId === client.user.id) return;
     try {
       const starter = await starterMessage(thread);
       const owner = await client.users.fetch(thread.ownerId).catch(() => null);

@@ -1,7 +1,8 @@
 'use strict';
 // Bericht an die Webseite (POST /_/bot/hello): Version, Funktionen, wie der Bot läuft, die Verbindung zu Discord
 // (gateway: bereit, Ping), der Server, alle Text-, Ankündigungs- und Forenkanäle mit den eigenen Rechten (ohne die
-// privaten Ticket-Kanäle), aktive Threads (ohne die Vorschläge), Rollen und die Kanäle #updates, #status und #alerts.
+// privaten Ticket-Kanäle und ohne das Vorschlagsforum – dort würde jedes Update zum Vorschlag), aktive Threads (ohne
+// die Vorschläge), Rollen und die Kanäle #updates, #status und #alerts.
 // Daraus wählt die Webseite, wo Updates, Vorfälle und Meldungen ans Team erscheinen. Der Bericht bleibt unter 48 KB:
 // erst fallen die Threads weg, dann Kanäle, in denen der Bot nicht posten darf, dann der Rest der Liste.
 const { ChannelType, Events, PermissionFlagsBits: P } = require('discord.js');
@@ -36,9 +37,10 @@ function gatewayOf(client) {
 function buildReport(guild, me, cfg, features, gateway = null) {
   const all = [...guild.channels.cache.values()];
   const inTickets = (c) => Boolean(cfg.supportCategoryId) && c.parentId === cfg.supportCategoryId;
+  const isSuggestionForum = (c) => Boolean(cfg.suggestionForumId) && c.id === cfg.suggestionForumId;
   const categories = new Map();
   const channels = [];
-  for (const c of all.filter((x) => TYPES[x.type] !== undefined && !inTickets(x)).sort(byPosition)) {
+  for (const c of all.filter((x) => TYPES[x.type] !== undefined && !inTickets(x) && !isSuggestionForum(x)).sort(byPosition)) {
     const type = TYPES[c.type];
     const perms = c.permissionsFor(me);
     const has = (name) => Boolean(perms && perms.has(P[name]));

@@ -54,7 +54,7 @@ test('report: text, announcement and forum channels with the bot’s permissions
   assert.deepEqual(r.features, ['updates.v1']);
   assert.deepEqual(r.guild, { id: GUILD, name: 'OnYourSite', community: true });
   assert.equal(r.updates_channel_id, ID(10));
-  assert.deepEqual(r.channels.map((c) => c.name), ['updates', 'general', 'changelog', 'suggestions'], 'no voice channel, no ticket channels');
+  assert.deepEqual(r.channels.map((c) => c.name), ['updates', 'general', 'changelog'], 'no voice channel, no ticket channels, not the suggestion forum');
   const [updates, general, changelog] = r.channels;
   assert.deepEqual(updates, { id: ID(10), name: 'updates', type: 'announcement', parent_id: ID(1), can_post: true, can_mention_everyone: true, missing: [] });
   assert.deepEqual([general.can_post, general.missing], [false, ['SendMessages', 'EmbedLinks']]);

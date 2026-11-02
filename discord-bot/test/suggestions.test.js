@@ -64,6 +64,26 @@ test('a new forum post: the bot tells the website that the author got the note (
   }
 });
 
+test('a post the bot made itself in the suggestion forum is no suggestion: nothing goes to the website', async () => {
+  const BOT = ID(99);
+  const client = Object.assign(new EventEmitter(), { user: { id: BOT }, users: { fetch: async () => ({ username: 'OnYourSite' }) } });
+  const site = fakeSite(() => ({ ok: true, suggestion: { id: 6, title: '2.5 – Own pages', status: 'open' } }));
+  setupSuggestions(client, cfg, site, () => {});
+  const sent = [];
+  const thread = {
+    id: ID(20), parentId: FORUM, guildId: GUILD, ownerId: BOT, name: '2.5 – Own pages',
+    fetchStarterMessage: async () => ({ content: '', attachments: new Map() }),
+    send: async (payload) => {
+      sent.push(payload);
+      return { id: ID(21) };
+    },
+  };
+  client.emit(Events.ThreadCreate, thread, true);
+  for (let i = 0; i < 20; i++) await tick();
+  assert.deepEqual(site.calls, []);
+  assert.deepEqual(sent, [], 'no status embed or buttons in the bot’s own post');
+});
+
 test('raw gateway events: a deleted suggestion post reaches the website, although discord.js ignores the uncached thread', async () => {
   const client = new Client({ intents: [] });
   try {

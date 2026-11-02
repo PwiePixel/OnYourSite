@@ -16,8 +16,8 @@ import { closeJob, jobFromRow, registerBotAction, registerCleanup, withRetry, ty
 import { outboxAdd, supersede } from '../community/community.js';
 import { updateFromRow, type Update } from '../updates/updates.js';
 import { discordBase, discordError, discordRequest, type DiscordResponse, type Payload } from './rest.js';
-import { webhookDelete, webhookEdit, webhookPost, type WebhookLink } from './webhook.js';
-import { activeWebhook, discordSettings, storeDiscordSettings, tokenUsable, type DiscordSettings } from './settings.js';
+import { parseWebhookLink, webhookDelete, webhookEdit, webhookPost, type WebhookLink } from './webhook.js';
+import { activeWebhook, decodeStored, discordSettings, normalizeSettings, storeDiscordSettings, tokenUsable, type DiscordSettings } from './settings.js';
 import { botStatus, botTarget, type BotTarget } from './botReport.js';
 import { forEdit, styleOf, threadName, updatePayload, type PostVia } from './payload.js';
 
@@ -55,6 +55,7 @@ export const TEXTS = {
   noBotRemove: 'Discord isn’t connected, so its post there was not removed – please delete it in Discord yourself.',
   otherBot: 'Posted by a different bot – it can’t be edited from here.',
   noMessageId: 'The bot didn’t report which message it posted.',
+  draft: 'Only published updates can be posted to Discord.',
 } as const;
 
 const now = (): string => date('Y-m-d H:i:s');
@@ -283,6 +284,17 @@ async function closeJobs(db: Db, jobs: OutboxJob[], reason: string): Promise<voi
   for (const j of jobs) await closeJob(db, j.id, reason);
 }
 
+// Tote Aufträge eines Beitrags beenden, wenn ein neuer Auftrag sie ersetzt – sonst stünden sie für immer als Fehler da
+async function closeDeadJobs(db: Db, postId: number, reason: string): Promise<void> {
+  await closeJobs(db, (await lockJobs(db, postId)).filter((j) => j.attempts >= 10), reason);
+}
+
+// Zeile löschen und alle ihre offenen und toten Aufträge beenden (die Zeile ist schon gesperrt)
+async function dropRowWithJobs(db: Db, id: number, reason: string): Promise<void> {
+  await closeJobs(db, await lockJobs(db, id), reason);
+  await dropRow(db, id);
+}
+
 function facts(row: PostRow, d: Pick<Delivery, 'botInstalled'>, jobs: OutboxJob[] = [], updateGone = false): Facts {
   const post = jobs.filter((j) => j.action === 'update.post' && j.attempts < 10).pop();
   return {
@@ -329,16 +341,29 @@ function deleteJob(row: PostRow): Record<string, unknown> {
 }
 
 async function queueEdit(db: Db, row: PostRow, u: Update, s: DiscordSettings): Promise<void> {
+  await closeDeadJobs(db, row.id, 'superseded');
   await supersede(refOf(row.id), 'update.edit', db);
   await outboxAdd('update.edit', editJob(row, u, s), { ref: refOf(row.id), db });
 }
 
 async function queueDelete(db: Db, row: PostRow): Promise<void> {
+  await closeDeadJobs(db, row.id, 'superseded');
   await setRow(db, row.id, { state: 'removing', error: null });
   await outboxAdd('update.delete', deleteJob(row), { ref: refOf(row.id), db });
 }
 
 // ------------------------------------------------------------------ Discord direkt (Webhook, alter Token)
+
+// Ein Feld des gespeicherten Webhooks nachtragen (z. B. „Thread bestätigt“): gesperrt gelesen und geschrieben wie jedes
+// Speichern der Einstellungen, und nur, solange noch derselbe Webhook gespeichert ist – ein gleichzeitiges Entfernen
+// oder Ersetzen geht so nicht verloren. change gibt false zurück, wenn es nichts zu ändern gibt.
+export async function patchWebhook(hookId: string, change: (w: DiscordSettings['webhook']) => boolean): Promise<void> {
+  await withRetry(async (db) => {
+    const fresh = normalizeSettings(decodeStored(phpStr(await db.value("SELECT meta_value FROM oys_meta WHERE meta_key = 'discord' FOR UPDATE") ?? '')));
+    if (parseWebhookLink(fresh.webhook.url)?.id !== hookId || !change(fresh.webhook)) return;
+    await storeDiscordSettings(fresh);
+  });
+}
 
 // state wie bisher: ok | missing (in Discord gelöscht) | unreachable (anderer Webhook/Bot, Webhook/Kanal gelöscht)
 // | disconnected (kein Ziel mehr) | failed (z. B. Zeitüberschreitung, Rate-Limit, fehlende Rechte)
@@ -400,11 +425,11 @@ async function sendNew(d: Delivery, dest: Dest, u: Update): Promise<{ ok: true; 
     where = d.s.webhook.thread_id;
     // Der erste Beitrag in den Thread hat geklappt: der Thread ist bestätigt
     if (!d.s.webhook.thread_verified) {
-      const fresh = await discordSettings();
-      if (fresh.webhook.thread_id === d.s.webhook.thread_id && !fresh.webhook.thread_verified) {
-        fresh.webhook.thread_verified = true;
-        await storeDiscordSettings(fresh);
-      }
+      await patchWebhook(hook.id, (w) => {
+        if (w.thread_id !== d.s.webhook.thread_id || w.thread_verified) return false;
+        w.thread_verified = true;
+        return true;
+      });
     }
   }
   return { ok: true, id, channel: where };
@@ -605,8 +630,7 @@ export async function remove(u: Update, d: Delivery, opts: { deleting?: boolean 
       await barrier('remove:locked', { postId: row.id, decision });
       switch (decision) {
         case 'cancel':
-          await closeJobs(db, jobs.filter((j) => j.action === 'update.post'), 'cancelled');
-          await dropRow(db, row.id);
+          await dropRowWithJobs(db, row.id, 'cancelled');
           return { via: row.via, what: 'removed' };
         case 'set_removing':
           await setRow(db, row.id, { state: 'removing' });
@@ -620,7 +644,7 @@ export async function remove(u: Update, d: Delivery, opts: { deleting?: boolean 
           await setRow(db, row.id, { state: 'remove_failed', error: TEXTS.noBotRemove });
           return { via: 'bot', what: 'change', change: { state: 'disconnected', error: 'Discord isn’t connected', transient: false } };
         case 'drop':
-          await dropRow(db, row.id);
+          await dropRowWithJobs(db, row.id, 'cancelled');
           return null;
         case 'still_posting':
           return { via: row.via, what: 'busy', text: TEXTS.stillPosting };
@@ -658,15 +682,20 @@ export async function stillPosting(updateId: number): Promise<boolean> {
 
 // ------------------------------------------------------------------ Retry und Forget (für die Karte „Discord posts“)
 
+// Schickt diese Entscheidung den Inhalt des Updates nach Discord (neu posten oder bearbeiten)?
+export const sendsUpdate = (decision: Decision): boolean => decision === 'claim_post' || decision === 'queue_post' || decision === 'edit';
+
 export async function retry(postId: number, d: Delivery): Promise<{ ok: boolean; text: string }> {
   const step = await withRetry(async (db): Promise<{ ok: boolean; text: string } | { sync: PostRow; decision: Decision }> => {
     const row = await lockRowById(db, postId);
     if (!row) return { ok: false, text: 'This Discord post is no longer listed.' };
     const jobs = await lockJobs(db, row.id);
     const decision = decide('retry', facts(row, d, jobs), row.via);
+    const u = await updateById(row.update_id, db);
+    // Ein Entwurf geht nie nach Discord: weder neu posten noch seinen Text in einen Beitrag schreiben (nur Entfernen geht)
+    if (u && !u.is_published && sendsUpdate(decision)) return { ok: false, text: TEXTS.draft };
     // Tote Aufträge dieses Beitrags sind damit erledigt
     await closeJobs(db, jobs.filter((j) => j.attempts >= 10), 'retried');
-    const u = await updateById(row.update_id, db);
     switch (decision) {
       case 'edit':
         if (!u) return { ok: false, text: 'The update no longer exists.' };
@@ -694,6 +723,7 @@ export async function retry(postId: number, d: Delivery): Promise<{ ok: boolean;
   });
   if (!('sync' in step)) return step;
   const u = await updateById(step.sync.update_id);
+  if (u && !u.is_published && sendsUpdate(step.decision)) return { ok: false, text: TEXTS.draft };
   if (step.decision === 'claim_post') {
     // Nur an das Ziel dieses Beitrags (und nur, wenn es noch eingerichtet ist)
     const dest = destinations(d).find((x) => x.via === step.sync.via);
@@ -730,7 +760,9 @@ export async function forget(postId: number): Promise<{ ok: boolean; text: strin
 // Discord-Anwendung gepostet – dann kann er sie nicht ändern und sagt es). Ohne Bot werden sie vergessen (die
 // Nachrichten bleiben in Discord, wie bisher bei nicht erreichbaren Beiträgen).
 export async function tokenRowsToBot(db: Db, botInstalled: boolean): Promise<void> {
-  await db.exec("DELETE FROM update_discord_posts WHERE via = 'token' AND state NOT IN ('posted', 'remove_failed')");
+  // Ein Beitrag, der gerade gesendet wird, bleibt: sein Ergebnis landet in der übernommenen Zeile (sonst stünde die
+  // Nachricht ohne Zeile in Discord und ließe sich nie mehr ändern oder entfernen)
+  await db.exec("DELETE FROM update_discord_posts WHERE via = 'token' AND state NOT IN ('posted', 'remove_failed', 'posting')");
   if (!botInstalled) {
     await db.exec("DELETE FROM update_discord_posts WHERE via = 'token'");
     return;
@@ -796,7 +828,7 @@ async function applyBotResult(db: Db, job: OutboxJob, result: Record<string, unk
       await setRow(db, row.id, { state: 'failed', error: cut(reason) });
       return;
     case 'drop':
-      await dropRow(db, row.id);
+      await dropRowWithJobs(db, row.id, 'dropped');
       return;
     case 'clear_error':
       await setRow(db, row.id, { error: null });
@@ -830,7 +862,7 @@ async function preparePost(db: Db, job: OutboxJob): Promise<Prepared> {
   if (row.state === 'removing' && row.message_id === null) {
     // Entfernt, bevor der Bot den Beitrag abgeholt hat: abbrechen; sonst nur einen schon geposteten melden lassen
     if (!claimed) {
-      await dropRow(db, row.id);
+      await dropRowWithJobs(db, row.id, 'cancelled');
       return { send: false, reason: 'cancelled' };
     }
     return { send: true, data: { ...data, recheck: true, only_if_posted: true } };

@@ -19,7 +19,7 @@ import {
   storeDiscordSettings, tokenUsable, webhookDefaults, type DiscordSettings,
 } from './settings.js';
 import { styleOf, testPayload as buildTestPayload } from './payload.js';
-import { TEXTS, delivery, dropWebhookRows, forget, retry, tokenRowsToBot } from './posts.js';
+import { TEXTS, delivery, dropWebhookRows, forget, patchWebhook, retry, tokenRowsToBot } from './posts.js';
 import { botStatus, report } from './botReport.js';
 import { cantPost, checkBotChoice, placeOf, webhookPostsInto } from './botCard.js';
 import { DISMISSABLE_JOBS } from './jobs.js';
@@ -215,13 +215,16 @@ async function webhookSave(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
     const fresh = await lockedSettings(db);
     const current = parseWebhookLink(fresh.webhook.url);
     const sameHook = !!current && current.id === hook.id;
+    // Ohne neuen Link gilt der gespeicherte, den Discord eben geprüft hat: hat ihn inzwischen jemand entfernt oder
+    // ersetzt, nicht den alten wieder einsetzen
+    if (linkRaw === '' && !sameHook) return fail(ctx, OUT_OF_DATE, '', keep);
     const was = fresh.webhook;
     const next: DiscordSettings = {
       ...fresh,
       webhook: {
         ...was,
         enabled: true,
-        url: linkRaw !== '' ? cleanWebhookLink(linkRaw) : s.webhook.url,
+        url: linkRaw !== '' ? cleanWebhookLink(linkRaw) : fresh.webhook.url,
         display_name: displayName,
         avatar_url: avatar,
         mention: mention.value,
@@ -290,9 +293,10 @@ async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
       const res = await webhookPost(hook, payload, { threadId: s.webhook.test_thread_id });
       if (res.status >= 200 && res.status < 300) return ok('Test message sent – check your Discord channel.');
       if (res.status === 404 && res.code === 10003) {
-        const fresh = await discordSettings();
-        fresh.webhook.test_thread_id = '';
-        await storeDiscordSettings(fresh);
+        await patchWebhook(hook.id, (w) => {
+          w.test_thread_id = '';
+          return true;
+        });
         return fail(ctx, 'The earlier test post was deleted in Discord – send the test again to create a new one.');
       }
       return fail(ctx, discordError(res, 'webhook'));
@@ -303,9 +307,10 @@ async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
     if (res.status >= 200 && res.status < 300) {
       const thread = typeof res.data?.channel_id === 'string' && snowflake(res.data.channel_id) ? res.data.channel_id : '';
       if (thread !== '') {
-        const fresh = await discordSettings();
-        fresh.webhook.test_thread_id = thread;
-        await storeDiscordSettings(fresh);
+        await patchWebhook(hook.id, (w) => {
+          w.test_thread_id = thread;
+          return true;
+        });
       }
       return ok('Test message sent – check your Discord channel.');
     }
@@ -316,11 +321,11 @@ async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
   const res = await webhookPost(hook, payload, { threadId });
   if (res.status >= 200 && res.status < 300) {
     if (threadId !== '' && !s.webhook.thread_verified) {
-      const fresh = await discordSettings();
-      if (fresh.webhook.thread_id === threadId) {
-        fresh.webhook.thread_verified = true;
-        await storeDiscordSettings(fresh);
-      }
+      await patchWebhook(hook.id, (w) => {
+        if (w.thread_id !== threadId) return false;
+        w.thread_verified = true;
+        return true;
+      });
     }
     return ok('Test message sent – check your Discord channel.');
   }

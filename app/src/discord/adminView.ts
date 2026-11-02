@@ -48,7 +48,7 @@ export function whereOf(row: PostRow, rep: BotReport | null): string {
 
 // Karte „Discord posts“: alles, was nicht gepostet ist oder einen Fehler hat, dazu die letzten 10 geposteten
 export async function postList(rep: BotReport | null, botInstalled: boolean): Promise<PostListItem[]> {
-  const cols = 'p.*, u.title AS u_title, u.version AS u_version';
+  const cols = 'p.*, u.title AS u_title, u.version AS u_version, u.is_published AS u_published';
   const problems = await q(`SELECT ${cols} FROM update_discord_posts p LEFT JOIN updates u ON u.id = p.update_id
     WHERE p.state <> 'posted' OR (p.error IS NOT NULL AND p.error <> '') ORDER BY p.updated_at DESC, p.id DESC LIMIT 50`);
   const recent = await q(`SELECT ${cols} FROM update_discord_posts p LEFT JOIN updates u ON u.id = p.update_id
@@ -61,7 +61,7 @@ export async function postList(rep: BotReport | null, botInstalled: boolean): Pr
     const row = rows[i];
     const title = r.u_title === null || r.u_title === undefined ? `(deleted update #${row.update_id})`
       : (phpStr(r.u_version) !== '' ? phpStr(r.u_version) + ' – ' : '') + phpStr(r.u_title);
-    return { chip: chipOf(row, jobs.get(row.id), botInstalled, now), title, where: whereOf(row, rep), at: row.updated_at };
+    return { chip: chipOf(row, jobs.get(row.id), botInstalled, now, intval(r.u_published) === 1), title, where: whereOf(row, rep), at: row.updated_at };
   });
 }
 

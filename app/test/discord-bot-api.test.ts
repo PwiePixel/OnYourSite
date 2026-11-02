@@ -20,6 +20,7 @@ import { outboxAdd } from '../src/community/community.js';
 import { outboxCleanup, outboxHooks, registerBotAction } from '../src/community/outbox.js';
 import { TEXTS, announce, delivery, forget, postHooks, retry, syncEdit } from '../src/discord/posts.js';
 import { discordAdminHandle } from '../src/discord/admin.js';
+import { failingJobs } from '../src/discord/jobs.js';
 import { BASE, testDatabase, type TestDb } from './coreHarness.js';
 import { GOOD_TOKEN, startStandIn, type DiscordStandIn } from './fixtures/discord/standIn.js';
 
@@ -430,6 +431,48 @@ test('results: a dead post fails, a dead edit stays posted with its error, a dea
   assert.equal((await q("SELECT id FROM community_outbox WHERE ref = ? AND done_at IS NULL", ['post:' + r3.id])).length, 0);
 });
 
+test('dead jobs end with their post: a deleted failed post, a newer edit or removal – no error banner is left behind', async () => {
+  await bot('POST', '/_/bot/hello', report());
+  const take = async (action: string) => items(await bot('GET', '/_/bot/outbox?f=updates.v1')).filter((i) => i.action === action);
+  const openJobs = async (postId: number) => (await q('SELECT id FROM community_outbox WHERE ref = ? AND done_at IS NULL', ['post:' + postId])).length;
+  // (a) Der Post scheitert endgültig (failed, toter Auftrag); das Update wird gelöscht
+  await addUpdate(1);
+  await announce((await updateGet(1))!, await delivery());
+  const pid1 = Number((await postOf(1))!.id);
+  const [p1] = await take('update.post');
+  await bot('POST', `/_/bot/outbox/${p1.id}/done`, { error: 'Missing Access (50001)', final: true });
+  assert.equal((await postOf(1))!.state, 'failed');
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_delete', id: '1' }))?.ok, 'Update deleted.');
+  assert.equal(await postOf(1), null);
+  assert.equal(await openJobs(pid1), 0, 'the dead post job ends with its row');
+  // (b) Ein Edit scheitert endgültig (posted mit Fehler); nach einer neuen Änderung, die klappt, ist der tote Edit erledigt
+  await addUpdate(2);
+  await announce((await updateGet(2))!, await delivery());
+  const pid2 = Number((await postOf(2))!.id);
+  const [p2] = await take('update.post');
+  await bot('POST', `/_/bot/outbox/${p2.id}/done`, { result: { message_id: ID(820), channel_id: UPDATES_CHANNEL } });
+  await syncEdit((await updateGet(2))!, await delivery());
+  const [e1] = await take('update.edit');
+  await bot('POST', `/_/bot/outbox/${e1.id}/done`, { error: 'Missing Permissions (50013)', final: true });
+  assert.deepEqual([(await postOf(2))!.state, (await postOf(2))!.error], ['posted', 'Missing Permissions (50013)']);
+  await adminUpdatesHandle({ oys_action: 'update_save', id: '2', title: 'Fixed', body: 'Text 2', category: 'new', publish: '1' });
+  assert.notEqual((await jobById(e1.id))!.done_at, null, 'the newer edit replaces the dead one');
+  const [e2] = await take('update.edit');
+  await bot('POST', `/_/bot/outbox/${e2.id}/done`, { result: {} });
+  assert.deepEqual([(await postOf(2))!.state, (await postOf(2))!.error], ['posted', null]);
+  assert.equal(await openJobs(pid2), 0);
+  // (c) Wieder ein toter Edit, dann zurück zu den Entwürfen: der Bot entfernt den Beitrag, nichts bleibt offen
+  await syncEdit((await updateGet(2))!, await delivery());
+  const [e3] = await take('update.edit');
+  await bot('POST', `/_/bot/outbox/${e3.id}/done`, { error: 'Missing Permissions (50013)', final: true });
+  await adminUpdatesHandle({ oys_action: 'update_publish', id: '2', state: '' });
+  const [d2] = await take('update.delete');
+  await bot('POST', `/_/bot/outbox/${d2.id}/done`, {});
+  assert.equal(await postOf(2), null);
+  assert.equal(await openJobs(pid2), 0, 'no dead edit outlives the removed post');
+  assert.deepEqual((await failingJobs()).filter((j) => j.post), [], 'nothing left for the banner in Admin → Discord');
+});
+
 test('the old token: it keeps posting after the migration; deleting it hands its posts to the installed bot (legacy)', async () => {
   await storeSettings({ mode: 'bot', webhook_url: '', bot_token: GOOD_TOKEN, channel_id: ID(40), mention: '', username: '', avatar_url: '', invite_url: '', auto_post: true });
   await addUpdate(1);
@@ -501,6 +544,54 @@ test('deleting an update: bot posts stay "removing" until the bot confirms; a tr
   assert.equal((await q("SELECT id FROM community_outbox WHERE action = 'update.delete' AND done_at IS NULL")).length, 0);
 });
 
+test('a draft never reaches Discord: Retry of a failed post or of a post that wasn’t removed sends nothing and queues nothing', async () => {
+  const draftText = 'Only published updates can be posted to Discord.';
+  await storeSettings({ v: 2, auto_post: true, invite_url: '', bot: {}, webhook: { enabled: true, url: `${discord.base}/webhooks/${HOOK}/${token('k3')}` }, bot_token: '', channel_id: '', mention: '' });
+  // (a) Webhook scheitert → failed; zurück zu den Entwürfen; Retry darf den Entwurf nicht posten
+  await addUpdate(1);
+  discord.failNext(403);
+  await adminUpdatesHandle({ oys_action: 'update_discord', id: '1' });
+  const failed = (await postOf(1, 'webhook'))!;
+  assert.equal(failed.state, 'failed');
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_publish', id: '1', state: '' }))?.ok, 'Moved back to drafts.');
+  let sent = discord.calls().length;
+  assert.deepEqual(await retry(Number(failed.id), await delivery()), { ok: false, text: draftText });
+  assert.equal(discord.calls().length, sent, 'nothing is sent for a draft');
+  assert.equal((await postOf(1, 'webhook'))!.state, 'failed');
+  // (b) Gepostet, beim Zurückziehen lehnt Discord ab → bleibt posted mit Fehler; Retry darf den Entwurfstext nicht hineinschreiben
+  await addUpdate(2);
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '2' }))?.ok, 'Posted to Discord.');
+  discord.failNext(403);
+  await adminUpdatesHandle({ oys_action: 'update_publish', id: '2', state: '' });
+  const kept = (await postOf(2, 'webhook'))!;
+  assert.equal(kept.state, 'posted');
+  assert.notEqual(String(kept.error ?? ''), '');
+  await exec("UPDATE updates SET body = 'Unreleased draft text' WHERE id = 2");
+  sent = discord.calls().length;
+  assert.deepEqual(await retry(Number(kept.id), await delivery()), { ok: false, text: draftText });
+  assert.equal(discord.calls().length, sent, 'no PATCH with the draft text');
+  // Entfernen geht weiterhin („Remove from Discord“)
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord_remove', id: '2' }))?.ok, 'Removed from Discord.');
+  assert.equal(await postOf(2, 'webhook'), null);
+  // (c) Bot: endgültig gescheitert → failed; als Entwurf darf Retry keinen neuen update.post einreihen
+  await exec("DELETE FROM oys_meta WHERE meta_key = 'discord'");
+  await bot('POST', '/_/bot/hello', report());
+  await addUpdate(3);
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '3' }))?.ok, 'Queued for the bot.');
+  const [p] = items(await bot('GET', '/_/bot/outbox?f=updates.v1'));
+  await bot('POST', `/_/bot/outbox/${p.id}/done`, { error: 'Missing Access (50001)', final: true });
+  const botRow = (await postOf(3))!;
+  assert.equal(botRow.state, 'failed');
+  assert.equal((await adminUpdatesHandle({ oys_action: 'update_publish', id: '3', state: '' }))?.ok, 'Moved back to drafts.');
+  assert.deepEqual(await retry(Number(botRow.id), await delivery()), { ok: false, text: draftText });
+  assert.equal((await postOf(3))!.state, 'failed');
+  assert.equal((await q("SELECT id FROM community_outbox WHERE action = 'update.post' AND done_at IS NULL AND attempts < 10")).length, 0, 'no job for the bot');
+  // Wieder veröffentlicht: Retry postet wie gewohnt
+  await exec('UPDATE updates SET is_published = 1 WHERE id IN (1, 3)');
+  assert.deepEqual(await retry(Number(failed.id), await delivery()), { ok: false, text: 'This destination isn’t set up any more.' });
+  assert.deepEqual(await retry(Number(botRow.id), await delivery()), { ok: true, text: 'Queued for the bot.' });
+});
+
 // ------------------------------------------------------------------ Rennen (zwei Abläufe, Haltepunkte)
 
 test('race: the bot’s result and an unpublish, in both orders – the row ends "removing" with a delete job, never stuck', async () => {
@@ -560,6 +651,22 @@ test('race: an edit against the bot’s result is never lost (dirty or a new job
     assert.equal(edit?.action, 'update.edit', order);
     assert.match(JSON.stringify(edit.data.message), /Edited title/, order);
   }
+});
+
+test('race: the old token is deleted while it is still posting – the installed bot takes that post over too', async () => {
+  await storeSettings({ mode: 'bot', webhook_url: '', bot_token: GOOD_TOKEN, channel_id: ID(40), mention: '', username: '', avatar_url: '', invite_url: '', auto_post: true });
+  await bot('POST', '/_/bot/hello', report());
+  await addUpdate(1);
+  const g = gate('announce:sent', postHooks);
+  const posting = adminUpdatesHandle({ oys_action: 'update_discord', id: '1' });
+  await g.arrived;
+  assert.equal((await postOf(1, 'token'))!.state, 'posting');
+  assert.equal((await discordAdminHandle('discord_token_remove', { _confirmed: '1' }))?.ok, 'The old bot token is deleted from the website.');
+  g.open();
+  assert.equal((await posting)?.ok, 'Posted to Discord.');
+  const row = await postOf(1, 'bot');
+  assert.ok(row, 'the message in Discord is still known, so it can be edited and removed later');
+  assert.deepEqual([row.state, row.legacy, row.channel_id, String(row.message_id ?? '') !== ''], ['posted', 1, ID(40), true]);
 });
 
 test('race: two announces to the webhook post once (the other hears "Already posting"); two to the bot queue one job', async () => {
@@ -698,6 +805,35 @@ test('migration: v1 settings become v2 without a mirror, posts from before becom
       await m.admin.query(`DELETE FROM ${db}.update_discord_posts`);
       assert.equal(await convertLegacyPosts(conn, { tokenStored: false, botInstalled: false }), 3);
     });
+  } finally {
+    await m.done();
+    useConfig();
+  }
+});
+
+test('migration: a token left over while v1 posted through the webhook stays off – one post per update, one ping', async () => {
+  const m = await testDatabase('dpmig3', { empty: true });
+  try {
+    setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: m.name } });
+    await ensureSchema({ upTo: V_DISCORD_DELIVERY - 1 });
+    const db = '`' + m.name + '`';
+    const link = 'https://discord.com/api/webhooks/123456789012345678/' + token('mw');
+    const v1 = { mode: 'webhook', webhook_url: link, bot_token: GOOD_TOKEN, channel_id: ID(40), mention: 'everyone', auto_post: true, post_in: 'channel' };
+    await m.admin.query(`REPLACE INTO ${db}.oys_meta (meta_key, meta_value) VALUES ('discord', ?)`, [String(encryptData(JSON.stringify(v1)))]);
+    // Ein Beitrag aus der Zeit, als der Token gewählt war
+    await m.admin.query(`INSERT INTO ${db}.updates (id, title, is_published, discord_message_id, discord_target, created_at) VALUES (104, 'U104', 1, ?, ?, NOW())`, [ID(204), 'bot:' + ID(40)]);
+    await ensureSchema();
+    const raw = (await m.admin.query<RowDataPacket[]>(`SELECT meta_value FROM ${db}.oys_meta WHERE meta_key = 'discord'`))[0][0].meta_value as string;
+    const v2 = JSON.parse(String(decryptData(raw))) as Record<string, any>;
+    assert.deepEqual([v2.webhook.enabled, v2.webhook.url, v2.webhook.mention], [true, link, 'everyone']);
+    assert.deepEqual([v2.bot_token, v2.channel_id, v2.mention], ['', '', ''], 'the unused token does not become a second destination');
+    // Seine früheren Beiträge übernimmt der installierte Bot (wie nach dem Löschen des Tokens)
+    const row = (await m.admin.query<RowDataPacket[]>(`SELECT via, legacy FROM ${db}.update_discord_posts WHERE update_id = 104`))[0][0];
+    assert.deepEqual([row.via, row.legacy], ['bot', 1]);
+    // Noch einmal: nichts ändert sich
+    await m.admin.query(`REPLACE INTO ${db}.oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)`, [String(V_DISCORD_DELIVERY - 1)]);
+    await ensureSchema();
+    assert.equal((await m.admin.query<RowDataPacket[]>(`SELECT meta_value FROM ${db}.oys_meta WHERE meta_key = 'discord'`))[0][0].meta_value, raw);
   } finally {
     await m.done();
     useConfig();

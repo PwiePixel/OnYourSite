@@ -73,9 +73,11 @@ export async function adminUpdatesView(ctx: Ctx): Promise<string> {
   const rows = [...posts.values()].flat();
   const jobs = await openJobsOf(rows.map((r) => r.id));
   const chips = new Map<number, Chip[]>();
+  // Nur veröffentlichte Updates bekommen „Retry“ zum (neu) Posten oder Bearbeiten
+  const published = new Set([...all, ...(edit ? [edit] : [])].filter((u) => u.is_published).map((u) => u.id));
   const postedWhere = new Map<number, string[]>();
   for (const row of rows) {
-    chips.set(row.update_id, [...(chips.get(row.update_id) ?? []), chipOf(row, jobs.get(row.id), d.botInstalled)]);
+    chips.set(row.update_id, [...(chips.get(row.update_id) ?? []), chipOf(row, jobs.get(row.id), d.botInstalled, undefined, published.has(row.update_id))]);
     if (row.state !== 'failed') postedWhere.set(row.update_id, [...(postedWhere.get(row.update_id) ?? []), whereText(row.via, row.via === 'bot' ? placeOf(rep, row.channel_id ?? '')?.name ?? '' : '')]);
   }
   return adminUpdatesTemplate({

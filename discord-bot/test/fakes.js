@@ -29,11 +29,14 @@ class FakeMessage {
   }
   async edit(p) {
     if (this.channel.failEdit) throw this.channel.failEdit;
+    // Wie Discord: in einem archivierten Thread geht nichts, bis er wieder offen ist
+    if (this.channel.archived) throw apiError(400, 50083, 'Thread is archived');
     this.edits.push(p);
     if (p.embeds) this.embeds = p.embeds;
     return this;
   }
   async delete() {
+    if (this.channel.archived) throw apiError(400, 50083, 'Thread is archived');
     this.deleted = true;
     this.channel.sent = this.channel.sent.filter((m) => m !== this);
   }
@@ -71,7 +74,11 @@ class FakeThread extends FakeChannel {
   }
   isThread() { return true; }
   async setArchived(v) { this.archived = v; }
-  async setName(n) { this.renamed.push(n); this.name = n; }
+  async setName(n) {
+    if (this.archived) throw apiError(400, 50083, 'Thread is archived');
+    this.renamed.push(n);
+    this.name = n;
+  }
   async delete() {
     if (this.failDelete) throw this.failDelete;
     this.deletedThread = true;

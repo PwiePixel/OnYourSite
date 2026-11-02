@@ -5,7 +5,7 @@ import { q, type Db } from '../db.js';
 import { e } from '../html.js';
 import { intval, phpStr, strtotime, time } from '../php.js';
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
-import { TEXTS, decide, refOf, type Facts, type PostRow } from './posts.js';
+import { TEXTS, decide, refOf, sendsUpdate, type Facts, type PostRow } from './posts.js';
 
 export type ChipTone = 'posted' | 'warn' | 'err';
 
@@ -49,7 +49,8 @@ export async function openJobsOf(postIds: number[], db?: Db): Promise<Map<number
   return out;
 }
 
-export function chipOf(row: PostRow, job: OpenJob | undefined, botInstalled: boolean, now = time()): Chip {
+// published: das Update ist veröffentlicht (ein Entwurf oder ein gelöschtes Update wird nie neu gepostet oder bearbeitet)
+export function chipOf(row: PostRow, job: OpenJob | undefined, botInstalled: boolean, now = time(), published = true): Chip {
   const t = strtotime(row.updated_at);
   const error = row.error ?? '';
   const f: Facts = {
@@ -87,7 +88,7 @@ export function chipOf(row: PostRow, job: OpenJob | undefined, botInstalled: boo
   return {
     id: row.id, update_id: row.update_id, via: row.via, state: row.state, label: VIA_LABEL[row.via] + ' · ' + label, tone,
     error: error !== '' ? error : jobNote,
-    retry: !otherBot && (retryDecision === 'edit' || retryDecision === 'queue_post' || retryDecision === 'claim_post' || retryDecision === 'delete'),
+    retry: !otherBot && (retryDecision === 'delete' || (published && sendsUpdate(retryDecision))),
     // Ein Beitrag, der einfach in Discord steht, braucht kein „Forget“ (discord-pages §3.3: posted → keine Aktion)
     forget: decide('forget', f, row.via) === 'drop_jobs' && !(row.state === 'posted' && error === ''),
     busy: !!job?.busy,
