@@ -97,14 +97,20 @@ function headerText(v: string | string[] | undefined): string {
   return Array.isArray(v) ? v.join(', ') : (v ?? '');
 }
 
-// php://input: bei POST mit multipart/form-data liest PHP den Inhalt selbst ein und lässt php://input leer
-// (Typ klein geschrieben bis zum ersten ';', ',' oder Leerzeichen – wie in community/api.ts)
-function phpInput(ctx: Ctx): Buffer {
+// php://input: bei POST mit multipart/form-data (Typ klein geschrieben bis zum ersten ';', ',' oder Leerzeichen) liest
+// PHP den Inhalt selbst ein und lässt php://input leer – aber nur, wenn rfc1867.c eine Grenze findet: "boundary" (erst
+// genau so, sonst ohne Rücksicht auf Groß-/Kleinschreibung), danach ein '=' und bei '"' ein schließendes '"' (die Grenze
+// darf leer sein). Sonst bricht PHP vorher ab und der Inhalt bleibt in php://input.
+export function phpInput(ctx: Ctx): Buffer {
   if (ctx.method !== 'POST') return ctx.rawBody;
   const type = headerText(ctx.headers['content-type']);
   const cut = type.search(/[;, ]/);
-  if (strtolower(cut >= 0 ? type.slice(0, cut) : type) === 'multipart/form-data') return Buffer.alloc(0);
-  return ctx.rawBody;
+  if (strtolower(cut >= 0 ? type.slice(0, cut) : type) !== 'multipart/form-data') return ctx.rawBody;
+  let at = type.indexOf('boundary');
+  if (at < 0) at = strtolower(type).indexOf('boundary');
+  const eq = at < 0 ? -1 : type.indexOf('=', at);
+  if (eq < 0 || (type[eq + 1] === '"' && type.indexOf('"', eq + 2) < 0)) return ctx.rawBody;
+  return Buffer.alloc(0);
 }
 
 // --- /_/… auf jeder Adresse (index.php → lib/routes_public.php). X-Robots-Tag setzt schon der Router. ---
