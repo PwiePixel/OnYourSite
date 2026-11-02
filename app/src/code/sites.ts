@@ -14,6 +14,7 @@ import { shopPrice } from '../honeycombs/catalogue.js';
 import { pathExtension, poolDb } from '../honeycombs/util.js';
 import { claimAddress, duplicateKey, isTakenError, releaseAddress } from '../content/addresses.js';
 import './shop.js';
+import { codeBannedText } from './slots.js';
 
 export const CODE_MAX_FILES = 30;
 export const CODE_MAX_FILE_BYTES = 262144; // 256 KB je Datei
@@ -205,12 +206,21 @@ export function codeStarterFiles(title: string): Record<string, string> {
 
 // oys_code_save(): geänderte/neue Dateien (Pfad → Inhalt) und gelöschte Pfade speichern. Fehlermeldung oder null.
 // Gleichzeitige Speichervorgänge (z. B. zwei Tabs) laufen nacheinander – sonst ließen sich die Grenzen umgehen.
-export async function codeSave(site: Row, files: CodeFileInput, deleted: unknown[]): Promise<string | null> {
+// after: läuft nach dem Schreiben in derselben Transaktion auf der gesperrten Zeile (Name, Online-Schalter); eine
+// Meldung von dort nimmt alles zurück.
+export async function codeSave(site: Row, files: CodeFileInput, deleted: unknown[],
+  after?: (db: Db) => Promise<string | null>): Promise<string | null> {
   return withConnection(async (sql, conn) => {
     await conn.beginTransaction();
     try {
-      await sql.q('SELECT id FROM code_sites WHERE id = ? FOR UPDATE', [intval(site.id)]);
-      const error = await codeWrite(site, files, deleted, sql);
+      // Gesperrt neu lesen: eine Sperre des Teams oder ein Bann, die während der Anfrage kamen, gelten – dann wird
+      // nichts geschrieben (der Bann wird erst nach der Zeilensperre gelesen, also mit dem neuesten Stand)
+      const cur = await sql.one('SELECT user_id, is_blocked, blocked_reason FROM code_sites WHERE id = ? FOR UPDATE', [intval(site.id)]);
+      const owner = cur ? await sql.one('SELECT code_banned_at, code_ban_reason FROM users WHERE id = ?', [intval(cur.user_id)]) : null;
+      const error = !cur ? 'This code page no longer exists. Please reload the editor.'
+        : phpTruthy(cur.is_blocked) ? 'Your code page has been blocked by the team' + (phpTruthy(cur.blocked_reason) ? ': ' + phpStr(cur.blocked_reason) : '.')
+          : owner && phpTruthy(owner.code_banned_at) ? codeBannedText(phpStr(owner.code_ban_reason ?? ''))
+            : (await codeWrite(site, files, deleted, sql)) ?? (after ? await after(sql) : null);
       if (error !== null) {
         await conn.rollback();
         return error;

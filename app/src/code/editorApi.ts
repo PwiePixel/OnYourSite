@@ -11,7 +11,7 @@ import { cleanText, normalizeSlug, pageDisplayUrl, slugProblem, uploadUrl, type 
 import { date, intval, phpStr, phpTruthy, strtotime, time } from '../php.js';
 import { isArr, own, values, type PhpArr } from '../content/util.js';
 import { cleanupFiles, createPage, syncUsername } from '../content/pages.js';
-import { claimAddress, duplicateKey, isTakenError, releaseAddress } from '../content/addresses.js';
+import { addressNameProblem, claimAddress, duplicateKey, isTakenError, releaseAddress } from '../content/addresses.js';
 import { hasDomain } from '../domains/index.js';
 import { hcBalance } from '../honeycombs/honeycombs.js';
 import { has } from '../honeycombs/entitlements.js';
@@ -22,17 +22,22 @@ import {
   CODE_TYPES, codeDeleteRows, codeFileCount, codeFiles, codePreviewToken, codeSave, codeSites, codeStarterFiles, codeUrl,
 } from './sites.js';
 import {
-  CODE_UNLOCK_TEXT, SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError,
+  CODE_MORE_TEXT, CODE_UNLOCK_TEXT, SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError,
   canCreate, canMove, codeBannedText, codeQuota, pageAllowance, slotRateKey, withSlotLock, type CodeDenied, type SlotUser,
 } from './slots.js';
 import { codeLimits, codeSettings } from './settings.js';
 import { CODE_TERMS_REQUIRED } from './shop.js';
+import { mustStayOffline } from './enforce.js';
 
 export const CODE_STALE_TAB = { ok: false, error: 'This tab is out of date. Please reload the editor.', reload: true } as const;
 export const CODE_SITE_GONE = { ok: false, error: 'This code page no longer exists. Please reload the editor.', reload: true } as const;
 const CHOOSE_TEXT = 'Choose where your code page should go.';
 const SHOWS_CODE_TEXT = 'This page already shows a code page.';
 const CONFIRM_TEXT = 'To confirm, please type the address of the code page.';
+// Eine Code-Seite übernimmt die Adresse eines Platzes: dieselben Namensregeln wie jede neue Code-Seiten-Adresse (Marken,
+// der Name von OnYourSite) – sonst würde aus einer Link-Seite mit Markennamen eine Code-Seite
+const BRAND_SLOT_TEXT = 'This page’s address contains a brand name. Code pages can’t use brand names in their address.';
+const slotNameRefused = (page: Row): boolean => addressNameProblem(phpStr(page.slug), 'code') !== null;
 const takenText = (slug: string): string => `Sorry, the address “${slug}” is already taken.`;
 const blockedText = (site: Row): string =>
   'Your code page has been blocked by the team' + (phpTruthy(site.blocked_reason) ? ': ' + phpStr(site.blocked_reason) : '.');
@@ -144,8 +149,10 @@ export async function codeApiState(ctx: Ctx, user: Row, selectedId: number | nul
   };
 }
 
-// Änderung unter der Sperre: busy (200) oder Konto weg (409 reload) beenden die Anfrage; eine Ablehnung ebenso
-async function locked<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUser) => Promise<T | Refused>): Promise<T> {
+// Änderung unter der Sperre: busy (200) oder Konto weg (409 reload) beenden die Anfrage; eine Ablehnung ebenso.
+// slug: die verlangte Adresse – für die Meldung, wenn ein anderes Konto sie gleichzeitig belegt (doppelter Schlüssel
+// in pages/code_sites statt AddressTakenError)
+async function locked<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUser) => Promise<T | Refused>, slug = ''): Promise<T> {
   let out: T | Refused;
   try {
     out = await withSlotLock(userId, async (db, user) => {
@@ -158,7 +165,7 @@ async function locked<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUser) 
     if (err instanceof RefusedError) out = err.r;
     else if (err instanceof SlotBusyError) ctx.json({ ok: false, error: SLOT_BUSY_TEXT, busy: true });
     else if (err instanceof SlotGoneError) ctx.json({ ok: false, error: SLOT_GONE_TEXT, reload: true }, 409);
-    else if (isTakenError(err)) ctx.json({ ok: false, error: takenText(phpStr((err as { slug?: unknown }).slug)) });
+    else if (isTakenError(err)) ctx.json({ ok: false, error: takenText(phpStr((err as { slug?: unknown }).slug ?? slug)) });
     else if (duplicateKey(err) === 'uq_own') ctx.json({ ok: false, error: 'You already have a code page with its own address.' });
     else throw err;
   }
@@ -257,6 +264,7 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
         if (page.code_site_id !== null && page.code_site_id !== undefined) return refuse(SHOWS_CODE_TEXT);
         const d = canCreate(quota, 'page', { hasDomain: await hasDomain(slotId, db) });
         if (d) return fromDenied(d);
+        if (slotNameRefused(page)) return refuse(BRAND_SLOT_TEXT);
         const siteId = await insertCodeSite(db, userId, null, phpTruthy(clean) ? clean : phpStr(page.slug));
         await pointSlot(db, slotId, siteId);
         return siteId;
@@ -264,7 +272,7 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
       // Neue Seite, die gleich die Code-Seite zeigt
       const d = canCreate(quota, 'new-page');
       if (d) return fromDenied(d);
-      const problem = await slugProblem(slug, null, null, { userId, db });
+      const problem = await slugProblem(slug, null, null, { userId, db, kind: 'code' });
       if (problem !== null) return refuse(problem);
       firstPage = quota.pagesUsed === 0;
       const title = phpTruthy(clean) ? clean : slug;
@@ -272,7 +280,7 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
       const siteId = await insertCodeSite(db, userId, null, title);
       await pointSlot(db, pageId, siteId);
       return siteId;
-    });
+    }, slug);
     if (firstPage) await syncUsername(userId);
     await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
     ctx.json(await state(id));
@@ -315,13 +323,24 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
     const deleted = values(isArr(deletedIn) ? deletedIn : []).filter((x) => typeof x === 'string');
     const max = (await codeSettings()).max_files;
     if (codeFileCount(files) > max * 2 || deleted.length > max * 2) ctx.json({ ok: false, error: 'Too many files.' }, 400);
-    const error = await codeSave(site, files, deleted);
-    if (phpTruthy(error)) ctx.json({ ok: false, error });
     // array_key_exists(): auch ein null-Wert zählt als vorhanden
+    const wantOnline = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : null;
+    // Einschalten nur, wenn der Abgleich die Seite nicht offline hält (code_more verloren, solange es etwas kostet) –
+    // früh, damit nichts gespeichert wird, und unten noch einmal auf der gesperrten Zeile
+    const moreNeeded = { ok: false, error: CODE_MORE_TEXT, need: 'code_more' };
+    if (wantOnline === true && (await mustStayOffline(userId, siteId))) ctx.json(moreNeeded, 403);
     const title = Object.hasOwn(input, 'title') ? cleanText(inp('title'), 120) : phpStr(site.title);
-    const online = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : phpTruthy(site.is_published);
-    await exec('UPDATE code_sites SET title = ?, is_published = ? WHERE id = ? AND user_id = ?',
-      [title !== '' ? title : phpStr(site.slug ?? (await slotOf(site))?.slug ?? ''), online ? 1 : 0, siteId, userId]);
+    const name = title !== '' ? title : phpStr(site.slug ?? (await slotOf(site))?.slug ?? '');
+    // Dateien, Name und Online-Schalter in einer Transaktion auf der gesperrten Zeile: ein Abgleich, der inzwischen lief,
+    // gilt – ohne Schalter bleibt der Stand der Zeile (nicht der vom Anfang der Anfrage)
+    const error = await codeSave(site, files, deleted, async (db) => {
+      if (wantOnline === true && (await mustStayOffline(userId, siteId, db))) return CODE_MORE_TEXT;
+      const online = wantOnline ?? phpTruthy(await db.value('SELECT is_published FROM code_sites WHERE id = ?', [siteId]));
+      await db.exec('UPDATE code_sites SET title = ?, is_published = ? WHERE id = ? AND user_id = ?', [name, online ? 1 : 0, siteId, userId]);
+      return null;
+    });
+    if (error === CODE_MORE_TEXT) ctx.json(moreNeeded, 403);
+    if (phpTruthy(error)) ctx.json({ ok: false, error });
     ctx.json(await state(siteId));
   }
 
@@ -358,14 +377,14 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
       // Seitenadresse: dieselbe 30-Tage-Regel wie die Link-Seite (das Team ist ausgenommen)
       const left = isStaff(ctx, lockedUser) ? 0 : addressDaysLeft(slot.slug_changed_at);
       if (left > 0) return refuse(addressDaysText(left));
-      const problem = await slugProblem(slug, intval(slot.id), siteId, { userId, db });
+      const problem = await slugProblem(slug, intval(slot.id), siteId, { userId, db, kind: 'code' });
       if (problem !== null) return refuse(problem);
       await db.exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), intval(slot.id)]);
       await claimAddress(db, slug, 'page', intval(slot.id), userId);
       await releaseAddress(db, phpStr(slot.slug), userId, 'owner', { kind: 'page', refId: intval(slot.id) });
       changed = true;
       return true;
-    });
+    }, slug);
     if (changed) {
       if (pageKind) await syncUsername(userId);
       await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
@@ -397,6 +416,7 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
       if (target.code_site_id !== null && target.code_site_id !== undefined) return refuse(SHOWS_CODE_TEXT);
       const d = canMove(quota, 'page', { hasDomain: await hasDomain(intval(target.id), db) });
       if (d) return fromDenied(d);
+      if (slotNameRefused(target)) return refuse(BRAND_SLOT_TEXT);
       await db.exec('UPDATE code_sites SET slug = NULL, updated_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), siteId]);
       await pointSlot(db, intval(target.id), siteId);
       await releaseAddress(db, phpStr(cur.slug), userId, 'owner', { kind: 'code', refId: siteId });
@@ -412,7 +432,7 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
     await db.exec('UPDATE code_sites SET slug = ?, updated_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), siteId]);
     await claimAddress(db, slug, 'code', siteId, userId);
     return true;
-  });
+  }, slug);
   await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
   ctx.json(await state(siteId));
 }

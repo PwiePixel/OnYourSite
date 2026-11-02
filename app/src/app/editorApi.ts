@@ -41,6 +41,7 @@ import { codeApi } from '../code/editorApi.js';
 
 // Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
 const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
+const PAGE_SHOWS_CODE = { ok: false, error: 'This page now shows a code page. Please reload the editor.', reload: true };
 const PAGE_BLOCKED_TEXT = 'This page shows a code page that has been blocked by the team. It can’t be deleted right now.';
 // Die Seite gibt es nicht mehr (anderer Tab) oder sie gehört inzwischen einem anderen Konto (Admin-Modus)
 const PAGE_GONE = { ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true };
@@ -142,7 +143,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     // Der Platz zeigt inzwischen eine Code-Seite: seine Link-Seite ist geparkt und wird nicht mehr bearbeitet (ein
     // älterer Tab darf nichts in sie schreiben)
     if (!isShownLinkPage(page) && LINK_PAGE_ACTIONS.has(action)) {
-      ctx.json({ ok: false, error: 'This page now shows a code page. Please reload the editor.', reload: true }, 409);
+      ctx.json(PAGE_SHOWS_CODE, 409);
     }
     session.set('page_id', requestedPage);
   } else {
@@ -378,8 +379,11 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         let refused: { body: Record<string, unknown>; status: number } | null = null;
         try {
           refused = await transaction(async (_conn, db) => {
-            const cur = await db.one('SELECT slug, slug_changed_at FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(page.id), userId]);
+            const cur = await db.one('SELECT slug, slug_changed_at, code_site_id FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(page.id), userId]);
             if (!cur) return { body: PAGE_GONE, status: 409 };
+            // Zeigt der Platz inzwischen eine Code-Seite (gleichzeitiges code-connect/code-move), gilt deren Namensregel –
+            // hier nichts ändern
+            if (cur.code_site_id !== null && cur.code_site_id !== undefined) return { body: PAGE_SHOWS_CODE, status: 409 };
             if (phpStr(cur.slug) !== phpStr(page.slug)) {
               // Inzwischen geändert: dann gilt die Sperrfrist dieser Änderung (wie bei zwei Änderungen nacheinander)
               const left = staff ? 0 : addressDaysLeft(cur.slug_changed_at);

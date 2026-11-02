@@ -321,12 +321,16 @@ test('enforcer: losing code_page takes every code page offline, losing code_more
   await q('UPDATE code_sites SET is_published = 1 WHERE user_id = 5');
   const mias = (await q('SELECT id FROM code_sites WHERE user_id = 5 ORDER BY id')).map((r) => Number(r.id));
   assert.equal(mias.length, 2);
-  // code_more war gekauft und ist erstattet (Zeile mit Menge 0): die neuere geht offline, die Dateien bleiben
+  // code_more war gekauft und ist erstattet (Zeile mit Menge 0), und weitere Code-Seiten kosten etwas: die neuere geht
+  // offline, die Dateien bleiben. Bei Preis 0 sind weitere Code-Seiten für alle frei – dann bleibt alles online.
   await q("INSERT INTO hc_entitlements (user_id, feature, lot, quantity, permanent, source, created_at, updated_at) VALUES (5, 'code_more', 0, 0, 1, 'purchase', NOW(), NOW())");
+  assert.equal(await enforceSlots(5), 0);
+  await q("UPDATE hc_items SET price = 40 WHERE item_key = 'code_more'");
   assert.equal(await enforceSlots(5), 1);
   assert.deepEqual((await q('SELECT id, is_published FROM code_sites WHERE user_id = 5 ORDER BY id')).map((r) => [Number(r.id), Number(r.is_published)]), [[mias[0], 1], [mias[1], 0]]);
   assert.ok(await n('SELECT COUNT(*) FROM code_files WHERE site_id = ?', [mias[1]]) > 0);
   assert.equal(await enforceSlots(5), 0);
+  await q("UPDATE hc_items SET price = 0 WHERE item_key = 'code_more'");
   // code_page entzogen: alle offline; ohne Freischaltung kann Mia sie nicht wieder einschalten
   await q("DELETE FROM honeycomb_ledger WHERE user_id = 5 AND reason = 'unlock' AND ref = 'code_page'");
   await q("INSERT INTO hc_entitlements (user_id, feature, lot, quantity, permanent, source, created_at, updated_at) VALUES (5, 'code_page', 0, 0, 1, 'purchase', NOW(), NOW())");
