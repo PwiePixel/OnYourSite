@@ -7,7 +7,7 @@ import { phpMultipart, rfc1867Boundary } from './web/multipart.js';
 import { DbUnavailableError } from './db.js';
 import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
-import { parseStr, phpText, strtolower } from './php.js';
+import { parseFormBody, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
@@ -164,8 +164,9 @@ export function phpBoundary(contentType: string): string | null {
 export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
   const type = phpPostType(contentType);
   if (type === 'application/x-www-form-urlencoded') {
-    // Bytes, die kein gültiges UTF-8 sind, bleiben wie in PHP erhalten (phpText)
-    ctx.post = parseStr(phpText(body), true);
+    // Bytes, die kein gültiges UTF-8 sind, bleiben wie in PHP erhalten (phpText); gelesen wird auf den Bytes, ohne den
+    // ganzen Inhalt erst als Text zu lesen (parseFormBody)
+    ctx.post = parseFormBody(body);
     return;
   }
   if (type !== 'multipart/form-data') return;

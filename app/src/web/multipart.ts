@@ -68,9 +68,19 @@ class Finder {
   find(from: number): number {
     if (from >= this.cacheFrom && from <= this.cacheAt) return this.cacheAt;
     this.cacheFrom = from;
-    this.cacheAt = this.mode === 'native' ? this.text.indexOf(this.pat, from) : this.mode === 'first' ? this.first(from) : this.kmp(from);
+    // Steht das Muster gleich an der Stelle (viele leere Teile hintereinander), ohne Aufruf von indexOf()
+    this.cacheAt = this.at(from) ? from
+      : this.mode === 'native' ? this.text.indexOf(this.pat, from) : this.mode === 'first' ? this.first(from) : this.kmp(from);
     if (this.cacheAt < 0) this.cacheAt = this.text.length;
     return this.cacheAt;
+  }
+
+  // Beginnt das Muster genau bei from? (nur kurze Muster, sonst false)
+  private at(from: number): boolean {
+    const p = this.pat;
+    if (p.length > 16 || from + p.length > this.text.length) return false;
+    for (let i = 0; i < p.length; i++) if (this.text.charCodeAt(from + i) !== p.charCodeAt(i)) return false;
+    return true;
   }
 
   private first(from: number): number {
@@ -102,13 +112,21 @@ class Finder {
   }
 }
 
+// Erstes Byte code ab from, sonst b.length. Die ersten Bytes prüft eine Schleife – bei kurzen Zeilen (Millionen
+// Kopfzeilen aus zwei Bytes) billiger als je ein Aufruf von indexOf(), das danach weitersucht
+function byteAt(b: Buffer, from: number, code: number): number {
+  const stop = Math.min(b.length, from + 16);
+  for (let i = from; i < stop; i++) if (b[i] === code) return i;
+  if (stop === b.length) return stop;
+  const i = b.indexOf(code, stop);
+  return i < 0 ? b.length : i;
+}
+
 // multipart_buffer: der Puffer ist immer ein zusammenhängendes Stück des Inhalts (input[start, start + len)), höchstens
 // bufsize lang und nachgefüllt wie fill_buffer() – darum ohne Kopien
 class MultipartBuffer {
   private start = 0;
   private len = 0;
-  // Anfang der zuletzt gelesenen Zeile
-  private lineStart = 0;
   // Nächstes \n ab lfFrom (gemerkt, damit die Suche über den ganzen Inhalt linear bleibt)
   private lfFrom = 0;
   private lfAt = -1;
@@ -122,8 +140,19 @@ class MultipartBuffer {
   private readonly bufsize: number;
   private readonly lineFinder: Finder;
   private readonly nextFinder: Finder;
+  // Ergebnis von headers(): der jeweils erste Content-Disposition- und Content-Type-Wert des Teils
+  cd: string | null = null;
+  ct: string | null = null;
+  // Wert des laufenden Kopfes: ein Stück des Inhalts (valStart bis valEnd), mit Fortsetzungszeilen die Bytes in
+  // val (valLen; -1 = noch ein Stück). Der Puffer wächst bei Bedarf und wird wiederverwendet – je Zeile entsteht so
+  // kein eigener Text (Millionen kurzer Fortsetzungszeilen kosteten sonst Sekunden).
+  private valStart = 0;
+  private valEnd = 0;
+  private valLen = -1;
+  private val = Buffer.alloc(0);
 
-  constructor(private readonly input: string, boundary: string) {
+  // input: der Inhalt als latin1-Text (ein Zeichen je Byte), bytes: derselbe Inhalt als Buffer
+  constructor(private readonly input: string, private readonly bytes: Buffer, boundary: string) {
     // spprintf("--%s"): die Grenze als C-Text
     this.boundary = '--' + cstr(boundary);
     this.boundaryNext = '\n--' + cstr(boundary);
@@ -135,18 +164,16 @@ class MultipartBuffer {
   // Erstes Vorkommen eines einzelnen Zeichens ab from (input.length = keins), gemerkt
   private nextColon(from: number): number {
     if (from < this.colonFrom || from > this.colonAt) {
-      const i = this.input.indexOf(':', from);
       this.colonFrom = from;
-      this.colonAt = i < 0 ? this.input.length : i;
+      this.colonAt = byteAt(this.bytes, from, 58);
     }
     return this.colonAt;
   }
 
   private nextNul(from: number): number {
     if (from < this.nulFrom || from > this.nulAt) {
-      const i = this.input.indexOf('\0', from);
       this.nulFrom = from;
-      this.nulAt = i < 0 ? this.input.length : i;
+      this.nulAt = byteAt(this.bytes, from, 0);
     }
     return this.nulAt;
   }
@@ -154,9 +181,8 @@ class MultipartBuffer {
   // Erstes \n ab from (input.length = keins)
   private nextLf(from: number): number {
     if (from < this.lfFrom || from > this.lfAt) {
-      const i = this.input.indexOf('\n', from);
       this.lfFrom = from;
-      this.lfAt = i < 0 ? this.input.length : i;
+      this.lfAt = byteAt(this.bytes, from, 10);
     }
     return this.lfAt;
   }
@@ -172,39 +198,6 @@ class MultipartBuffer {
   // multipart_buffer_eof()
   eof(): boolean {
     return this.len === 0 && this.fill() < 1;
-  }
-
-  // next_line(): Zeile bis LF (ein CR davor fällt weg); ohne LF in vollem Puffer der ganze Puffer, sonst -1.
-  // Liefert das Ende der Zeile, der Anfang steht in lineStart.
-  private nextLine(): number {
-    const end = this.start + this.len;
-    const lf = this.nextLf(this.start);
-    this.lineStart = this.start;
-    if (lf < end) {
-      const stop = lf > this.start && this.input.charCodeAt(lf - 1) === 13 ? lf - 1 : lf;
-      this.len -= lf + 1 - this.start;
-      this.start = lf + 1;
-      return stop;
-    }
-    if (this.len < this.bufsize) return -1;
-    this.start = end;
-    this.len = 0;
-    return end;
-  }
-
-  // get_line()
-  private getLineEnd(): number {
-    let end = this.nextLine();
-    if (end < 0) {
-      this.fill();
-      end = this.nextLine();
-    }
-    return end;
-  }
-
-  getLine(): string | null {
-    const end = this.getLineEnd();
-    return end < 0 ? null : cstr(this.input.slice(this.lineStart, end));
   }
 
   // find_boundary(): Zeilen überspringen bis genau "--Grenze" (als C-Text: danach Ende oder ein Nullbyte). Statt jede
@@ -248,43 +241,98 @@ class MultipartBuffer {
 
   // multipart_buffer_headers() und php_mime_get_hdr_value(): Kopfzeilen bis zur Leerzeile, Fortsetzungen (Leerraum vorn
   // oder ohne ':') hängen am vorigen Wert. Gebraucht wird nur der jeweils erste Content-Disposition- und Content-Type-Kopf
-  // (Name ohne Rücksicht auf Groß-/Kleinschreibung).
-  headers(): { cd: string | null; ct: string | null } | null {
-    if (!this.findBoundary()) return null;
+  // (Name ohne Rücksicht auf Groß-/Kleinschreibung), danach in cd und ct. false: keine Grenze mehr.
+  headers(): boolean {
+    if (!this.findBoundary()) return false;
     const input = this.input;
-    let cd: string | null = null;
-    let ct: string | null = null;
-    // Der laufende Kopf: gibt es einen (buf_value), und wird sein Wert gebraucht (cd/ct)?
+    this.cd = null;
+    this.ct = null;
+    // Der laufende Kopf: gibt es einen (buf_value), und wird sein Wert gebraucht (1 = cd, 2 = ct, 0 = nein)?
     let open = false;
-    let want: 'cd' | 'ct' | null = null;
-    let parts: string[] = [];
-    const done = (): void => {
-      if (want === 'cd' && cd === null) cd = parts.join('');
-      else if (want === 'ct' && ct === null) ct = parts.join('');
-    };
-    for (let end = this.getLineEnd(); end >= 0; end = this.getLineEnd()) {
-      const s = this.lineStart;
+    let want = 0;
+    // get_line() und next_line(), mit dem Puffer in lokalen Werten (Millionen kurzer Kopfzeilen): eine Zeile bis LF
+    // (ein CR davor fällt weg), wenn das LF im Puffer steht; sonst einmal auffüllen (fill_buffer), dann eine Zeile, ohne
+    // LF der ganze volle Puffer oder – nicht voll – keine Zeile mehr
+    const bs = this.bufsize;
+    const bytes = this.bytes;
+    let start = this.start;
+    let len = this.len;
+    for (;;) {
+      const s = start;
+      const lf = this.nextLf(s);
+      if (lf >= s + len && len < bs) {
+        const more = Math.min(bs - len, input.length - s - len);
+        if (more > 0) len += more;
+      }
+      let end: number;
+      if (lf < s + len) {
+        end = lf > s && bytes[lf - 1] === 13 ? lf - 1 : lf;
+        len -= lf + 1 - s;
+        start = lf + 1;
+      } else if (len < bs) {
+        break;
+      } else {
+        end = s + len;
+        start = end;
+        len = 0;
+      }
       // als C-Text: am ersten Nullbyte zu Ende; eine leere Zeile beendet die Köpfe
       const e = Math.min(end, this.nextNul(s));
       if (e === s) break;
-      const colon = isSpace(input.charCodeAt(s)) ? -1 : this.nextColon(s);
+      const colon = isSpace(bytes[s]) ? -1 : this.nextColon(s);
       if (colon >= 0 && colon < e) {
-        done();
+        if (want !== 0) this.keepValue(want);
         open = true;
         const len = colon - s;
         const key = len === 19 || len === 12 ? strtolower(input.slice(s, colon)) : '';
-        want = key === 'content-disposition' && cd === null ? 'cd' : key === 'content-type' && ct === null ? 'ct' : null;
-        if (want) {
+        want = key === 'content-disposition' && this.cd === null ? 1 : key === 'content-type' && this.ct === null ? 2 : 0;
+        if (want !== 0) {
           let v = colon + 1;
           while (v < e && isSpace(input.charCodeAt(v))) v++;
-          parts = [input.slice(v, e)];
+          this.valStart = v;
+          this.valEnd = e;
+          this.valLen = -1;
         }
-      } else if (open && want) {
-        parts.push(input.slice(s, e));
+      } else if (open && want !== 0) {
+        this.appendValue(s, e);
       }
     }
-    done();
-    return { cd, ct };
+    this.start = start;
+    this.len = len;
+    if (want !== 0) this.keepValue(want);
+    return true;
+  }
+
+  // Fortsetzungszeile (Bytes s bis e) an den Wert des laufenden Kopfes hängen
+  private appendValue(s: number, e: number): void {
+    let n = this.valLen;
+    if (n < 0) {
+      this.appendBytes(this.valStart, this.valEnd, 0);
+      n = this.valEnd - this.valStart;
+    }
+    this.appendBytes(s, e, n);
+    this.valLen = n + (e - s);
+  }
+
+  // Bytes s bis e des Inhalts an Stelle at in val schreiben (val wächst auf das Doppelte, wenn es nicht reicht)
+  private appendBytes(s: number, e: number, at: number): void {
+    const need = at + (e - s);
+    if (need > this.val.length) {
+      const grown = Buffer.allocUnsafe(Math.max(need, this.val.length * 2, 256));
+      this.val.copy(grown, 0, 0, at);
+      this.val = grown;
+    }
+    const val = this.val;
+    const bytes = this.bytes;
+    if (e - s > 64) bytes.copy(val, at, s, e);
+    else for (let k = s; k < e; k++) val[at++] = bytes[k];
+  }
+
+  // Wert des laufenden Kopfes übernehmen (der erste Content-Disposition- bzw. Content-Type-Kopf zählt)
+  private keepValue(want: number): void {
+    const v = this.valLen < 0 ? this.input.slice(this.valStart, this.valEnd) : this.val.toString('latin1', 0, this.valLen);
+    if (want === 1 && this.cd === null) this.cd = v;
+    else if (want === 2 && this.ct === null) this.ct = v;
   }
 
   // php_ap_memstr() im Puffer: erste Stelle, an der "\n--Grenze" beginnt; partial: auch nur angeschnitten am Ende des
@@ -328,30 +376,56 @@ class MultipartBuffer {
   }
 }
 
-// php_ap_getword(): bis zum Trennzeichen (Anführungszeichen mit \-Maskierung werden übersprungen); danach alle
-// folgenden Trennzeichen weg
-function getword(s: string, at: number, stop: number): [string, number] {
-  const n = s.length;
+// Ein Parameter von Content-Disposition ab at, wie php_ap_getword(…, ';') und darin php_ap_getword(…, '='): Ende ist
+// das erste ';' außerhalb von Anführungszeichen (die mit \-Maskierung übersprungen werden) oder n. Dabei gemerkt:
+// das erste '=' außerhalb (Ende des Schlüssels, sonst das Ende) und ob überhaupt ein '=' darin steht (auch in
+// Anführungszeichen). Bis zum ersten '=' gehen beide Suchen von PHP denselben Weg, darum genügt ein Durchgang. Auf
+// Stellen statt auf Teiltexten: ein Kopf mit Millionen Parametern legt so keine Texte und Listen je Parameter an.
+let paramKeyEnd = 0;
+let paramHasEq = false;
+function paramEnd(s: string, at: number, n: number): number {
+  let keyEnd = -1;
+  let eq = false;
   let pos = at;
   while (pos < n) {
     const c = s.charCodeAt(pos);
-    if (c === stop) break;
-    if (c === 34 || c === 39) {
+    if (c === 59) break;
+    if (c === 61) {
+      eq = true;
+      if (keyEnd < 0) keyEnd = pos;
+      pos++;
+    } else if (c === 34 || c === 39) {
       pos++;
       while (pos < n) {
         const d = s.charCodeAt(pos);
         if (d === c) break;
-        pos += d === 92 && s.charCodeAt(pos + 1) === c ? 2 : 1;
+        if (d === 61) eq = true;
+        pos += d === 92 && pos + 1 < n && s.charCodeAt(pos + 1) === c ? 2 : 1;
       }
       if (pos < n) pos++;
     } else {
       pos++;
     }
   }
-  if (pos >= n) return [s.slice(at), n];
-  const word = s.slice(at, pos);
-  while (s.charCodeAt(pos) === stop) pos++;
-  return [word, pos];
+  const end = pos < n ? pos : n;
+  paramKeyEnd = keyEnd < 0 ? end : keyEnd;
+  paramHasEq = eq;
+  return end;
+}
+// Alle Trennzeichen stop ab pos überspringen (höchstens bis n)
+function skipStops(s: string, pos: number, n: number, stop: number): number {
+  while (pos < n && s.charCodeAt(pos) === stop) pos++;
+  return pos;
+}
+// Ist s[at, end) gleich name (name klein geschrieben), ohne Rücksicht auf Groß-/Kleinschreibung (ASCII)?
+function isWord(s: string, at: number, end: number, name: string): boolean {
+  if (end - at !== name.length) return false;
+  for (let i = 0; i < name.length; i++) {
+    let c = s.charCodeAt(at + i);
+    if (c >= 65 && c <= 90) c += 32;
+    if (c !== name.charCodeAt(i)) return false;
+  }
+  return true;
 }
 
 // php_ap_getword_conf() mit substring_conf(): Wert in Anführungszeichen (\\ und \" bzw. \' maskiert) oder bis zum
@@ -439,7 +513,7 @@ export interface PhpForm {
 export function phpMultipart(contentType: string, body: Buffer, uploadMax: number): PhpForm | null {
   const boundary = rfc1867Boundary(contentType);
   if (boundary === null) return null;
-  const mbuff = new MultipartBuffer(body.toString('latin1'), boundary);
+  const mbuff = new MultipartBuffer(body.toString('latin1'), body, boundary);
   const post: PhpArray = {};
   const filesVars: PhpArray = {};
   const uploads = new Map<string, Buffer>();
@@ -454,25 +528,27 @@ export function phpMultipart(contentType: string, body: Buffer, uploadMax: numbe
   const register = (target: PhpArray, name: string, value: string): void => setPhpVar(target, utf8(name), value);
 
   while (!mbuff.eof()) {
-    const headers = mbuff.headers();
-    if (headers === null) break;
-    const cd = headers.cd;
+    if (!mbuff.headers()) break;
+    const cd = mbuff.cd;
     if (cd === null) continue;
     if (--bodyParts < 0) break;
 
+    // Parameter durch ';' getrennt; nur die mit '=' zählen, davon name und filename (Schlüssel bis zum ersten '=')
     let param: string | null = null;
     let filename: string | null = null;
+    const n = cd.length;
     let at = 0;
     while (isSpace(cd.charCodeAt(at))) at++;
-    while (at < cd.length) {
-      const [pair, next] = getword(cd, at, 59);
-      at = next;
-      while (isSpace(cd.charCodeAt(at))) at++;
-      if (pair.includes('=')) {
-        const [key, rest] = getword(pair, 0, 61);
-        if (key.length === 4 && strtolower(key) === 'name') param = getwordConf(pair.slice(rest));
-        else if (key.length === 8 && strtolower(key) === 'filename') filename = getwordConf(pair.slice(rest));
+    while (at < n) {
+      const pairEnd = paramEnd(cd, at, n);
+      if (paramHasEq) {
+        const keyEnd = paramKeyEnd;
+        const rest = skipStops(cd, keyEnd, pairEnd, 61);
+        if (isWord(cd, at, keyEnd, 'name')) param = getwordConf(cd.slice(rest, pairEnd));
+        else if (isWord(cd, at, keyEnd, 'filename')) filename = getwordConf(cd.slice(rest, pairEnd));
       }
+      at = skipStops(cd, pairEnd, n, 59);
+      while (isSpace(cd.charCodeAt(at))) at++;
     }
 
     // Normales Formularfeld
@@ -518,7 +594,7 @@ export function phpMultipart(contentType: string, body: Buffer, uploadMax: numbe
     const isArray = open >= 0 && p.endsWith(']');
     const varName = (sub: string): string => (isArray ? `${p.slice(0, open)}[${sub}][${p.slice(open + 1, -1)}]` : `${p}[${sub}]`);
     // Bei jedem Fehler (auch 3 = nur teilweise angekommen) bleibt der Typ leer
-    const type = cancel ? '' : (headers.ct ?? '').split(';')[0];
+    const type = cancel ? '' : (mbuff.ct ?? '').split(';')[0];
     const token = `\0upload${uploads.size}`;
     uploads.set(token, cancel ? Buffer.alloc(0) : Buffer.from(content.join(''), 'latin1'));
     register(filesVars, varName('name'), utf8(basename(filename!)));
