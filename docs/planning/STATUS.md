@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 02:50 (UTC+1).
+Last update: 2026-11-02 03:05 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -40,7 +40,8 @@ Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests a
 | 28 | HC-1 | Yellow honeycomb icons | Built and reviewed |
 | 2 | DP-1 | Discord settings form and real errors (the webhook / channel ID loop of Q13) | Built and reviewed |
 | 4 | DP-4 | Own pages: changelog and roadmap | Built and reviewed |
-| 3, 5, 12 | CD-0, CD-1, CD-3 | Dialog contract, dialog and notice library, admin and sign-in confirmations | Being built |
+| 3, 5, 12 | CD-0, CD-1, CD-3 | Dialog contract, dialog and notice library, admin and sign-in confirmations | Built; review in progress |
+| 15, 23, 24 | CD-2, CD-4, CD-5b | Editor dialogs, guard and drafts; themed dialogs on profile pages; bell in the editor and admin header | Being built (no separate review) |
 | 8, 16 | HC-2, HC-3 | Ledger, entitlements, Premium status; catalogue, offers, purchases, refunds | Being built |
 | 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Being built |
 | 10, 18 | CS-2, CS-3 | Address registry with holds; code slots data model and routing | Being built |
@@ -50,7 +51,6 @@ Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests a
 
 Next, as soon as their dependencies are in:
 - Discord: DP-2b (admin UI for bot posting, after the dialog library).
-- Dialogs: CD-2 (editor), CD-4 (profile pages), CD-5b (bell in the editor and admin header).
 - Premium and domains: PD-1 (Premium flags, branding), PD-3 (domain worker), PD-1b, PD-4 (domain in the editor), PD-5,
   PD-6.
 - Shop: HC-4 (editor tab), HC-5, HC-6a, HC-8, then HC-7a/7b, HC-6b, HC-9.
