@@ -294,26 +294,17 @@ function runPhpCli(root: string, ca: string): Promise<{ code: number; stdout: st
 }
 
 // Der Befehl in diesem Prozess (dieselbe Funktion wie node dist/cli/weekly-report.js), Ausgabe aufgefangen
+// Ausgabe über eigene Empfänger (process.stdout zu ersetzen fing auch Nachrichten des Test-Runners ein)
 async function runNodeCli(cfg: ConfigData, mailDir: string | null): Promise<{ code: number; stdout: string; stderr: string }> {
   const out: string[] = [];
   const err: string[] = [];
-  const write = process.stdout.write.bind(process.stdout);
-  const error = console.error;
-  process.stdout.write = ((chunk: string | Uint8Array, cb?: unknown) => {
-    out.push(String(chunk));
-    if (typeof cb === 'function') (cb as () => void)();
-    return true;
-  }) as typeof process.stdout.write;
-  console.error = (...a: unknown[]) => err.push(a.map(String).join(' '));
   setReportMailerForTests(undefined);
   setMailDirForTests(mailDir);
   setConfigForTests(cfg);
   try {
-    const code = await weeklyReportCli();
+    const code = await weeklyReportCli({ out: async (text) => void out.push(text), err: (line) => void err.push(line) });
     return { code, stdout: out.join(''), stderr: err.join('\n') };
   } finally {
-    process.stdout.write = write;
-    console.error = error;
     setConfigForTests(CONFIG);
   }
 }

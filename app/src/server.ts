@@ -1,13 +1,13 @@
 // OnYourSite – Webserver (Node.js). Fastify nimmt die Anfragen an, alles Weitere passiert in dispatch() wie früher
 // in index.php. Formulare und Uploads werden wie von PHP gelesen ($_POST/$_FILES-Regeln).
 import Fastify from 'fastify';
-import Busboy from 'busboy';
 import { Readable } from 'node:stream';
-import { Ctx, isHalt, type UploadedFile } from './web/ctx.js';
+import { Ctx, isHalt } from './web/ctx.js';
+import { phpMultipart, rfc1867Boundary } from './web/multipart.js';
 import { DbUnavailableError } from './db.js';
 import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
-import { setPhpVar, parseStr, strtolower } from './php.js';
+import { parseStr, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
@@ -120,19 +120,9 @@ export function phpPostType(contentType: string): string {
 }
 
 // Grenze wie rfc1867.c: das erste "boundary" im ganzen Wert (sonst ohne Rücksicht auf Groß-/Kleinschreibung), ab dem
-// nächsten '=' der Wert in Anführungszeichen oder bis zum ersten ',' oder ';'. null = PHP liest nichts.
+// nächsten '=' der Wert in Anführungszeichen oder bis zum ersten ',' oder ';'. null = keine (oder eine leere) Grenze.
 export function phpBoundary(contentType: string): string | null {
-  let at = contentType.indexOf('boundary');
-  if (at < 0) at = strtolower(contentType).indexOf('boundary');
-  const eq = at < 0 ? -1 : contentType.indexOf('=', at);
-  if (eq < 0) return null;
-  const rest = contentType.slice(eq + 1);
-  if (rest.startsWith('"')) {
-    const end = rest.indexOf('"', 1);
-    return end < 0 ? null : rest.slice(1, end) || null;
-  }
-  const end = rest.search(/[,;]/);
-  return (end >= 0 ? rest.slice(0, end) : rest) || null;
+  return rfc1867Boundary(contentType) || null;
 }
 
 export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Promise<void> {
@@ -142,61 +132,12 @@ export async function readBody(ctx: Ctx, contentType: string, body: Buffer): Pro
     return;
   }
   if (type !== 'multipart/form-data') return;
-  const boundary = phpBoundary(contentType);
-  if (boundary === null) return;
-  await new Promise<void>((resolve) => {
-    let bb: Busboy.Busboy;
-    try {
-      // Busboy bekommt die Grenze, die PHP gefunden hat, in einer Form, die es sicher liest. preservePath: den Pfad im
-      // Dateinamen entfernt PHP selbst (unten) – busboy machte aus „.“ und „..“ einen leeren Namen
-      const header = `multipart/form-data; boundary="${boundary.replace(/["\\]/g, '\\$&')}"`;
-      bb = Busboy({ headers: { 'content-type': header }, defParamCharset: 'utf8', preservePath: true, limits: { fileSize: UPLOAD_MAX + 1 } });
-    } catch {
-      resolve();
-      return;
-    }
-    const files: Array<Promise<void>> = [];
-    bb.on('field', (name, value) => setPhpVar(ctx.post, name, value));
-    bb.on('file', (name, stream, info) => {
-      files.push(new Promise<void>((done) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        let tooBig = false;
-        // php_ap_basename(): alles nach dem letzten / oder \
-        const raw = info.filename ?? '';
-        const fileName = raw.slice(Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\')) + 1);
-        // Nur einfache Namen wie in den Formularen der Seite (avatar, file …). name[…] ist in PHP ein Array von
-        // Dateien ($_FILES['name']['error'] usw. sind Arrays) – die Datei bleibt erreichbar, multiple merkt es sich.
-        const store = (file: UploadedFile) => {
-          const open = name.indexOf('[');
-          if (open > 0) ctx.files[name.slice(0, open)] = { ...file, multiple: true };
-          else ctx.files[name] = file;
-        };
-        stream.on('data', (c: Buffer) => {
-          size += c.length;
-          if (size > UPLOAD_MAX) tooBig = true;
-          else chunks.push(c);
-        });
-        stream.on('end', () => {
-          store(raw === ''
-            ? { name: '', type: '', size: 0, data: Buffer.alloc(0), error: 4 }
-            : { name: fileName, type: info.mimeType, size: tooBig ? 0 : size, data: tooBig ? Buffer.alloc(0) : Buffer.concat(chunks), error: tooBig ? 1 : 0 });
-          done();
-        });
-        // Das Formular endet mitten in der Datei: wie PHP UPLOAD_ERR_PARTIAL (3) ohne Inhalt. Ohne diesen Empfänger
-        // beendete der Fehler den ganzen Server.
-        stream.on('error', () => {
-          store({ name: fileName, type: '', size: 0, data: Buffer.alloc(0), error: 3 });
-          done();
-        });
-        stream.on('close', () => done());
-      }));
-    });
-    const finish = () => void Promise.all(files).then(() => resolve());
-    bb.on('close', finish);
-    bb.on('error', finish);
-    bb.end(body);
-  });
+  // multipart liest PHP selbst (web/multipart.ts, wie rfc1867.c) – danach ist php://input leer
+  const form = phpMultipart(contentType, body, UPLOAD_MAX);
+  if (form === null) return;
+  ctx.rawBody = Buffer.alloc(0);
+  ctx.post = form.post;
+  ctx.files = form.files;
 }
 
 // Start: node dist/server.js (Port und Adresse aus den Einstellungen oder PORT/HOST)

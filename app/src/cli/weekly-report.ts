@@ -11,16 +11,25 @@ import { date } from '../php.js';
 import { DB_FAILED_TEXT, DB_FAILED_TITLE, setupErrorPage } from '../web/setupError.js';
 import { runWeeklyReports } from '../app/report.js';
 
-// Text auf stdout – erst weiter, wenn er geschrieben ist (stdout an eine Datei oder Pipe ist asynchron)
-const out = (text: string): Promise<void> => new Promise((resolve) => process.stdout.write(text, () => resolve()));
+// Ausgabe des Befehls: Text auf stdout (erst weiter, wenn er geschrieben ist – stdout an eine Datei oder Pipe ist
+// asynchron) und Meldungen auf stderr. Tests geben eigene Empfänger mit, statt process.stdout zu ersetzen (der
+// Test-Runner schreibt dort selbst).
+export interface CliOutput {
+  out(text: string): Promise<void>;
+  err(line: string): void;
+}
+const stdio: CliOutput = {
+  out: (text) => new Promise((resolve) => process.stdout.write(text, () => resolve())),
+  err: (line) => console.error(line),
+};
 
-export async function weeklyReportCli(): Promise<number> {
+export async function weeklyReportCli(io: CliOutput = stdio): Promise<number> {
   try {
     loadConfig();
   } catch (err) {
     // Ohne config.json startet auch der Server nicht (Meldung, Rückgabewert 1)
     if (err instanceof ConfigMissingError) {
-      console.error(err.message);
+      io.err(err.message);
       return 1;
     }
     throw err;
@@ -33,15 +42,15 @@ export async function weeklyReportCli(): Promise<number> {
       await ensureSchemaOnce();
     } catch (err) {
       if (!(err instanceof DbUnavailableError)) throw err;
-      console.error('DB connection failed: ' + err.message);
-      await out(setupErrorPage(DB_FAILED_TITLE, DB_FAILED_TEXT));
+      io.err('DB connection failed: ' + err.message);
+      await io.out(setupErrorPage(DB_FAILED_TITLE, DB_FAILED_TEXT));
       return 0;
     }
     const result = await runWeeklyReports();
-    await out(date('Y-m-d H:i') + ' – Weekly reports sent: ' + result.sent + ', failed: ' + result.failed + '\n');
+    await io.out(date('Y-m-d H:i') + ' – Weekly reports sent: ' + result.sent + ', failed: ' + result.failed + '\n');
     return 0;
   } catch (err) {
-    console.error('Weekly report failed:', err);
+    io.err('Weekly report failed: ' + (err instanceof Error ? (err.stack ?? err.message) : String(err)));
     return 255;
   } finally {
     await closePool().catch(() => undefined);
