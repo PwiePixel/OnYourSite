@@ -8,7 +8,8 @@ import { date, intval, numberFormat, phpFloatToString, phpStr, phpTruthy, strtol
 import { e, html, join, raw, type SafeHtml } from '../html.js';
 import { baseAuthority } from '../helpers.js';
 import { csrfField } from '../web/security.js';
-import { hcSettings } from '../honeycombs/honeycombs.js';
+import { unlockHolders } from '../honeycombs/entitlements.js';
+import { listPrice } from '../honeycombs/catalogue.js';
 import { codeUrl } from './sites.js';
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 
@@ -40,7 +41,7 @@ const address = (cs: Row): string => slugOf(cs) + '.' + baseAuthority();
 
 // allUsers: alle Konten aus admin/page.ts (id, full_name, email, username, …; neueste zuerst)
 export async function adminCodePagesView(ctx: Ctx, allUsers: Row[]): Promise<string> {
-  const price = (await hcSettings()).code_page;
+  const price = await listPrice('code_page');
   // Dateien und Größe wie bisher aus den Dateien selbst gezählt (gleichnamig nach s.*, also maßgeblich); dazu der
   // Seitenplatz, der eine Code-Seite ohne eigene Adresse zeigt
   const codeSites = await q(`SELECT s.*, u.full_name, u.email,
@@ -49,11 +50,9 @@ export async function adminCodePagesView(ctx: Ctx, allUsers: Row[]): Promise<str
         p.id AS slot_id, p.slug AS slot_slug
     FROM code_sites s JOIN users u ON u.id = s.user_id LEFT JOIN pages p ON p.code_site_id = s.id AND p.user_id = s.user_id
     ORDER BY s.updated_at DESC`);
-  // Freischaltung je Konto: der Betrag der Buchung (0 = vom Team geschenkt, sonst bezahlt)
-  const unlocks = new Map<number, number>();
-  for (const r of await q("SELECT user_id, amount FROM honeycomb_ledger WHERE reason = 'unlock' AND ref = 'code_page'")) {
-    unlocks.set(intval(r.user_id), intval(r.amount));
-  }
+  // Freischaltung je Konto (wer die Berechtigung gerade hat): der Betrag der letzten Buchung (0 = vom Team geschenkt,
+  // sonst bezahlt). Eine erstattete Freischaltung zählt nicht mehr, auch wenn ihre Buchung bleibt.
+  const unlocks = await unlockHolders('code_page');
   const sitesOf = new Map<number, Row[]>();
   for (const cs of codeSites) {
     const list = sitesOf.get(intval(cs.user_id));

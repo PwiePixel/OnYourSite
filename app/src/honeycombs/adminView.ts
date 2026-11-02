@@ -9,6 +9,7 @@ import { e } from '../html.js';
 import { randomHex } from '../crypto.js';
 import { csrfField } from '../web/security.js';
 import { HC_MAX_VIEW_REWARDS, hcDescribe, hcSettings, type HcSettings } from './honeycombs.js';
+import { listPrice } from './catalogue.js';
 
 const IN = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
 const LBL = 'block text-sm font-medium text-gray-300 mb-1.5';
@@ -25,7 +26,8 @@ function stamp(v: unknown): number {
 
 // allUsers: $all_users aus views/admin.php (id, full_name, email, username, discord_id, is_admin, created_at; neueste zuerst)
 export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<string> {
-  const rules: HcSettings = await hcSettings();
+  // Der Preis der Code-Seite kommt aus dem Katalog (das Feld bleibt hier, bis Admin → Katalog & Preise ihn übernimmt)
+  const rules: HcSettings = { ...(await hcSettings()), code_page: await listPrice('code_page') };
   const balances = new Map<number, Row>();
   for (const row of await q('SELECT user_id, SUM(amount) AS balance, SUM(GREATEST(amount, 0)) AS earned, SUM(GREATEST(-amount, 0)) AS spent FROM honeycomb_ledger GROUP BY user_id')) {
     balances.set(intval(row.user_id), row);

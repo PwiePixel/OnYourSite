@@ -3,7 +3,7 @@
 // Schreibvorgänge sind unverändert übernommen.
 import { date, field, intval, phpStr, type PhpArray } from '../php.js';
 import { cleanText } from '../helpers.js';
-import { hcAdd, type AdminResult } from '../honeycombs/honeycombs.js';
+import { HcBusyError, hcAdd, type AdminResult } from '../honeycombs/honeycombs.js';
 import { phpInt, poolDb } from '../honeycombs/util.js';
 import { codeAddress, codeSiteById, slotOfSite } from './sites.js';
 
@@ -33,9 +33,15 @@ export async function adminCodeHandle(post: PhpArray): Promise<AdminResult> {
       if (!user) return { error: 'Please choose a user.' };
       if (!CODE_UNLOCK_ITEMS.includes(field(post, 'item', 'code_page'))) return { error: 'Please choose what to unlock.' };
       const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
-      if (!(await hcAdd(intval(user.id), 0, 'unlock', 'code_page', 'Unlocked by the team'))) {
-        return { ok: name + ' had already unlocked the code page.' };
+      // Buchung und Berechtigung unter der Kontosperre (hcAdd → grantUnlock)
+      let booked: boolean;
+      try {
+        booked = await hcAdd(intval(user.id), 0, 'unlock', 'code_page', 'Unlocked by the team');
+      } catch (err) {
+        if (err instanceof HcBusyError) return { error: err.message };
+        throw err;
       }
+      if (!booked) return { ok: name + ' had already unlocked the code page.' };
       return { ok: 'Code page unlocked for ' + name + '.' };
     }
   }

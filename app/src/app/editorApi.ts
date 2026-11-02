@@ -18,7 +18,8 @@ import { stats } from '../content/stats.js';
 import { layoutKey, themeKey } from '../content/themes.js';
 import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, uploadKinds, userUploadFiles } from '../content/uploads.js';
 import { entries, isArr, jsonDecode, own, values, type PhpArr } from '../content/util.js';
-import { hcForEditor, hcSettings, hcSpend } from '../honeycombs/honeycombs.js';
+import { hcForEditor } from '../honeycombs/honeycombs.js';
+import { REQUEST_ID, adminMode, buy } from '../honeycombs/shop.js';
 import { phpFloatString } from '../community/json.js';
 import {
   CODE_MAX_FILES, codeChangeAddress, codeCreate, codeDeleteRows, codeEditorState, codeFileCount, codeSave, codeSite, codeSiteById, codeSiteOfUser, codeUnlocked,
@@ -409,17 +410,35 @@ async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boolean, inp
 
   if (action === 'code') ctx.json(await state());
   if (!isPost) ctx.json({ ok: false, error: 'Not found.' }, 404);
+  // Freischalten über den Shop (Vertrag der Kauf-Routen): Anfrage-ID aus dem Dialog und der Preis, den er zeigte.
+  // Die Regeln akzeptiert der Kauf selbst (in seiner Transaktion) – im Admin-Modus wird also nichts geschrieben.
+  if (action === 'code-unlock') {
+    const requestId = inp('request_id');
+    const expected = inp('expected_price');
+    const missing = (v: unknown): boolean => v === undefined || v === null || v === '';
+    if (missing(requestId) || missing(expected)) {
+      ctx.json({ ok: false, error: 'OnYourSite was updated – please reload the editor.', reload: true }, 409);
+    }
+    const price = typeof expected === 'number' ? expected : typeof expected === 'string' && /^[0-9]{1,7}$/.test(expected) ? Number(expected) : -1;
+    if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId) || !Number.isSafeInteger(price) || price < 0) {
+      ctx.json({ ok: false, error: 'Not all of the data arrived. Please try again.' }, 400);
+    }
+    if (adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Buying is turned off in admin mode.' }, 403);
+    if (!(await rateLimit('hcbuy:' + userId, 20, 600))) {
+      ctx.json({ ok: false, error: 'Too many purchases in a short time – please wait a moment.' });
+    }
+    const r = await buy(ctx, userId, 'code_page', requestId as string, price, { via: 'code', terms: phpTruthy(inp('terms')) });
+    // Schon freigeschaltet: Erfolg ohne Abbuchung (wie bisher)
+    if (r.ok) ctx.json({ ...(await state()), notices: r.notices });
+    if (r.code === 'owned') ctx.json(await state());
+    ctx.json(r.price === undefined ? { ok: false, code: r.code, error: r.error } : { ok: false, code: r.code, price: r.price, error: r.error }, r.status);
+  }
   // Wer die Regeln noch nicht akzeptiert hat, muss es jetzt tun
-  if ((action === 'code-unlock' || action === 'code-create') && !termsAccepted) {
+  if (action === 'code-create' && !termsAccepted) {
     if (!phpTruthy(inp('terms'))) {
       ctx.json({ ok: false, error: 'Please read and accept the rules for code pages first.' });
     }
     await exec('UPDATE users SET code_terms_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), userId]);
-  }
-  if (action === 'code-unlock') {
-    const error = await hcSpend(userId, (await hcSettings()).code_page, 'code_page');
-    if (phpTruthy(error)) ctx.json({ ok: false, error });
-    ctx.json(await state());
   }
   if (!(await codeUnlocked(userId))) {
     ctx.json({ ok: false, error: 'Unlock code pages with honeycombs first.' }, 403);

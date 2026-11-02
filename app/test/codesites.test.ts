@@ -161,7 +161,7 @@ test('lookups, editor data and used uploads', async () => {
     ['code_files', 1], ['code_files', 2], ['code_files', 999], ['code_for_editor', 1], ['code_for_editor', 2], ['code_used_uploads', 5], ['code_used_uploads', 6],
     ['code_used_uploads', 999], ['preview_token', 1, 1700000000],
     ['code_state', 5], ['code_state', 6], ['code_state', 9], ['code_state', 999], ['sql', "UPDATE users SET code_terms_at = '2026-10-10 10:00:00' WHERE id = 5"],
-    ['sql', "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', '{\"code_page\":\"250\"}')"], ['code_state', 5],
+    ['set_code_price', 250], ['code_state', 5],
     ['sql', "DELETE FROM oys_meta WHERE meta_key = 'honeycombs'"]], 'lookups');
 });
 

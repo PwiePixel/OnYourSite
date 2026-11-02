@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import { ROOT_DIR } from '../src/config.js';
-import { sha256Hex } from '../src/crypto.js';
 import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
@@ -20,8 +19,6 @@ import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, r
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 
 const DB = { php: testDbName('hcu_hc_php'), node: testDbName('hcu_hc_node') };
-// Nutzernummern für die Sperr-Prüfung: aus dem Namen der Datenbank (900000–999998), je Arbeitsordner verschieden
-const lockUser = 900000 + (parseInt(sha256Hex(DB.node).slice(0, 8), 16) % 49999) * 2;
 let admin: Connection;
 
 function fixture(): Array<[string, unknown[]]> {
@@ -230,42 +227,36 @@ test('admin handler: every action incl. invalid input', async () => {
   const php = await same(ops, 'admin');
   assert.deepEqual(php[0], null);
   assert.deepEqual(php[5], { ok: 'Honeycomb settings saved.' });
+  // Nur Node: jede Gutschrift des Teams nennt den Admin (actor_id = die ID aus dem Bezug a<id>-…)
+  const [grants] = await admin.query<RowDataPacket[]>(`SELECT ref, actor_id FROM \`${DB.node}\`.honeycomb_ledger WHERE reason = 'admin' AND id > 4 ORDER BY id`);
+  assert.ok(grants.length >= 5);
+  for (const g of grants) assert.equal(g.actor_id, Number(/^a(\d+)-/.exec(String(g.ref))?.[1]), String(g.ref));
 });
 
-test('locked: busy message after 10 s, and parallel spends never overdraw', async () => {
-  // Die Sperren (oys_hc_<Nutzer>) gelten für den ganzen Datenbankserver: Nutzernummern je Arbeitsordner, damit
-  // gleichzeitige Läufe in anderen Arbeitsordnern nicht dieselbe Sperre halten
-  const busy = lockUser;
-  const buyer = lockUser + 1;
-  // Fremde Sperre halten: PHP und Node warten je 10 Sekunden und melden dann, dass es gerade nicht geht
+test('locked: busy message while the account is locked, and parallel spends never overdraw (Node only)', async () => {
+  // PHP wartete auf GET_LOCK('oys_hc_<id>', 10). Node sperrt seit dem Shop-Kern die Zeile des Kontos in hc_accounts
+  // (höchstens 5 Sekunden) – eine zweite Sperrart gibt es nicht mehr, deshalb ohne Vergleich mit PHP.
+  await useDb(DB.node);
   const holder = await adminConnection();
   try {
-    await holder.query('SELECT GET_LOCK(?, 30)', ['oys_hc_' + busy]);
-    const php = new Promise<string>((resolve, reject) => {
-      const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_hc_spend($pdo, ${busy}, 0, 'busy'), JSON_UNESCAPED_UNICODE);`],
-        { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out))));
-      child.stdin?.end();
-    });
-    await useDb(DB.node);
-    const node = hcSpend(busy, 0, 'busy');
-    const [a, b] = await Promise.all([php, node]);
-    assert.equal(a, HC_BUSY);
-    assert.equal(b, HC_BUSY);
+    await holder.query(`USE \`${DB.node}\``);
+    await holder.query('INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) VALUES (99999, NOW(), NOW())');
+    await holder.query('START TRANSACTION');
+    await holder.query('SELECT * FROM hc_accounts WHERE user_id = 99999 FOR UPDATE');
+    assert.equal(await hcSpend(99999, 0, 'busy_test'), HC_BUSY);
+    assert.equal(await hcLocked(99999, async () => 'ran'), HC_BUSY);
+    await holder.query('ROLLBACK');
   } finally {
-    await holder.query('SELECT RELEASE_LOCK(?)', ['oys_hc_' + busy]);
     await holder.end();
   }
-  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt, die Sperre ist danach frei
-  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (?, 100, 'admin', 'p', '', NOW())`, [buyer]);
-  const results = await Promise.all([hcSpend(buyer, 60, 'x'), hcSpend(buyer, 60, 'y'), hcSpend(buyer, 60, 'z')]);
+  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt
+  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (99998, 100, 'admin', 'p', '', NOW())`);
+  const results = await Promise.all([hcSpend(99998, 60, 'xx'), hcSpend(99998, 60, 'yy'), hcSpend(99998, 60, 'zz')]);
   assert.equal(results.filter((r) => r === null).length, 1);
   assert.deepEqual(results.filter((r) => r !== null), ['You need 60 honeycombs – you have 40.', 'You need 60 honeycombs – you have 40.']);
-  const [free] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
-  assert.equal(Number(free[0].f), 1);
-  // Fehler in fn: Sperre wird trotzdem gelöst
-  await assert.rejects(hcLocked(buyer, async () => { throw new Error('boom'); }));
-  const [free2] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
-  assert.equal(Number(free2[0].f), 1);
+  // Fehler in fn: zurückgerollt, die Sperre ist danach frei
+  await assert.rejects(hcLocked(99998, async () => { throw new Error('boom'); }));
+  assert.equal(await hcLocked(99998, async () => 'free'), 'free');
   await restoreDb();
 });
 
@@ -350,6 +341,15 @@ const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text
   .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
 
 test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', async () => {
+  // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
+  // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
+  // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
+  // zufälligen Bezüge der Gutschriften nicht).
+  const [phpTimes] = await admin.query<RowDataPacket[]>(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS t FROM \`${DB.php}\`.honeycomb_ledger ORDER BY id`);
+  const [nodeRows] = await admin.query<RowDataPacket[]>(`SELECT id FROM \`${DB.node}\`.honeycomb_ledger ORDER BY id`);
+  for (const [i, r] of nodeRows.entries()) {
+    if (phpTimes[i]) await admin.query(`UPDATE \`${DB.node}\`.honeycomb_ledger SET created_at = ? WHERE id = ?`, [phpTimes[i].t, r.id]);
+  }
   // Die Code-Seiten stehen nach updated_at DESC (ohne zweites Sortierfeld, wie in PHP). Die Admin-Aktionen oben setzen
   // drei Seiten in derselben Sekunde auf „jetzt“ – bei Gleichstand wählt MariaDB die Reihenfolge selbst, in beiden
   // Datenbanken womöglich verschieden. Darum vorher eindeutige Zeiten (gleicher Tag, angezeigt wird nur das Datum).

@@ -2274,11 +2274,24 @@
     '</div>';
   }
 
+  // Kennung eines Kaufs (32 hex), erzeugt beim Öffnen des Dialogs: Doppelklick oder erneutes Senden bucht nur einmal
+  function purchaseId() {
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    return Array.prototype.map.call(b, function (x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+  }
+
   function openUnlockModal() {
-    var st = code.st;
+    var st = code.st, rid = purchaseId(), price = st.cost;
+    // Was nach dem Kauf übrig bleibt – oder wie viele fehlen, falls der Preis im offenen Dialog über den Kontostand steigt
+    function leftHtml() {
+      return 'You unlock it once and keep it for good. ' + (st.balance >= price
+        ? 'Afterwards you have <span id="codeAfter">' + fmtNum(st.balance - price) + '</span> honeycombs left.'
+        : 'You need ' + fmtNum(price - st.balance) + ' more honeycombs.');
+    }
     openModal('Unlock your code page',
-      '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.cost) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
-      '<p class="text-sm text-gray-400 mb-4">You unlock it once and keep it for good. Afterwards you have ' + fmtNum(st.balance - st.cost) + ' honeycombs left.</p>' +
+      '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b id="codePrice">' + fmtNum(price) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
+      '<p class="text-sm text-gray-400 mb-4" id="codeLeft">' + leftHtml() + '</p>' +
       (st.terms ? '' : codeTermsHtml()) +
       '<p class="text-sm text-red-400 mt-3 hidden" id="codeErr"></p>',
       '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="codeUnlockGo"><i class="bx bx-lock-open-alt"></i> Unlock</button>',
@@ -2287,14 +2300,27 @@
           var btn = this, terms = $('#codeTerms', box);
           if (terms && !terms.checked) { codeErr(box, 'Please accept the rules for code pages first.'); return; }
           btn.disabled = true;
-          api('code-unlock', { terms: true }).then(function (res) {
+          api('code-unlock', { terms: true, request_id: rid, expected_price: price }).then(function (res) {
             btn.disabled = false;
+            // Neuer Preis (Angebot begonnen oder vorbei, Preis geändert): Dialog bleibt offen, gleiche Kennung, neuer Preis
+            if (res && res.code === 'price_changed' && typeof res.price === 'number') {
+              price = res.price;
+              $('#codePrice', box).textContent = fmtNum(price);
+              $('#codeLeft', box).innerHTML = leftHtml();
+              // Jetzt zu teuer: kein Kauf aus diesem Dialog (wie der Knopf im Code-Tab, „… more honeycombs needed“)
+              btn.disabled = st.balance < price;
+              codeErr(box, res.error);
+              apiGet('code').then(function (fresh) { if (fresh && fresh.ok) { setCodeState(fresh); renderCode(); } });
+              return;
+            }
             if (!res || !res.ok) { codeErr(box, (res && res.error) || 'That didn’t work.'); return; }
             closeModal();
             setCodeState(res);
             setBalance(res.balance, true);
             renderCode();
-            toast('Code page unlocked – ' + fmtNum(st.cost) + ' honeycombs spent.', 'hc');
+            // Abgebucht wurde, was der Hinweis des Servers sagt (schon freigeschaltet oder kostenlos: nichts)
+            var spent = res.notices && res.notices[0] && res.notices[0].amount < 0 ? -res.notices[0].amount : 0;
+            toast(spent ? 'Code page unlocked – ' + fmtNum(spent) + ' honeycombs spent.' : 'Code page unlocked.', 'hc');
           });
         });
       });

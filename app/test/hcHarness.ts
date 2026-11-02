@@ -11,6 +11,9 @@ import { strtotime, time, type PhpArray } from '../src/php.js';
 import * as hc from '../src/honeycombs/honeycombs.js';
 import * as code from '../src/code/sites.js';
 import { adminCodeHandle, legacyCodePost } from '../src/code/admin.js';
+import { hcDeleteUser } from '../src/honeycombs/deletion.js';
+import { poolDb } from '../src/honeycombs/util.js';
+import { ensureCatalogue } from '../src/honeycombs/catalogue.js';
 
 export const BASE = loadConfig();
 export const started = time();
@@ -82,6 +85,8 @@ const PHP_OPS = `${PHP_BOOT}
         case 'code_admin': $p = $a[0]; if (isset($p['code_action'])) { $p['hc_action'] = is_string($p['code_action']) ? 'code_' . $p['code_action'] : $p['code_action']; unset($p['code_action']); }
           $r = oys_admin_hc_handle($pdo, $p, $a[1]); break;
         case 'sql': $pdo->exec($a[0]); $r = true; break;
+        // Preis der Code-Seite: PHP las ihn aus den Einstellungen, Node aus dem Katalog (hc_items)
+        case 'set_code_price': $pdo->prepare("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)")->execute([json_encode(['code_page' => $a[0]])]); $r = true; break;
         case 'code_site': $r = oys_code_site($pdo, $a[0]); break;
         case 'code_site_by_id': $r = oys_code_site_by_id($pdo, $a[0]); break;
         case 'code_site_by_slug': $r = oys_code_site_by_slug($pdo, $a[0]); break;
@@ -158,6 +163,12 @@ export async function nodeRun(db: string, ops: Op[]): Promise<unknown[]> {
           }
           case 'code_admin': r = await adminCodeHandle(a[0] as PhpArray); break;
           case 'sql': await exec(a[0] as string); r = true; break;
+          case 'set_code_price':
+            await exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [JSON.stringify({ code_page: a[0] })]);
+            await ensureCatalogue();
+            await exec("UPDATE hc_items SET price = ? WHERE item_key = 'code_page'", [a[0] as number]);
+            r = true;
+            break;
           case 'code_site': r = await code.codeSite(a[0] as number); break;
           case 'code_site_by_id': r = await code.codeSiteById(a[0] as number); break;
           case 'code_site_by_slug': r = await code.codeSiteBySlug(a[0] as string); break;
@@ -169,7 +180,8 @@ export async function nodeRun(db: string, ops: Op[]): Promise<unknown[]> {
           case 'code_create': r = await code.codeCreate(a[0] as number, a[1] as string, a[2] as string); break;
           case 'code_save': r = await code.codeSave(await siteOf(a[0]), arr(a[1]), a[2] as unknown[]); break;
           case 'code_write': r = await code.codeWrite(await siteOf(a[0]), arr(a[1]), a[2] as unknown[]); break;
-          case 'code_delete_user': await code.codeDeleteUser(a[0] as number); r = null; break;
+          // oys_code_delete_user() löschte auch die Buchungen; in Node sind das zwei Haken des Kontolöschens (code, honeycombs)
+          case 'code_delete_user': await code.codeDeleteUser(a[0] as number); await hcDeleteUser(a[0] as number, poolDb); r = null; break;
           case 'code_used_uploads': r = [...(await code.codeUsedUploads(a[0] as number))]; break;
           case 'preview_token': r = code.codePreviewToken(await siteOf(a[0]), a[1] as number); break;
           case 'preview_valid': r = code.codePreviewValid(await siteOf(a[0]), a[1] as string); break;
@@ -217,11 +229,18 @@ export async function dump(admin: Connection, db: string, knownRefs: string[] = 
   const out: Record<string, unknown> = {};
   for (const t of TABLES) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${db}\`.\`${t}\` ORDER BY 1`);
-    // Die Zähler der Code-Seiten (Dateien, Größe) führt nur Node – PHP kennt sie nicht; geprüft in codeCounters()
-    out[t] = normalize(rows.map((r) => (t === 'code_sites' ? omit({ ...r }, ['file_count', 'bytes']) : { ...r })), knownRefs);
+    // Die Zähler der Code-Seiten (Dateien, Größe) führt nur Node – PHP kennt sie nicht; geprüft in codeCounters().
+    // Buchungen seit dem Shop-Kern: actor_id (wer gebucht hat) schreibt nur Node – PHP kennt die Spalte nicht; geprüft
+    // wird sie in honeycombs.test.ts und hc-core.db.test.ts. Eine schon vorhandene Freischaltung bucht Node gar nicht
+    // erst (PHP verbraucht dabei mit INSERT IGNORE eine Nummer) – verglichen werden Inhalt und Reihenfolge, nicht die IDs.
+    out[t] = normalize(rows.map((r) => {
+      if (t === 'code_sites') return omit({ ...r }, ['file_count', 'bytes']);
+      if (t === 'honeycomb_ledger') return omit({ ...r }, ['actor_id', 'id']);
+      return { ...r };
+    }), knownRefs);
   }
   // Nächste freie IDs (INSERT IGNORE und ON DUPLICATE KEY verbrauchen Nummern)
-  const [ai] = await admin.query<RowDataPacket[]>(`SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('honeycomb_ledger', 'code_sites', 'code_files') ORDER BY 1`, [db]);
+  const [ai] = await admin.query<RowDataPacket[]>(`SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('code_sites', 'code_files') ORDER BY 1`, [db]);
   out.auto_increment = ai.map((r) => ({ ...r }));
   return out;
 }

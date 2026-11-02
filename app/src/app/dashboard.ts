@@ -11,6 +11,7 @@ import { DEFAULT_THEME, fontChoices, layouts, themes } from '../content/themes.j
 import { brands, bxIcons } from '../content/social.js';
 import { uploadLimitMb } from '../content/uploads.js';
 import { hcEarn, hcForEditor } from '../honeycombs/honeycombs.js';
+import { premiumState } from '../honeycombs/premium.js';
 import { currentPage, flash, hasPremium } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
@@ -66,6 +67,8 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const honeycombs = await hcForEditor(userId, isImpersonating ? [] : await hcEarn(userId));
   // Seitenplätze: max_pages, unbegrenzt nur für das Team (code/slots.ts)
   const allowance = await pageAllowance(ctx, user);
+  // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)
+  const premiumNow = await premiumState(userId);
 
   // views/dashboard.php: Daten für static/js/editor.js (Reihenfolge der Schlüssel wie in PHP)
   let slugDaysLeft = 0;
@@ -87,6 +90,8 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     maxPages: allowance.max,
     premium,
     pagesUnlimited: allowance.unlimited,
+    premiumUntil: premiumNow.until,
+    premiumForever: premiumNow.forever,
     themes: themes(),
     defaultTheme: DEFAULT_THEME,
     layouts: layouts(),

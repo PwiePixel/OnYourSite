@@ -57,9 +57,15 @@ async function startServer() {
 
 // Code-Seiten und Buchungen der Testkonten entfernen (vor dem Test und danach) und alle Buchungen seit dem Start
 let ledgerStart = 0;
-const clean = () => sql(`DELETE FROM code_files WHERE site_id IN (SELECT id FROM code_sites WHERE user_id IN (5, 6, 7));
+const clean = () => {
+  sql(`DELETE FROM code_files WHERE site_id IN (SELECT id FROM code_sites WHERE user_id IN (5, 6, 7));
     DELETE FROM code_sites WHERE user_id IN (5, 6, 7);
     DELETE FROM honeycomb_ledger WHERE user_id IN (5, 6, 7) OR id > ${ledgerStart};`);
+  // Berechtigungen des Shops (die Tabellen legt erst der Server beim ersten Start an)
+  if (sql("SHOW TABLES LIKE 'hc\\_entitlements'") !== '') {
+    sql('DELETE FROM hc_entitlements WHERE user_id IN (5, 6, 7); DELETE FROM hc_accounts WHERE user_id IN (5, 6, 7);');
+  }
+};
 
 function seed() {
   ledgerStart = Number(sql('SELECT COALESCE(MAX(id), 0) FROM honeycomb_ledger'));

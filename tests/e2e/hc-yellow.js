@@ -74,8 +74,14 @@ async function login(browser, email, width = 1400) {
 
 // Lea ohne Buchungen und ohne Code-Seite; dazu alle Buchungen seit dem Start
 let ledgerStart = 0;
-const clean = () => sql(`DELETE FROM code_files WHERE site_id IN (SELECT id FROM code_sites WHERE user_id = 7);
+const clean = () => {
+  sql(`DELETE FROM code_files WHERE site_id IN (SELECT id FROM code_sites WHERE user_id = 7);
     DELETE FROM code_sites WHERE user_id = 7; DELETE FROM honeycomb_ledger WHERE user_id = 7 OR id > ${ledgerStart};`);
+  // Berechtigungen des Shops (die Tabellen legt erst der Server beim ersten Start an)
+  if (sql("SHOW TABLES LIKE 'hc\\_entitlements'") !== '') {
+    sql('DELETE FROM hc_entitlements WHERE user_id = 7; DELETE FROM hc_accounts WHERE user_id = 7;');
+  }
+};
 
 (async () => {
   // Ohne Buchungen gibt es beim ersten Öffnen des Editors die Tagesbelohnung (gelber Hinweis)

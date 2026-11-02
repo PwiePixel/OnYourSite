@@ -29,6 +29,8 @@ export const V_CUSTOM_DOMAINS = 7; // Eigene Domains (Premium): Domains, Verlauf
 export const V_SITE_ADDRESSES = 8; // Adressen aller Seiten in einer Tabelle, freigegebene bleiben reserviert
 export const V_CODE_SLOTS = 9; // Code-Seiten auch auf Seitenadressen (Plätze), Zähler, Moderation
 export const V_STATUS_TABLES = 10; // Statusseiten: Tabellen, eigene Seite von OnYourSite
+export const V_SHOP_CORE = 11; // Honigwaben: Konten, Berechtigungen, Premium-Status, Admin-Protokoll
+export const V_SHOP_CATALOGUE = 12; // Honigwaben: Katalog mit Preisen, Angebote, Käufe
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -63,6 +65,8 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SITE_ADDRESSES, name: 'siteAddresses', run: siteAddresses },
   { version: V_CODE_SLOTS, name: 'codeSlots', run: codeSlots },
   { version: V_STATUS_TABLES, name: 'statusTables', run: statusTables },
+  { version: V_SHOP_CORE, name: 'shopCore', run: shopCore },
+  { version: V_SHOP_CATALOGUE, name: 'shopCatalogue', run: shopCatalogue },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1007,6 +1011,155 @@ async function seedSystemStatusRows(conn: PoolConnection): Promise<void> {
     await run(conn, "INSERT IGNORE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at) VALUES ('status', 'status', ?, NULL, ?)", [page.insertId, stamp]);
   }
   await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('status_rev', '1')");
+}
+
+// V_SHOP_CORE (braucht die Tabellen aus V_PAGES und V_CODE_PAGES): Kern des Honigwaben-Shops. Das Buch bleibt die
+// einzige Quelle für Kontostände; dazu kommen je Konto eine Sperrzeile, die Berechtigungen (was ein Konto besitzt),
+// users.premium_until und das Protokoll der Admin-Aktionen. Bisherige Freischaltungen werden zu Berechtigungen.
+async function shopCore(conn: PoolConnection): Promise<void> {
+  // Wer eine Buchung ausgelöst hat (Admin-ID); NULL = Nutzer oder System
+  await addColumn(conn, 'honeycomb_ledger', 'actor_id', 'INT NULL');
+  await addIndex(conn, 'honeycomb_ledger', 'idx_reason_time', 'KEY idx_reason_time (reason, created_at)');
+  await addIndex(conn, 'honeycomb_ledger', 'idx_time', 'KEY idx_time (created_at)');
+  // Premium-Status für SQL-Verknüpfungen anderer Bereiche: NULL = keins, Datum = bis dahin,
+  // '9999-12-31 23:59:59' = dauerhaft (nie NULL für „dauerhaft“)
+  await addColumn(conn, 'users', 'premium_until', 'DATETIME NULL');
+  await addIndex(conn, 'users', 'idx_premium_until', 'KEY idx_premium_until (premium_until)');
+
+  // Eine Zeile je Konto: Sperrzeile für Buchungen, Sperre durch das Team, ausstehender Abgleich
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_accounts (
+        user_id INT NOT NULL PRIMARY KEY,
+        frozen_at DATETIME NULL,
+        frozen_reason VARCHAR(200) NULL,
+        reconcile_at DATETIME NULL,
+        reconcile_gen INT UNSIGNED NOT NULL DEFAULT 0,
+        reconcile_tries SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        reconcile_error VARCHAR(200) NOT NULL DEFAULT '',
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_reconcile (reconcile_at)
+    ) ${OPTS}`);
+  // Was ein Konto besitzt: je Funktion eine Zeile, bei stapelbaren Zeitpaketen eine je Paket (lot)
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_entitlements (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        lot TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        quantity INT UNSIGNED NOT NULL DEFAULT 1,
+        permanent TINYINT(1) NOT NULL DEFAULT 0,
+        expires_at DATETIME NULL,
+        source VARCHAR(10) NOT NULL DEFAULT 'purchase',
+        reminded TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        expiry_done_at DATETIME NULL,
+        note VARCHAR(200) NOT NULL DEFAULT '',
+        granted_by INT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_feature (user_id, feature, lot),
+        KEY idx_expiry (expires_at)
+    ) ${OPTS}`);
+  // Jede Admin-Aktion rund um Honigwaben – details nur mit IDs, Beträgen und Schlüsseln, nie Namen oder Notizen
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_audit (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        admin_id INT NOT NULL,
+        action VARCHAR(30) NOT NULL,
+        user_id INT NULL,
+        target VARCHAR(80) NOT NULL DEFAULT '',
+        details TEXT NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_time (created_at),
+        KEY idx_user (user_id, id)
+    ) ${OPTS}`);
+
+  const now = date('Y-m-d H:i:s');
+  await run(conn, 'INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) SELECT id, ?, ? FROM users', [now, now]);
+  // Alle bisherigen Freischaltungen (unlock/<Funktion>) werden dauerhafte Berechtigungen – Schlüssel genau in
+  // Kleinbuchstaben (BINARY: REGEXP folgt sonst der Sortierung und ignoriert Groß/klein)
+  await run(conn, `INSERT IGNORE INTO hc_entitlements (user_id, feature, lot, quantity, permanent, expires_at, source, note, created_at, updated_at)
+        SELECT l.user_id, l.ref, 0, 1, 1, NULL, IF(l.amount = 0, 'admin', 'legacy'), '', l.created_at, l.created_at
+        FROM honeycomb_ledger l WHERE l.reason = 'unlock' AND CAST(l.ref AS BINARY) REGEXP '^[a-z][a-z0-9_]{1,39}$'`);
+  // Sicherheitsnetz: wer schon eine Code-Seite hat, behält sie
+  await run(conn, `INSERT IGNORE INTO hc_entitlements (user_id, feature, lot, quantity, permanent, expires_at, source, note, created_at, updated_at)
+        SELECT s.user_id, 'code_page', 0, 1, 1, NULL, 'legacy', '', COALESCE(s.created_at, ?), ? FROM code_sites s`, [now, now]);
+  // Admin-Gutschriften: den Admin aus dem Bezug a<id>-<16 hex> übernehmen
+  await run(conn, `UPDATE honeycomb_ledger SET actor_id = CAST(SUBSTRING_INDEX(SUBSTRING(ref, 2), '-', 1) AS UNSIGNED)
+        WHERE reason = 'admin' AND actor_id IS NULL AND ref REGEXP '^a[0-9]{1,9}-[0-9a-f]{16}$'`);
+}
+
+// V_SHOP_CATALOGUE (braucht V_SHOP_CORE): Optionen mit Preisen (das Verhalten steht im Code der Bereiche), Rabatt-
+// aktionen und jeder Kauf. Die Standard-Optionen legt der Shop beim ersten Lesen des Katalogs an (seedItems), denn
+// welche es gibt, melden die Bereiche erst beim Start an.
+async function shopCatalogue(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        item_key VARCHAR(40) NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        days SMALLINT UNSIGNED NULL,
+        units SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+        price INT UNSIGNED NOT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 0,
+        position INT NOT NULL DEFAULT 0,
+        available_from DATETIME NULL,
+        available_until DATETIME NULL,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        min_active_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_item (item_key),
+        KEY idx_feature (feature, position)
+    ) ${OPTS}`);
+  // Rabattaktionen mit Start und Ende; uses sinkt bei Erstattungen nicht
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_offers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        label VARCHAR(60) NOT NULL,
+        scope VARCHAR(60) NOT NULL,
+        percent_off TINYINT UNSIGNED NULL,
+        fixed_price INT UNSIGNED NULL,
+        starts_at DATETIME NOT NULL,
+        ends_at DATETIME NOT NULL,
+        max_uses INT UNSIGNED NULL,
+        uses INT UNSIGNED NOT NULL DEFAULT 0,
+        per_user_max SMALLINT UNSIGNED NULL,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        min_active_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        cancelled_at DATETIME NULL,
+        form_ref CHAR(16) NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_form (created_by, form_ref),
+        KEY idx_window (ends_at, starts_at)
+    ) ${OPTS}`);
+  // Jeder Kauf, unveränderlich bis auf die Erstattung (und das Verschieben späterer Zeiträume bei einer Erstattung)
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_purchases (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        request_id VARCHAR(40) NOT NULL,
+        item_key VARCHAR(40) NOT NULL,
+        feature VARCHAR(40) NOT NULL,
+        lot TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        units SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+        days SMALLINT UNSIGNED NULL,
+        list_price INT UNSIGNED NOT NULL,
+        price INT UNSIGNED NOT NULL,
+        offer_id INT NULL,
+        ledger_id INT NOT NULL,
+        via VARCHAR(10) NOT NULL DEFAULT 'shop',
+        period_start DATETIME NULL,
+        period_end DATETIME NULL,
+        refunded_at DATETIME NULL,
+        refund_amount INT UNSIGNED NULL,
+        refund_units SMALLINT UNSIGNED NULL,
+        refund_cut_sec INT UNSIGNED NULL,
+        refund_removed TINYINT(1) NULL,
+        refunded_by INT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_request (user_id, request_id),
+        KEY idx_user (user_id, id),
+        KEY idx_lot (user_id, feature, lot, period_start),
+        KEY idx_item_time (item_key, created_at),
+        KEY idx_offer (offer_id, user_id),
+        KEY idx_time (created_at)
+    ) ${OPTS}`);
 }
 
 type Seed = [string | null, string, string, string, string];

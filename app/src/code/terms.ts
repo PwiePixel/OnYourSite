@@ -3,11 +3,12 @@
 // unter „3. How Code Pages Work“ steht, dass freigegebene Adressen reserviert bleiben.
 import type { Ctx } from '../web/ctx.js';
 import { date, numberFormat } from '../php.js';
-import { hcSettings } from '../honeycombs/honeycombs.js';
 import { uiAssets } from '../views/partials/ui.js';
+import { shopPrice } from '../honeycombs/catalogue.js';
+import './shop.js';
 
 export async function termsCodePages(ctx: Ctx): Promise<void> {
-  ctx.write(termsCodePagesView((await hcSettings()).code_page));
+  ctx.write(termsCodePagesView(await shopPrice('code_page')));
 }
 
 // Zusatzbedingungen für Code-Seiten (selbst geschriebene Websites unter name.on-your.site)

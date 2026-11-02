@@ -8,9 +8,12 @@ import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, rawurldecode, strle
 import { e } from '../html.js';
 import { hmac, safeEqual } from '../crypto.js';
 import { baseAuthority, cleanText, scheme, slugProblem } from '../helpers.js';
-import { hcBalance, hcHas, hcSettings } from '../honeycombs/honeycombs.js';
+import { hcBalance } from '../honeycombs/honeycombs.js';
+import { has } from '../honeycombs/entitlements.js';
+import { shopPrice } from '../honeycombs/catalogue.js';
 import { pathExtension, poolDb } from '../honeycombs/util.js';
 import { claimAddress, duplicateKey, isTakenError, releaseAddress } from '../content/addresses.js';
+import './shop.js';
 
 export const CODE_MAX_FILES = 30;
 export const CODE_MAX_FILE_BYTES = 262144; // 256 KB je Datei
@@ -72,8 +75,8 @@ export function codeAddress(site: Row, slot: Row | null = null): CodeAddress | n
 // oys_code_url(): eigene Subdomain (eigener Ursprung) – für eine Code-Seite (ihre eigene Adresse) oder eine Adresse
 export const codeUrl = (site: Row | string): string => scheme() + '://' + (typeof site === 'string' ? site : phpStr(site.slug)) + '.' + baseAuthority();
 
-// oys_code_unlocked()
-export const codeUnlocked = (userId: number): Promise<boolean> => hcHas(userId, 'unlock', 'code_page');
+// oys_code_unlocked(): die Berechtigung code_page (gekauft, geschenkt oder eine alte Freischaltung im Buch)
+export const codeUnlocked = (userId: number, sql: Db = poolDb): Promise<boolean> => has(userId, 'code_page', sql);
 
 // oys_code_files(): Pfad → Inhalt, nach Pfad sortiert (Map behält die Reihenfolge wie ein PHP-Array)
 export async function codeFiles(siteId: number, sql: Db = poolDb): Promise<Map<string, string>> {
@@ -124,7 +127,8 @@ export async function codeEditorState(userId: number): Promise<CodeEditorState> 
   return {
     unlocked: await codeUnlocked(userId),
     terms,
-    cost: (await hcSettings()).code_page,
+    // Preis aus dem Katalog, mit einem Angebot, das für dieses Konto gilt
+    cost: await shopPrice('code_page', userId),
     balance: await hcBalance(userId),
     site: site ? await codeForEditor(site) : null,
   };
@@ -279,13 +283,12 @@ export async function codeDeleteRows(db: Db, site: Row): Promise<Set<string>> {
   return used;
 }
 
-// oys_code_delete_user(): Konto gelöscht – alle Code-Seiten mit Dateien, das Protokoll der Team-Aktionen zum Konto und
-// (bis der Shop seinen eigenen Haken hat) die Honigwaben. sql: die Verbindung des Aufrufers (Konto löschen: alles in
-// einer Transaktion)
+// oys_code_delete_user(): Konto gelöscht – alle Code-Seiten mit Dateien und das Protokoll der Team-Aktionen zum Konto
+// (die Honigwaben-Buchungen löscht der eigene Haken „honeycombs“, honeycombs/deletion.ts). sql: die Verbindung des
+// Aufrufers (Konto löschen: alles in einer Transaktion)
 export async function codeDeleteUser(userId: number, sql: Db = poolDb): Promise<void> {
   for (const site of await codeSites(userId, sql)) await codeDeleteRows(sql, site);
   await sql.exec('DELETE FROM code_moderation WHERE user_id = ?', [userId]);
-  await sql.exec('DELETE FROM honeycomb_ledger WHERE user_id = ?', [userId]);
 }
 
 // Für sites:repair: Zähler neu zählen (nur wo sie nicht stimmen) und melden, was nur durch Handarbeit in der Datenbank
