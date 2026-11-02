@@ -211,9 +211,14 @@ async function confirmAndLoad(page) {
     await page.goto(B + '/admin#newsletter');
     const posts = [];
     page.on('request', (r) => { if (r.method() === 'POST' && r.url().endsWith('/admin')) posts.push(new URLSearchParams(r.postData() || '')); });
+    const tplSelect = page.locator('select[name=template_file]');
+    const chevron = page.locator('#newsletterForm .bx-chevron-down').first();
+    const centre = async (l) => { const b = await l.boundingBox(); return b.y + b.height / 2; };
     await page.click('#newsletterForm button[type=submit]');
     await sleep(200);
     ok(await page.locator('.ui-dialog').count() === 0 && (await page.textContent('#newsletterForm .ui-field-err')) === 'Please choose a template.', 'no template: inline error, no dialog');
+    // Die Meldung steht unter dem Feld, nicht im Rahmen um Auswahl und Pfeil: der Pfeil bleibt mittig in der Auswahl
+    ok(Math.abs((await centre(chevron)) - (await centre(tplSelect))) < 2, 'the chevron stays centred in the select while the message shows');
     await page.selectOption('select[name=template_file]', 'welcome.json');
     await page.selectOption('#audienceSelect', 'single');
     await page.click('#newsletterForm button[type=submit]');
@@ -260,6 +265,25 @@ async function confirmAndLoad(page) {
     await page.click('#pwdModal button[type=submit]');
     await sleep(200);
     ok((await page.textContent('#pwdModal .ui-field-err')) === 'Please enter a new password.' && await page.getAttribute('#resetPassword', 'aria-invalid') === 'true', 'empty → inline error');
+    // Für die nächste Zeile öffnet das Fenster ohne die Meldung von eben
+    await page.keyboard.press('Escape');
+    await row(page, 'mia@test.de').locator('button[title="Force Password Reset"]').click();
+    ok((await page.textContent('#resetUserName')) === 'Mia Müller' && await page.locator('#pwdModal .ui-field-err').count() === 0
+      && await page.getAttribute('#resetPassword', 'aria-invalid') === null, 'reopened for another user: no old message');
+    // Text im Feld markieren und die Maus neben dem Fenster loslassen: das Fenster bleibt offen, nichts geht verloren
+    const typed = ['typed', 'not', 'lost'].join('-');
+    await page.fill('#resetPassword', typed);
+    const field = await page.locator('#resetPassword').boundingBox();
+    await page.mouse.move(field.x + field.width - 4, field.y + field.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(field.x - 200, field.y + field.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await sleep(200);
+    ok(await page.isVisible('#pwdModal') && (await page.inputValue('#resetPassword')) === typed, 'a text selection ending on the backdrop keeps the window open');
+    await page.mouse.click(30, 450);
+    await sleep(200);
+    ok(!(await page.isVisible('#pwdModal')), 'a real click on the backdrop still closes it');
+    await key.click();
     const before = sql('SELECT password FROM users WHERE id = 6');
     await page.fill('#resetPassword', 'Another-pass-123');
     await Promise.all([page.waitForNavigation(), page.click('#pwdModal button[type=submit]')]);

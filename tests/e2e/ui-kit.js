@@ -247,6 +247,15 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
     await page.keyboard.press('Escape');
     const n = await page.evaluate(() => [OYSUI.normalize.host('xn--bcher-kva.de'), OYSUI.normalize.slug('  My-Page! '), OYSUI.normalize.lower(' AbC '), OYSUI.normalize.trim('  x ')]);
     ok(JSON.stringify(n) === JSON.stringify(['xn--bcher-kva.de', 'my-page', 'abc', 'x']), 'normalize helpers');
+    // Lange Eingaben (eingefügt in ein Feld zum Bestätigen) dürfen den Tab nicht einfrieren: kein quadratisches Zurückgehen
+    const slow = await page.evaluate(() => {
+      const t = performance.now();
+      const a = OYSUI.normalize.trim('a' + ' '.repeat(50000) + 'b');
+      const b = OYSUI.normalize.host('x' + '/'.repeat(50000) + '\ny');
+      const c = OYSUI.normalize.host('https://user@Bücher.de:8080/a/b?c#d');
+      return { ms: performance.now() - t, a: a.length, b, c };
+    });
+    ok(slow.ms < 1000 && slow.a === 50002 && slow.b === 'x' && slow.c === 'xn--bcher-kva.de', 'normalize stays fast and correct on long input (' + Math.round(slow.ms) + ' ms)');
     await page.evaluate(() => { OYSUI.prompt({ title: 'Code', validate: (s) => (s.length < 3 ? 'Too short.' : '') }).then((v) => { window.r.val = v; }); });
     await page.waitForSelector('.ui-input');
     await page.fill('.ui-input', 'ab');
@@ -469,7 +478,9 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
     await page.evaluate(() => OYSUI.toast({ text: 'Open inbox again', tone: 'info', action: { label: 'Open', run: () => { window.r.ran++; } } }));
     await page.click('.ui-toast-act');
     ok(await page.evaluate(() => window.r.ran) === 1, 'without a dialog the action runs');
-    // Ein Hinweis mit Aktion wartet, solange ein Dialog offen ist
+    // Ein Hinweis mit Aktion wartet, solange ein Dialog offen ist. Der Zeiger darf nicht auf dem Hinweis ruhen (er steht
+    // noch dort, wo eben „Open“ geklickt wurde): Darüber hält der Hinweis absichtlich an und liefe nie ab
+    await page.mouse.move(5, 700);
     await page.evaluate(() => { OYSUI.toast({ text: 'Held', tone: 'info', duration: 300, action: { label: 'Go', run() {} } }); OYSUI.confirm('Hold'); });
     await sleep(9000);
     ok(await page.locator('.ui-toast', { hasText: 'Held' }).count() === 1, 'a toast with an action is held while a dialog is open');
@@ -610,6 +621,38 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
     await ctx.close();
   });
 
+  await step('form checks: one message per radio group, reset clears the messages', async () => {
+    const body = `<form id="f" action="/submit" method="post"><p>Plan</p>
+      <label><input type="radio" name="plan" value="a" required> A</label>
+      <label><input type="radio" name="plan" value="b"> B</label>
+      <label><input type="radio" name="plan" value="c"> C</label>
+      <input name="title" required aria-label="Title">
+      <input name="pw" minlength="8" aria-label="Password">
+      <input name="pw2" data-match="pw" aria-label="Repeat">
+      <button type="submit" id="go">Send</button></form>`;
+    const { ctx, page } = await open({ body });
+    await page.click('#go');
+    await sleep(200);
+    ok(await page.locator('.ui-field-err').count() === 2, 'one message for the whole radio group and one for the text field');
+    ok(await page.evaluate(() => { const n = document.querySelector('input[value=c]').closest('label').nextElementSibling; return !!n && n.classList.contains('ui-field-err') && n.textContent === 'Please choose an option.'; }), 'the group message follows the last option');
+    ok(await page.evaluate(() => [...document.querySelectorAll('input[name=plan]')].every((r) => r.getAttribute('aria-invalid') === 'true' && !!r.getAttribute('aria-describedby'))), 'every option of the group is marked and described');
+    ok(await page.evaluate(() => document.activeElement.value) === 'a', 'focus on the first option');
+    await page.click('input[value=b]');
+    await sleep(100);
+    ok(await page.locator('.ui-field-err').count() === 1 && await page.evaluate(() => [...document.querySelectorAll('input[name=plan]')].every((r) => !r.hasAttribute('aria-invalid') && !r.hasAttribute('aria-describedby'))), 'choosing an option clears the group message');
+    // Zurücksetzen (z. B. ein Fenster für die nächste Zeile) nimmt alle Meldungen und eigenen Prüfungen weg
+    await page.type('input[name=pw]', 'short');
+    await page.type('input[name=pw2]', 'other');
+    await page.click('#go');
+    await sleep(200);
+    ok(await page.locator('.ui-field-err').count() === 3, 'title, short password and mismatch are reported');
+    await page.evaluate(() => document.getElementById('f').reset());
+    await sleep(50);
+    ok(await page.locator('.ui-field-err').count() === 0 && await page.evaluate(() => ![...document.querySelectorAll('#f [aria-invalid]')].length), 'resetting the form clears its messages');
+    ok(await page.evaluate(() => { const f = document.getElementById('f'); return f.pw.validity.valid && f.pw2.validity.valid; }), 'and the custom length and match checks');
+    await ctx.close();
+  });
+
   await step('data-confirm pipeline', async () => {
     const body = `<form id="del" action="/admin" method="post" data-confirm="Delete this user?" data-confirm-text="Mia (mia@test.de) and all their pages … can’t be undone." data-confirm-ok="Delete user" data-confirm-tone="danger">
         <input type="hidden" name="csrf" value="c123"><input type="hidden" name="_confirmed" value="0" autocomplete="off">
@@ -703,6 +746,15 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
     const q = form(s.posts[0].body);
     ok(s.posts.length === 1 && q.community_action === 'ticket_close' && q._confirmed === '1', 'the fallback still sends the submitter’s name=value');
     await s.ctx.close();
+    // Der gedrückte Knopf kann ein anderes Ziel haben (formaction …): auch ohne requestSubmit geht es dorthin
+    const t = await open({ init: () => { delete HTMLFormElement.prototype.requestSubmit; },
+      body: `<form action="/save" method="post"><input type="hidden" name="_confirmed" value="0"><input name="title" value="x">
+        <button id="save">Save</button><button id="del" name="act" value="delete" formaction="/delete" data-confirm="Delete this?">Delete</button></form>` });
+    await t.page.click('#del');
+    await t.page.click('.ui-btn.is-primary');
+    await t.page.waitForSelector('#posted');
+    ok(t.posts.length === 1 && t.posts[0].path === '/delete' && form(t.posts[0].body).act === 'delete', 'the fallback keeps the button’s formaction (' + (t.posts[0] && t.posts[0].path) + ')');
+    await t.ctx.close();
   });
 
   await step('openLink only opens own paths', async () => {
@@ -723,7 +775,7 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
   });
 
   await step('leave guard', async () => {
-    const body = '<a id="away" href="/next">Away</a> <a id="mail" href="mailto:mia@test.de">Reply</a> <a id="off" href="/next" data-guard="off">Off</a> <a id="hash" href="#tab">Tab</a>'
+    const body = '<a id="away" href="/next">Away</a> <a id="mail" href="mailto:mia@test.de">Reply</a> <a id="off" href="/next" data-guard="off">Off</a> <a id="hash" href="#tab">Tab</a> <a id="top" href="#">Top</a> <a id="top2" href="/#">Top</a>'
       + '<form id="out" action="/logout" method="post"><button id="logout">Log out</button></form>';
     let s = await open({ body });
     await s.page.evaluate(() => { window.r = { discard: 0 }; window.dirty = true; window.g = OYSUI.guard({ isDirty: () => window.dirty, onDiscard: () => { window.r.discard++; } }); });
@@ -734,6 +786,14 @@ const dialogs = (page) => page.locator('.ui-dialog').count();
     ok(s.page.url() === ORIGIN + '/' && await s.page.evaluate(() => window.r.discard) === 0, 'Stay keeps the page');
     await s.page.click('#hash');
     ok(await dialogs(s.page) === 0, 'a hash link on the same page does not ask');
+    // Auch ein leerer Anker (#, /#) bleibt auf der Seite – keine Frage
+    await s.page.click('#top');
+    await sleep(100);
+    ok(await dialogs(s.page) === 0, 'a link to "#" does not ask');
+    await s.page.click('#top2');
+    await sleep(100);
+    ok(await dialogs(s.page) === 0, 'a link to the same path with an empty fragment does not ask');
+    if (await dialogs(s.page)) await s.page.click('.ui-btn.is-ghost');
     await s.page.click('#mail');
     await sleep(100);
     ok(await dialogs(s.page) === 0, 'mailto: opens without any dialog');

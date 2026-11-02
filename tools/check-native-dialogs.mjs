@@ -2,7 +2,7 @@
 // Prüft, dass keine Browser-Popups zurückkommen: alert/confirm/prompt, Bestätigungen im HTML (onsubmit=, return confirm),
 // Seitenwechsel an der Wache vorbei (location.href = … in Skripten mit OYSUI.guard) und Benachrichtigungen ohne notify().
 // Aufruf: node tools/check-native-dialogs.mjs [--strict]   (ohne --strict nur Warnungen, Exit 0; mit --strict Exit 1)
-// Die Tests (app/test/native-dialogs.test.ts) laufen es bei jedem npm test mit.
+// Die Tests (app/test/dialogs.test.ts) laufen es bei jedem npm test mit.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
