@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 06:16 (UTC+1).
+Last update: 2026-11-02 06:28 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -15,8 +15,8 @@ Last update: 2026-11-02 06:16 (UTC+1).
 | Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | Done |
 | Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | Done |
 
-**Release 3.0 is complete and ready to merge** (PR #15 merges cleanly into `main`). The PHP removal is being merged
-into `feature/new-features` next.
+**Release 3.0 is complete and ready to merge** (PR #15 merges cleanly into `main`). The PHP removal and everything
+else from `feature/node-complete` is merged into `feature/new-features` too.
 
 Points to settle before or soon after 3.0:
 - Node checks only bcrypt password hashes (`$2y$`, `$2a$`, `$2b$`). Check production before the switch:
@@ -52,14 +52,15 @@ review get one shared security review at the end.
 | 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Built and reviewed (units still to be wired into install.sh) |
 | 8, 16 | HC-2, HC-3 | Ledger, entitlements, Premium status; catalogue, offers, purchases, refunds | Built and reviewed |
 | 7, 13, 14 | DP-2a, DP-3, DP-5 | Delivery model and bot API; bot 0.2.0; public suggestions page (+ 5b) | Built |
-| 20 | DP-2b | Admin UI for bot posting | Being built |
-| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Being built |
-| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Being built |
+| 20 | DP-2b | Admin UI for bot posting | Built; being merged into `feature/new-features` |
+| 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built; being merged into `feature/new-features` |
+| 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built; being merged into `feature/new-features` (branding step takes schema number 15) |
+| 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Being built |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-4 (domain in the editor), PD-5, PD-6.
-- Shop: HC-4 (editor tab), HC-5, HC-6a, HC-8, then HC-7a/7b, HC-6b, HC-9.
+- Shop: HC-6a, HC-8, then HC-7a/7b, HC-6b, HC-9.
 - Status pages: ST-4 (status pages for users), ST-5, ST-7.
 - Code pages: CS-4, CS-5, CS-6 (code slots in the editor, live).
 - Later (Stage C): `ROADMAP.md` §4.2.
