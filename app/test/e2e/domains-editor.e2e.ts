@@ -150,6 +150,29 @@ test('R2: a blocked domain can be removed; the form comes back, but the hostname
   }
 });
 
+test('R8: an admin working as the user sees the domain section locked, with the reason', async () => {
+  const page = await browser.newPage();
+  await login(page);
+  await open(page, '/admin');
+  // „Log in as“ wie das Formular im Admin-Bereich (mit Bestätigung)
+  await Promise.all([page.waitForNavigation(), page.evaluate((id) => {
+    const f = document.createElement('form');
+    f.method = 'POST';
+    f.action = '/admin_impersonate.php';
+    for (const [k, v] of Object.entries({ csrf: (document.querySelector('input[name=csrf]') as HTMLInputElement).value, id: String(id), _confirmed: '1' })) {
+      const i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f.appendChild(i);
+    }
+    document.body.appendChild(f);
+    f.submit();
+  }, premiumId)]);
+  await open(page, '/dashboard#settings/domain');
+  const sec = page.locator('#domainSection');
+  await sec.getByText('Custom domains can’t be changed in admin mode.').waitFor();
+  assert.equal(await sec.locator('#domainInput').isDisabled(), true);
+  assert.equal(await sec.getByRole('button', { name: 'Connect domain' }).isDisabled(), true);
+  await page.close();
+});
+
 test('phone: the records table fits without sideways scrolling', async () => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();

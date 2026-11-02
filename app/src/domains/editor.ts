@@ -24,6 +24,7 @@ import { Doh, dohFromConfig, txtView, type TxtView } from './worker/dns.js';
 import { NOTICE_TITLES, domainLink, noticeText } from './notify.js';
 import { notify } from '../notify/notify.js';
 import { pausePoint } from '../honeycombs/ledger.js';
+import { adminMode } from '../honeycombs/shop.js';
 
 export const DOMAIN_ACTIONS: ReadonlySet<string> = new Set(['domain', 'domain-add', 'domain-check', 'domain-remove', 'domain-settings']);
 export const isDomainAction = (action: string): boolean => DOMAIN_ACTIONS.has(action);
@@ -186,6 +187,9 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
   }
   if (!page || intval(page.user_id) !== uid) ctx.json({ ok: false, error: 'Please reload the editor.', reload: true }, 409);
   const pageId = intval(page.id);
+  // R8: ein Admin, der als dieser Nutzer arbeitet, sieht die Domain, ändert aber nichts (wie beim Kaufen)
+  const asAdmin = adminMode(ctx);
+  if (isPost && asAdmin) ctx.json({ ok: false, code: 'admin_mode', error: 'Custom domains can’t be changed in admin mode.' }, 403);
   const s = await domainSettings();
   const row = await domainForTarget('page', pageId);
   const inp = (k: string): unknown => own(input, k);
@@ -197,7 +201,7 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
     const workerAge = ws.worker_at ? time() - ts(ws.worker_at) : null;
     const cap = await domainsCapacity();
     ctx.json({
-      ok: true, available: true, enabled: s.enabled,
+      ok: true, available: true, enabled: s.enabled, adminMode: asAdmin,
       premium: { active: prem.active, until: prem.until, forever: prem.forever },
       target: cnameTarget(), linkPage: isShownLinkPage(page),
       limits: { perUser: staff ? null : s.per_user, used, slots: s.slots ? await quantity(uid, 'custom_domain') : null },

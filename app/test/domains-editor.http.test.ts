@@ -31,8 +31,8 @@ async function sql(query: string, params: unknown[] = []): Promise<RowDataPacket
 }
 const count = async (query: string, params: unknown[] = []): Promise<number> => Number((await sql(query, params))[0].n);
 
-async function api(action: string, o: { userId?: number; json?: unknown; method?: string; csrf?: string | null; query?: string } = {}): Promise<Ctx> {
-  const sid = o.userId === undefined ? null : await loginSession(o.userId);
+async function api(action: string, o: { userId?: number; json?: unknown; method?: string; csrf?: string | null; query?: string; impersonatedBy?: number } = {}): Promise<Ctx> {
+  const sid = o.userId === undefined ? null : await loginSession(o.userId, o.impersonatedBy !== undefined ? { impersonatedBy: o.impersonatedBy } : {});
   const method = o.method ?? 'POST';
   const headers: Record<string, string> = {};
   if (method === 'POST') headers['content-type'] = 'application/json';
@@ -275,6 +275,45 @@ test('remove needs the typed domain; afterwards the page has none', async () => 
   assert.equal(jsonBody(await get(U, pages.u1)).domain, null);
   const none = await api('domain-check', { userId: U, json: { page_id: pages.u1 } });
   assert.equal(none.status, 404);
+});
+
+test('R8: an admin working as the user sees the domain but changes nothing – every domain action is refused', async () => {
+  const ADMIN = 3;
+  const HOST_R8 = 'admin-mode.example.com';
+  // Eine eigene, aktive Domain auf V's Seite – unabhängig vom Stand der Tests davor
+  await createDomain({ hostname: HOST_R8, targetId: pages.v1, userId: V });
+  await sql("UPDATE `DB`.custom_domains SET state = 'active' WHERE hostname = ?", [HOST_R8]);
+  try {
+    const rows = async () => (await sql('SELECT hostname, user_id, target_id, state, redirect, version, manual_at FROM `DB`.custom_domains ORDER BY id')).map((r) => ({ ...r }));
+    const before = await rows();
+    const logs = await count('SELECT COUNT(*) AS n FROM `DB`.custom_domain_log');
+    // Ansehen geht: die Domain ist da, dazu der Hinweis für den Editor
+    const g = jsonBody(await api('domain', { userId: V, method: 'GET', query: '?page=' + pages.v1, impersonatedBy: ADMIN }));
+    assert.equal(g.adminMode, true);
+    assert.equal((g.domain as { hostname: string }).hostname, HOST_R8);
+    assert.equal(jsonBody(await get(V, pages.v1)).adminMode, false);
+    // Jede Änderung: 403, auch die Übernahme mit dem passenden TXT-Wert (claim) und eine neue Domain
+    txt = [ownershipToken(U, HOST_R8)];
+    for (const [uid, action, json] of [
+      [V, 'domain-check', { page_id: pages.v1 }],
+      [V, 'domain-settings', { page_id: pages.v1, redirect: false }],
+      [V, 'domain-remove', { page_id: pages.v1, confirm: HOST_R8 }],
+      [U, 'domain-add', { page_id: pages.u3, hostname: 'admin-new.example.com' }],
+      [U, 'domain-add', { page_id: pages.u3, hostname: HOST_R8, claim: true }],
+    ] as const) {
+      const r = await api(action, { userId: uid, json, impersonatedBy: ADMIN });
+      assert.equal(r.status, 403, action);
+      assert.deepEqual(jsonBody(r), { ok: false, code: 'admin_mode', error: 'Custom domains can’t be changed in admin mode.' }, action);
+    }
+    assert.deepEqual(await rows(), before);
+    assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.custom_domain_log'), logs);
+    // Vor der Ablehnung zählt kein Ratenlimit (beforeEach leert die Tabelle)
+    assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.rate_limits'), 0);
+  } finally {
+    txt = [];
+    await sql('DELETE FROM `DB`.custom_domains WHERE hostname = ?', [HOST_R8]);
+    await sql('UPDATE `DB`.pages SET custom_domain = NULL WHERE id = ?', [pages.v1]);
+  }
 });
 
 test('rate limit: at most 10 add attempts per account and day', async () => {

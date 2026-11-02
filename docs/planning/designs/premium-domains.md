@@ -76,7 +76,7 @@ their domain shown there; this is a Premium feature, just like removing the OnYo
 | "dns einträge bekommt" | The app shows the exact records to add (name, type, value, relative "host" field, copy buttons) and checks them. It never edits the user's DNS. |
 | "für link page" | Link (profile) pages only. A page that shows a code page cannot get a domain, and a page with a domain cannot be turned into a code page (code-slots-admin rule E7). Status pages can be added later through the target registry (§4.12, Q10). |
 | "OnYourSite werbung weg machen" | v1 covers today's scope: the "Made with OnYourSite" footer, the "OnYourSite" mark on the OG card, and the `hide_branding` API field. The title suffix ` \| OnYourSite`, the `og:image:alt` suffix ` on OnYourSite` and the favicon follow in PR 1b only if the owner agrees (Q7). The code-page badge "Hosted on OnYourSite" (`lib/codesites.php:332-342`) is the code module's report link and stays (code-slots-admin Q8). |
-| Premium for admins | Admin accounts always count as Premium (`isPremiumRow` = `is_admin \|\| premium_until > now`). An admin acting as a user sees the user's real Premium status, because honeycomb-shop reads the database, never the session. The admin keeps the staff privileges (`isStaff`). |
+| Premium for admins | Admin accounts always count as Premium (`isPremiumRow` = `is_admin \|\| premium_until > now`). An admin acting as a user sees the user's real Premium status, because honeycomb-shop reads the database, never the session. The admin keeps the staff privileges (`isStaff`) – but, superseded by DECISIONS.md R8, changes no custom domain while acting as the user (every domain action answers 403 `admin_mode`). |
 
 ### 1.3 Not in v1
 
