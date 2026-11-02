@@ -18,6 +18,8 @@ export function setMailDirForTests(dir: string | null): void {
   mailDir = dir;
 }
 const emailDir = (): string => (mailDir ?? ROOT_DIR + '/email') + '/';
+// Pfad der Mail-Einstellungen (email/smtp.json)
+export const smtpConfigPath = (): string => emailDir() + 'smtp.json';
 
 // error_log(): eine Zeile ins Fehlerprotokoll
 function errorLog(message: string): void {
@@ -306,7 +308,7 @@ function smtpTargets(hostSetting: string, port: PhpJson, smtps: boolean): SmtpTa
 }
 
 // Verbinden, (STARTTLS,) anmelden – wie PHPMailer mit CRAM-MD5 vor LOGIN vor PLAIN, und nie ohne AUTH-Angebot
-async function openConnection(target: SmtpTarget, user: string, pass: string): Promise<SMTPConnection> {
+async function openConnection(target: SmtpTarget, user: string, pass: string, timeoutMs = TIMEOUT_MS): Promise<SMTPConnection> {
   const port = tcpPort(target.port);
   if (port === 0) throw new MailerError('SMTP Error: Could not connect to SMTP host. Failed to connect to server');
   const conn = new SMTPConnection({
@@ -315,9 +317,9 @@ async function openConnection(target: SmtpTarget, user: string, pass: string): P
     secure: target.secure,
     requireTLS: !target.secure,
     name: helloName(),
-    connectionTimeout: TIMEOUT_MS,
-    greetingTimeout: TIMEOUT_MS,
-    socketTimeout: TIMEOUT_MS,
+    connectionTimeout: timeoutMs,
+    greetingTimeout: timeoutMs,
+    socketTimeout: timeoutMs,
     // Ohne Namen des Servers scheitert die Prüfung des Zertifikats wie in PHP
     ...(peerNameFound(target.port) ? {} : { tls: { checkServerIdentity: () => new Error('SMTP Error: the peer certificate name could not be determined') } }),
   });
@@ -437,6 +439,54 @@ export async function sendCustomEmail(
     errorLog(`Mailer Error: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
+}
+
+// Text-Mail ohne Vorlage, wie server/cert-alert.php sie mit PHPMailer verschickt: Server und Zugang aus smtp.json,
+// Port (int) ($smtp['port'] ?? 587) – 465 = TLS ab der ersten Zeile, sonst STARTTLS –, 15 Sekunden Zeit, Absender
+// from_email/from_name (sonst „OnYourSite“), nur Text. Ein Fehler kommt als Exception mit der Meldung zurück.
+export async function sendPlainEmail(smtpConfig: PhpJson, toEmail: string, subject: string, text: string, timeoutMs = 15_000): Promise<void> {
+  const field = (key: string): PhpJson | undefined => get(smtpConfig, key) ?? undefined;
+  const host = field('host');
+  if (host instanceof PhpArr) throw new PhpTypeError('explode(): Argument #2 ($string) must be of type string, array given');
+  const user = phpCastString(field('username') ?? '');
+  const pass = phpCastString(field('password') ?? '');
+  const portValue = field('port') ?? new PhpInt(587n);
+  const port = intval(portValue instanceof PhpInt ? Number(portValue.value) : portValue instanceof PhpFloat ? portValue.value : portValue);
+  // setFrom(): trim, Zeilenumbrüche aus dem Namen
+  const fromEmail = phpTrim(phpCastString(field('from_email') ?? ''));
+  const fromNameValue = field('from_name') ?? 'OnYourSite';
+  if (fromNameValue instanceof PhpArr) throw new PhpTypeError('trim(): Argument #1 ($string) must be of type string, array given');
+  const fromName = phpTrim(phpCastString(fromNameValue).replace(/[\r\n]+/g, ''));
+  if (!fromEmail.includes('@') || !validAddress(punyencode(fromEmail))) throw new MailerError(`Invalid address:  (From): ${fromEmail}`);
+  const from = punyencode(fromEmail);
+  const to = checkAddress('to', toEmail);
+  if (!phpTruthy(text)) throw new MailerError('Message body empty');
+  const subjectText = phpTrim(phpTrim(subject).replace(/[\r\n]/g, ''));
+  const message = await new MailComposer({
+    from: fromName !== '' ? { name: fromName, address: from } : from,
+    to,
+    subject: subjectText,
+    text: normalizeBreaks(text),
+    textEncoding: 'quoted-printable',
+  }).compile().build();
+  const targets = smtpTargets(host === undefined || host === null ? 'localhost' : phpCastString(host), String(port), port === 465);
+  let lastError: unknown = new MailerError('SMTP Error: Could not connect to SMTP host.');
+  for (const target of targets) {
+    let conn: SMTPConnection;
+    try {
+      conn = await openConnection(target, user, pass, timeoutMs);
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+    try {
+      await step(conn, (done) => conn.send({ from, to: [to] }, message, (err, info) => done(err ?? null, info)));
+    } finally {
+      conn.quit();
+    }
+    return;
+  }
+  throw lastError;
 }
 
 // !$value für dekodiertes JSON (leeres Array, "", "0", 0, false, null sind falsch)

@@ -10,7 +10,8 @@
 #
 # Die Einstellungen (Token, IDs, Geheimnis) liegen in einer Datei, die nur root lesen kann – nie im Webordner
 # und nie im Docker-Image. Beim erneuten Aufruf behält Enter die bisherigen Werte.
-# server/install.sh übergibt OYS_SITE_URL und OYS_BOT_SECRET, dann muss nichts in config.php kopiert werden.
+# server/install.sh übergibt OYS_SITE_URL und OYS_BOT_SECRET, dann muss nichts in die Einstellungen der Webseite
+# (config.json) kopiert werden.
 set -euo pipefail
 # Pakete immer ohne Rückfragen installieren – auch die Programme, die apt nebenbei startet
 # (debconf, apt-listchanges bei Debian, needrestart bei Ubuntu), sonst warten sie unsichtbar auf eine Taste
@@ -36,6 +37,12 @@ choose() {
 node_ok() {
   "$1" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 18 || (a === 18 && b >= 17) ? 0 : 1)' 2>/dev/null
 }
+# Dieselbe Node.js-Installation wie die Webseite (server/node.sh, Node.js 22 von NodeSource). Fehlt sie – nur der
+# Bot-Ordner wurde kopiert –, reicht ein schon vorhandenes Node.js.
+if [ -f "$SRC/../server/node.sh" ]; then
+  # shellcheck source-path=SCRIPTDIR source=../server/node.sh
+  . "$SRC/../server/node.sh"
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || fail "Please run this as root."
@@ -88,23 +95,13 @@ if [ "$MODE" = service ]; then
   done
   if [ -z "$NODE" ]; then
     [ "$UPDATE" = 0 ] || fail "Node.js 18.17 or newer is missing."
-    command -v apt-get >/dev/null 2>&1 || fail "Install Node.js 22 (nodejs.org) and run this again."
+    { command -v apt-get >/dev/null 2>&1 && declare -f node_install >/dev/null; } || fail "Install Node.js 22 (nodejs.org) and run this again."
     case "$(choose "Node.js 18.17 or newer is missing. Install Node.js 22 now (from deb.nodesource.com)? [Y/n]" y)" in
       [nN]*) fail "Install Node.js 22 and run this again." ;;
     esac
-    command -v curl >/dev/null 2>&1 || fail "curl is missing – install it first (apt install curl)."
     info "Installing Node.js 22 – this takes a minute or two …"
-    # Die Ausgabe kommt in eine Datei und wird nur bei einem Fehler gezeigt
-    log=$(mktemp)
-    if ! { curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; } >"$log" 2>&1 \
-      || ! apt-get -o DPkg::Lock::Timeout=600 install -y -qq nodejs >>"$log" 2>&1; then
-      tail -n 25 "$log" | grep -v "stable CLI interface" | sed 's/^/    /'
-      rm -f "$log"
-      fail "Node.js couldn’t be installed – see above."
-    fi
-    rm -f "$log"
-    NODE=$(command -v node || true)
-    if [ -z "$NODE" ] || ! node_ok "$NODE"; then fail "Node.js couldn’t be installed."; fi
+    node_install || fail "Node.js couldn’t be installed – see above."
+    NODE=$(node_find 18 17) || fail "Node.js couldn’t be installed."
   fi
   NODE_BIN=$(dirname "$NODE")
   [ -x "$NODE_BIN/npm" ] || command -v npm >/dev/null 2>&1 || fail "npm is missing next to $NODE."
@@ -292,12 +289,12 @@ else
   ask SITE_URL "Website address" url "${OYS_SITE_URL:-https://on-your.site}"
   PRESET_SECRET=${OYS_BOT_SECRET:-}
   if [ -z "$(current BOT_SECRET)" ] && [ "${#PRESET_SECRET}" -ge 32 ]; then
-    # Vom Server-Installer: steht schon in config.php
+    # Vom Server-Installer: steht schon in den Einstellungen der Webseite (config.json)
     VAL_BOT_SECRET=$PRESET_SECRET
-    info "Secret for the website connection: taken from config.php."
+    info "Secret for the website connection: taken from the website’s settings (config.json)."
   elif [ -z "$(current BOT_SECRET)" ]; then
     case "$(choose "Create a new secret for the website connection? [Y/n]" y)" in
-      [nN]*) ask BOT_SECRET "Secret (the same as bot_secret in config.php)" secret ;;
+      [nN]*) ask BOT_SECRET "Secret (the same as bot_secret in the website’s config.json)" secret ;;
       *) VAL_BOT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); NEW_SECRET=$VAL_BOT_SECRET ;;
     esac
   else
@@ -323,11 +320,12 @@ else
   info "Saved to $ENV_FILE (readable only by root)."
   if [ -n "$NEW_SECRET" ]; then
     echo
-    info "Add this line to config.php of the website (same secret on both sides):"
+    info "Give the website the same secret – on the website’s server, run:"
     echo
-    echo "      'bot_secret' => '$NEW_SECRET',"
+    echo "      sudo OYS_VALUE='$NEW_SECRET' node /var/www/onyoursite/app/scripts/config.mjs set bot_secret"
+    echo "      sudo systemctl restart onyoursite-web"
     echo
-    read -rp "  Press Enter once it’s in config.php … " _ || true
+    read -rp "  Press Enter once the website has it … " _ || true
   fi
 fi
 
@@ -343,7 +341,7 @@ if "${CHECK[@]}" </dev/null; then
   info "The website accepts the bot."
 else
   info "The website didn’t accept the bot. Check that:"
-  info "  - the website is updated and has 'bot_secret' in config.php,"
+  info "  - the website is updated and has 'bot_secret' in its config.json,"
   info "  - it’s exactly the same secret as here,"
   info "  - the website address is right (and points to the website’s server)."
   if [ "$UPDATE" = 1 ]; then

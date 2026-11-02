@@ -50,7 +50,7 @@ function readConfig() {
   if (!/^https:\/\/[^/]+/.test(cfg.siteUrl) && !/^http:\/\/(localhost|127\.0\.0\.1|[a-z0-9.-]+\.test)(:\d+)?$/.test(cfg.siteUrl)) {
     problems.push('SITE_URL must be the address of the website, starting with https://');
   }
-  if (cfg.botSecret.length < 32) problems.push('BOT_SECRET must be at least 32 characters – the same value as bot_secret in config.php.');
+  if (cfg.botSecret.length < 32) problems.push('BOT_SECRET must be at least 32 characters – the same value as bot_secret in config.json of the website.');
   return { cfg, problems };
 }
 

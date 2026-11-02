@@ -10,9 +10,9 @@ All messages are embeds in English.
 
 ## How it connects to the website
 
-The bot calls the website at `/_/bot/…`. Every request is signed with a shared secret (`BOT_SECRET` in the bot, `bot_secret` in the website’s `config.php`) – HMAC-SHA256 over a timestamp, the method, the path and the body; requests older than 5 minutes are refused. The secret itself is never sent. Changes made on the website wait in a queue until the bot picks them up (every 10 seconds by default), so the website never needs the bot token and the bot doesn’t need to be reachable from the internet.
+The bot calls the website at `/_/bot/…`. Every request is signed with a shared secret (`BOT_SECRET` in the bot, `bot_secret` in the website’s `config.json`) – HMAC-SHA256 over a timestamp, the method, the path and the body; requests older than 5 minutes are refused. The secret itself is never sent. Changes made on the website wait in a queue until the bot picks them up (every 10 seconds by default), so the website never needs the bot token and the bot doesn’t need to be reachable from the internet.
 
-Without `bot_secret` in `config.php`, the endpoints don’t exist (404). The endpoints and the admin panel are excluded from search engines (`robots.txt`, `noindex`), and there are no public pages with suggestions or tickets.
+Without `bot_secret` in `config.json`, the endpoints don’t exist (404). The endpoints and the admin panel are excluded from search engines (`robots.txt`, `noindex`), and there are no public pages with suggestions or tickets.
 
 ## Set up (about 5 minutes)
 
@@ -32,11 +32,11 @@ The invite link asks for: View Channels, Send Messages, Send Messages in Threads
 
 Forum channels may need a community server: if Discord refuses the forum, the installer says so – turn on *Server Settings → Enable Community* and run the installer again. Everything else works without it.
 
-**Without the installer** (e.g. to develop on your computer): Node.js 18 or newer, then `cp .env.example .env`, fill in the token and the IDs by hand, add `'bot_secret' => '…',` to `config.php` (*Admin → Community* shows a fresh random one), and `npm install && npm run check && npm start`.
+**Without the installer** (e.g. to develop on your computer): Node.js 18 or newer, then `cp .env.example .env`, fill in the token and the IDs by hand, add `"bot_secret": "…"` to the website’s `config.json` and restart the website (*Admin → Community* shows a fresh random one), and `npm install && npm run check && npm start`.
 
 ## Install on a server
 
-**On your own server together with the website** (recommended): `server/install.sh` of the website asks “Set up the Discord bot on this server too?” and runs this installer for you – including the shared secret in `config.php`, so nothing has to be copied by hand. See [server/README.md](../server/README.md).
+**On your own server together with the website** (recommended): `server/install.sh` of the website asks “Set up the Discord bot on this server too?” and runs this installer for you – including the shared secret in `config.json`, so nothing has to be copied by hand. See [server/README.md](../server/README.md).
 
 **Anywhere else** – e.g. a small extra server (Ubuntu or Debian, 1 CPU and 512 MB RAM are plenty). The bot only connects outwards – to Discord and to the website – so no ports have to be opened:
 
@@ -54,7 +54,7 @@ The installer asks how the bot should run:
 1. **As a system service with Node.js** (recommended): installs Node.js 22 if it’s missing (from deb.nodesource.com, after asking), copies the bot to `/opt/onyoursite-bot` and runs it as its own user without a login, without write access and with a 256 MB limit. The settings are stored in `/etc/onyoursite-bot.env`, readable only by root.
 2. **In Docker**: installs Docker if it’s missing (official script from get.docker.com, after asking) and runs the bot as a container with a read-only file system, no extra rights and rotated logs. The settings are stored in `.env` next to the installer, readable only by root – they never go into the image.
 
-Both ask only for the **bot token** and the **Application ID** (Enter takes the one that belongs to the token), set up the Discord server as described above, ask for the website address (Enter = `https://on-your.site`), create the secret for `config.php` if there is none yet, check the connection to the website and start the bot. It restarts by itself after a crash or a reboot. **The Client Secret is not needed** – don’t enter it anywhere.
+Both ask only for the **bot token** and the **Application ID** (Enter takes the one that belongs to the token), set up the Discord server as described above, ask for the website address (Enter = `https://on-your.site`), create the secret for the website’s `config.json` if there is none yet, check the connection to the website and start the bot. It restarts by itself after a crash or a reboot. **The Client Secret is not needed** – don’t enter it anywhere.
 
 | | System service | Docker |
 |---|---|---|
