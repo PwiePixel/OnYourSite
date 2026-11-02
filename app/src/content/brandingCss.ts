@@ -15,6 +15,9 @@ const collapse = (s: string): string => s.replace(/[ \t\n\r\f]+/g, ' ').trim();
 
 // Tiefer verschachtelte Blöcke werden übersprungen (begrenzt die Arbeit bei Unsinn wie 20 000 „{“)
 const MAX_DEPTH = 16;
+// Jede verschachtelte Regel wiederholt die Selektoren der umschließenden – 20 000 Zeichen CSS ergäben so bis zu 30 Mio.
+// Zeichen Selektoren. Darüber werden keine weiteren Regeln geliefert (gewöhnliches CSS bleibt weit darunter).
+const MAX_SELECTOR_CHARS = 256 * 1024;
 
 // Regeln aus (gesäubertem) CSS: Zeichenketten und Escapes werden übersprungen, Verschachtelung (auch @media) gefolgt.
 // Kein vollständiger Parser – nur genug, um Selektoren und ihre Deklarationen zu finden. Läuft in einem Durchgang.
@@ -23,13 +26,20 @@ export function cssRules(css: string): CssRule[] {
   const stack: Array<{ prelude: string; body: string }> = [];
   let skip = 0;
   let chunk = '';
+  let total = 0; // Zeichen aller gelieferten Selektoren
+  let full = false;
   const close = (): void => {
     const top = stack.pop();
-    if (!top || top.prelude.startsWith('@')) return;
-    const selector = [...stack.map((s) => s.prelude), top.prelude].filter((p) => !p.startsWith('@')).join(' ');
-    rules.push({ selector, body: top.body });
+    if (!top || top.prelude.startsWith('@') || full) return;
+    const parts = [...stack.map((s) => s.prelude), top.prelude].filter((p) => !p.startsWith('@'));
+    total += parts.reduce((n, p) => n + p.length + 1, 0);
+    if (total > MAX_SELECTOR_CHARS) {
+      full = true;
+      return;
+    }
+    rules.push({ selector: parts.join(' '), body: top.body });
   };
-  for (let i = 0; i < css.length; i++) {
+  for (let i = 0; i < css.length && !full; i++) {
     const c = css[i];
     if (c === '\\') {
       chunk += css.slice(i, i + 2);
@@ -61,7 +71,7 @@ export function cssRules(css: string): CssRule[] {
     }
   }
   // Nicht geschlossene Blöcke am Ende zählen wie geschlossene (der Browser macht es genauso)
-  while (stack.length) {
+  while (stack.length && !full) {
     stack[stack.length - 1].body += chunk;
     chunk = '';
     close();
@@ -78,9 +88,14 @@ export function selectorTargetsBranding(selector: string, base = ''): boolean {
   const main = /\.oys-main(?![a-z0-9_-])|\.profile-container(?![a-z0-9_-])|(?:^|[^a-z0-9_.#\\-])main(?![a-z0-9_-])/.test(low);
   if (main && /:(?:last-child|last-of-type|nth-last-child|nth-last-of-type)/.test(low)) return true;
   const host = strtolower(base);
-  for (const m of low.matchAll(/\[[^\]]*\]/g)) {
-    const attr = m[0];
+  // Attribute wie früher mit /\[[^\]]*\]/g: vom nächsten „[“ bis zum ersten „]“ danach – aber in einem Durchgang (der
+  // Ausdruck brauchte bei vielen „[“ ohne „]“ quadratische Zeit)
+  for (let open = low.indexOf('['); open >= 0;) {
+    const end = low.indexOf(']', open);
+    if (end < 0) break;
+    const attr = low.slice(open, end + 1);
     if (attr.includes('on-your') || attr.includes('onyoursite') || attr.includes('foot') || (host !== '' && attr.includes(host))) return true;
+    open = low.indexOf('[', end + 1);
   }
   return false;
 }
@@ -94,6 +109,21 @@ export function cssTouches(css: string, base = ''): boolean {
 const ZERO = /^[-+]?(?:0+(?:\.0*)?|\.0+)(?:[a-z%]+)?$/;
 // Weit aus dem Bild geschoben (-9999px, 10000px …)
 const FAR = /-\d{4,}|(?:^|[^\d.])\d{4,}(?:px|em|rem|vw|vh|%)/;
+// Eine Zahl 0 in scale(…) bzw. opacity(…): 0+(?:\.0*)? statt 0+\.?0* (dieselben Texte, aber ohne quadratisches Zurückgehen)
+const SCALE_ZERO = /scale(?:x|y|z|3d)?\(\s*[-+]?(?:0+(?:\.0*)?|\.0+)\s*[,)]/;
+const OPACITY_ZERO = /opacity\(\s*(?:0+(?:\.0*)?|\.0+)%?\s*\)/;
+const TRANSLATE = /translate(?:x|y|z|3d)?\(/;
+const FAR_SHIFT = /-\d{4,}|(?<!\d)\d{4,}(?:px|em|rem|vw|vh|%)/;
+
+// Weit verschoben mit translate(…)? Wie früher /translate(?:x|y|z|3d)?\([^)]*(?:-\d{4,}|\d{4,}(?:px|…|%))/, aber in einem
+// Durchgang: je Abschnitt bis zur nächsten „)“ zählt der Text nach dem ersten translate( darin
+function farTranslate(v: string): boolean {
+  for (const seg of v.split(')')) {
+    const m = TRANSLATE.exec(seg);
+    if (m && FAR_SHIFT.test(seg.slice(m.index + m[0].length))) return true;
+  }
+  return false;
+}
 
 // Deklarationen, die ein Element verschwinden lassen – genau die, gegen die die festen Stile der Fußzeile jetzt wirken.
 // decls: Eigenschaft → Wert (klein, ohne !important) einer Regel.
@@ -131,13 +161,13 @@ function hidesWith(decls: Map<string, string>): boolean {
         if (v === 'hidden') return true;
         break;
       case 'transform':
-        if (/scale(?:x|y|z|3d)?\(\s*[-+]?(?:0+\.?0*|\.0+)\s*[,)]/.test(v) || /translate(?:x|y|z|3d)?\([^)]*(?:-\d{4,}|\d{4,}(?:px|em|rem|vw|vh|%))/.test(v)) return true;
+        if (SCALE_ZERO.test(v) || farTranslate(v)) return true;
         break;
       case 'scale': case 'zoom':
         if (ZERO.test(v.split(' ')[0] ?? '')) return true;
         break;
       case 'filter':
-        if (/opacity\(\s*(?:0+\.?0*|\.0+)%?\s*\)/.test(v) || v.includes('blur(')) return true;
+        if (OPACITY_ZERO.test(v) || v.includes('blur(')) return true;
         break;
       case 'text-indent': case 'left': case 'right': case 'top': case 'bottom': case 'inset': case 'translate':
         if (FAR.test(v)) return true;
@@ -150,19 +180,38 @@ function hidesWith(decls: Map<string, string>): boolean {
 // Zustände und Pseudo-Elemente blenden den Hinweis nicht dauerhaft aus (::before, :hover …)
 const TRANSIENT = /::|:(?:before|after|first-line|first-letter|hover|focus|focus-visible|focus-within|active|visited)(?![a-z-])/;
 
+// :not(…) bis zur ersten „)“ entfernen – wie früher p.replace(/:not\([^)]*\)/gi, ''), aber in einem Durchgang
+function dropNot(p: string): string {
+  const open = /:not\(/gi;
+  let out = '';
+  let from = 0;
+  for (let m = open.exec(p); m; m = open.exec(p)) {
+    const end = p.indexOf(')', m.index + 5);
+    if (end < 0) break;
+    out += p.slice(from, m.index);
+    from = end + 1;
+    open.lastIndex = end + 1;
+  }
+  return out + p.slice(from);
+}
+
 // Strenger: blendet das CSS den Hinweis heute aus? Ein Selektor für den Hinweis UND eine ausblendende Deklaration in
 // derselben Regel. Für den Bestandsschutz (Q9): solche Seiten behalten ihr Aussehen.
 export function cssHides(css: string, base = ''): boolean {
   for (const r of cssRules(css)) {
     // Jede Angabe der Liste für sich; was nur in :not(…) steht, meint gerade nicht den Hinweis
-    const parts = r.selector.split(',').map((p) => p.replace(/:not\([^)]*\)/gi, ''));
+    const parts = r.selector.split(',').map(dropNot);
     if (!parts.some((p) => selectorTargetsBranding(p, base) && !TRANSIENT.test(strtolower(p)))) continue;
     const decls = new Map<string, string>();
     for (const decl of r.body.split(';')) {
       const at = decl.indexOf(':');
       if (at < 0) continue;
       const prop = strtolower(decl.slice(0, at).trim());
-      const value = strtolower(collapse(decl.slice(at + 1))).replace(/\s*!\s*important$/, '');
+      // !important am Ende weg – wie früher .replace(/\s*!\s*important$/, ''), ohne quadratisches Zurückgehen über lange
+      // Folgen von Leerraum (z. B. U+00A0, das collapse() nicht zusammenfasst)
+      const raw = strtolower(collapse(decl.slice(at + 1)));
+      const bang = /!\s*important$/.exec(raw);
+      const value = bang ? raw.slice(0, bang.index).trimEnd() : raw;
       if (prop !== '') decls.set(prop, value);
     }
     if (hidesWith(decls)) return true;

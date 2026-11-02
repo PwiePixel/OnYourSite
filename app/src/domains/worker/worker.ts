@@ -12,6 +12,7 @@ import { date, intval, phpStr } from '../../php.js';
 import { nowStr, toUnix } from '../../honeycombs/clock.js';
 import { reconcileUser } from '../lifecycle.js';
 import { poolDb } from '../../honeycombs/util.js';
+import { isPremiumRow } from '../../honeycombs/premium.js';
 import { cnameTarget } from '../config.js';
 import { domainById, logEvent, removeDomain, transition, type DomainRow, type DomainState } from '../store.js';
 import { ownershipToken, probeAnswer } from '../tokens.js';
@@ -240,6 +241,10 @@ export class DomainWorker {
   // Hostname anlegen – nacheinander (nie zwei gleichzeitig: Plätze und „eine Domain je Konto in pending“ stimmen so)
   private create(row: DomainRow, d: Decision, s: DomainSettings, now: number, obs: Obs, manual: boolean): Promise<Decision> {
     const run = async (): Promise<Decision> => {
+      // Nur mit Premium (oder als Admin): „Check again“ auf einer gescheiterten Domain prüft den TXT-Eintrag auch ohne
+      // Premium – dann bleibt alles, wie es ist, und kein Hostname entsteht
+      const owner = await one('SELECT id, is_admin, premium_until FROM users WHERE id = ?', [row.user_id]);
+      if (!owner || !isPremiumRow(owner)) return { ...d, state: row.state, cfAction: 'none', event: null, notice: null, set: { checked_at: at(now) } };
       const fresh = await this.facts(row, s, now);
       if (!(fresh.placeFree && !fresh.olderWaiting && !fresh.ownPending && fresh.recentCreates < 3)) {
         return evaluate({ row, obs, settings: s, frozen: this.frozen, now, at, toUnix, manual, facts: fresh });
@@ -294,6 +299,13 @@ export class DomainWorker {
       await this.d.cf.deleteHostname(id);
     } catch (err) {
       this.tokenTrouble(err);
+      // Pausiert (Frist vorbei, freigegeben): „getrennt“ erst, wenn der Hostname wirklich weg ist – sonst käme der Hinweis
+      // samt Mail bei jedem neuen Versuch noch einmal; problem_detail bleibt, damit der nächste Versuch ihn wieder setzt
+      if (row.state === 'suspended') {
+        const set = { ...d.set };
+        delete set.problem_detail;
+        return { ...d, cfAction: 'none', deleteRow: false, unknown: true, notice: null, set };
+      }
       return { ...d, state: row.state === 'removing' ? 'removing' : d.state, cfAction: 'none', deleteRow: false, unknown: true,
         notice: row.state === 'removing' ? null : d.notice, set: { ...d.set } };
     }
@@ -364,7 +376,11 @@ export class DomainWorker {
                 : noticeText.removed(row, page, notice.reason, str(row.blocked_reason));
         await domainNotice(db, row, notice.type, text);
       }
-      if (d.adminAlert) await adminAlert(db, d.adminAlert, row.hostname);
+      // Meldung an die Admins zu dieser Domain (Zertifikat läuft ab) höchstens einmal je 24 Stunden – sonst käme sie nach
+      // jedem einzelnen Fehler dazwischen erneut
+      const alerted = d.adminAlert !== null && (await db.one("SELECT id FROM custom_domain_log WHERE event = 'alert' AND hostname = ? AND created_at >= ? LIMIT 1",
+        [row.hostname, at(now - DAY)])) !== null;
+      if (d.adminAlert && !alerted) await adminAlert(db, d.adminAlert, row.hostname);
     });
   }
 
@@ -415,9 +431,10 @@ export class DomainWorker {
     }, alerts, now);
     this.tokenProblem = null;
 
-    // 3. Sicherheitsnetz für Premium: Abgleich für Konten, deren Domains nicht zum Premium-Stand passen
+    // 3. Sicherheitsnetz für Premium: Abgleich für Konten, deren Domains nicht zum Premium-Stand passen. premium_until ist
+    // NULL nach Erstattung, Entzug oder ohne Kauf (Ex-Admin) – NOT (… OR NULL > ?) wäre NULL, das Konto fiele heraus
     const lost = await q(`SELECT DISTINCT d.user_id FROM custom_domains d JOIN users u ON u.id = d.user_id
-        WHERE d.state IN ('verifying','pending','active','broken') AND NOT (u.is_admin = 1 OR u.premium_until > ?)`, [at(now)]);
+        WHERE d.state IN ('verifying','pending','active','broken') AND u.is_admin = 0 AND (u.premium_until IS NULL OR u.premium_until <= ?)`, [at(now)]);
     const back = await q(`SELECT DISTINCT d.user_id FROM custom_domains d JOIN users u ON u.id = d.user_id
         WHERE d.state = 'suspended' AND (u.is_admin = 1 OR u.premium_until > ?)`, [at(now)]);
     for (const r of [...lost, ...back]) {

@@ -69,6 +69,11 @@ const TRICKS = [
   '.oys-foot{-webkit-mask-image:linear-gradient(transparent,transparent)!important;mask-image:linear-gradient(transparent,transparent)!important}',
   '.oys-foot a{filter:opacity(0)!important;translate:0 -9999px!important}',
   '.oys-foot{zoom:.01!important}',
+  '.oys-foot{margin-top:-99999px!important}',
+  '.oys-main>section~*{margin-left:-300vw!important}',
+  '.oys-foot{float:left!important;margin:0 0 0 -200vw!important}',
+  '.oys-foot a{margin-left:-9999px!important}',
+  '.oys-foot strong{margin-left:-9999px!important}',
 ];
 
 // Box und berechnete Stile des Hinweises

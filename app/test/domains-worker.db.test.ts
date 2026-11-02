@@ -38,6 +38,7 @@ import { startCfSaasMock, type CfSaasMock } from './support/cfSaasMock.js';
 import { startDohMock, type DohMock } from './support/dohMock.js';
 import { startTestEdge, type Forwarded, type TestEdge } from './support/testEdge.js';
 import { testDatabase, type TestDb } from './coreHarness.js';
+import { setPauseGateForTests } from '../src/honeycombs/ledger.js';
 
 const skip = !hasOpenssl();
 let t: TestDb;
@@ -464,6 +465,152 @@ test('the admin role goes: the domain pauses with its own notice (once); the rol
   await w.check(ids.pixel);
   assert.equal((await row(ids.pixel)).state, 'active');
   assert.equal(await pageDomain(1), PIXEL);
+});
+
+// Erstattung, Entzug und ein Ex-Admin ohne Premium hinterlassen premium_until = NULL. Ging der Abgleich im Moment der
+// Änderung verloren, muss das Sicherheitsnetz die Konten trotzdem finden.
+test('the safety net also catches Premium that ended with premium_until NULL (refund, revoke) and an ex-admin without Premium', { skip }, async () => {
+  assert.deepEqual([(await row(ids.mia)).state, (await row(ids.pixel)).state], ['active', 'active']);
+  await exec('UPDATE users SET premium_until = NULL WHERE id = 5');
+  await exec('UPDATE users SET is_admin = 0, premium_until = NULL WHERE id = 3');
+  await w.minute();
+  for (const id of [ids.mia, ids.pixel]) {
+    const r = await row(id);
+    assert.deepEqual([r.state, r.problem], ['suspended', 'premium_ended'], r.hostname);
+  }
+  assert.deepEqual([await pageDomain(2), await pageDomain(1)], [null, null]);
+
+  // Wieder wie vorher (die folgenden Tests bauen darauf auf)
+  await exec('UPDATE users SET premium_until = ? WHERE id = 5', [later(30 * DAY)]);
+  await exec('UPDATE users SET is_admin = 1 WHERE id = 3');
+  await w.minute();
+  for (const [id, host] of [[ids.mia, HOST], [ids.pixel, PIXEL]] as const) {
+    if ((await row(id)).state === 'verifying') await w.check(id);
+    assert.equal((await row(id)).state, 'pending', host);
+    cf.set(host, { status: 'active', ssl: 'active' });
+    await w.check(id);
+    assert.equal((await row(id)).state, 'active', host);
+  }
+});
+
+// Dienst oder Besitzer ändern die Zeile zwischen Lesen und Schreiben des Abgleichs (wie domain-settings: version + 1)
+test('a lost compare-and-set in the account reconcile is tried again; lost three times → an error, so the shop keeps its marker', { skip }, async () => {
+  const bumpEvery = (limit: number): void => {
+    let bumps = 0;
+    setPauseGateForTests(async (name) => {
+      if (name !== 'domains-reconcile' || bumps >= limit) return;
+      bumps++;
+      await exec('UPDATE custom_domains SET version = version + 1 WHERE id = ?', [ids.mia]);
+    });
+  };
+  await exec('UPDATE users SET premium_until = NULL WHERE id = 5');
+  try {
+    bumpEvery(Infinity);
+    await assert.rejects(reconcileUser(5), /changed during every reconcile run/);
+    assert.equal((await row(ids.mia)).state, 'active');
+    bumpEvery(1);
+    await reconcileUser(5);
+  } finally {
+    setPauseGateForTests(null);
+  }
+  const r = await row(ids.mia);
+  assert.deepEqual([r.state, r.problem], ['suspended', 'premium_ended']);
+  assert.equal(await pageDomain(2), null);
+
+  // Wieder wie vorher (die folgenden Tests bauen darauf auf)
+  await exec('UPDATE users SET premium_until = ? WHERE id = 5', [later(30 * DAY)]);
+  await reconcileUser(5);
+  if ((await row(ids.mia)).state === 'verifying') await w.check(ids.mia);
+  assert.equal((await row(ids.mia)).state, 'pending');
+  cf.set(HOST, { status: 'active', ssl: 'active' });
+  await w.check(ids.mia);
+  assert.equal((await row(ids.mia)).state, 'active');
+});
+
+test('grace period over but Cloudflare refuses the deletion: “disconnected” comes once, after the hostname is really gone', { skip }, async () => {
+  await setRow(ids.mia, { activated_at: ago(15 * DAY) });
+  await exec('UPDATE users SET premium_until = NULL WHERE id = 5');
+  await reconcileUser(5);
+  let r = await row(ids.mia);
+  assert.deepEqual([r.state, r.problem_detail], ['suspended', 'forward']);
+  await setRow(ids.mia, { suspended_at: ago(31 * DAY) });
+  const before = await bells(5, 'domain_removed');
+  const mailsBefore = await pendingMails();
+  cf.failNext(500, 1000);
+  try {
+    for (let k = 0; k < 3; k++) await w.check(ids.mia);
+  } finally {
+    cf.failNext(500, 0);
+  }
+  r = await row(ids.mia);
+  assert.ok(r.cf_id && onCf(HOST), 'still at Cloudflare');
+  assert.equal(await bells(5, 'domain_removed'), before, 'no notice while the deletion fails');
+  assert.equal(await pendingMails(), mailsBefore, 'no mail while the deletion fails');
+  await w.check(ids.mia);
+  r = await row(ids.mia);
+  assert.deepEqual([r.cf_id, r.problem_detail], [null, 'released']);
+  assert.equal(await bells(5, 'domain_removed'), before + 1);
+  await w.check(ids.mia);
+  assert.equal(await bells(5, 'domain_removed'), before + 1, 'exactly once');
+
+  // Wieder wie vorher (die folgenden Tests bauen darauf auf; frühere Einrichtungen zählen nicht gegen „drei in 24 Stunden“)
+  await exec("UPDATE custom_domain_log SET created_at = ? WHERE domain_id = ? AND event = 'cf_created'", [ago(2 * DAY), ids.mia]);
+  await exec('UPDATE users SET premium_until = ? WHERE id = 5', [later(30 * DAY)]);
+  await reconcileUser(5);
+  if ((await row(ids.mia)).state === 'verifying') await w.check(ids.mia);
+  const back = await row(ids.mia);
+  assert.equal(back.state, 'pending', `${String(back.problem)} ${String(back.problem_detail)}`);
+  cf.set(HOST, { status: 'active', ssl: 'active' });
+  await w.check(ids.mia);
+  assert.equal((await row(ids.mia)).state, 'active');
+});
+
+// Zertifikat läuft bald ab: ein einzelner, noch unbestätigter Fehler dazwischen löst keine zweite Meldung an die Admins aus
+test('certificate expiring soon: the admins hear it once, also when a single failure flips the problem in between', { skip }, async () => {
+  const alerts = async (): Promise<number> => Number(await value("SELECT COUNT(*) FROM custom_domain_log WHERE event = 'alert' AND hostname = ?", [HOST]));
+  const start = await alerts();
+  edge.certs.set(HOST, 'expiring');
+  cf.set(HOST, { ssl: 'pending_validation' });
+  await setRow(ids.mia, { cf_ssl_status: 'pending_validation' });
+  try {
+    await w.check(ids.mia);
+    let r = await row(ids.mia);
+    assert.deepEqual([r.state, r.problem], ['active', 'cert_expiring']);
+    const once = await alerts();
+    assert.ok(once > start, 'the admins hear it');
+    await setRow(ids.mia, { problem: 'dns_error', cf_ssl_status: 'pending_validation' });
+    await w.check(ids.mia);
+    r = await row(ids.mia);
+    assert.equal(r.problem, 'cert_expiring');
+    assert.equal(await alerts(), once, 'no second alert within 24 hours');
+  } finally {
+    edge.certs.delete(HOST);
+    cf.set(HOST, { ssl: 'active' });
+  }
+  await setRow(ids.mia, { problem: '', notice_state: 0, notice_at: null, cert_expires_at: null });
+  await w.check(ids.mia);
+  const r = await row(ids.mia);
+  assert.deepEqual([r.state, r.problem], ['active', '']);
+});
+
+// „Check again“ auf einer gescheiterten Domain (failed) nach dem Ende von Premium: kein neuer Hostname bei Cloudflare
+test('a failed domain checked again without Premium gets no hostname at Cloudflare', { skip }, async () => {
+  const OLD = 'old.example.net';
+  pointToUs(OLD, 8);
+  const id = await createDomain({ hostname: OLD, targetId: await newPage(8, 'pd3-failed'), userId: 8 });
+  await setRow(id, { state: 'failed', problem: 'txt_timeout', manual_at: ago(5), checked_at: ago(60) });
+  await exec('UPDATE users SET premium_until = NULL WHERE id = 8');
+  try {
+    await w.check(id);
+    const r = await row(id);
+    assert.deepEqual([r.state, r.cf_id], ['failed', null]);
+    assert.equal(onCf(OLD), null);
+  } finally {
+    await exec('UPDATE users SET premium_until = ? WHERE id = 8', [later(30 * DAY)]);
+    await transaction((_c, db) => removeDomain(db, id, 'removed by the user'));
+    await w.check(id);
+  }
+  assert.equal(onCf(OLD), null);
 });
 
 test('mails: at most the budget per minute; a failing send is tried 5 times, then left alone', { skip }, async () => {

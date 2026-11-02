@@ -7,6 +7,7 @@ import { toUnix, nowStr } from '../honeycombs/clock.js';
 import { isPremiumRow } from '../honeycombs/premium.js';
 import { quantity } from '../honeycombs/entitlements.js';
 import { poolDb } from '../honeycombs/util.js';
+import { pausePoint } from '../honeycombs/ledger.js';
 import { domainsAvailable } from './config.js';
 import { domainSettings, workerState, type DomainSettings } from './settings.js';
 import { displayHostname } from './hostname.js';
@@ -36,11 +37,24 @@ async function allowance(user: Row | null, uid: number, s: DomainSettings, db: D
 // Abgleich eines Kontos (registerEnforcer 'domains', inline): unter der eigenen Sperre je Konto die Domains lesen,
 // dann das Konto, dann pausieren oder fortsetzen – jede Änderung ein Compare-and-set. Die ältesten Domains behalten
 // ihren Platz; pausierte kommen nur zurück, solange Platz ist. Wiederholbar ohne Folgen: ein zweiter Lauf findet nichts.
+// Ein verlorenes Compare-and-set (Dienst oder Besitzer haben die Zeile dazwischen geändert): neu lesen und noch einmal
+// entscheiden. Bleibt es nach drei Läufen verloren, ein Fehler – der Shop behält dann seine Markierung (reconcile_at).
 export async function reconcileUser(uid: number): Promise<void> {
-  await withNamedLock('oys_domains_u' + uid, 5, async (db) => {
+  for (let run = 1; ; run++) {
+    const lost = await reconcileOnce(uid);
+    if (lost === 0) return;
+    if (run >= 3) throw new Error(`${lost} custom ${lost === 1 ? 'domain' : 'domains'} changed during every reconcile run.`);
+  }
+}
+
+// Ein Lauf; Ergebnis: Zahl der Zeilen, deren Änderung verloren ging
+async function reconcileOnce(uid: number): Promise<number> {
+  return withNamedLock('oys_domains_u' + uid, 5, async (db) => {
+    let lost = 0;
     const rows = await db.q<DomainRow>(`SELECT * FROM custom_domains WHERE user_id = ? AND state IN ('verifying','pending','active','broken','suspended')
       ORDER BY created_at, id`, [uid]);
-    if (!rows.length) return;
+    if (!rows.length) return 0;
+    await pausePoint('domains-reconcile', { uid });
     const user = await db.one('SELECT id, is_admin, premium_until FROM users WHERE id = ?', [uid]);
     const s = await domainSettings(db);
     const premium = user !== null && isPremiumRow(user);
@@ -63,6 +77,7 @@ export async function reconcileUser(uid: number): Promise<void> {
             fast_until: null, next_check_at: nowStr(now) },
           log: { event: 'suspended', detail: premium ? 'over the domain limit' : 'Premium ended' },
         }, tx);
+        if (!ok) lost++;
         if (ok && viaRole) {
           const text = forward
             ? `You’re no longer an admin, so ${displayHostname(row.hostname)} forwards to ${pageAddress(page)}.`
@@ -77,13 +92,17 @@ export async function reconcileUser(uid: number): Promise<void> {
       const hasHost = row.cf_id !== null && row.cf_id !== '';
       // Mit Hostnamen beginnt die Einrichtungsfrist (pending_days, gezählt ab cf_created_at) jetzt neu – sonst wäre sie
       // bei einer lange live gewesenen Domain sofort abgelaufen und der Dienst löschte den Hostnamen (setup_timeout)
-      await transaction((_c, tx) => transition(row, {
-        state: hasHost ? 'pending' : 'verifying',
-        set: { problem: '', problem_detail: '', fail_count: 0, fail_since: null, next_check_at: nowStr(now), fast_until: hasHost ? nowStr(now + 900) : null,
-          ...(hasHost ? { cf_created_at: nowStr(now) } : {}) },
-        log: { event: 'resumed', detail: hasHost ? 'Premium is back – reconnecting.' : 'Premium is back – checking the records.' },
-      }, tx));
+      await transaction(async (_c, tx) => {
+        const ok = await transition(row, {
+          state: hasHost ? 'pending' : 'verifying',
+          set: { problem: '', problem_detail: '', fail_count: 0, fail_since: null, next_check_at: nowStr(now), fast_until: hasHost ? nowStr(now + 900) : null,
+            ...(hasHost ? { cf_created_at: nowStr(now) } : {}) },
+          log: { event: 'resumed', detail: hasHost ? 'Premium is back – reconnecting.' : 'Premium is back – checking the records.' },
+        }, tx);
+        if (!ok) lost++;
+      });
     }
+    return lost;
   }, 'fail');
 }
 

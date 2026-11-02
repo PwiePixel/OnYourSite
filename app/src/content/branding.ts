@@ -76,13 +76,15 @@ export function faviconUrl(page: { id?: unknown; avatar?: unknown }, unbranded: 
 // in page.css von der Deckkraft zur Unterstreichung, denn die feste Deckkraft schlägt :hover.
 const HIDE_PROOF = 'transform:none!important;translate:none!important;scale:none!important;rotate:none!important;zoom:1!important;'
   + 'filter:none!important;clip-path:none!important;mask:none!important;-webkit-mask:none!important;text-indent:0!important';
+// Auch die Abstände (margin wie in page.css, kein float): sonst schöbe ein negativer Rand den Hinweis aus dem Bild
 export const FOOTER_STYLE = 'display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;'
   + 'inset:auto!important;z-index:2147483647!important;' + HIDE_PROOF + ';height:auto!important;max-height:none!important;'
-  + 'overflow:visible!important;content-visibility:visible!important;font-size:max(.78em,11px)!important';
+  + 'overflow:visible!important;content-visibility:visible!important;font-size:max(.78em,11px)!important;margin:auto 0 0!important;'
+  + 'float:none!important';
 export const FOOTER_LINK_STYLE = 'display:inline-block!important;visibility:visible!important;opacity:.75!important;position:static!important;'
-  + HIDE_PROOF + ';font-size:max(1em,11px)!important';
+  + HIDE_PROOF + ';font-size:max(1em,11px)!important;margin:0!important;float:none!important';
 export const FOOTER_STRONG_STYLE = 'display:inline!important;visibility:visible!important;opacity:1!important;filter:none!important;'
-  + 'clip-path:none!important;mask:none!important;-webkit-mask:none!important;font-size:inherit!important';
+  + 'clip-path:none!important;mask:none!important;-webkit-mask:none!important;font-size:inherit!important;margin:0!important';
 
 // <footer class="oys-foot"> der Profilseite (Abstände wie bisher in render.ts)
 export function brandingFooter(): string {

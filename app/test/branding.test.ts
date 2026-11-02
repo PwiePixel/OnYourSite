@@ -171,13 +171,15 @@ test('OG card hash: the effective value replaces the stored switch – PHP’s v
 test('the footer carries pinned styles; the page renders it unless the effective branding hides it', () => {
   for (const d of ['display:block!important', 'visibility:visible!important', 'opacity:1!important', 'position:relative!important', 'z-index:2147483647!important',
     'transform:none!important', 'scale:none!important', 'clip-path:none!important', 'filter:none!important', 'height:auto!important', 'max-height:none!important',
-    'overflow:visible!important', 'content-visibility:visible!important', 'font-size:max(.78em,11px)!important', 'text-indent:0!important', 'inset:auto!important']) {
+    'overflow:visible!important', 'content-visibility:visible!important', 'font-size:max(.78em,11px)!important', 'text-indent:0!important', 'inset:auto!important',
+    'margin:auto 0 0!important', 'float:none!important']) {
     assert.ok(FOOTER_STYLE.split(';').includes(d), d);
   }
-  for (const d of ['display:inline-block!important', 'opacity:.75!important', 'position:static!important', 'font-size:max(1em,11px)!important', 'transform:none!important']) {
+  for (const d of ['display:inline-block!important', 'opacity:.75!important', 'position:static!important', 'font-size:max(1em,11px)!important', 'transform:none!important',
+    'margin:0!important']) {
     assert.ok(FOOTER_LINK_STYLE.split(';').includes(d), d);
   }
-  for (const d of ['display:inline!important', 'visibility:visible!important', 'font-size:inherit!important']) assert.ok(FOOTER_STRONG_STYLE.split(';').includes(d), d);
+  for (const d of ['display:inline!important', 'visibility:visible!important', 'font-size:inherit!important', 'margin:0!important']) assert.ok(FOOTER_STRONG_STYLE.split(';').includes(d), d);
   const page = { id: 3, user_id: 5, slug: 'mia', title: 'Mia', theme: 'minimal', layout: 'buttons', address_mode: 'subdomain', settings: '{"hide_branding":true,"custom_css":".oys-foot{display:none}"}' };
   // Ohne Angabe: der Besitzer zählt als ohne Premium – der Hinweis bleibt
   const plain = renderPage(page, [], { mode: 'public' });

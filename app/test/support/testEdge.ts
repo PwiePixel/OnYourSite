@@ -12,7 +12,7 @@ export type EdgeMode =
   | { kind: 'challenge' }
   | { kind: 'hang' };
 
-export type CertMode = 'valid' | 'other' | 'expired' | 'none';
+export type CertMode = 'valid' | 'other' | 'expired' | 'expiring' | 'none';
 
 export interface TestEdge {
   port: number;
@@ -28,6 +28,9 @@ export interface Forwarded {
   headers: Record<string, string>;
   body: string;
 }
+
+// Zeitpunkt für openssl (YYYYMMDDHHMMSSZ)
+const stamp = (ms: number): string => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14) + 'Z';
 
 export async function startTestEdge(pki: TestPki, forward: (host: string, path: string, method: string) => Promise<Forwarded>): Promise<TestEdge> {
   const leaves = new Map<string, Leaf>();
@@ -47,7 +50,9 @@ export async function startTestEdge(pki: TestPki, forward: (host: string, path: 
       if (mode === 'none') return cb(null, undefined);
       const l = mode === 'other' ? leaf('other', ['other.invalid'])
         : mode === 'expired' ? leaf('expired:' + servername, [servername], { start: '20200101000000Z', end: '20200201000000Z' })
-          : leaf('valid:' + servername, [servername]);
+          // Gültig, läuft aber in 10 Tagen ab
+          : mode === 'expiring' ? leaf('expiring:' + servername, [servername], { start: stamp(Date.now() - 86400_000), end: stamp(Date.now() + 10 * 86400_000) })
+            : leaf('valid:' + servername, [servername]);
       cb(null, tls.createSecureContext({ key: l.key, cert: l.cert }));
     },
   }, (req, res) => {

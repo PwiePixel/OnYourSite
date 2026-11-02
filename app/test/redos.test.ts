@@ -14,6 +14,8 @@ import { externLine, fileMime } from '../src/content/fileMime.js';
 import { ogFit, ogFont, ogWidth } from '../src/content/share.js';
 import { phpRtrim } from '../src/php.js';
 import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
+import { cssHides, cssRules, cssTouches } from '../src/content/brandingCss.js';
+import * as oldBranding from './support/oldBrandingCss.js';
 
 // Kleinste Zeit aus fünf Läufen (die Maschine ist oft ausgelastet)
 function fastest(fn: () => unknown): number {
@@ -253,5 +255,38 @@ test('the preview text is shortened exactly like before', () => {
     for (const [bold, size, maxW] of [[true, 30, 200], [false, 32, 120], [false, 20, 40]] as const) {
       assert.equal(ogFit(s, ogFont(bold), size, maxW), oldOgFit(s, ogFont(bold), size, maxW), JSON.stringify([s, size, maxW]));
     }
+  }
+});
+
+// ---------------------------------------------------------------- Hinweis „Made with OnYourSite“ im eigenen CSS (brandingCss.ts)
+
+// Läuft bei jedem Speichern ohne Premium (Hinweis im Editor) und im Schema-Schritt V_BRANDING_LEGACY über gespeichertes
+// CSS. Vorher: viele „[“ ohne „]“ vor vielen verschachtelten Regeln brauchten mit 13,5 KB 96 s.
+test('the branding checks on custom CSS stay fast on hostile input (every save, schema step V_BRANDING_LEGACY)', () => {
+  const nested = (outer: string, inner: number): string => outer + '{' + 'x{}'.repeat(inner) + '}';
+  const inputs = [
+    nested('['.repeat(12000), 500), nested('['.repeat(10000), 3333), nested(':not('.repeat(2000), 3000), nested('.oys-foot ['.repeat(1000), 3000),
+    nested('a'.repeat(10000), 3333), '.oys-foot{' + nested('['.repeat(5000), 1000) + '}', pump('['), pump(':not('), pump(']'),
+    '[' + pump(']') + '[', pump('.oys-main{['), pump('{x{}'), pump('[{'),
+    '.oys-foot{transform:translate(' + pump('1') + 'q)}', '.oys-foot{transform:' + pump('translate(') + '-1}', '.oys-foot{transform:scale(' + pump('0') + 'x)}',
+    '.oys-foot{filter:opacity(' + pump('0') + 'x)}', '.oys-foot{color:a' + pump('\u00a0') + 'b}', '.oys-foot{left:' + pump('1') + 'q}',
+    '.oys-foot{opacity:' + pump('0') + 'x}', '.oys-foot{transform:translatex(' + pump('-1') + '}', pump(':not(.oys-foot{display:none}'),
+  ];
+  for (const css of inputs) {
+    const name = JSON.stringify(css.slice(0, 24)) + ' (' + css.length + ')';
+    assert.ok(fastest(() => cssTouches(css, 'on-your.site')) < LIMIT_MS, 'cssTouches ' + name);
+    assert.ok(fastest(() => cssHides(css, 'on-your.site')) < LIMIT_MS, 'cssHides ' + name);
+  }
+});
+
+test('the branding checks give the same results as before for random CSS', () => {
+  const alphabet = ['[', ']', '{', '}', '(', ')', ',', ';', ':', ' ', '"', '\\', 'foot', '.oys-foot', 'footer', '.oys-main', 'main', ':last-child',
+    ':not(', ':NOT(', ':hover', '::', 'display:none', 'opacity:0', 'transform:scale(', 'translate(', 'translatex(', '-12345', '12345px', '0', '00.0',
+    'on-your.site', 'onyoursite', '@media x', '!important', '! important', 'x', 'A', '.', '\u00a0', '\v', 'filter:opacity(', 'height:0',
+    'overflow:hidden', 'width:0', 'left:', '-9999px', 'href*=', '%', 'em', '&'];
+  for (const css of randomStrings(5, 40000, alphabet, 14)) {
+    assert.deepEqual(cssRules(css), oldBranding.cssRules(css), JSON.stringify(css));
+    assert.equal(cssTouches(css, 'on-your.site'), oldBranding.cssTouches(css, 'on-your.site'), JSON.stringify(css));
+    assert.equal(cssHides(css, 'on-your.site'), oldBranding.cssHides(css, 'on-your.site'), JSON.stringify(css));
   }
 });
