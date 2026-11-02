@@ -50,6 +50,11 @@ after(async () => {
   await t.done();
 });
 
+
+// Die fünf bisherigen Schlüssel des Code-Zustands (und die Hinweise, falls vorhanden)
+const pickState = (b: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(b).filter(([k]) => ['ok', 'unlocked', 'terms', 'cost', 'balance', 'site', 'notices', 'code', 'error'].includes(k)));
+
 test('code-unlock: 409 reload without request id or price, 400 for bad input, 403 in admin mode without writing anything', async () => {
   await give(5, 300);
   const reload = { ok: false, error: 'OnYourSite was updated – please reload the editor.', reload: true };
@@ -83,16 +88,18 @@ test('code-unlock: a changed price, success with a notice, a replay and an unloc
   ctx = await unlock(5, { terms: true, request_id: id, expected_price: '100' });
   assert.equal(ctx.status, 200);
   const body = jsonBody(ctx);
-  // Antwort wie bisher (Zustand des Code-Tabs) plus die Hinweise
-  assert.deepEqual(Object.keys(body), ['ok', 'unlocked', 'terms', 'cost', 'balance', 'site', 'notices']);
-  assert.deepEqual(body, { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null, notices: [{ tone: 'hc', text: 'Code page unlocked', amount: -100 }] });
+  // Antwort: Zustand des Code-Tabs (die fünf bisherigen Schlüssel zuerst, dann die Plätze) plus die Hinweise
+  assert.deepEqual(Object.keys(body), ['ok', 'unlocked', 'terms', 'cost', 'balance', 'site', 'sites', 'slots', 'more', 'banned', 'paused', 'pages', 'notices']);
+  assert.deepEqual(pickState(body), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null, notices: [{ tone: 'hc', text: 'Code page unlocked', amount: -100 }] });
+  assert.deepEqual(body.sites, []);
+  assert.deepEqual(body.more, { unlocked: true, cost: 0 });
   assert.notEqual((await sql('SELECT code_terms_at FROM `DB`.users WHERE id = 5'))[0].code_terms_at, null);
   // Dieselbe Anfrage noch einmal (Doppelklick): Erfolg ohne zweite Abbuchung, ohne zweiten Hinweis
   ctx = await unlock(5, { terms: true, request_id: id, expected_price: 100 });
-  assert.deepEqual(jsonBody(ctx), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null, notices: [] });
+  assert.deepEqual(pickState(jsonBody(ctx)), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null, notices: [] });
   // Neue Anfrage, schon freigeschaltet: Erfolg wie bisher, nichts gebucht
   ctx = await unlock(5, { terms: true, request_id: rid(), expected_price: 100 });
-  assert.deepEqual(jsonBody(ctx), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null });
+  assert.deepEqual(pickState(jsonBody(ctx)), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null });
   const rows = (await sql("SELECT reason, ref, amount FROM `DB`.honeycomb_ledger WHERE user_id = 5 AND reason = 'unlock'")).map((r) => ({ ...r }));
   assert.deepEqual(rows, [{ reason: 'unlock', ref: 'code_page', amount: -100 }]);
   assert.deepEqual((await sql('SELECT request_id, via, price FROM `DB`.hc_purchases WHERE user_id = 5')).map((r) => ({ ...r })), [{ request_id: id, via: 'code', price: 100 }]);

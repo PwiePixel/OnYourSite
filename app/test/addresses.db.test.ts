@@ -263,7 +263,7 @@ test('code pages: creating claims the address, renaming holds the old one, brand
   assert.equal((await row('tom-lab'))?.ref_id, site);
   // Lange benutzt, dann umbenannt
   await q("UPDATE site_addresses SET claimed_at = ? WHERE slug = 'tom-lab'", [ago(40)]);
-  res = await api(6, 'code-address', { slug: 'tom-lab2' });
+  res = await api(6, 'code-address', { site, slug: 'tom-lab2' });
   assert.equal((res.body.site as { slug: string }).slug, 'tom-lab2');
   assert.equal((await row('tom-lab2'))?.kind, 'code');
   assert.equal((await row('tom-lab'))?.kind, 'held');
@@ -276,7 +276,7 @@ test('code pages: creating claims the address, renaming holds the old one, brand
   assert.equal((await row('tom-lab'))?.kind, 'page');
   await api(6, 'page-delete', { id: Number(res.body.id), confirm: 'tom-lab' });
   // Eine fremde Adresse für die Code-Seite: vergeben
-  res = await api(6, 'code-address', { slug: 'lea' });
+  res = await api(6, 'code-address', { site, slug: 'lea' });
   assert.deepEqual(res.body, { ok: false, error: TAKEN('lea') });
   assert.equal((await row('tom-lab2'))?.kind, 'code');
 });
@@ -607,10 +607,11 @@ test('two address changes of one code page at once leave exactly one live addres
   try {
     await other.query('START TRANSACTION');
     await other.query('SELECT id FROM code_sites WHERE id = ? FOR UPDATE', [site]);
-    const first = api(6, 'code-address', { slug: 'tom-race-b' });
+    const first = api(6, 'code-address', { site, slug: 'tom-race-b' });
     await waitForStatements(waitingOn('code_sites', site), 1);
-    const second = api(6, 'code-address', { slug: 'tom-race-c' });
-    await waitForStatements(waitingOn('code_sites', site), 2);
+    const second = api(6, 'code-address', { site, slug: 'tom-race-c' });
+    // Die zweite Änderung wartet auf die Sperre der Seitenplätze des Kontos (users), die die erste hält
+    await waitForStatements([...waitingOn('code_sites', site), 'SELECT id, is_admin, % FROM users WHERE id = 6 FOR UPDATE'], 2);
     await other.query('COMMIT');
     const answers = [(await first).body, (await second).body];
     assert.equal(answers[0].ok, true, JSON.stringify(answers[0]));
@@ -636,7 +637,7 @@ test('a block by the team that lands while a code page changes its address wins:
     // Das Team sperrt die Code-Seite (noch nicht bestätigt), während die Anfrage sie noch als offen gelesen hat
     await other.query('START TRANSACTION');
     await other.query("UPDATE code_sites SET is_blocked = 1, blocked_reason = 'Phishing' WHERE id = ?", [site]);
-    const pending = api(6, 'code-address', { slug: 'tom-race-d' });
+    const pending = api(6, 'code-address', { site, slug: 'tom-race-d' });
     await waitForStatements(waitingOn('code_sites', site), 1);
     await other.query('COMMIT');
     assert.deepEqual((await pending).body, { ok: false, error: 'Your code page has been blocked by the team: Phishing' });

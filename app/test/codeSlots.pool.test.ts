@@ -115,7 +115,7 @@ test('the other address writers – sign-up, address change, code page create an
   const [code, ms3] = await timed(() => api(6, 'code-create', { slug: 'tom-pool-code', title: 'Code', terms: true }));
   assert.equal(code.ok, true, JSON.stringify(code).slice(0, 200));
   assert.ok(ms3 < 2000, 'code-create took ' + ms3 + ' ms');
-  const [renamed, ms4] = await timed(() => api(6, 'code-address', { slug: 'tom-pool-code2' }));
+  const [renamed, ms4] = await timed(() => api(6, 'code-address', { site: (code.site as { id: number }).id, slug: 'tom-pool-code2' }));
   assert.equal(renamed.ok, true, JSON.stringify(renamed).slice(0, 200));
   assert.ok(ms4 < 2000, 'code-address took ' + ms4 + ' ms');
   assert.equal((await q("SELECT kind FROM site_addresses WHERE slug = 'tom-pool-code2'"))[0]?.kind, 'code');

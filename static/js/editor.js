@@ -3016,7 +3016,7 @@
     if (!Object.keys(files).length && !deleted.length) { toast('Nothing to save – your page is up to date.', 'info'); return; }
     code.saving = true;
     setCodeSaveState('saving');
-    api('code-save', { files: files, deleted: deleted }).then(function (res) {
+    api('code-save', { site: st.site.id, files: files, deleted: deleted }).then(function (res) {
       code.saving = false;
       if (!res || !res.ok) { setCodeSaveState('dirty'); toast((res && res.error) || 'Saving failed.', 'err'); return; }
       setCodeState(res, true);
@@ -3030,6 +3030,8 @@
 
   // Name, Adresse und Online-Schalter (ohne die Dateien anzufassen)
   function codeSettings(action, body, done) {
+    // Jede Änderung nennt die Code-Seite, die der Tab zeigt (der Server lehnt Anfragen ohne sie ab)
+    if (code.st && code.st.site) body.site = code.st.site.id;
     return api(action, body).then(function (res) {
       if (!res || !res.ok) { toast((res && res.error) || 'That didn’t work.', 'err'); return false; }
       setCodeState(res, true);

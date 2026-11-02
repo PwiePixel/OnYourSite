@@ -11,8 +11,11 @@
 import type { Ctx } from '../web/ctx.js';
 import { transaction, withConnection, type Db, type Row } from '../db.js';
 import { config } from '../config.js';
-import { intval } from '../php.js';
+import { intval, phpStr, phpTruthy } from '../php.js';
 import { isStaff } from '../app/context.js';
+import { has } from '../honeycombs/entitlements.js';
+import { shopPrice } from '../honeycombs/catalogue.js';
+import { codeSettings } from './settings.js';
 
 // Erfolgreiche Änderungen an den Plätzen: höchstens 20 je Stunde und Konto (abgelehnte Versuche zählen nicht)
 export const SLOT_RATE_MAX = 20;
@@ -80,3 +83,77 @@ export async function pageAllowance(ctx: Ctx, user: Row, _db?: Db): Promise<Page
 
 // „You can create up to N pages.“ (Text wie bisher)
 export const pageLimitText = (max: number): string => `You can create up to ${max} ` + (max === 1 ? 'page.' : 'pages.');
+
+// ---- Regeln für Code-Seiten (E1–E8) ----
+
+// Stand eines Kontos für die Regeln – innerhalb der Sperre gelesen (Bann, Pause und Zähler gelten so sofort)
+export interface CodeQuota {
+  unlocked: boolean; more: boolean; morePrice: number; banned: string | null; paused: boolean;
+  own: number; onPages: number; total: number; maxOnPages: number;
+  pagesUsed: number; pages: PageAllowance;
+}
+export interface CodeDenied { error: string; status: 200 | 403; need?: 'code_page' | 'code_more' }
+// Ein Platz, auf den eine Code-Seite soll: hat er eine eigene Domain (in irgendeinem Zustand)? (E7)
+export interface SlotTarget { hasDomain: boolean }
+
+export const CODE_PAUSED_NEW_TEXT = 'New code pages are paused right now. Please try again later.';
+export const CODE_PAUSED_MOVE_TEXT = 'Code pages can’t move to a new address right now. Please try again later.';
+export const CODE_OWN_USED_TEXT = 'You already have a code page with its own address.';
+export const CODE_DOMAIN_TEXT = 'Remove the custom domain of this page first – custom domains work for link pages only.';
+export const CODE_UNLOCK_TEXT = 'Unlock code pages with honeycombs first.';
+export const CODE_MORE_TEXT = 'Unlock more code pages with honeycombs first.';
+
+export const codeBannedText = (reason: string): string =>
+  'Code pages have been turned off for your account by the team' + (reason !== '' ? ': ' + reason : '.');
+
+export function onPagesText(max: number): string {
+  if (max <= 0) return 'Code pages can’t use your page addresses right now.';
+  return max === 1 ? 'Only one of your pages can show a code page.' : `Up to ${max} of your pages can show a code page.`;
+}
+
+const deny = (error: string, status: 200 | 403 = 200, need?: 'code_page' | 'code_more'): CodeDenied =>
+  need ? { error, status, need } : { error, status };
+
+// Neue Code-Seite: an eigener Adresse (own), auf einem bestehenden Platz (page) oder auf einer neuen Seite (new-page).
+// Die erste verletzte Regel gewinnt; E8 (Bezahlen) zuletzt, damit niemand für etwas zahlt, das eine andere Regel ablehnt.
+export function canCreate(q: CodeQuota, target: 'own' | 'page' | 'new-page', slot?: SlotTarget): CodeDenied | null {
+  if (q.banned !== null) return deny(codeBannedText(q.banned));
+  if (!q.unlocked) return deny(CODE_UNLOCK_TEXT, 403, 'code_page');
+  if (q.paused) return deny(CODE_PAUSED_NEW_TEXT);
+  if (target === 'own' && q.own >= 1) return deny(CODE_OWN_USED_TEXT);
+  if (target !== 'own' && q.onPages >= q.maxOnPages) return deny(onPagesText(q.maxOnPages));
+  if (target === 'new-page' && !q.pages.unlimited && q.pagesUsed >= q.pages.max) return deny(pageLimitText(q.pages.max));
+  if (target === 'page' && slot?.hasDomain) return deny(CODE_DOMAIN_TEXT);
+  if (q.total >= 1 && q.morePrice > 0 && !q.more) return deny(CODE_MORE_TEXT, 403, 'code_more');
+  return null;
+}
+
+// Bestehende Code-Seite umziehen: an eine eigene Adresse (own) oder auf einen Platz (page)
+export function canMove(q: CodeQuota, to: 'own' | 'page', slot?: SlotTarget): CodeDenied | null {
+  if (q.banned !== null) return deny(codeBannedText(q.banned));
+  if (q.paused) return deny(CODE_PAUSED_MOVE_TEXT);
+  if (to === 'own' && q.own >= 1) return deny(CODE_OWN_USED_TEXT);
+  if (to === 'page' && q.onPages >= q.maxOnPages) return deny(onPagesText(q.maxOnPages));
+  if (to === 'page' && slot?.hasDomain) return deny(CODE_DOMAIN_TEXT);
+  return null;
+}
+
+// Stand für die Regeln lesen – nur über db (die Verbindung der Sperre), mit der gesperrten Zeile des Kontos
+export async function codeQuota(user: SlotUser, ctx: Ctx, db: Db): Promise<CodeQuota> {
+  const uid = intval(user.id);
+  const settings = await codeSettings(db);
+  const count = async (sql: string): Promise<number> => intval(await db.value(sql, [uid]));
+  return {
+    unlocked: await has(uid, 'code_page', db),
+    more: await has(uid, 'code_more', db),
+    morePrice: await shopPrice('code_more', uid, db),
+    banned: phpTruthy(user.code_banned_at) ? phpStr(user.code_ban_reason ?? '') : null,
+    paused: settings.paused,
+    own: await count('SELECT COUNT(*) FROM code_sites WHERE user_id = ? AND slug IS NOT NULL'),
+    onPages: await count('SELECT COUNT(*) FROM pages WHERE user_id = ? AND code_site_id IS NOT NULL'),
+    total: await count('SELECT COUNT(*) FROM code_sites WHERE user_id = ?'),
+    maxOnPages: settings.max_on_pages,
+    pagesUsed: await count('SELECT COUNT(*) FROM pages WHERE user_id = ?'),
+    pages: await pageAllowance(ctx, user, db),
+  };
+}

@@ -19,13 +19,12 @@ import { isPremiumRow } from '../honeycombs/premium.js';
 import { stats } from '../content/stats.js';
 import { layoutKey, themeKey } from '../content/themes.js';
 import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, uploadKinds, userUploadFiles } from '../content/uploads.js';
-import { entries, isArr, jsonDecode, own, values, type PhpArr } from '../content/util.js';
+import { entries, isArr, jsonDecode, own, type PhpArr } from '../content/util.js';
 import { hcForEditor } from '../honeycombs/honeycombs.js';
-import { REQUEST_ID, adminMode, buy } from '../honeycombs/shop.js';
 import { isShopAction, shopApi } from '../honeycombs/editorApi.js';
 import { phpFloatString } from '../community/json.js';
 import {
-  CODE_MAX_FILES, codeChangeAddress, codeCreate, codeDeleteRows, codeEditorState, codeFileCount, codeSave, codeSite, codeSiteById, codeSiteOfUser, codeUnlocked,
+  codeDeleteRows, codeSiteById, codeSiteOfUser,
 } from '../code/sites.js';
 import {
   SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError, pageAllowance, pageLimitText, slotRateKey,
@@ -37,6 +36,7 @@ import { currentPage, isStaff } from './context.js';
 import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
 import { statusEditorApi } from '../status/editorApi.js';
+import { codeApi } from '../code/editorApi.js';
 
 // Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
 const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
@@ -423,85 +423,4 @@ async function slotChange<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUs
     if (err instanceof SlotGoneError) ctx.json({ ok: false, error: SLOT_GONE_TEXT, reload: true }, 409);
     throw err;
   }
-}
-
-// Code-Seite: alle Aktionen, die mit „code“ beginnen (enden immer hier)
-async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boolean, input: PhpArr): Promise<never> {
-  const userId = intval(user.id);
-  const inp = (key: string): unknown => own(input, key);
-  const site = await codeSite(userId);
-  const termsAccepted = phpTruthy(user.code_terms_at);
-  const state = async (): Promise<Record<string, unknown>> => ({ ok: true, ...(await codeEditorState(userId)) });
-
-  if (action === 'code') ctx.json(await state());
-  if (!isPost) ctx.json({ ok: false, error: 'Not found.' }, 404);
-  // Freischalten über den Shop (Vertrag der Kauf-Routen): Anfrage-ID aus dem Dialog und der Preis, den er zeigte.
-  // Die Regeln akzeptiert der Kauf selbst (in seiner Transaktion) – im Admin-Modus wird also nichts geschrieben.
-  if (action === 'code-unlock') {
-    const requestId = inp('request_id');
-    const expected = inp('expected_price');
-    const missing = (v: unknown): boolean => v === undefined || v === null || v === '';
-    if (missing(requestId) || missing(expected)) {
-      ctx.json({ ok: false, error: 'OnYourSite was updated – please reload the editor.', reload: true }, 409);
-    }
-    const price = typeof expected === 'number' ? expected : typeof expected === 'string' && /^[0-9]{1,7}$/.test(expected) ? Number(expected) : -1;
-    if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId) || !Number.isSafeInteger(price) || price < 0) {
-      ctx.json({ ok: false, error: 'Not all of the data arrived. Please try again.' }, 400);
-    }
-    if (adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Buying is turned off in admin mode.' }, 403);
-    if (!(await rateLimit('hcbuy:' + userId, 20, 600))) {
-      ctx.json({ ok: false, error: 'Too many purchases in a short time – please wait a moment.' });
-    }
-    const r = await buy(ctx, userId, 'code_page', requestId as string, price, { via: 'code', terms: phpTruthy(inp('terms')) });
-    // Schon freigeschaltet: Erfolg ohne Abbuchung (wie bisher)
-    if (r.ok) ctx.json({ ...(await state()), notices: r.notices });
-    if (r.code === 'owned') ctx.json(await state());
-    ctx.json(r.price === undefined ? { ok: false, code: r.code, error: r.error } : { ok: false, code: r.code, price: r.price, error: r.error }, r.status);
-  }
-  // Wer die Regeln noch nicht akzeptiert hat, muss es jetzt tun
-  if (action === 'code-create' && !termsAccepted) {
-    if (!phpTruthy(inp('terms'))) {
-      ctx.json({ ok: false, error: 'Please read and accept the rules for code pages first.' });
-    }
-    await exec('UPDATE users SET code_terms_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), userId]);
-  }
-  if (!(await codeUnlocked(userId))) {
-    ctx.json({ ok: false, error: 'Unlock code pages with honeycombs first.' }, 403);
-  }
-  if (action === 'code-create') {
-    const [, error] = await codeCreate(userId, normalizeSlug(inp('slug') ?? ''), phpStr(inp('title') ?? ''));
-    ctx.json(phpTruthy(error) ? { ok: false, error } : await state());
-  }
-  if (!site) {
-    ctx.json({ ok: false, error: 'Create your code page first.' }, 404);
-  }
-  if (phpTruthy(site.is_blocked)) {
-    ctx.json({ ok: false, error: 'Your code page has been blocked by the team' + (phpTruthy(site.blocked_reason) ? ': ' + phpStr(site.blocked_reason) : '.') });
-  }
-  if (action === 'code-save') {
-    // Dateien in der Reihenfolge der Anfrage (json_decode behält sie), gelöschte Pfade nur als Text
-    const filesIn = inp('files') ?? null;
-    const files: PhpArr = isArr(filesIn) ? filesIn : [];
-    const deletedIn = inp('deleted') ?? null;
-    const deleted = values(isArr(deletedIn) ? deletedIn : []).filter((x) => typeof x === 'string');
-    if (codeFileCount(files) > CODE_MAX_FILES * 2 || deleted.length > CODE_MAX_FILES * 2) {
-      ctx.json({ ok: false, error: 'Too many files.' }, 400);
-    }
-    const error = await codeSave(site, files, deleted);
-    if (phpTruthy(error)) ctx.json({ ok: false, error });
-    // array_key_exists(): auch ein null-Wert zählt als vorhanden
-    const title = Object.hasOwn(input, 'title') ? cleanText(inp('title'), 120) : site.title;
-    const online = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : phpTruthy(site.is_published);
-    await exec('UPDATE code_sites SET title = ?, is_published = ? WHERE id = ?', [(title !== '' ? title : site.slug) as Param, online ? 1 : 0, site.id as Param]);
-    ctx.json(await state());
-  }
-  if (action === 'code-address') {
-    const slug = normalizeSlug(inp('slug') ?? '');
-    if (slug !== site.slug) {
-      const problem = await codeChangeAddress(site, slug, userId);
-      if (problem !== null) ctx.json({ ok: false, error: problem });
-    }
-    ctx.json(await state());
-  }
-  ctx.json({ ok: false, error: 'Not found.' }, 404);
 }
