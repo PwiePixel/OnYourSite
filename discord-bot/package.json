@@ -1,6 +1,6 @@
 {
   "name": "onyoursite-discord-bot",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Discord bot for OnYourSite: welcome messages, suggestions, support tickets, updates and status messages, connected to the website.",
   "main": "index.js",

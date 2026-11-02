@@ -98,7 +98,7 @@ test('status.alert posts one message in the team channel with a nonce', async ()
 
 test('version 0.3.0 reports status.v1 and handles every status.* job', () => {
   const index = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  assert.equal(require('../package.json').version, '0.3.0');
+  assert.equal(require('../package.json').version, '0.3.1');
   assert.match(index, /const FEATURES = \['updates\.v1', 'suggestions\.v2', 'status\.v1'\];/);
   for (const action of ['status.post', 'status.edit', 'status.delete', 'status.alert']) assert.ok(index.includes(`'${action}': `), action);
 });
