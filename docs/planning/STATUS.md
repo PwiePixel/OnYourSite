@@ -69,6 +69,35 @@ Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 s
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy – new
 steps take the next free number when they are merged.
 
+## How to continue (handoff)
+
+1. **Merge PR #15 first** ("Create a merge commit" keeps `feature/new-features` in line; after a squash merge, bring
+   `main` into `feature/new-features` with `git merge -s ours origin/main` – only when the tree of `main` equals the
+   tree of `feature/node-complete` – so #14 shows only the feature changes). Then deploy with
+   `sudo bash server/install.sh --update` (see `server/README.md`).
+2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 909 tests pass
+   (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
+3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
+   - Shop: HC-4 (editor "Honeycombs" tab) and HC-5 (shop admin I) – being built; then HC-6a, HC-8, HC-7a, HC-6b,
+     HC-9, HC-7b.
+   - Premium and domains: PD-4 (custom domain in the editor – needs HC-4), PD-5 (domains admin), PD-6 (installer:
+     Cloudflare for SaaS, systemd unit for the domain worker).
+   - Code pages: CS-4 (editor API), CS-5 (moderation), CS-6 (code slots in the editor, live).
+   - Status pages: ST-4 (status pages for users – needs HC-6a), then ST-5, ST-7.
+   - Later: Stage C (`ROADMAP.md` §4.2).
+4. **Follow-ups found during the work:**
+   - Texts that still name the PHP setup: `app/src/content/storage.ts` (uploads_dir hint), `app/src/admin/views/storage.ts`
+     (config.php line, backup list), `app/src/community/adminView.ts` (bot secret hint), `app/src/admin/newsletter.ts`
+     (PHPMailer), `app/src/content/uploads.ts` (PHP settings), the privacy page ("PHP Sessions"), `app/src/cli.ts`
+     ("PHP Fatal error" text; exit code 0 when the database is down).
+   - README: the "Updates, roadmap & Discord" section still describes the old single Discord form and the `/roadmap`
+     redirect; "Structure" is missing `src/discord`, `src/domains`, `src/notify`, `src/status`.
+   - The browser flows (`tests/e2e/*.js`, `app/test/e2e/*.e2e.ts`) are not part of `npm test`; the tsconfig does not
+     type-check the test files.
+   - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
+   - The native-dialog check also matches regular-expression literals and comments.
+   - Extra DNS records for root domains (ownership TXT, DCV) have no storage yet – PD-4 adds it.
+
 Work in progress lives on branches of the current workspace and is pushed when it is merged into
 `feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
 requests into `feature/new-features` (for example #16, the weekly report's best link).
