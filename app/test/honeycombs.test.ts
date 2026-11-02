@@ -1,23 +1,24 @@
 // Honigwaben gegen PHP: Einstellungen, Kontostand, Buchungen, Verdienen, Bezahlen, Editor-Daten und der Admin-Teil.
 // Dieselben Aufrufe laufen mit lib/honeycombs.php (PHP-Version, siehe support/phpRef.ts) auf Datenbank A und mit der
-// Node-Version auf Datenbank B; nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein.
+// Node-Version auf Datenbank B; nach jedem Abschnitt müssen Ergebnisse und Tabellen gleich sein. Seit der Trennung im
+// Admin stehen die Aktionen und die Liste der Code-Seiten im Bereich „Code pages“ (code/admin.ts, code/adminView.ts) –
+// verglichen wird mit denselben Teilen von PHP.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { sha256Hex } from '../src/crypto.js';
 import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
 import { phpInt, phpJsonDecode } from '../src/honeycombs/util.js';
-import { kb, adminHoneycombsView } from '../src/honeycombs/adminView.js';
+import { adminHoneycombsView } from '../src/honeycombs/adminView.js';
+import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
 import { phpBoot, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
+import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 const DB = { php: testDbName('hcu_hc_php'), node: testDbName('hcu_hc_node') };
-// Nutzernummern für die Sperr-Prüfung: aus dem Namen der Datenbank (900000–999998), je Arbeitsordner verschieden
-const lockUser = 900000 + (parseInt(sha256Hex(DB.node).slice(0, 8), 16) % 49999) * 2;
 let admin: Connection;
 
 function fixture(): Array<[string, unknown[]]> {
@@ -174,10 +175,8 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
   const g = (o: Record<string, unknown>) => ({ hc_action: 'grant', ...o });
   const ops: Op[] = [
     ['admin', {}, 3], ['admin', { hc_action: 'nope' }, 3], ['admin', { hc_action: ['settings'] }, 3], ['admin', { hc_action: 'Settings' }, 3], ['admin', { hc_action: '' }, 3],
-    ['admin', { hc_action: 'settings', daily: '3', profile: '15', views: '8', views_step: '50', code_page: '250' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: '1e400', views_step: '0', code_page: '-1', profile: '1e5', views: '100001' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: ['5'], profile: '', views: 'abc', views_step: ' 7 ', code_page: '0x10' }, 3], ['settings'],
+    // hc_action=settings vergleicht hc-admin.http.test.ts: seit „Catalogue & prices“ steht der Preis nur im Katalog,
+    // und das Formular lässt Schlüssel, die es nicht schickt (spätere Schritte), stehen – PHP schrieb alle fünf neu
     ['admin', g({ user_id: '0', amount: '5' }), 3], ['admin', g({ user_id: 'abc', amount: '5' }), 3], ['admin', g({ user_id: '999', amount: '5' }), 3],
     ['admin', g({ amount: '5' }), 3], ['admin', g({ user_id: '1e400', amount: '5' }), 3],
     ['admin', g({ user_id: '5', amount: '0' }), 3], ['admin', g({ user_id: '5', amount: '100001' }), 3], ['admin', g({ user_id: '5', amount: '-100001' }), 3],
@@ -190,18 +189,18 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
     ['admin', g({ user_id: '5', amount: '7', grant_ref: '0123456789abcdee\n' }), 3],
     ['admin', g({ user_id: '5', amount: '7', grant_ref: ['0123456789abcdef'] }), 3],
     ['admin', g({ user_id: '5', amount: '7', grant_ref: '0123456789abcde' }), 3],
-    ['admin', g({ user_id: '6', amount: '-1000', grant_ref: 'aaaaaaaaaaaaaaa1' }), 3],
-    ['admin', g({ user_id: '6', amount: '-5', grant_ref: 'aaaaaaaaaaaaaaa2' }), 3],
+    ['admin', g({ user_id: '6', amount: '-1000', grant_ref: 'aaaaaaaaaaaaaaa1', _confirmed: '1' }), 3],
+    ['admin', g({ user_id: '6', amount: '-5', grant_ref: 'aaaaaaaaaaaaaaa2', _confirmed: '1' }), 3],
     ['admin', g({ user_id: '7', amount: ' 12.9abc', note: 'x'.repeat(200), grant_ref: 'aaaaaaaaaaaaaaa3' }), 3],
-    ['admin', g({ user_id: '10', amount: '100000', note: '<b>"bidi‮"</b>\u0000', grant_ref: 'aaaaaaaaaaaaaaa4' }), 3],
-    ['admin', g({ user_id: '5', amount: '-100000', grant_ref: 'aaaaaaaaaaaaaaa5' }), 3],
+    ['admin', g({ user_id: '10', amount: '100000', note: '<b>"bidi‮"</b>\u0000', grant_ref: 'aaaaaaaaaaaaaaa4', _confirmed: '1' }), 3],
+    ['admin', g({ user_id: '5', amount: '-100000', grant_ref: 'aaaaaaaaaaaaaaa5', _confirmed: '1' }), 3],
     ['admin', g({ user_id: ['5'], amount: '3', grant_ref: 'aaaaaaaaaaaaaaa6' }), 3],
     ['admin', g({ user_id: '5', amount: ['3'], grant_ref: 'aaaaaaaaaaaaaaa7' }), 3],
     ['admin', g({ user_id: '5', amount: '2', note: ['x'], grant_ref: 'aaaaaaaaaaaaaaa8' }), 3],
     ['admin', g({ user_id: '5', amount: '1', grant_ref: 'aaaaaaaaaaaaaaa9' }), 7],
     ['admin', g({ user_id: ' 9', amount: '+15', note: 'Für dich 🐝', grant_ref: 'bbbbbbbbbbbbbbb1' }), 3],
-    ['admin', g({ user_id: '9', amount: '-15', grant_ref: 'bbbbbbbbbbbbbbb2' }), 3],
-    ['admin', g({ user_id: '9', amount: '-1', grant_ref: 'bbbbbbbbbbbbbbb3' }), 3],
+    ['admin', g({ user_id: '9', amount: '-15', grant_ref: 'bbbbbbbbbbbbbbb2', _confirmed: '1' }), 3],
+    ['admin', g({ user_id: '9', amount: '-1', grant_ref: 'bbbbbbbbbbbbbbb3', _confirmed: '1' }), 3],
     ['admin', { hc_action: 'code_block', site_id: '999' }, 3], ['admin', { hc_action: 'code_block' }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: '  Selling\tstuff  ' + 'y'.repeat(250) }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: '' }, 3],
@@ -214,52 +213,49 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
     ['admin', { hc_action: 'code_unlock', user_id: '9' }, 3], ['admin', { hc_action: 'code_unlock', user_id: '9' }, 3],
     ['admin', { hc_action: 'code_unlock', user_id: '6' }, 3], ['admin', { hc_action: 'code_unlock', user_id: '7' }, 3],
     ['admin', { hc_action: 'code_unlock', user_id: '10' }, 3], ['admin', { hc_action: 'code_unlock', user_id: ['10'] }, 3],
-    ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30]];
+    // Dieselben Aktionen als code_action (Bereich Code-Seiten): Ergebnis und Tabellen wie die alten PHP-Aktionen
+    ['code_admin', {}, 3], ['code_admin', { code_action: 'nope' }, 3], ['code_admin', { code_action: ['block'] }, 3], ['code_admin', { code_action: 'Block', site_id: '1' }, 3],
+    ['code_admin', { code_action: 'block', site_id: '999' }, 3], ['code_admin', { code_action: 'block' }, 3],
+    ['code_admin', { code_action: 'block', site_id: '2', reason: '  Phishing\t<b>x</b>  ' + 'z'.repeat(250) }, 3],
+    ['code_admin', { code_action: 'block', site_id: '3', reason: '' }, 3],
+    ['code_admin', { code_action: 'unblock', site_id: '2', reason: 'ignored' }, 3], ['code_admin', { code_action: 'unblock', site_id: ' 1x' }, 3],
+    ['code_admin', { code_action: 'unblock', site_id: '999' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '0', item: 'code_page' }, 3], ['code_admin', { code_action: 'unlock' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '8', item: 'code_page' }, 3], ['code_admin', { code_action: 'unlock', user_id: '8', item: 'code_page' }, 3],
+    ['code_admin', { code_action: 'unlock', user_id: '5' }, 3], ['code_admin', { code_action: 'unlock', user_id: ['8'] }, 3],
+    ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30], ['history', 8, 5]];
   const php = await same(ops, 'admin');
   assert.deepEqual(php[0], null);
-  assert.deepEqual(php[5], { ok: 'Honeycomb settings saved.' });
+  // Nur Node: jede Gutschrift des Teams nennt den Admin (actor_id = die ID aus dem Bezug a<id>-…)
+  const [grants] = await admin.query<RowDataPacket[]>(`SELECT ref, actor_id FROM \`${DB.node}\`.honeycomb_ledger WHERE reason = 'admin' AND id > 4 ORDER BY id`);
+  assert.ok(grants.length >= 5);
+  for (const g of grants) assert.equal(g.actor_id, Number(/^a(\d+)-/.exec(String(g.ref))?.[1]), String(g.ref));
 });
 
-// Die Sperren (oys_hc_<Nutzer>) gelten für den ganzen Datenbankserver: Nutzernummern je Arbeitsordner, damit
-// gleichzeitige Läufe in anderen Arbeitsordnern nicht dieselbe Sperre halten
-const busy = lockUser;
-const buyer = lockUser + 1;
-
-// Fremde Sperre halten, während spend() läuft: es wartet 10 Sekunden und meldet dann, dass es gerade nicht geht
-async function whileLocked<T>(spend: () => Promise<T>): Promise<T> {
+test('locked: busy message while the account is locked, and parallel spends never overdraw (Node only)', async () => {
+  // PHP wartete auf GET_LOCK('oys_hc_<id>', 10). Node sperrt seit dem Shop-Kern die Zeile des Kontos in hc_accounts
+  // (höchstens 5 Sekunden) – eine zweite Sperrart gibt es nicht mehr, deshalb ohne Vergleich mit PHP.
+  await useDb(DB.node);
   const holder = await adminConnection();
   try {
-    await holder.query('SELECT GET_LOCK(?, 30)', ['oys_hc_' + busy]);
-    return await spend();
+    await holder.query(`USE \`${DB.node}\``);
+    await holder.query('INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) VALUES (99999, NOW(), NOW())');
+    await holder.query('START TRANSACTION');
+    await holder.query('SELECT * FROM hc_accounts WHERE user_id = 99999 FOR UPDATE');
+    assert.equal(await hcSpend(99999, 0, 'busy_test'), HC_BUSY);
+    assert.equal(await hcLocked(99999, async () => 'ran'), HC_BUSY);
+    await holder.query('ROLLBACK');
   } finally {
-    await holder.query('SELECT RELEASE_LOCK(?)', ['oys_hc_' + busy]);
     await holder.end();
   }
-}
-
-test('locked: PHP gives the same busy message after 10 s', { skip: PHP_SKIP }, async () => {
-  const a = await whileLocked(() => new Promise<string>((resolve, reject) => {
-    const child = execFile('php', ['-r', `${phpBoot()} echo json_encode(oys_hc_spend($pdo, ${busy}, 0, 'busy'), JSON_UNESCAPED_UNICODE);`],
-      { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: phpRoot() }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out))));
-    child.stdin?.end();
-  }));
-  assert.equal(a, HC_BUSY);
-});
-
-test('locked: busy message after 10 s, and parallel spends never overdraw', async () => {
-  await useDb(DB.node);
-  assert.equal(await whileLocked(() => hcSpend(busy, 0, 'busy')), HC_BUSY);
-  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt, die Sperre ist danach frei
-  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (?, 100, 'admin', 'p', '', NOW())`, [buyer]);
-  const results = await Promise.all([hcSpend(buyer, 60, 'x'), hcSpend(buyer, 60, 'y'), hcSpend(buyer, 60, 'z')]);
+  // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt
+  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (99998, 100, 'admin', 'p', '', NOW())`);
+  const results = await Promise.all([hcSpend(99998, 60, 'xx'), hcSpend(99998, 60, 'yy'), hcSpend(99998, 60, 'zz')]);
   assert.equal(results.filter((r) => r === null).length, 1);
   assert.deepEqual(results.filter((r) => r !== null), ['You need 60 honeycombs – you have 40.', 'You need 60 honeycombs – you have 40.']);
-  const [free] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
-  assert.equal(Number(free[0].f), 1);
-  // Fehler in fn: Sperre wird trotzdem gelöst
-  await assert.rejects(hcLocked(buyer, async () => { throw new Error('boom'); }));
-  const [free2] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
-  assert.equal(Number(free2[0].f), 1);
+  // Fehler in fn: zurückgerollt, die Sperre ist danach frei
+  await assert.rejects(hcLocked(99998, async () => { throw new Error('boom'); }));
+  assert.equal(await hcLocked(99998, async () => 'free'), 'free');
   await restoreDb();
 });
 
@@ -290,10 +286,10 @@ async function phpView(db: string): Promise<string> {
     child.stdin?.end();
   });
 }
-async function nodeView(db: string): Promise<string> {
+async function nodeView(db: string, tab = ''): Promise<string> {
   await useDb(db);
   try {
-    const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+    const ctx = new Ctx({ method: 'GET', url: '/admin' + (tab ? '?hc_tab=' + tab : ''), headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
     // Sitzung mit festem CSRF-Wert (wie $_SESSION im PHP-Aufruf)
     ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
     const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
@@ -302,9 +298,54 @@ async function nodeView(db: string): Promise<string> {
     await restoreDb();
   }
 }
+async function nodeCodeView(db: string): Promise<string> {
+  await useDb(db);
+  try {
+    const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+    ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
+    const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
+    return await adminCodePagesView(ctx, users);
+  } finally {
+    await restoreDb();
+  }
+}
 const viewNorm = (s: string) => s.replace(/name="grant_ref" value="[0-9a-f]{16}"/, 'name="grant_ref" value="REF"');
 
-test('admin view: byte-identical HTML (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
+// Die Ausgabe von views/admin_honeycombs.php geteilt wie im Admin seit der Trennung: die Karte mit der Liste der
+// Code-Seiten und die Spalte „Code page“ (Kopf und je Zeile eine Zelle) gehören zum Bereich Code-Seiten
+const CARD = '                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">\n';
+const CODE_CARD = CARD + '                    <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">\n'
+  + '                        <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class=\'bx bx-code-alt';
+function splitPhpView(php: string): { honeycombs: string; codeList: string } {
+  const start = php.indexOf(CODE_CARD);
+  assert.ok(start > 0, 'code pages card in the PHP view');
+  const end = php.indexOf(CARD, start + CARD.length);
+  const rest = php.slice(0, start) + php.slice(end);
+  assert.equal(rest.split('<th class="px-4 py-3 font-medium">Code page</th>').length, 2, 'one "Code page" column');
+  return {
+    honeycombs: rest.replace('<th class="px-4 py-3 font-medium">Code page</th>', '').replace(/ {36}<td class="px-4 py-3">\n[\s\S]*? {36}<\/td>\n/g, ''),
+    codeList: php.slice(start, end),
+  };
+}
+// Die Liste im Bereich Code-Seiten (bis zur nächsten Karte „Access“)
+function nodeCodeList(node: string): string {
+  const start = node.indexOf(CODE_CARD);
+  assert.ok(start > 0, 'code pages card in the Node section');
+  return node.slice(start, node.indexOf(CARD, start + CARD.length));
+}
+// Die Formulare senden jetzt code_action statt hc_action=code_*
+const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(block|unblock)"/g, 'name="code_action" value="$1"');
+
+test('admin view: the grant form and balances keep the fields of PHP, the moved code page list is unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
+  // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
+  // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
+  // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
+  // zufälligen Bezüge der Gutschriften nicht).
+  const [phpTimes] = await admin.query<RowDataPacket[]>(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS t FROM \`${DB.php}\`.honeycomb_ledger ORDER BY id`);
+  const [nodeRows] = await admin.query<RowDataPacket[]>(`SELECT id FROM \`${DB.node}\`.honeycomb_ledger ORDER BY id`);
+  for (const [i, r] of nodeRows.entries()) {
+    if (phpTimes[i]) await admin.query(`UPDATE \`${DB.node}\`.honeycomb_ledger SET created_at = ? WHERE id = ?`, [phpTimes[i].t, r.id]);
+  }
   // Die Code-Seiten stehen nach updated_at DESC (ohne zweites Sortierfeld, wie in PHP). Die Admin-Aktionen oben setzen
   // drei Seiten in derselben Sekunde auf „jetzt“ – bei Gleichstand wählt MariaDB die Reihenfolge selbst, in beiden
   // Datenbanken womöglich verschieden. Darum vorher eindeutige Zeiten (gleicher Tag, angezeigt wird nur das Datum).
@@ -312,10 +353,19 @@ test('admin view: byte-identical HTML (with data, after changes, and empty)', { 
   for (const [label, prep] of [['current data', unambiguous], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
     ['ledger only', 'DELETE FROM code_sites'], ['empty', 'DELETE FROM honeycomb_ledger']] as const) {
     if (prep) for (const db of Object.values(DB)) await admin.query(`USE \`${db}\``).then(() => admin.query(prep));
-    const php = viewNorm(await phpView(DB.php));
+    const php = splitPhpView(viewNorm(await phpView(DB.php)));
     const node = viewNorm(await nodeView(DB.node));
-    assert.ok(php.length > 1000, label);
-    assert.equal(node, php, label);
+    assert.ok(php.honeycombs.length > 1000, label);
+    // Seit HC-5 hat der Bereich Honeycombs eigene Unterbereiche (hc-admin.http.test.ts); „Give honeycombs“ und die
+    // Kontostände stehen unter „Users“ mit denselben Feldern wie in PHP
+    const users = viewNorm(await nodeView(DB.node, 'users'));
+    for (const part of ['name="hc_action" value="grant"', 'name="grant_ref" value="REF"', 'id="hcUser" name="user_id"', 'id="hcAmount" type="number" name="amount" required min="-100000" max="100000"',
+      'id="hcNote" type="text" name="note" maxlength="150"', 'id="hcFilter"', 'id="hcRows"']) {
+      assert.ok(users.includes(part) && php.honeycombs.includes(part), label + ': ' + part);
+    }
+    assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
+    assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
+    assert.equal(withoutDialogs(nodeCodeList(await nodeCodeView(DB.node))), withoutNativeConfirms(asCodeAction(php.codeList)), label);
   }
 });
 

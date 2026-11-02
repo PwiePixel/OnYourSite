@@ -12,6 +12,32 @@ import { PhpArr, PhpFloat, PhpInt, jsonField, phpCastString, phpJsonDecode, phpJ
 
 const TIMEOUT_MS = 10_000;
 
+// Wünsche eines Aufrufers (z. B. Hintergrunddienste): eigene Kopfzeilen wie List-Unsubscribe und eine Zeitgrenze.
+// timeoutMs gilt für jeden Schritt mit dem Server UND für den ganzen Versand (ohne: wie bisher 10 s je Schritt).
+export interface MailOptions {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+// Für Tests: Versand ohne SMTP-Server. Bekommt die fertige Nachricht (alle Prüfungen sind schon gelaufen).
+export interface CapturedMail {
+  from: string;
+  to: string;
+  raw: Buffer;
+  headers: Record<string, string>;
+  timeoutMs: number;
+}
+export type MailTransport = (mail: CapturedMail) => Promise<void> | void;
+let testTransport: MailTransport | null = null;
+export function setMailTransportForTests(fn: MailTransport | null): void {
+  testTransport = fn;
+}
+
+// Diese Kopfzeilen setzt der Versand selbst – ein Aufrufer darf sie nicht überschreiben
+const OWN_HEADERS = new Set(['from', 'to', 'cc', 'bcc', 'subject', 'reply-to', 'sender', 'return-path', 'date', 'message-id',
+  'mime-version', 'content-type', 'content-transfer-encoding', 'content-disposition', 'content-id', 'in-reply-to', 'references',
+  'received', 'dkim-signature']);
+
 // Ordner mit smtp.json und den Vorlagen (Tests können einen anderen setzen)
 let mailDir: string | null = null;
 export function setMailDirForTests(dir: string | null): void {
@@ -308,7 +334,8 @@ function smtpTargets(hostSetting: string, port: PhpJson, smtps: boolean): SmtpTa
 }
 
 // Verbinden, (STARTTLS,) anmelden – wie PHPMailer mit CRAM-MD5 vor LOGIN vor PLAIN, und nie ohne AUTH-Angebot
-async function openConnection(target: SmtpTarget, user: string, pass: string, timeoutMs = TIMEOUT_MS): Promise<SMTPConnection> {
+async function openConnection(target: SmtpTarget, user: string, pass: string, timeoutMs: number = TIMEOUT_MS,
+  opened: (conn: SMTPConnection) => void = () => undefined): Promise<SMTPConnection> {
   const port = tcpPort(target.port);
   if (port === 0) throw new MailerError('SMTP Error: Could not connect to SMTP host. Failed to connect to server');
   const conn = new SMTPConnection({
@@ -325,6 +352,7 @@ async function openConnection(target: SmtpTarget, user: string, pass: string, ti
   });
   // Spätere Fehler nach dem letzten Schritt nicht unbehandelt lassen
   conn.on('error', () => undefined);
+  opened(conn);
   try {
     await step<void>(conn, (done) => conn.connect((err?: Error) => done(err ?? null)));
     // Ohne AUTH im EHLO meldet sich PHPMailer gar nicht erst an; nach HELO nimmt es LOGIN
@@ -344,14 +372,48 @@ async function openConnection(target: SmtpTarget, user: string, pass: string, ti
   }
 }
 
+// Eigene Kopfzeilen prüfen: einfacher Name, keine Kopfzeile des Versands, nur druckbares ASCII (keine Zeilenumbrüche –
+// sonst ließen sich weitere Kopfzeilen einschleusen). Der Wert erscheint nie im Protokoll.
+function extraHeaders(headers: Record<string, string> | undefined): Record<string, { prepared: true; value: string }> {
+  const out: Record<string, { prepared: true; value: string }> = {};
+  const seen = new Set<string>();
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    const lower = name.toLowerCase();
+    if (!/^[A-Za-z][A-Za-z0-9-]{0,62}$/.test(name) || OWN_HEADERS.has(lower) || seen.has(lower)) throw new MailerError(`Invalid header: ${name}`);
+    if (typeof value !== 'string' || !/^[\x21-\x7e](?:[\x20-\x7e]{0,898}[\x21-\x7e])?$/.test(value)) throw new MailerError(`Invalid value for header ${name}`);
+    seen.add(lower);
+    out[name] = { prepared: true, value };
+  }
+  return out;
+}
+
+// Versand abbrechen, wenn er länger dauert als erlaubt (die offene Verbindung wird geschlossen)
+function withDeadline<T>(work: Promise<T>, error: () => Error, ms: number, onTimeout: () => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(error());
+    }, ms);
+    work.then((v) => {
+      clearTimeout(timer);
+      resolve(v);
+    }, (err: unknown) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
 // sendCustomEmail($to_email, $template_name, $variables = [], $subject_override = null, $reply_to = null)
 // variables: Reihenfolge zählt (Werte, die {andere} enthalten, werden später mit ersetzt)
+// opts (nur Node): eigene Kopfzeilen und eine Zeitgrenze für diesen Aufruf (siehe MailOptions)
 export async function sendCustomEmail(
   toEmail: unknown,
   templateName: string,
   variables: Record<string, unknown> = {},
   subjectOverride: unknown = null,
   replyTo: unknown = null,
+  opts: MailOptions = {},
 ): Promise<boolean> {
   const smtpFile = emailDir() + 'smtp.json';
   const templateFile = emailDir() + templateName + '.json';
@@ -399,6 +461,8 @@ export async function sendCustomEmail(
     const alt = stripTags(bodyText);
     if (!phpTruthy(html)) throw new MailerError('Message body empty');
     const subjectText = phpTrim(phpTrim(scalarText(subject)).replace(/[\r\n]/g, ''));
+    const extra = extraHeaders(opts.headers);
+    const timeoutMs = opts.timeoutMs === undefined ? TIMEOUT_MS : Math.min(120_000, Math.max(100, Math.floor(opts.timeoutMs) || TIMEOUT_MS));
 
     // Mehrteilig nur, wenn es einen Text-Teil gibt (empty($AltBody) wie PHPMailer)
     const composer = new MailComposer({
@@ -409,31 +473,56 @@ export async function sendCustomEmail(
       html: normalizeBreaks(html),
       text: phpTruthy(alt) ? normalizeBreaks(alt) : undefined,
       textEncoding: 'quoted-printable',
+      ...(Object.keys(extra).length ? { headers: extra } : {}),
     });
     let message = await composer.compile().build();
     // PHPMailer schreibt die Betreffzeile auch, wenn sie leer ist
     if (subjectText === '') message = Buffer.concat([Buffer.from('Subject: \r\n'), message]);
 
     if (host instanceof PhpArr) throw new PhpTypeError('explode(): Argument #2 ($string) must be of type string, array given');
-    const targets = smtpTargets(host === null ? 'localhost' : scalarText(host), port, smtps);
-    let lastError: unknown = new MailerError('SMTP Error: Could not connect to SMTP host.');
-    for (const target of targets) {
-      let conn: SMTPConnection;
-      try {
-        conn = await openConnection(target, user, pass);
-      } catch (err) {
-        // Nächsten Server versuchen
-        lastError = err;
-        continue;
+    const hostText = host === null ? 'localhost' : scalarText(host);
+    // Nach Ablauf der Zeitgrenze darf nichts mehr hinausgehen (sonst käme die Mail beim nächsten Versuch doppelt)
+    let active: SMTPConnection | null = null;
+    let expired = false;
+    const late = (): MailerError => new MailerError(`SMTP Error: Sending took longer than ${timeoutMs} ms.`);
+    const deliver = async (): Promise<void> => {
+      if (testTransport) {
+        const headers = Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, v.value]));
+        await testTransport({ from, to, raw: message, headers, timeoutMs });
+        return;
       }
-      try {
-        await step(conn, (done) => conn.send({ from, to: [to] }, message, (err, info) => done(err ?? null, info)));
-      } finally {
-        conn.quit();
+      const targets = smtpTargets(hostText, port, smtps);
+      let lastError: unknown = new MailerError('SMTP Error: Could not connect to SMTP host.');
+      for (const target of targets) {
+        if (expired) throw late();
+        let conn: SMTPConnection;
+        try {
+          conn = await openConnection(target, user, pass, timeoutMs, (c) => {
+            active = c;
+          });
+        } catch (err) {
+          // Nächsten Server versuchen
+          lastError = err;
+          continue;
+        }
+        try {
+          if (expired) throw late();
+          await step(conn, (done) => conn.send({ from, to: [to] }, message, (err, info) => done(err ?? null, info)));
+        } finally {
+          conn.quit();
+        }
+        return;
       }
-      return true;
+      throw lastError;
+    };
+    if (opts.timeoutMs === undefined) await deliver();
+    else {
+      await withDeadline(deliver(), late, timeoutMs, () => {
+        expired = true;
+        (active as SMTPConnection | null)?.close();
+      });
     }
-    throw lastError;
+    return true;
   } catch (err) {
     if (err instanceof PhpTypeError) throw err;
     errorLog(`Mailer Error: ${err instanceof Error ? err.message : String(err)}`);

@@ -1161,6 +1161,8 @@ Wants=network-online.target
 Type=simple
 # TUNNEL_TOKEN comes from this file (only root can read it), not from the command line
 EnvironmentFile=$TUNNEL_ENV
+# Fixed metrics address: the status sensor asks /ready there (only on this server)
+Environment=TUNNEL_METRICS=${STATUS_TUNNEL_METRICS:-127.0.0.1:20241}
 ExecStart=$bin --no-autoupdate tunnel run
 Restart=always
 RestartSec=5
@@ -1684,13 +1686,13 @@ step_protect() {
   systemctl restart fail2ban
   # Sicherheitsupdates installieren sich selbst
   printf '%s\n' 'APT::Periodic::Update-Package-Lists "1";' 'APT::Periodic::Unattended-Upgrade "1";' > /etc/apt/apt.conf.d/20auto-upgrades
-  # Datenbank nur von diesem Server aus erreichbar, keine Dateien über SQL einlesen
-  if [ -d /etc/mysql/mariadb.conf.d ] && write_if_changed /etc/mysql/mariadb.conf.d/90-onyoursite.cnf <<'EOF'
-# OnYourSite – written by server/install.sh
-[mysqld]
-bind-address = 127.0.0.1
-local-infile = 0
-EOF
+  # Datenbank nur von diesem Server aus erreichbar, keine Dateien über SQL einlesen; dazu der Puffer für die Daten der
+  # Statusseiten (server/status-units.sh: ein Viertel des Speichers, außer der Admin hat ihn woanders gesetzt)
+  status_load
+  if [ -d /etc/mysql/mariadb.conf.d ] && {
+      printf '%s\n' "# OnYourSite – written by server/install.sh" "[mysqld]" "bind-address = 127.0.0.1" "local-infile = 0"
+      if declare -F status_buffer_pool_line >/dev/null; then status_buffer_pool_line; fi
+    } | write_if_changed /etc/mysql/mariadb.conf.d/90-onyoursite.cnf
   then
     systemctl restart mariadb
   fi
@@ -1761,11 +1763,36 @@ step_ssh() {
   fi
 }
 
+# Statusseiten (server/status-units.sh des eingerichteten Codes – nach einem Update der neue): die Datei definiert nur
+# Funktionen; ohne sie (ältere Version im Code-Ordner) fehlen sie einfach
+status_load() {
+  if [ -f "$CODE/server/status-units.sh" ]; then
+    # shellcheck source=server/status-units.sh
+    . "$CODE/server/status-units.sh"
+  fi
+}
+
+# Prüfdienst, Benachrichtigungsdienst und Sensor einrichten (Einrichtung, --update, --https, --tunnel): nur mit Node.js
+# und gebautem Code; ein Fehler hält den Installer nicht auf (die Webseite läuft auch ohne sie)
+status_services() {
+  status_load
+  if ! declare -F write_status_units >/dev/null || [ -z "$NODE" ] || [ ! -f "$CODE/app/dist/status/worker.js" ]; then return 0; fi
+  PORT=$(web_port)
+  write_status_units "$@" || warn "The status services weren’t set up – see above. The website works without them."
+}
+
+# Geplantes Fenster für die Statusseite (Neustarts von Webseite oder Tunnel zählen nicht als Störung): 600 davor, 0 danach
+status_window() {
+  status_load
+  if declare -F status_planned >/dev/null && [ -n "$NODE" ]; then status_planned "$1"; fi
+}
+
 step_services() {
   bold "7/9  Protection, backups and weekly report"
   step_protect
   step_ssh
   write_timers
+  status_services
   info "Weekly report: Mondays at 8:00 · Backup: every night to $BACKUPS (kept $BACKUP_DAYS days)"
 }
 
@@ -1805,7 +1832,8 @@ step_admin() {
 step_bot() {
   local secret
   bold "9/9  Discord bot"
-  if [ -f "$UNITS/onyoursite-bot.service" ]; then
+  # Als Systemdienst – oder in Docker im Code-Ordner (dieselbe Prüfung wie discord-bot/install.sh)
+  if [ -f "$UNITS/onyoursite-bot.service" ] || { [ -s "$CODE/discord-bot/.env" ] && [ -f "$CODE/discord-bot/docker-compose.yml" ]; }; then
     bash "$CODE/discord-bot/install.sh" --update || warn "The bot update didn’t finish – see above."
     return 0
   fi
@@ -1885,6 +1913,7 @@ summary() {
   echo
   info "Update:   ${SUDO_HINT}bash $CODE/server/install.sh --update"
   info "Backups:  $BACKUPS – every night, kept $BACKUP_DAYS days. Copy them off the server now and then."
+  if declare -F status_summary_line >/dev/null; then info "$(status_summary_line "$DOMAIN")"; fi
   info "Errors:   journalctl -u onyoursite-web -f"
   if [ -n "${IMPORT:-}" ]; then
     warn "$IMPORT holds passwords and all data from the old server – delete it once everything works here:"
@@ -2441,6 +2470,8 @@ update_site() {
     || fail "The database couldn’t be updated – see above. The website keeps running as before; the backup is in $BACKUP_DIR."
   stage_check || fail "The new version doesn’t start – see above. The website keeps running as before."
 
+  # Der Neustart ist geplant: die Statusseite zählt ihn nicht als Störung
+  status_window 600
   switch_release
   UPDATED=1
   if [ "$MIGRATE" = 1 ]; then retire_php; fi
@@ -2457,10 +2488,12 @@ update_finish() {
   bold "Protection, backups and weekly report"
   step_protect
   write_timers
+  status_services update
   save_conf
   step_bot
   bold "Checking the website"
   check_site
+  status_window 0
   bold "Done."
   if [ "$MIGRATE" = 1 ]; then
     info "OnYourSite now runs on Node.js (service onyoursite-web) – PHP isn’t used any more."
@@ -2605,17 +2638,23 @@ case $MODE in
     ensure_cert
     step_https force
     write_timers
+    status_services
     ;;
   tunnel)
     [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
     DOMAIN=$(conf_get DOMAIN)
+    # Der Tunnel startet neu: geplant, keine Störung auf der Statusseite
+    status_window 600
     step_tunnel force
     bold "7/9  Protection"
     step_protect
+    # Mit dem Tunnel ändern sich die Adressen, die der Prüfdienst nie erreichen darf
+    status_services
     if [ "$PROBE_TUNNEL" = 1 ]; then tunnel_probe; fi
     save_conf
     bold "Checking the website"
     check_site
+    status_window 0
     ;;
   reset)
     [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server – there is nothing to reset."
@@ -2635,8 +2674,11 @@ case $MODE in
     [ "$answer" = "$DOMAIN" ] || fail "Not confirmed – nothing was deleted."
     info "Making a backup …"
     bash "$CODE/server/backup.sh" before-reset || fail "The backup didn’t work – nothing was deleted."
-    # Die Webseite hält Verbindungen und Einstellungen – sie startet gleich mit den neuen wieder
+    # Die Webseite und die Dienste der Statusseiten halten Verbindungen und Einstellungen – sie starten gleich mit den
+    # neuen wieder
     systemctl stop onyoursite-web >/dev/null 2>&1 || true
+    status_load
+    if declare -F status_units_stop >/dev/null; then status_units_stop; fi
     mariadb -e "DROP DATABASE IF EXISTS \`$DB_NAME\`"
     find "$UPLOADS" -mindepth 1 -delete
     # Neue Schlüssel: der Installer legt sie gleich neu an. bot_secret bleibt – den hat der Bot auch.

@@ -1,12 +1,22 @@
 // Honigwaben (lib/honeycombs.php): Punkte für aktive Nutzung, mit denen man Extras freischaltet (z. B. eine Code-Seite).
 // Jede Buchung steht in honeycomb_ledger. Grund + Bezug sind eindeutig – so kann niemand etwas doppelt verdienen.
-import { LockBusyError, withNamedLock, type Db, type Row } from '../db.js';
-import { date, field, intval, mbSubstr, numberFormat, phpStr, ucfirst, type PhpArray } from '../php.js';
+// Seit dem Shop-Kern laufen Ausgaben und Admin-Buchungen unter der Kontosperre (ledger.ts) und jede Freischaltung
+// schreibt zugleich die Berechtigung (entitlements.ts) – auch über hcAdd(…, 'unlock', …).
+import type { Db, Row } from '../db.js';
+import { date, field, intval, numberFormat, phpStr, ucfirst, type PhpArray } from '../php.js';
 import { cleanText } from '../helpers.js';
+import { notify } from '../notify/notify.js';
 import { phpJson } from '../html.js';
 import { randomHex } from '../crypto.js';
-import { codeSiteById } from '../code/sites.js';
 import { PhpNumber, jsonInt, jsonIsNumeric, phpInt, phpJsonDecode, poolDb } from './util.js';
+import { BUSY, HC_BUSY_TEXT, balanceIn, credit, lockedAccount, withAccount } from './ledger.js';
+import { grantUnlock, has } from './entitlements.js';
+import { feature } from './features.js';
+import { shopPrice } from './catalogue.js';
+import { adminShopHandle } from './admin.js';
+import { reconcileNow } from './reconcile.js';
+import { audit } from './audit.js';
+import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export interface HcSettings {
   daily: number;
@@ -37,7 +47,7 @@ export function hcDefaults(): HcSettings {
     profile: 20, // einmalig: Profilbild, Bio und mindestens 3 Links
     views: 10, // je erreichte Stufe an Aufrufen …
     views_step: 100, // … alle 100 Aufrufe (eine Stufe pro Tag, höchstens HC_MAX_VIEW_REWARDS-mal)
-    code_page: 100, // Preis: eigene Code-Seite freischalten
+    code_page: 100, // früherer Preis der Code-Seite – heute steht er im Katalog (hc_items), hier nur noch das alte Feld
   };
 }
 
@@ -84,11 +94,28 @@ export async function hcHas(userId: number, reason: string, ref: string, sql: Db
   return !!(await sql.value('SELECT 1 FROM honeycomb_ledger WHERE user_id = ? AND reason = ? AND ref = ? LIMIT 1', [userId, reason, ref]));
 }
 
+// Die Kontosperre wurde nicht frei (hcAdd mit 'unlock' kann nicht „schon gebucht“ melden, wenn es nicht stimmt)
+export class HcBusyError extends Error {
+  constructor() {
+    super(HC_BUSY_TEXT);
+  }
+}
+
 // oys_hc_add(): bucht Honigwaben (+ verdient, − ausgegeben). false, wenn es diese Buchung schon gibt.
+// reason 'unlock' ist eine Freischaltung: Buchung + Berechtigung über grantUnlock() – unter der Kontosperre (fehlt sie,
+// holt hcAdd sie selbst). false heißt dann: war schon freigeschaltet.
 export async function hcAdd(userId: number, amount: number, reason: string, ref: string, note = '', sql: Db = poolDb): Promise<boolean> {
-  const res = await sql.exec('INSERT IGNORE INTO honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [userId, amount, reason, mbSubstr(ref, 0, 80), mbSubstr(note, 0, 200), date('Y-m-d H:i:s')]);
-  return res.affectedRows > 0;
+  if (reason === 'unlock') {
+    const source = amount < 0 ? 'purchase' : 'admin';
+    // In der Kontosperre des Aufrufers: in dessen Transaktion; den Abgleich startet er selbst nach seinem Commit
+    if (lockedAccount() === userId) return (await grantUnlock(sql, userId, ref, amount, note, null, source)) !== null;
+    const booked = await withAccount(userId, async (db) => (await grantUnlock(db, userId, ref, amount, note, null, source)) !== null);
+    if (booked === BUSY) throw new HcBusyError();
+    // Nach dem Commit, ohne gehaltene Verbindung: die schnellen Abgleiche (z. B. Code-Seiten), die übrigen der Job
+    await reconcileNow(userId, { inlineOnly: true });
+    return booked;
+  }
+  return (await credit(sql, userId, amount, reason, ref, note)) !== null;
 }
 
 // oys_hc_history(): neueste Buchungen zuerst
@@ -108,11 +135,36 @@ export function hcDescribe(r: Row): string {
     case 'views':
       return numberFormat(intval(r.note)) + ' page views reached';
     case 'unlock':
-      return phpStr(r.ref) === 'code_page' ? 'Unlocked your code page' : 'Unlocked an extra';
+      return unlockText(phpStr(r.ref));
     case 'admin':
       return note !== '' ? note : intval(r.amount) >= 0 ? 'Gift from the team' : 'Correction by the team';
+    // Gründe des Shops (Notiz = Titel der Option oder Notiz des Teams)
+    case 'purchase':
+      return (phpStr(r.ref).startsWith('auto-') ? 'Renewed ' : 'Bought ') + (note !== '' ? note : 'an extra');
+    case 'grant':
+      return note !== '' ? note : 'From the team';
+    case 'revoke':
+      return note !== '' ? note : 'Removed by the team';
+    case 'refund':
+      return note !== '' ? note : 'Refund';
+    case 'reversal':
+      return note !== '' ? note : 'Correction by the team';
+    case 'streak':
+      return phpStr(r.ref).startsWith('m') ? '30-day streak' : '7-day streak';
+    case 'code':
+      return note !== '' ? note : 'Code redeemed';
   }
   return note !== '' ? note : ucfirst(phpStr(r.reason));
+}
+
+// Freischaltung: <Funktion> oder <Funktion>:<n> (erneut nach einer Erstattung) – Groß/klein genau wie bisher
+function unlockText(ref: string): string {
+  const m = /^([a-z][a-z0-9_]{1,39})(?::[1-9][0-9]{0,5})?$/.exec(ref);
+  if (!m) return 'Unlocked an extra';
+  if (m[1] === 'code_page') return 'Unlocked your code page';
+  if (m[1] === 'code_more') return 'Unlocked more code pages';
+  const f = feature(m[1]);
+  return f ? 'Unlocked ' + f.title : 'Unlocked an extra';
 }
 
 // oys_hc_profile_complete(): eine Seite mit Profilbild, Text und mindestens 3 sichtbaren Links
@@ -147,29 +199,29 @@ export async function hcEarn(userId: number, sql: Db = poolDb): Promise<HcEarned
   return earned;
 }
 
-export const HC_BUSY = 'Honeycombs are busy right now – please try again in a moment.';
+export const HC_BUSY = HC_BUSY_TEXT;
 
 // oys_hc_locked(): Sperre je Nutzer – gleichzeitige Buchungen (zwei Klicks, ein Admin) dürfen den Kontostand nicht
-// unter 0 bringen. fn arbeitet auf derselben Verbindung wie GET_LOCK/RELEASE_LOCK. Gibt zurück, was fn zurückgibt –
-// oder die Meldung, wenn die Sperre nicht innerhalb von 10 Sekunden frei wird.
+// unter 0 bringen. Seit dem Shop-Kern die Kontosperre (Zeile in hc_accounts, eine Transaktion): fn arbeitet nur über
+// sql. Gibt zurück, was fn zurückgibt – oder die Meldung, wenn die Sperre nicht innerhalb von 5 Sekunden frei wird.
 export async function hcLocked<T>(userId: number, fn: (sql: Db) => Promise<T>): Promise<T | string> {
-  try {
-    return await withNamedLock('oys_hc_' + userId, 10, fn);
-  } catch (err) {
-    if (err instanceof LockBusyError) return HC_BUSY;
-    throw err;
-  }
+  const out = await withAccount(userId, (db) => fn(db));
+  return out === BUSY ? HC_BUSY : out;
 }
 
-// oys_hc_spend(): mit Honigwaben bezahlen (je Bezug nur einmal). Fehlermeldung oder null.
+// oys_hc_spend(): mit Honigwaben dauerhaft freischalten (je Funktion nur einmal). Fehlermeldung oder null.
+// Wer die Funktion schon hat, zahlt nichts; eine erstattete Freischaltung kostet erneut.
 export async function hcSpend(userId: number, cost: number, ref: string): Promise<string | null> {
-  return hcLocked(userId, async (sql) => {
-    if (await hcHas(userId, 'unlock', ref, sql)) return null;
-    const balance = await hcBalance(userId, sql);
+  const out = await hcLocked(userId, async (sql) => {
+    if (await has(userId, ref, sql)) return null;
+    const balance = await balanceIn(sql, userId);
     if (balance < cost) return 'You need ' + cost + ' honeycombs – you have ' + balance + '.';
-    await hcAdd(userId, 0 - cost, 'unlock', ref, '', sql);
+    await grantUnlock(sql, userId, ref, 0 - cost, '', null, 'purchase');
     return null;
   });
+  // Nach dem Commit: die schnellen Abgleiche (ohne Merker kehrt reconcileNow sofort zurück)
+  if (out !== HC_BUSY) await reconcileNow(userId, { inlineOnly: true });
+  return out;
 }
 
 // oys_hc_for_editor(): Kontostand, Verlauf und wie man mehr verdient (Schlüssel-Reihenfolge wie in PHP)
@@ -180,33 +232,37 @@ export async function hcForEditor(userId: number, earned: HcEarned[] = [], sql: 
     balance: await hcBalance(userId, sql),
     earned,
     history: await hcHistory(userId, 15, sql),
-    rules: cfg,
+    // Preis der Code-Seite aus dem Katalog (mit Angebot für dieses Konto) – nicht mehr aus den Einstellungen
+    rules: { ...cfg, code_page: await shopPrice('code_page', userId, sql) },
     today: await hcHas(userId, 'daily', date('Y-m-d'), sql),
     profile: await hcHas(userId, 'profile', 'complete', sql),
     viewRewards,
     maxViewRewards: HC_MAX_VIEW_REWARDS,
-    codeUnlocked: await hcHas(userId, 'unlock', 'code_page', sql),
+    codeUnlocked: await has(userId, 'code_page', sql),
   };
 }
 
 // ---------------------------------------------------------------
-// Admin: Einstellungen, vergeben/abziehen, Code-Seiten sperren
+// Admin: Einstellungen, vergeben/abziehen
 // ---------------------------------------------------------------
 
+// Gaben über dieser Grenze und jedes Abziehen fragen erst im eigenen Dialog (adminView.ts) und brauchen _confirmed=1
+export const GRANT_ASK_ABOVE = 1000;
+
 // oys_admin_hc_handle(): $post wie $_POST, adminId = angemeldeter Admin. null = keine bekannte Aktion.
+// Sperren, Entsperren und Freischalten der Code-Seiten gehören zum eigenen Bereich (code/admin.ts). Regeln, Katalog
+// und Angebote (Unterbereiche des Shops) erledigt admin.ts; die Preise stehen nur noch im Katalog.
 export async function adminHcHandle(post: PhpArray, adminId: number): Promise<AdminResult> {
   const action = field(post, 'hc_action');
   switch (action) {
-    case 'settings':
-      await hcSaveSettings(post);
-      return { ok: 'Honeycomb settings saved.' };
-
     case 'grant': {
       const userId = phpInt(post.user_id ?? 0);
       const amount = phpInt(post.amount ?? 0);
       const user = await poolDb.one('SELECT id, full_name, email FROM users WHERE id = ?', [userId]);
       if (!user) return { error: 'Please choose a user.' };
       if (amount === 0 || Math.abs(amount) > 100000) return { error: 'Enter an amount between −100,000 and 100,000 (not 0).' };
+      // Abziehen und große Gaben nur nach dem Dialog: ohne _confirmed=1 (Formular ohne ui.js, selbst gebaut) nichts buchen
+      if ((amount < 0 || amount > GRANT_ASK_ABOVE) && post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
       const note = cleanText(post.note ?? '', 150);
       // Jedes Formular hat einen eigenen Schlüssel: doppelt abgeschickt wird nur einmal gebucht
       const formRef = field(post, 'grant_ref');
@@ -215,34 +271,16 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
         if (amount < 0 && (await hcBalance(userId, sql)) + amount < 0) {
           return 'That would take the balance below 0 (current: ' + (await hcBalance(userId, sql)) + ').';
         }
-        return (await hcAdd(userId, amount, 'admin', ref, note, sql)) ? true : 'This was already booked – the form was sent twice.';
+        if ((await credit(sql, userId, amount, 'admin', ref, note, adminId)) === null) return 'This was already booked – the form was sent twice.';
+        // Protokoll (nur Betrag, nie die Notiz) und Glocke nur, wenn gebucht wurde – in derselben Transaktion, also genau einmal
+        await audit(sql, adminId, 'grant', userId, '', { amount });
+        await notify(userId, 'honeycombs', (amount > 0 ? '+' + amount + ' honeycombs from the team' : '−' + -amount + ' honeycombs (correction by the team)'), note, '/dashboard#honeycombs', { db: sql });
+        return true;
       });
       if (booked !== true) return { error: booked };
       const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
       return { ok: (amount > 0 ? '+' : '−') + Math.abs(amount) + ' honeycombs for ' + name + '. New balance: ' + (await hcBalance(userId)) + '.' };
     }
-
-    case 'code_block':
-    case 'code_unblock': {
-      const site = await codeSiteById(phpInt(post.site_id ?? 0));
-      if (!site) return { error: 'Code page not found.' };
-      const block = action === 'code_block';
-      const reason = block ? cleanText(post.reason ?? '', 200) : '';
-      await poolDb.exec('UPDATE code_sites SET is_blocked = ?, blocked_reason = ?, updated_at = ? WHERE id = ?',
-        [block ? 1 : 0, reason !== '' ? reason : null, date('Y-m-d H:i:s'), intval(site.id)]);
-      return { ok: block ? '“' + phpStr(site.slug) + '” is blocked.' : '“' + phpStr(site.slug) + '” is online again.' };
-    }
-
-    case 'code_unlock': {
-      // Code-Seite ohne Honigwaben freischalten (z. B. für Tester)
-      const user = await poolDb.one('SELECT id, full_name, email FROM users WHERE id = ?', [phpInt(post.user_id ?? 0)]);
-      if (!user) return { error: 'Please choose a user.' };
-      const name = phpStr(user.full_name ?? '') !== '' ? phpStr(user.full_name) : phpStr(user.email);
-      if (!(await hcAdd(intval(user.id), 0, 'unlock', 'code_page', 'Unlocked by the team'))) {
-        return { ok: name + ' had already unlocked the code page.' };
-      }
-      return { ok: 'Code page unlocked for ' + name + '.' };
-    }
   }
-  return null;
+  return adminShopHandle(post, adminId);
 }

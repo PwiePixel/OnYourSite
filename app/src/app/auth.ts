@@ -2,12 +2,13 @@
 import type { Ctx } from '../web/ctx.js';
 import { Session } from '../web/session.js';
 import { attemptFailed, attemptsAllowed, clientKey, csrfCheck, csrfField, rateLimit } from '../web/security.js';
-import { DbUnavailableError, exec, one, type Param } from '../db.js';
+import { DbUnavailableError, exec, one, transaction, type Param } from '../db.js';
 import { encryptData, passwordHash, passwordVerify, sha256Hex } from '../crypto.js';
 import { cleanText, normalizeSlug, slugProblem, validateEmail } from '../helpers.js';
 import { intval, phpEmpty, phpTrim, strlen, strtolower, type PhpArray } from '../php.js';
 import { e } from '../html.js';
 import { createPage } from '../content/pages.js';
+import { isTakenError } from '../content/addresses.js';
 import { DEFAULT_THEME } from '../content/themes.js';
 import { sendCustomEmail } from '../mail.js';
 import { flash } from './context.js';
@@ -60,10 +61,15 @@ export async function register(ctx: Ctx): Promise<void> {
       } else {
         try {
           // password_hash() steht in PHP vor dem INSERT: ein Nullbyte im Passwort endet mit 500 (kein PDO-Fehler)
-          const { insertId } = await exec("INSERT INTO users (email, password, full_name, username, layout_type, last_ip, theme) VALUES (?, ?, ?, ?, 'link-tree', ?, ?)",
-            [email, await passwordHash(password), fullname, slug, encryptData(ctx.ip) ?? null, DEFAULT_THEME]);
-          const userId = intval(insertId);
-          const pageId = await createPage(userId, slug, fullname);
+          const hash = await passwordHash(password);
+          // Konto und erste Seite in einer Transaktion: ist die Adresse inzwischen vergeben, entsteht auch kein Konto
+          // (früher blieb dann ein Konto ohne Seite zurück)
+          const { userId, pageId } = await transaction(async (_conn, db) => {
+            const { insertId } = await db.exec("INSERT INTO users (email, password, full_name, username, layout_type, last_ip, theme) VALUES (?, ?, ?, ?, 'link-tree', ?, ?)",
+              [email, hash, fullname, slug, encryptData(ctx.ip) ?? null, DEFAULT_THEME]);
+            const id = intval(insertId);
+            return { userId: id, pageId: await createPage(id, slug, fullname, db) };
+          });
           session.regenerate();
           session.set('user_id', userId);
           session.set('page_id', pageId);
@@ -72,10 +78,15 @@ export async function register(ctx: Ctx): Promise<void> {
           await sendMail(email, 'register', { full_name: e(fullname), subdomain: e(slug) });
           ctx.redirect('/dashboard');
         } catch (err) {
-          // Nur Datenbankfehler wie catch (PDOException) – alles andere (auch das Ende der Anfrage) geht weiter
-          if (!isDbError(err)) throw err;
-          console.error('Sign-up failed: ' + (err as Error).message);
-          flash(ctx, 'error', 'This email address is already registered.');
+          if (isTakenError(err)) {
+            // Die Adresse wurde zwischen Prüfung und Anlegen vergeben – beides ist zurückgerollt
+            flash(ctx, 'error', 'This email address or page address is already registered.');
+          } else {
+            // Nur Datenbankfehler wie catch (PDOException) – alles andere (auch das Ende der Anfrage) geht weiter
+            if (!isDbError(err)) throw err;
+            console.error('Sign-up failed: ' + (err as Error).message);
+            flash(ctx, 'error', 'This email address is already registered.');
+          }
         }
       }
     }

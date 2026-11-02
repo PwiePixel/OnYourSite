@@ -201,7 +201,8 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 
 .oys-foot { margin-top: auto; padding-top: 40px; text-align: center; font-size: .78em; }
 .oys-foot a { display: inline-block; padding: 10px 14px; text-decoration: none; color: var(--muted); opacity: .75; transition: opacity .2s; }
-.oys-foot a:hover { opacity: 1; }
+/* Die Deckkraft steht fest im Element (Premium: der Hinweis bleibt sichtbar) – beim Darüberfahren unterstreichen */
+.oys-foot a:hover { text-decoration: underline; }
 
 /* ---------- Links: Grundform (Knöpfe) ---------- */
 .oys-links { display: flex; flex-direction: column; gap: 12px; }
@@ -493,6 +494,12 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 
 .oys-lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .92); display: grid; place-items: center; padding: 20px; cursor: zoom-out; animation: oys-fade .2s; }
 .oys-lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; }
+.oys-lightbox-close {
+  position: absolute; top: calc(14px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); width: 42px; height: 42px;
+  border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer;
+}
+.oys-lightbox-close:hover { background: rgba(255, 255, 255, .22); }
+.oys-lightbox-close .oys-ico { width: 22px; height: 22px; }
 
 /* ---------- Video & Musik (2-Klick) ---------- */
 .oys-embed { border-radius: var(--card-radius); overflow: hidden; background: var(--card-bg); border: var(--card-border); box-shadow: var(--card-shadow); }
@@ -588,24 +595,54 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 @keyframes oys-in { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
 @keyframes oys-fade { from { opacity: 0; } to { opacity: 1; } }
 
-/* ---------- Dialog (geschützte Links) ---------- */
-.oys-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); animation: oys-fade .2s; }
+/* ---------- Dialog (geschützte Links) und eigene Dialoge aus ui.js im Design der Seite ---------- */
+.oys-modal, body.oys .ui-layer { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); animation: oys-fade .2s; }
 .oys-modal[hidden] { display: none; }
-.oys-modal-box { position: relative; width: 100%; max-width: 360px; padding: 26px 22px 22px; border-radius: min(22px, var(--card-radius) + 6px); background: var(--surface); color: var(--surface-text); border: var(--card-border); box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .6); text-align: center; animation: oys-pop .25s ease; }
-.oys-modal-close { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px; border: 0; background: transparent; border-radius: 50%; cursor: pointer; opacity: .6; display: grid; place-items: center; }
-.oys-modal-close:hover { opacity: 1; }
-.oys-modal-icon { width: 54px; height: 54px; margin: 0 auto 12px; border-radius: 50%; display: grid; place-items: center; background: var(--icon-bg); color: var(--accent); font-weight: 800; }
-.oys-modal-icon .oys-ico { width: 26px; height: 26px; }
-.oys-modal h2 { margin: 0 0 6px; font-family: var(--font-head); font-size: 1.2em; font-weight: var(--head-weight); text-transform: var(--head-transform); }
-.oys-modal p { margin: 0 0 16px; font-size: .9em; opacity: .75; }
-.oys-modal input { width: 100%; padding: 12px 14px; margin-bottom: 10px; font: inherit; font-size: 16px; color: var(--input-text); background: var(--input-bg); border: var(--input-border); border-radius: 12px; outline: none; text-align: center; }
-.oys-modal .oys-btn {
+.oys-modal-box, body.oys .ui-dialog { position: relative; width: 100%; max-width: 360px; padding: 26px 22px 22px; border-radius: min(22px, var(--card-radius) + 6px); background: var(--surface); color: var(--surface-text); border: var(--card-border); box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .6); text-align: center; animation: oys-pop .25s ease; }
+.oys-modal-close, body.oys .ui-x { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px; border: 0; background: transparent; border-radius: 50%; cursor: pointer; opacity: .6; display: grid; place-items: center; }
+.oys-modal-close:hover, body.oys .ui-x:hover { opacity: 1; }
+.oys-modal-icon, body.oys .ui-ico { width: 54px; height: 54px; margin: 0 auto 12px; border-radius: 50%; display: grid; place-items: center; background: var(--icon-bg); color: var(--accent); font-weight: 800; }
+.oys-modal-icon .oys-ico, body.oys .ui-ico .ui-svg { width: 26px; height: 26px; }
+.oys-modal h2, body.oys .ui-title { margin: 0 0 6px; font-family: var(--font-head); font-size: 1.2em; font-weight: var(--head-weight); text-transform: var(--head-transform); }
+.oys-modal p, body.oys .ui-text { margin: 0 0 16px; font-size: .9em; opacity: .75; }
+.oys-modal input, body.oys .ui-input { width: 100%; padding: 12px 14px; margin-bottom: 10px; font: inherit; font-size: 16px; color: var(--input-text); background: var(--input-bg); border: var(--input-border); border-radius: 12px; outline: none; text-align: center; }
+.oys-modal .oys-btn, body.oys .ui-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 16px; border: 0; cursor: pointer; text-decoration: none;
   border-radius: 12px; background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 1em; margin-top: 4px;
 }
-.oys-modal .oys-btn.ghost { background: transparent; color: inherit; border: var(--input-border); }
-.oys-modal .oys-err { color: #ef4444; font-size: .85em; font-weight: 600; margin: 0 0 10px; }
+.oys-modal .oys-btn.ghost, body.oys .ui-btn.is-ghost { background: transparent; color: inherit; border: var(--input-border); }
+.oys-modal .oys-err, body.oys .ui-msg.is-err { color: #ef4444; font-size: .85em; font-weight: 600; margin: 0 0 10px; }
 @keyframes oys-pop { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.oys-modal-box { max-height: 86vh; max-height: min(86vh, 86dvh); overflow-y: auto; }
+body.oys .ui-layer { display: flex; }
+body.oys .ui-x { color: inherit; }
+body.oys .ui-x .ui-svg, body.oys .ui-toast-x .ui-svg { width: 20px; height: 20px; }
+body.oys .ui-head { display: block; text-align: center; }
+body.oys .ui-dialog.is-danger .ui-ico { color: #ef4444; }
+body.oys .ui-dialog.is-warn .ui-ico { color: #f59e0b; }
+body.oys .ui-text { white-space: pre-line; overflow-wrap: anywhere; }
+body.oys .ui-list { margin: 0 0 16px; padding-left: 1.2em; text-align: left; font-size: .9em; opacity: .75; }
+body.oys .ui-label { display: block; margin: 0 0 6px; font-size: .85em; font-weight: 600; opacity: .8; }
+body.oys .ui-foot { display: flex; flex-direction: column-reverse; gap: 8px; }
+body.oys .ui-foot .ui-btn { margin-top: 0; }
+body.oys .ui-msg { order: 9; margin: 0 0 4px; font-size: .85em; }
+body.oys .ui-btn.is-danger { background: #ef4444; color: #fff; }
+body.oys .ui-btn:disabled { opacity: .55; cursor: not-allowed; }
+body.oys .ui-toasts { top: calc(16px + env(safe-area-inset-top)); }
+body.oys .ui-toast {
+  padding: 10px 14px; background: var(--surface); color: var(--surface-text, var(--text)); border: var(--card-border);
+  border-radius: min(14px, var(--card-radius)); font-family: var(--font); font-size: .88em; font-weight: 600;
+  box-shadow: 0 16px 40px -14px rgba(0, 0, 0, .5);
+}
+body.oys .ui-toast b { display: block; }
+body.oys .ui-toast.err > .ui-svg { color: #ef4444; }
+body.oys .ui-toast.ok > .ui-svg { color: #10b981; }
+body.oys .ui-toast.warn > .ui-svg { color: #f59e0b; }
+body.oys .ui-toast.info > .ui-svg { color: var(--accent); }
+body.oys .ui-toast-act { padding: 4px 10px; border-radius: 10px; border: var(--input-border); background: transparent; cursor: pointer; font-weight: 700; }
+body.oys .ui-toast-x { display: grid; place-items: center; width: 24px; height: 24px; margin-right: -6px; border: 0; background: transparent; opacity: .6; cursor: pointer; }
+body.oys .ui-field-err { display: flex; gap: 4px; align-items: center; color: #ef4444; font-size: .82em; font-weight: 600; margin: 6px 0 0; opacity: 1; text-align: left; }
+body.oys [aria-invalid="true"] { border-color: #ef4444 !important; }
 
 /* ---------- Teilen ---------- */
 .oys-share {

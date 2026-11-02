@@ -6,7 +6,9 @@
 #   --docker   als Docker-Container – z. B. auf einem eigenen kleinen Server nur für den Bot
 #
 #   sudo bash install.sh              Einrichten oder Einstellungen ändern (fragt nach der Art)
-#   sudo bash install.sh --update     Neue Version übernehmen, Einstellungen bleiben
+#   sudo bash install.sh --update     Neue Version übernehmen, Einstellungen bleiben; Kanäle, die die neue Version
+#                                     kennt (z. B. #updates, #status, #alerts), werden einmal angelegt oder übernommen
+#   sudo bash install.sh --channel KEY  Einen dieser Kanäle noch einmal versuchen (z. B. UPDATES_CHANNEL_ID)
 #
 # Die Einstellungen (Token, IDs, Geheimnis) liegen in einer Datei, die nur root lesen kann – nie im Webordner
 # und nie im Docker-Image. Beim erneuten Aufruf behält Enter die bisherigen Werte.
@@ -20,9 +22,10 @@ cd "$(dirname "$(readlink -f "$0")")"
 SRC=$(pwd)
 
 NAME=onyoursite-bot
-APP_DIR=/opt/onyoursite-bot
-SERVICE_ENV=/etc/onyoursite-bot.env
-UNIT=/etc/systemd/system/onyoursite-bot.service
+# Die Pfade lassen sich nur für Tests umstellen (OYS_BOT_TEST_ROOT: alles unter diesem Ordner)
+APP_DIR=${OYS_BOT_TEST_ROOT:-}/opt/onyoursite-bot
+SERVICE_ENV=${OYS_BOT_TEST_ROOT:-}/etc/onyoursite-bot.env
+UNIT=${OYS_BOT_TEST_ROOT:-}/etc/systemd/system/onyoursite-bot.service
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -55,13 +58,20 @@ if [ -n "${SUDO_USER:-}" ]; then SUDO_HINT="sudo "; fi
 
 UPDATE=0
 MODE=""
-for arg in "$@"; do
-  case $arg in
+CHANNEL_KEY=""
+while [ $# -gt 0 ]; do
+  case $1 in
     --update) UPDATE=1 ;;
     --service) MODE=service ;;
     --docker) MODE=docker ;;
-    *) fail "Unknown option: $arg (use --service, --docker or --update)" ;;
+    --channel)
+      [[ ${2:-} =~ ^[A-Z0-9_]+$ ]] || fail "Use --channel with the name of a channel setting, e.g. --channel UPDATES_CHANNEL_ID"
+      UPDATE=1
+      CHANNEL_KEY=$2
+      shift ;;
+    *) fail "Unknown option: $1 (use --service, --docker, --update or --channel KEY)" ;;
   esac
+  shift
 done
 
 # Art: was schon installiert ist – sonst fragen
@@ -160,7 +170,8 @@ bot_tool() {
   else
     DISCORD_TOKEN=$TOKEN "${COMPOSE[@]}" run --rm --no-deps -T -e DISCORD_TOKEN -e DISCORD_API_BASE -e TEAM_ROLE_ID \
       -e WELCOME_CHANNEL_ID -e RULES_CHANNEL_ID -e SUPPORT_CHANNEL_ID -e SUGGESTION_FORUM_ID -e TAG_ACCEPTED_ID \
-      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID bot node index.js "$@" </dev/null
+      -e TAG_DECLINED_ID -e SUPPORT_CATEGORY_ID -e UPDATES_CHANNEL_ID -e STATUS_CHANNEL_ID -e ALERTS_CHANNEL_ID \
+      bot node index.js "$@" </dev/null
   fi
 }
 
@@ -170,6 +181,63 @@ NEW_SECRET=""
 # Bisheriger Wert aus der Einstellungsdatei (ohne sie auszuführen)
 current() {
   if [ -f "$ENV_FILE" ]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; fi
+}
+
+# Eine Zeile der Einstellungsdatei setzen oder anhängen (nur Schlüssel A–Z/0–9/_ und Discord-IDs); jede andere Zeile
+# bleibt Byte für Byte, wie sie ist. Erst komplett schreiben, dann ersetzen; nur für root lesbar.
+env_set() {
+  local key=$1 value=$2 tmp
+  [[ $key =~ ^[A-Z0-9_]+$ && $value =~ ^[0-9]*$ ]] || fail "Invalid setting $key."
+  tmp=$(umask 077 && mktemp "$ENV_FILE.XXXXXX")
+  if grep -q "^$key=" "$ENV_FILE"; then
+    sed "s/^$key=.*/$key=$value/" "$ENV_FILE" > "$tmp"
+  else
+    cat "$ENV_FILE" > "$tmp"
+    if [ -s "$ENV_FILE" ] && [ -n "$(tail -c 1 "$ENV_FILE")" ]; then echo >> "$tmp"; fi
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+# Kanäle, die der Bot kennt (KEY=name), z. B. UPDATES_CHANNEL_ID=updates
+CHANNEL_NAMES=""
+
+# Einen Kanal finden oder anlegen (nur diesen – Rollen und andere Kanäle bleiben, wie sie sind) und seine ID merken.
+# Klappt es nicht, steht der Schlüssel leer in der Datei: das nächste --update versucht es nicht noch einmal.
+add_channel() {
+  local key=$1 name out id err
+  name=$(sed -n "s/^$key=//p" <<< "$CHANNEL_NAMES" | tail -n 1)
+  name=${name:-$key}
+  info "Adding the #$name channel …"
+  err=$(mktemp)
+  # Die bisherige ID dieses Kanals (z. B. nach --channel) und die Rolle des Teams (für private Kanäle wie #alerts) – nur
+  # in der Umgebung dieses einen Aufrufs (die Befehlsersetzung läuft in einer eigenen Shell)
+  if out=$(export "$key=$(current "$key")"; TEAM_ROLE_ID=$(current TEAM_ROLE_ID) WELCOME_CHANNEL_ID=$(current WELCOME_CHANNEL_ID) \
+      SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) bot_tool --discord-channel "$key" "$(current GUILD_ID)" 2>"$err") \
+      && id=$(sed -n "s/^$key=//p" <<< "$out" | tail -n 1) && [[ $id =~ ^[0-9]{15,22}$ ]]; then
+    env_set "$key" "$id"
+    while IFS='=' read -r k v; do
+      case $k in
+        DONE) info "  $v" ;;
+        WARN) info "  Note: $v" ;;
+      esac
+    done <<< "$out"
+  else
+    env_set "$key" ""
+    info "  Note: The #$name channel couldn’t be added: $(tr '\n' ' ' < "$err" | sed 's/ *$//') – run ${SUDO_HINT}bash $SRC/install.sh --channel $key to try again."
+  fi
+  rm -f "$err"
+}
+
+# Bei --update: jeden Kanal, den diese Version kennt und der in den Einstellungen noch fehlt, einmal anlegen
+add_missing_channels() {
+  local key _
+  while IFS='=' read -r key _; do
+    [[ $key =~ ^[A-Z0-9_]+$ ]] || continue
+    if grep -q "^$key=" "$ENV_FILE"; then continue; fi
+    add_channel "$key"
+  done <<< "$CHANNEL_NAMES"
 }
 
 # ask KEY "Frage" Art [Vorgabe] [neu] – Art: id (Discord-ID), token, secret, url; „neu“: der bisherige Wert gilt nicht
@@ -201,6 +269,15 @@ if [ "$UPDATE" = 1 ]; then
   # Leer = nur der Platzhalter eines abgebrochenen Docker-Laufs, keine Einstellungen
   [ -s "$ENV_FILE" ] || fail "There are no settings yet. Run: ${SUDO_HINT}bash $SRC/install.sh"
   info "Keeping the settings in $ENV_FILE"
+  # Das Token für die Werkzeuge des Bots kommt aus der Einstellungsdatei (es wird nirgends angezeigt)
+  TOKEN=$(current DISCORD_TOKEN)
+  CHANNEL_NAMES=$(bot_tool --channel-keys 2>/dev/null || true)
+  if [ -n "$CHANNEL_KEY" ]; then
+    grep -q "^$CHANNEL_KEY=" <<< "$CHANNEL_NAMES" || fail "Unknown channel setting: $CHANNEL_KEY (known: $(cut -d= -f1 <<< "$CHANNEL_NAMES" | tr '\n' ' '))"
+    add_channel "$CHANNEL_KEY"
+  else
+    add_missing_channels
+  fi
 else
   info "From the Discord Developer Portal (discord.com/developers/applications) you only need two things:"
   info "  1. New Application → tab Bot → Reset Token. On the same tab turn on Server Members Intent and"
@@ -270,14 +347,15 @@ else
     RULES_CHANNEL_ID=$(current RULES_CHANNEL_ID) SUPPORT_CHANNEL_ID=$(current SUPPORT_CHANNEL_ID) \
     SUGGESTION_FORUM_ID=$(current SUGGESTION_FORUM_ID) TAG_ACCEPTED_ID=$(current TAG_ACCEPTED_ID) \
     TAG_DECLINED_ID=$(current TAG_DECLINED_ID) SUPPORT_CATEGORY_ID=$(current SUPPORT_CATEGORY_ID) \
-    bot_tool --discord-setup "$guild_id" 2>"$errf") \
+    UPDATES_CHANNEL_ID=$(current UPDATES_CHANNEL_ID) STATUS_CHANNEL_ID=$(current STATUS_CHANNEL_ID) \
+    ALERTS_CHANNEL_ID=$(current ALERTS_CHANNEL_ID) bot_tool --discord-setup "$guild_id" 2>"$errf") \
     || fail "The Discord server couldn’t be set up: $(tr '\n' ' ' < "$errf") – if the bot is missing permissions, open this link, choose the server and authorize again: $invite"
   rm -f "$errf"
   while IFS='=' read -r key value; do
     case $key in
       DONE) info "  $value" ;;
       WARN) info "  Note: $value" ;;
-      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID)
+      GUILD_ID|TEAM_ROLE_ID|WELCOME_CHANNEL_ID|RULES_CHANNEL_ID|SUPPORT_CHANNEL_ID|SUGGESTION_FORUM_ID|TAG_ACCEPTED_ID|TAG_DECLINED_ID|SUPPORT_CATEGORY_ID|UPDATES_CHANNEL_ID|STATUS_CHANNEL_ID|ALERTS_CHANNEL_ID)
         printf -v "VAL_$key" '%s' "$value" ;;
     esac
   done <<< "$setup"
@@ -309,7 +387,8 @@ else
   {
     echo "# OnYourSite Discord bot – written by install.sh on $(date -u +%Y-%m-%d). Keep this file private."
     for key in DISCORD_TOKEN DISCORD_CLIENT_ID GUILD_ID TEAM_ROLE_ID WELCOME_CHANNEL_ID WELCOME_ROLE_ID RULES_CHANNEL_ID SUPPORT_CHANNEL_ID \
-               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID SITE_URL BOT_SECRET POLL_SECONDS; do
+               SUGGESTION_FORUM_ID TAG_ACCEPTED_ID TAG_DECLINED_ID SUPPORT_CATEGORY_ID UPDATES_CHANNEL_ID STATUS_CHANNEL_ID ALERTS_CHANNEL_ID \
+               SITE_URL BOT_SECRET POLL_SECONDS; do
       var="VAL_$key"
       echo "$key=${!var:-}"
     done
@@ -375,6 +454,7 @@ Group=$NAME
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
 Environment=NODE_ENV=production
+Environment=OYS_BOT_RUNTIME=service
 ExecStart=$NODE $APP_DIR/index.js
 Restart=always
 RestartSec=5

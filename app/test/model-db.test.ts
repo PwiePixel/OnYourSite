@@ -11,6 +11,7 @@ import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import { loadConfig, setConfigForTests, configString, type ConfigData } from '../src/config.js';
 import { closePool, exec, q, value } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { passwordVerify } from '../src/crypto.js';
 import { strtotime, time } from '../src/php.js';
 import { calendarKey } from '../src/content/blocks.js';
@@ -52,6 +53,15 @@ before(async () => {
       await admin.query(`INSERT INTO \`${db}\`.\`${t}\` SELECT * FROM \`${SOURCE}\`.\`${t}\``);
     }
   }
+  // Beide Kopien auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert); PHP arbeitet auf demselben
+  // Schema und kennt die neuen Tabellen einfach nicht
+  for (const db of Object.values(DBS)) {
+    await closePool();
+    setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: db } });
+    await ensureSchema();
+  }
+  await closePool();
+  setConfigForTests(BASE);
   tmp = mkdtempSync(join(tmpdir(), 'oys-model-'));
   for (const side of Object.keys(DBS) as Side[]) {
     const d = dirs(side);

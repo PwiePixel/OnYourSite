@@ -6,6 +6,8 @@
 //   node index.js --discord-app      → APP_ID=…, APP_NAME=…, INVITE=… (Einladungslink)
 //   node index.js --discord-guilds   → GUILD_<id>=<Name> für jeden Server, auf dem der Bot ist
 //   node index.js --discord-setup ID → GUILD_ID=…, TEAM_ROLE_ID=…, … sowie DONE=… und WARN=… (Texte für die Ausgabe)
+//   node index.js --discord-channel KEY ID → KEY=… sowie DONE=…/WARN=…: nur diesen einen Kanal finden oder anlegen
+//   node index.js --channel-keys     → KEY=name für jeden Kanal aus CHANNEL_SPECS (ohne Token)
 //
 // Das Token kommt aus DISCORD_TOKEN, gespeicherte IDs (zum Wiederverwenden) aus den gleichnamigen Variablen.
 const { REST, Routes, ChannelType, PermissionFlagsBits: P } = require('discord.js');
@@ -21,6 +23,87 @@ const BRAND = 0x6366f1;
 const REASON = 'OnYourSite bot setup';
 
 const bits = (...flags) => String(flags.reduce((a, b) => a | b, 0n));
+
+// Kanäle, die einzeln dazukommen können: install.sh --update legt jeden an, dessen Schlüssel in den Einstellungen fehlt
+// (einmal; ein Fehlschlag wird als leerer Wert gemerkt). Weitere Teile der Webseite ergänzen hier ihre Kanäle.
+// private: nur das Team (Rolle aus TEAM_ROLE_ID) und der Bot sehen ihn – immer ein Textkanal.
+const CHANNEL_SPECS = {
+  UPDATES_CHANNEL_ID: { name: 'updates', topic: 'Release notes and updates from OnYourSite.' },
+  STATUS_CHANNEL_ID: { name: 'status', topic: 'Incidents and maintenance of OnYourSite, as on our status page.' },
+  ALERTS_CHANNEL_ID: { name: 'alerts', topic: 'Alerts for the team when one of OnYourSite’s checks fails or recovers.', private: true },
+};
+const NAMED_TYPES = [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum];
+
+// Lesekanal: nur der Bot schreibt (das Team kann es über die Kanal-Rechte jederzeit ändern)
+function readOnlyOverwrites(everyoneId, botId) {
+  return [
+    { id: everyoneId, type: 0, deny: bits(P.SendMessages, P.SendMessagesInThreads, P.CreatePublicThreads, P.CreatePrivateThreads) },
+    { id: botId, type: 1, allow: bits(P.ViewChannel, P.SendMessages, P.SendMessagesInThreads, P.EmbedLinks, P.ReadMessageHistory) },
+  ];
+}
+
+// Privater Kanal: niemand außer dem Team und dem Bot sieht ihn
+function privateOverwrites(everyoneId, botId, teamRoleId) {
+  const list = [{ id: everyoneId, type: 0, deny: bits(P.ViewChannel) }];
+  if (teamRoleId) list.push({ id: teamRoleId, type: 0, allow: bits(P.ViewChannel, P.SendMessages, P.ReadMessageHistory) });
+  list.push({ id: botId, type: 1, allow: bits(P.ViewChannel, P.SendMessages, P.EmbedLinks, P.ReadMessageHistory) });
+  return list;
+}
+
+// Sieht @everyone diesen Kanal nicht? (eigene Rechte des Kanals, sonst die seiner Kategorie)
+function hiddenFromEveryone(channel, channels, everyoneId) {
+  const rule = (c) => (c && c.permission_overwrites ? c.permission_overwrites.find((o) => o.id === everyoneId) : null);
+  const own = rule(channel);
+  if (own && (BigInt(own.deny || '0') & P.ViewChannel)) return true;
+  if (own && (BigInt(own.allow || '0') & P.ViewChannel)) return false;
+  const parent = rule(channels.find((c) => c.id === channel.parent_id));
+  return Boolean(parent && (BigInt(parent.deny || '0') & P.ViewChannel));
+}
+
+// Einen Kanal aus CHANNEL_SPECS finden oder anlegen: die gespeicherte ID, sonst ein Text-, Ankündigungs- oder
+// Forenkanal mit diesem Namen – beides unverändert benutzt (keine Rechte, kein Thema, nichts wird geändert; ein privater
+// Kanal, den alle sehen, bekommt nur einen Hinweis). Sonst entsteht er in der Kategorie „OnYourSite“: auf einem
+// Community-Server als Ankündigungskanal, sonst als Textkanal; ein privater immer als Textkanal nur für das Team.
+async function ensureNamedChannel(rest, guildId, key, current = {}) {
+  const spec = CHANNEL_SPECS[key];
+  if (!spec) throw new Error(`Unknown channel ${key}.`);
+  const me = await rest.get(Routes.user());
+  const guild = await rest.get(Routes.guild(guildId));
+  const channels = await rest.get(Routes.guildChannels(guildId));
+  const found = channels.find((c) => c.id === current[key] && NAMED_TYPES.includes(c.type))
+    || channels.find((c) => NAMED_TYPES.includes(c.type) && (c.name || '').toLowerCase() === spec.name);
+  if (found) {
+    const warnings = [];
+    if (spec.private && !hiddenFromEveryone(found, channels, guild.id)) {
+      warnings.push(`Everyone on the server can see #${found.name} – the team alerts would be public there. In Discord, make it `
+        + 'private (only Staff and the bot), or choose another channel on the website.');
+    }
+    return { id: found.id, done: [`Using your existing #${found.name}`], warnings };
+  }
+  const community = (guild.features || []).includes('COMMUNITY');
+  const parentOf = (id) => (channels.find((c) => c.id === id) || {}).parent_id || null;
+  const categoryId = parentOf(current.WELCOME_CHANNEL_ID) || parentOf(current.SUPPORT_CHANNEL_ID);
+  const category = channels.find((c) => c.type === ChannelType.GuildCategory && c.id === categoryId)
+    || channels.find((c) => c.type === ChannelType.GuildCategory && (c.name || '').toLowerCase() === 'onyoursite');
+  if (spec.private) {
+    const teamRoleId = /^\d{15,22}$/.test(String(current.TEAM_ROLE_ID || '')) ? String(current.TEAM_ROLE_ID) : '';
+    const body = { name: spec.name, type: ChannelType.GuildText, topic: spec.topic, permission_overwrites: privateOverwrites(guild.id, me.id, teamRoleId) };
+    if (category) body.parent_id = category.id;
+    const ch = await rest.post(Routes.guildChannels(guildId), { body, reason: REASON });
+    const warnings = teamRoleId ? [] : [`Only the bot and server admins can see #${ch.name} – give your team’s role access to it in Discord.`];
+    return { id: ch.id, done: [`Created the private channel #${ch.name} (only Staff and the bot)`], warnings };
+  }
+  const body = {
+    name: spec.name,
+    type: community ? ChannelType.GuildAnnouncement : ChannelType.GuildText,
+    topic: spec.topic,
+    permission_overwrites: readOnlyOverwrites(guild.id, me.id),
+  };
+  if (category) body.parent_id = category.id;
+  const ch = await rest.post(Routes.guildChannels(guildId), { body, reason: REASON });
+  const done = community ? `Created channel #${ch.name}` : `Created channel #${ch.name} (a text channel – announcement channels need a community server)`;
+  return { id: ch.id, done: [done], warnings: [] };
+}
 
 function api(token) {
   // DISCORD_API_BASE nur für Tests mit einem nachgebauten Discord
@@ -127,11 +210,7 @@ async function setupGuild(rest, guildId, current) {
   }
 
   // Lesekanäle: nur der Bot schreibt (das Team kann es über die Kanal-Rechte jederzeit ändern)
-  const botWrites = { id: me.id, type: 1, allow: bits(P.ViewChannel, P.SendMessages, P.SendMessagesInThreads, P.EmbedLinks, P.ReadMessageHistory) };
-  const readOnly = [
-    { id: everyone, type: 0, deny: bits(P.SendMessages, P.SendMessagesInThreads, P.CreatePublicThreads, P.CreatePrivateThreads) },
-    botWrites,
-  ];
+  const readOnly = readOnlyOverwrites(everyone, me.id);
   // Die Kategorie wiederfinden: über die gespeicherten Kanäle (auch wenn sie umbenannt wurde), sonst über den Namen
   const parentOf = (id) => (channels.find((c) => c.id === id) || {}).parent_id || null;
   const info = await ensure(parentOf(current.WELCOME_CHANNEL_ID) || parentOf(current.SUPPORT_CHANNEL_ID),
@@ -147,6 +226,24 @@ async function setupGuild(rest, guildId, current) {
     rules = await ensure(current.RULES_CHANNEL_ID, textChannel('rules', 'The rules of this server.'), 'Channel');
   }
   const support = await ensure(current.SUPPORT_CHANNEL_ID, textChannel('support', 'Need help? Open a private ticket with the button.'), 'Channel');
+  // #updates (Beiträge der Webseite), #status (Vorfälle) und #alerts (Meldungen ans Team, privat): ein vorhandener Kanal
+  // mit dem Namen bleibt, wie er ist
+  const named = { UPDATES_CHANNEL_ID: current.UPDATES_CHANNEL_ID || '', STATUS_CHANNEL_ID: current.STATUS_CHANNEL_ID || '', ALERTS_CHANNEL_ID: current.ALERTS_CHANNEL_ID || '' };
+  const fallback = {
+    UPDATES_CHANNEL_ID: 'the website can still use a webhook',
+    STATUS_CHANNEL_ID: 'run install.sh --channel STATUS_CHANNEL_ID to try again',
+    ALERTS_CHANNEL_ID: 'run install.sh --channel ALERTS_CHANNEL_ID to try again',
+  };
+  for (const key of Object.keys(named)) {
+    try {
+      const r = await ensureNamedChannel(rest, guildId, key, { ...current, TEAM_ROLE_ID: staff.id, WELCOME_CHANNEL_ID: welcome.id, SUPPORT_CHANNEL_ID: support.id });
+      named[key] = r.id;
+      done.push(...r.done);
+      warnings.push(...r.warnings);
+    } catch (err) {
+      warnings.push(`The #${CHANNEL_SPECS[key].name} channel couldn’t be added (${err.message}) – ${fallback[key]}.`);
+    }
+  }
 
   // Forum für Vorschläge mit den Tags „Accepted“ und „Declined“ (nur der Bot und das Team dürfen sie setzen)
   let forum = null;
@@ -203,6 +300,9 @@ async function setupGuild(rest, guildId, current) {
       TAG_ACCEPTED_ID: tags.accepted,
       TAG_DECLINED_ID: tags.declined,
       SUPPORT_CATEGORY_ID: tickets.id,
+      UPDATES_CHANNEL_ID: named.UPDATES_CHANNEL_ID,
+      STATUS_CHANNEL_ID: named.STATUS_CHANNEL_ID,
+      ALERTS_CHANNEL_ID: named.ALERTS_CHANNEL_ID,
     },
     done,
     warnings,
@@ -214,6 +314,10 @@ const line = (key, value) => `${key}=${String(value).replace(/[\r\n\t]+/g, ' ')}
 
 // Aufruf aus index.js – gibt den Exit-Code zurück
 async function cli(argv) {
+  if (argv.includes('--channel-keys')) {
+    process.stdout.write(`${Object.entries(CHANNEL_SPECS).map(([key, spec]) => line(key, spec.name)).join('\n')}\n`);
+    return 0;
+  }
   const token = String(process.env.DISCORD_TOKEN || '').trim();
   if (!token) {
     console.error('DISCORD_TOKEN is missing.');
@@ -227,6 +331,20 @@ async function cli(argv) {
       out.push(line('APP_ID', app.id), line('APP_NAME', app.name), line('INVITE', app.invite));
     } else if (argv.includes('--discord-guilds')) {
       for (const g of await guilds(rest)) out.push(line(`GUILD_${g.id}`, g.name));
+    } else if (argv.includes('--discord-channel')) {
+      const i = argv.indexOf('--discord-channel');
+      const key = argv[i + 1] || '';
+      const guildId = argv[i + 2] || '';
+      if (!CHANNEL_SPECS[key] || !/^\d{15,22}$/.test(guildId)) {
+        console.error(`Usage: --discord-channel <${Object.keys(CHANNEL_SPECS).join('|')}> <server ID>`);
+        return 1;
+      }
+      const current = {};
+      for (const k of [key, 'TEAM_ROLE_ID', 'WELCOME_CHANNEL_ID', 'SUPPORT_CHANNEL_ID']) current[k] = String(process.env[k] || '');
+      const r = await ensureNamedChannel(rest, guildId, key, current);
+      out.push(line(key, r.id));
+      for (const text of r.done) out.push(line('DONE', text));
+      for (const text of r.warnings) out.push(line('WARN', text));
     } else {
       const guildId = argv[argv.indexOf('--discord-setup') + 1] || '';
       if (!/^\d{15,22}$/.test(guildId)) {
@@ -235,7 +353,7 @@ async function cli(argv) {
       }
       const current = {};
       for (const key of ['TEAM_ROLE_ID', 'WELCOME_CHANNEL_ID', 'RULES_CHANNEL_ID', 'SUPPORT_CHANNEL_ID', 'SUGGESTION_FORUM_ID',
-        'TAG_ACCEPTED_ID', 'TAG_DECLINED_ID', 'SUPPORT_CATEGORY_ID']) {
+        'TAG_ACCEPTED_ID', 'TAG_DECLINED_ID', 'SUPPORT_CATEGORY_ID', 'UPDATES_CHANNEL_ID', 'STATUS_CHANNEL_ID', 'ALERTS_CHANNEL_ID']) {
         current[key] = String(process.env[key] || '');
       }
       const result = await setupGuild(rest, guildId, current);
@@ -252,4 +370,4 @@ async function cli(argv) {
   }
 }
 
-module.exports = { cli, inviteUrl, INVITE_PERMISSIONS, setupGuild };
+module.exports = { cli, inviteUrl, INVITE_PERMISSIONS, setupGuild, ensureNamedChannel, CHANNEL_SPECS };

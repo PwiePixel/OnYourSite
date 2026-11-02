@@ -4,6 +4,8 @@ import type { Ctx } from '../web/ctx.js';
 import { e } from '../html.js';
 import { baseHost, mainUrl, slugProblem } from '../helpers.js';
 import { date, phpRtrim, rawurlencode, strtolower } from '../php.js';
+import { neutralNotFound } from '../domains/answers.js';
+import { uiAssets } from '../views/partials/ui.js';
 
 // Daten der Vorlage
 export interface NotFoundData {
@@ -31,6 +33,8 @@ export async function notFoundData(ctx: Ctx): Promise<NotFoundData> {
 
 // http_response_code(404); require views/404.php; exit;
 export async function notFound(ctx: Ctx): Promise<void> {
+  // Auf einer eigenen Domain (Premium) nie die OnYourSite-Seite, sondern die neutrale 404
+  if (ctx.customDomain) neutralNotFound(ctx);
   const d = await notFoundData(ctx);
   ctx.send(notFoundView(d), 404);
 }
@@ -40,7 +44,7 @@ export function notFoundView(d: NotFoundData): string {
   let o = '';
   o += "<!DOCTYPE html>\n<html lang=\"en\" class=\"scroll-smooth\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->\n    <meta name=\"color-scheme\" content=\"dark\">\n    <meta name=\"darkreader-lock\">\n    <title>";
   o += (d.isFree ? 'Address available' : 'Not found');
-  o += " | OnYourSite</title>\n    <link rel=\"icon\" type=\"image/png\" href=\"/static/images/favicon.png\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n    <link rel=\"stylesheet\" href=\"/static/vendor/boxicons/css/boxicons.min.css\">\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n    \n    <script>\n        tailwind.config = {\n            theme: {\n                extend: {\n                    fontFamily: { sans: ['Inter', 'sans-serif'], },\n                    colors: {\n                        background: '#09090b', \n                        card: '#18181b',\n                        bordercolor: 'rgba(255, 255, 255, 0.08)',\n                        brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', }\n                    }\n                }\n            }\n        }\n    </script>\n</head>\n<body class=\"bg-background text-gray-300 font-sans antialiased overflow-x-hidden selection:bg-brand-500/30 flex flex-col min-h-screen\">\n\n    <nav class=\"fixed w-full z-50 top-0 transition-all duration-300 backdrop-blur-md bg-background/80 border-b border-bordercolor\">\n        <div class=\"max-w-7xl mx-auto px-4 sm:px-6 lg:px-8\">\n            <div class=\"flex justify-between items-center h-20\">\n                <a href=\"";
+  o += " | OnYourSite</title>\n    <link rel=\"icon\" type=\"image/png\" href=\"/static/images/favicon.png\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n    <link rel=\"stylesheet\" href=\"/static/vendor/boxicons/css/boxicons.min.css\">\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n    \n    <script>\n        tailwind.config = {\n            theme: {\n                extend: {\n                    fontFamily: { sans: ['Inter', 'sans-serif'], },\n                    colors: {\n                        background: '#09090b', \n                        card: '#18181b',\n                        bordercolor: 'rgba(255, 255, 255, 0.08)',\n                        brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', }\n                    }\n                }\n            }\n        }\n    </script>\n" + "    " + uiAssets('app', { toastTop: 96 }) + "\n</head>\n<body class=\"bg-background text-gray-300 font-sans antialiased overflow-x-hidden selection:bg-brand-500/30 flex flex-col min-h-screen\">\n\n    <nav class=\"fixed w-full z-50 top-0 transition-all duration-300 backdrop-blur-md bg-background/80 border-b border-bordercolor\">\n        <div class=\"max-w-7xl mx-auto px-4 sm:px-6 lg:px-8\">\n            <div class=\"flex justify-between items-center h-20\">\n                <a href=\"";
   o += e(d.mainUrl);
   o += "/\" class=\"flex-shrink-0 flex items-center gap-2 cursor-pointer transition-transform hover:scale-105\">\n                    <i class='bx bx-hive text-3xl text-brand-500'></i>\n                    <span class=\"font-bold text-xl text-white tracking-tight\">OnYourSite</span>\n                </a>\n                <div class=\"hidden md:flex items-center space-x-8\">\n                    <a href=\"";
   o += e(d.mainUrl);

@@ -1,6 +1,7 @@
-// Admin-Panel: Updates, Roadmap und Discord (views/admin_updates.php). Gibt genau das HTML zurück, das dieses
-// include innerhalb von views/admin.php ausgibt (ab der ersten Zeile nach dem PHP-Kopf, mit dem Zeilenumbruch am
-// Ende) – admin.php schreibt davor nur seine 12 Leerzeichen. Text außerhalb der PHP-Teile: view2ts, Byte für Byte.
+// Admin-Panel: Updates, Roadmap und Discord (views/admin_updates.php). Updates und Roadmap geben genau das HTML
+// dieses includes innerhalb von views/admin.php aus (ab der ersten Zeile nach dem PHP-Kopf) – admin.php schreibt davor
+// nur seine 12 Leerzeichen; Text außerhalb der PHP-Teile: view2ts, Byte für Byte. Der Reiter Discord kommt aus
+// app/src/discord/adminView.ts.
 import type { Ctx } from '../web/ctx.js';
 import { csrfField } from '../web/security.js';
 import { e } from '../html.js';
@@ -8,7 +9,14 @@ import { date, intval, phpLtrim, phpStr, phpTruthy, strtotime } from '../php.js'
 import {
   MILESTONE_STATUSES, UPDATE_CATEGORIES, milestoneGet, milestones, updateGet, updatesList, type Milestone, type Update,
 } from './updates.js';
-import { discordConfigured, discordParseWebhook, discordSettings, type DiscordSettings } from './discord.js';
+import type { DiscordSettings } from '../discord/settings.js';
+import { discordTabData, discordTabView } from '../discord/adminView.js';
+import { confirmAttrs, confirmField } from '../views/partials/ui.js';
+import { anyDestination, delivery, destinations, isOnDiscord, postsOf, type Delivery, type PostRow } from '../discord/posts.js';
+import { chipActionsHtml, chipHtml, chipOf, openJobsOf, type Chip } from '../discord/chips.js';
+import { report as botReport } from '../discord/botReport.js';
+import { placeOf } from '../discord/botCard.js';
+import { parseWebhookLink } from '../discord/webhook.js';
 
 export interface AdminUpdatesData {
   // oys_csrf_field() – überall dasselbe Feld
@@ -20,6 +28,15 @@ export interface AdminUpdatesData {
   editUpdate: Update | null;
   prefillMs: Milestone | null;
   editMilestone: Milestone | null;
+  // Reiter Discord (fertiges HTML aus discord/adminView.ts)
+  discordTab: string;
+  // Ein Chip je Beitrag eines Updates (Bot, Webhook, alter Token) mit Retry/Forget
+  chips?: Map<number, Chip[]>;
+  // Wo ein Update in Discord steht (für „On Discord (…)“), und wohin ein neues ginge (Ziele, die an sind)
+  postedWhere?: Map<number, string[]>;
+  activeWhere?: string[];
+  // Etwas ist eingerichtet (Bot, Webhook, alter Token), aber kein Ziel ist an
+  discordOff?: boolean;
 }
 
 // Formularwerte: ein vorhandenes Update oder die Vorgaben (auf Wunsch aus einem Meilenstein vorbefüllt)
@@ -36,25 +53,65 @@ interface UpdateForm {
   discord_announce: unknown;
 }
 
+// Steht ein Update in Discord? Die Vorlage fragt wie früher discord_message_id ab – der Wert kommt jetzt aus den
+// Beiträgen (update_discord_posts), nicht mehr aus der alten Spalte
+function withPosts(u: Update, posts: Map<number, PostRow[]>): Update {
+  const rows = posts.get(u.id);
+  const first = rows?.find((r) => r.state !== 'failed');
+  return { ...u, discord_message_id: isOnDiscord(rows) ? first?.message_id ?? first?.state ?? '' : '' };
+}
+
 // Daten wie am Anfang von admin_updates.php: ?edit_update=, ?new_update_for= und ?edit_milestone= aus der Adresse
 export async function adminUpdatesView(ctx: Ctx): Promise<string> {
-  const settings = await discordSettings();
+  const d = await delivery();
+  const csrf = (await csrfField(ctx)).value;
   const get = ctx.get;
+  const all = await updatesList(false, 300);
+  const edit = get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null;
+  const posts = await postsOf([...all.map((u) => u.id), ...(edit ? [edit.id] : [])]);
+  const rep = d.botInstalled ? await botReport() : null;
+  const rows = [...posts.values()].flat();
+  const jobs = await openJobsOf(rows.map((r) => r.id));
+  const chips = new Map<number, Chip[]>();
+  // Nur veröffentlichte Updates bekommen „Retry“ zum (neu) Posten oder Bearbeiten
+  const published = new Set([...all, ...(edit ? [edit] : [])].filter((u) => u.is_published).map((u) => u.id));
+  const postedWhere = new Map<number, string[]>();
+  for (const row of rows) {
+    chips.set(row.update_id, [...(chips.get(row.update_id) ?? []), chipOf(row, jobs.get(row.id), d.botInstalled, undefined, published.has(row.update_id))]);
+    if (row.state !== 'failed') postedWhere.set(row.update_id, [...(postedWhere.get(row.update_id) ?? []), whereText(row.via, row.via === 'bot' ? placeOf(rep, row.channel_id ?? '')?.name ?? '' : '')]);
+  }
   return adminUpdatesTemplate({
-    discordSettings: settings,
-    discordReady: discordConfigured(settings),
-    allUpdates: await updatesList(false, 300),
+    discordSettings: d.s,
+    discordReady: anyDestination(d),
+    allUpdates: all.map((u) => withPosts(u, posts)),
     allMilestones: await milestones(false),
-    editUpdate: get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null,
+    editUpdate: edit ? withPosts(edit, posts) : null,
     prefillMs: get.new_update_for !== undefined ? await milestoneGet(intval(get.new_update_for)) : null,
     editMilestone: get.edit_milestone !== undefined ? await milestoneGet(intval(get.edit_milestone)) : null,
-    csrf: (await csrfField(ctx)).value,
+    csrf,
+    discordTab: discordTabView(await discordTabData(ctx, csrf)),
+    chips,
+    postedWhere,
+    activeWhere: destinations(d).map((x) => whereText(x.via, x.via === 'bot' ? d.bot?.name ?? '' : '')),
+    discordOff: !anyDestination(d) && somethingSetUp(d),
   });
+}
+
+// Ziel in Worten: „bot in #updates“, „webhook“, „old bot token“
+function whereText(via: PostRow['via'], channel: string): string {
+  if (via === 'bot') return channel !== '' ? 'bot in #' + channel : 'bot';
+  return via === 'webhook' ? 'webhook' : 'old bot token';
+}
+
+// Ist überhaupt etwas eingerichtet? (Bot installiert, Webhook gespeichert oder alter Token) – dann heißt „kein Ziel“
+// „ausgeschaltet“, nicht „noch nicht verbunden“
+function somethingSetUp(d: Delivery): boolean {
+  return d.botInstalled || parseWebhookLink(d.s.webhook.url) !== null || d.s.bot_token !== '';
 }
 
 export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   let o = '';
-  const { csrf, discordSettings: ds, discordReady, allUpdates, allMilestones, editUpdate, prefillMs, editMilestone } = d;
+  const { csrf, discordSettings: ds, discordReady, allUpdates, allMilestones, editUpdate, prefillMs, editMilestone, discordTab } = d;
   const inp = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
   const lbl = 'block text-sm font-medium text-gray-300 mb-1.5';
   const btn = 'inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors';
@@ -77,9 +134,6 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   const mf = editMilestone ?? { id: 0, title: '', description: '', status: 'next', target: '', is_public: true };
   const byStatus: Record<string, Milestone[]> = { now: [], next: [], planned: [], done: [] };
   for (const m of allMilestones) byStatus[m.status].push(m);
-  const hook = ds.webhook_url !== '' ? discordParseWebhook(ds.webhook_url) : null;
-  const maskedHook = hook ? 'https://discord.com/api/webhooks/' + hook[0] + '/••••••••' : '';
-  const maskedToken = ds.bot_token !== '' ? '••••••••' + ds.bot_token.slice(-4) : '';
   o += "            <!-- ===================== Updates ===================== -->\n            <div id=\"tab-updates\" class=\"admin-tab-content max-w-5xl mx-auto space-y-8 hidden\">\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 mb-6 border-b border-bordercolor pb-4\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-edit text-xl text-sky-400'></i> ";
   o += editUpdate ? 'Edit update' : 'Write an update';
   o += "</h2>\n                        <a href=\"/updates\" target=\"_blank\" rel=\"noopener\" class=\"text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2\">View /updates <i class='bx bx-link-external'></i></a>\n                    </div>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-5\">\n                        ";
@@ -88,7 +142,7 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += uf.id;
   o += "\">\n                        <div>\n                            <label class=\"";
   o += lbl;
-  o += "\" for=\"uTitle\">Title</label>\n                            <input id=\"uTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" value=\"";
+  o += "\" for=\"uTitle\">Title</label>\n                            <input id=\"uTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" data-error-required=\"Please enter a title.\" value=\"";
   o += e(uf.title);
   o += "\" placeholder=\"e.g. New themes and a faster editor\" class=\"";
   o += inp;
@@ -118,7 +172,7 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += e(ufDate);
   o += "\" max=\"";
   o += e(date('Y-m-d'));
-  o += "\" class=\"";
+  o += "\" data-error-max=\"The date can’t be in the future.\" class=\"";
   o += inp;
   o += "\">\n                                <input type=\"hidden\" name=\"date_default\" value=\"";
   o += e(ufDate);
@@ -149,15 +203,21 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   o += "> Publish</label>\n                                <label class=\"flex items-center gap-2 cursor-pointer\"><input type=\"radio\" name=\"publish\" value=\"\"";
   o += editUpdate && !uf.is_published ? ' checked' : '';
   o += " class=\"accent-brand-500\"> Save as draft</label>\n                            </div>\n                            <div class=\"sm:pt-4 text-sm\">\n                                ";
-  if (!discordReady) {
+  const where = editUpdate ? d.postedWhere?.get(editUpdate.id) ?? [] : [];
+  if (!discordReady && d.discordOff) {
+    // Eingerichtet, aber kein Ziel an (z. B. Bot ausgeschaltet): sagen, dass gerade nichts angekündigt wird
+    o += "                                <span class=\"text-gray-500 flex items-center gap-1.5\" data-discord-off><i class='bx bxl-discord-alt text-lg'></i> Updates aren’t announced on Discord right now – no destination is on. <a href=\"#discord\" class=\"text-brand-400 hover:text-white\">Discord settings</a></span>\n                                ";
+  } else if (!discordReady) {
     o += "                                <span class=\"text-gray-500 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> Connect Discord under <a href=\"#discord\" onclick=\"switchAdminTab('discord')\" class=\"text-brand-400 hover:text-white\">Discord</a> to announce updates.</span>\n                                ";
   } else if (uf.discord_message_id !== '') {
-    o += "                                <span class=\"text-emerald-400 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> Already on Discord – changes are synced, drafts are removed there.</span>\n                                ";
+    o += "                                <span class=\"text-emerald-400 flex items-center gap-1.5\"><i class='bx bxl-discord-alt text-lg'></i> " + (where.length ? 'On Discord (' + e(where.join(', ')) + ')' : 'Already on Discord') + " – changes are synced, drafts are removed there.</span>\n                                ";
   } else {
     o += "                                <input type=\"hidden\" name=\"announce_field\" value=\"1\">\n                                <label class=\"flex items-center gap-2 cursor-pointer text-gray-300\"><input type=\"checkbox\" name=\"post_discord\" value=\"1\" class=\"accent-[#5865F2]\"";
     o += announceChecked ? ' checked' : '';
     o += "> <i class='bx bxl-discord-alt text-lg text-[#5865F2]'></i> ";
     o += announceNow ? 'Post it to Discord now' : 'Announce on Discord when published';
+    // Wohin angekündigt wird (die Ziele, die an sind)
+    o += d.activeWhere && d.activeWhere.length ? '<span class="text-gray-500" data-discord-where> (' + e(d.activeWhere.join(', ')) + ')</span>' : '';
     o += "</label>\n                                ";
   }
   o += "                            </div>\n                        </div>\n                        <div class=\"flex flex-wrap justify-end gap-3\">\n                            ";
@@ -190,7 +250,11 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
     o += "22\">";
     o += e(cat.label);
     o += "</span>\n                                    ";
-    if (u.discord_message_id !== '') {
+    // Ein Chip je Ziel (ersetzt das frühere „On Discord“)
+    const uChips = d.chips?.get(u.id) ?? [];
+    if (uChips.length) {
+      o += '<span class="contents" data-discord-chips="' + u.id + '">' + uChips.map((c) => chipHtml(c, u.title)).join('') + '</span>';
+    } else if (!d.chips && u.discord_message_id !== '') {
       o += "<span class=\"text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[#5865F2]/20 text-[#8b93ff] flex items-center gap-1\"><i class='bx bxl-discord-alt'></i> On Discord</span>";
     }
     o += "                                </div>\n                                <p class=\"mt-1.5 text-white font-medium truncate\">";
@@ -240,10 +304,15 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
       o += btn;
       o += " text-[#8b93ff]\"><i class='bx bxl-discord-alt'></i> Remove from Discord</button></form>\n                                ";
     }
-    o += "                                <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Delete this update";
-    o += u.discord_message_id !== '' ? ' and its Discord post' : '';
-    o += "?');\">";
-    o += csrf;
+    // Retry und Forget je Beitrag, der sich noch ändern kann (die übrigen ändern sich nur durch eine Aktion hier)
+    const actionable = uChips.filter((c) => c.retry || c.forget || c.state !== 'posted' || c.error !== '' || c.busy);
+    if (actionable.length) {
+      o += '<div class="contents" data-discord-actions="' + u.id + '">' + actionable.map((c) => chipActionsHtml(c, csrf, 'updates', uChips.length > 1)).join('') + '</div>';
+    }
+    o += "                                <form action=\"/admin\" method=\"POST\" class=\"m-0\"";
+    o += confirmAttrs({ title: 'Delete this update?', text: u.discord_message_id !== '' ? 'Its Discord post is deleted too.' : undefined, ok: 'Delete', tone: 'danger' });
+    o += ">";
+    o += csrf + confirmField();
     o += "<input type=\"hidden\" name=\"oys_action\" value=\"update_delete\"><input type=\"hidden\" name=\"id\" value=\"";
     o += u.id;
     o += "\">\n                                    <button type=\"submit\" class=\"";
@@ -252,13 +321,13 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
   }
   o += "                    </ul>\n                </div>\n            </div>\n\n            <!-- ===================== Roadmap ===================== -->\n            <div id=\"tab-roadmap\" class=\"admin-tab-content max-w-6xl mx-auto space-y-8 hidden\">\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 mb-6 border-b border-bordercolor pb-4\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-map-alt text-xl text-amber-400'></i> ";
   o += editMilestone ? 'Edit milestone' : 'Add a milestone';
-  o += "</h2>\n                        <a href=\"/updates#roadmap\" target=\"_blank\" rel=\"noopener\" class=\"text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2\">View roadmap <i class='bx bx-link-external'></i></a>\n                    </div>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-5\">\n                        ";
+  o += "</h2>\n                        <a href=\"/roadmap\" target=\"_blank\" rel=\"noopener\" class=\"text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2\">View roadmap <i class='bx bx-link-external'></i></a>\n                    </div>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-5\">\n                        ";
   o += csrf;
   o += "                        <input type=\"hidden\" name=\"oys_action\" value=\"milestone_save\">\n                        <input type=\"hidden\" name=\"id\" value=\"";
   o += mf.id;
   o += "\">\n                        <div class=\"grid grid-cols-1 sm:grid-cols-[1fr_180px_160px] gap-4\">\n                            <div>\n                                <label class=\"";
   o += lbl;
-  o += "\" for=\"mTitle\">Title</label>\n                                <input id=\"mTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" value=\"";
+  o += "\" for=\"mTitle\">Title</label>\n                                <input id=\"mTitle\" type=\"text\" name=\"title\" required maxlength=\"160\" data-error-required=\"Please enter a title.\" value=\"";
   o += e(mf.title);
   o += "\" placeholder=\"e.g. Custom domains\" class=\"";
   o += inp;
@@ -359,8 +428,10 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
           o += t.is_done ? 'line-through' : '';
           o += " min-w-0 break-words\">";
           o += e(t.title);
-          o += "</span></button></form>\n                                        <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Remove this task?');\">";
-          o += csrf;
+          o += "</span></button></form>\n                                        <form action=\"/admin\" method=\"POST\" class=\"m-0\"";
+          o += confirmAttrs({ title: 'Remove this task?', ok: 'Remove', tone: 'danger' });
+          o += ">";
+          o += csrf + confirmField();
           o += "<input type=\"hidden\" name=\"oys_action\" value=\"task_delete\"><input type=\"hidden\" name=\"id\" value=\"";
           o += t.id;
           o += "\">\n                                            <button type=\"submit\" class=\"w-8 h-8 inline-flex items-center justify-center text-gray-600 hover:text-red-400\" title=\"Remove task\"><i class='bx bx-x'></i></button></form>\n                                    </li>\n                                    ";
@@ -405,82 +476,17 @@ export function adminUpdatesTemplate(d: AdminUpdatesData): string {
       o += m.id;
       o += "#roadmap\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Edit\"><i class='bx bx-edit-alt'></i></a>\n                                    <a href=\"/admin?new_update_for=";
       o += m.id;
-      o += "#updates\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Write an update about it\"><i class='bx bx-news'></i></a>\n                                    <form action=\"/admin\" method=\"POST\" class=\"m-0 ml-auto\" onsubmit=\"return confirm('Delete this milestone and its tasks?');\">";
-      o += csrf;
+      o += "#updates\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 hover:text-white\" title=\"Write an update about it\"><i class='bx bx-news'></i></a>\n                                    <form action=\"/admin\" method=\"POST\" class=\"m-0 ml-auto\"";
+      o += confirmAttrs({ title: 'Delete this milestone?', text: 'Its tasks are deleted too.', ok: 'Delete', tone: 'danger' });
+      o += ">";
+      o += csrf + confirmField();
       o += "<input type=\"hidden\" name=\"oys_action\" value=\"milestone_delete\"><input type=\"hidden\" name=\"id\" value=\"";
       o += m.id;
       o += "\">\n                                        <button type=\"submit\" class=\"w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-500 hover:text-red-400\" title=\"Delete\"><i class='bx bx-trash'></i></button></form>\n                                </div>\n                            </div>\n                            ";
     }
     o += "                        </div>\n                    </div>\n                    ";
   }
-  o += "                </div>\n            </div>\n\n            <!-- ===================== Discord ===================== -->\n            <div id=\"tab-discord\" class=\"admin-tab-content max-w-4xl mx-auto space-y-8 hidden\">\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4\">\n                    <span class=\"w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ";
-  o += discordReady ? 'bg-[#5865F2]/20 text-[#8b93ff]' : 'bg-white/5 text-gray-500';
-  o += "\"><i class='bx bxl-discord-alt text-3xl'></i></span>\n                    <div class=\"flex-1 min-w-0\">\n                        <p class=\"text-white font-semibold\">";
-  o += discordReady ? 'Discord is connected' : 'Discord isn’t connected yet';
-  o += "</p>\n                        <p class=\"text-sm text-gray-400 truncate\">";
-  o += discordReady ? (ds.mode === 'bot' ? 'Via bot · channel ' + e(ds.channel_id) : 'Via webhook · ' + e(maskedHook)) : 'Paste a webhook link or connect a bot below.';
-  o += "</p>\n                    </div>\n                    ";
-  if (discordReady) {
-    o += "                    <div class=\"flex gap-2\">\n                        <form action=\"/admin\" method=\"POST\" class=\"m-0\">";
-    o += csrf;
-    o += "<input type=\"hidden\" name=\"oys_action\" value=\"discord_test\"><button type=\"submit\" class=\"";
-    o += btn;
-    o += "\"><i class='bx bx-paper-plane'></i> Send test</button></form>\n                        <form action=\"/admin\" method=\"POST\" class=\"m-0\" onsubmit=\"return confirm('Disconnect Discord? Saved links and tokens are removed.');\">";
-    o += csrf;
-    o += "<input type=\"hidden\" name=\"oys_action\" value=\"discord_disconnect\"><button type=\"submit\" class=\"";
-    o += btn;
-    o += " hover:text-red-400\"><i class='bx bx-unlink'></i> Disconnect</button></form>\n                    </div>\n                    ";
-  }
-  o += "                </div>\n\n                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                    <h2 class=\"text-base font-semibold text-white mb-5 flex items-center gap-2\"><i class='bx bx-cog text-xl text-[#8b93ff]'></i> Settings</h2>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-5\" id=\"discordForm\">\n                        ";
-  o += csrf;
-  o += "                        <input type=\"hidden\" name=\"oys_action\" value=\"discord_save\">\n                        <div class=\"grid grid-cols-1 sm:grid-cols-2 gap-3\">\n                            <label class=\"flex gap-3 p-4 rounded-xl border border-bordercolor cursor-pointer has-[:checked]:border-[#5865F2] has-[:checked]:bg-[#5865F2]/10\">\n                                <input type=\"radio\" name=\"mode\" value=\"webhook\" class=\"mt-1 accent-[#5865F2]\"";
-  o += ds.mode !== 'bot' ? ' checked' : '';
-  o += ">\n                                <span><span class=\"block text-white font-medium text-sm\">Webhook link</span><span class=\"block text-xs text-gray-400 mt-0.5\">Easiest – no bot needed. Posts into one channel.</span></span>\n                            </label>\n                            <label class=\"flex gap-3 p-4 rounded-xl border border-bordercolor cursor-pointer has-[:checked]:border-[#5865F2] has-[:checked]:bg-[#5865F2]/10\">\n                                <input type=\"radio\" name=\"mode\" value=\"bot\" class=\"mt-1 accent-[#5865F2]\"";
-  o += ds.mode === 'bot' ? ' checked' : '';
-  o += ">\n                                <span><span class=\"block text-white font-medium text-sm\">Discord bot</span><span class=\"block text-xs text-gray-400 mt-0.5\">Your own bot posts as itself into a channel.</span></span>\n                            </label>\n                        </div>\n                        <div data-mode=\"webhook\" class=\"space-y-4\">\n                            <div>\n                                <label class=\"";
-  o += lbl;
-  o += "\" for=\"dHook\">Webhook link</label>\n                                <input id=\"dHook\" type=\"password\" name=\"webhook_url\" autocomplete=\"off\" placeholder=\"";
-  o += e(maskedHook !== '' ? maskedHook + ' (saved – paste a new one to replace it)' : 'https://discord.com/api/webhooks/…');
-  o += "\" class=\"";
-  o += inp;
-  o += "\">\n                            </div>\n                            <div class=\"grid grid-cols-1 sm:grid-cols-2 gap-4\">\n                                <div>\n                                    <label class=\"";
-  o += lbl;
-  o += "\" for=\"dName\">Name in Discord <span class=\"text-gray-500 font-normal\">(optional)</span></label>\n                                    <input id=\"dName\" type=\"text\" name=\"username\" maxlength=\"80\" value=\"";
-  o += e(ds.username);
-  o += "\" placeholder=\"OnYourSite Updates\" class=\"";
-  o += inp;
-  o += "\">\n                                </div>\n                                <div>\n                                    <label class=\"";
-  o += lbl;
-  o += "\" for=\"dAvatar\">Avatar image link <span class=\"text-gray-500 font-normal\">(optional)</span></label>\n                                    <input id=\"dAvatar\" type=\"url\" name=\"avatar_url\" value=\"";
-  o += e(ds.avatar_url);
-  o += "\" placeholder=\"https://…/logo.png\" class=\"";
-  o += inp;
-  o += "\">\n                                </div>\n                            </div>\n                        </div>\n                        <div data-mode=\"bot\" class=\"grid grid-cols-1 sm:grid-cols-2 gap-4\">\n                            <div>\n                                <label class=\"";
-  o += lbl;
-  o += "\" for=\"dToken\">Bot token</label>\n                                <input id=\"dToken\" type=\"password\" name=\"bot_token\" autocomplete=\"off\" placeholder=\"";
-  o += e(maskedToken !== '' ? maskedToken + ' (saved)' : 'From the Developer Portal → Bot');
-  o += "\" class=\"";
-  o += inp;
-  o += "\">\n                            </div>\n                            <div>\n                                <label class=\"";
-  o += lbl;
-  o += "\" for=\"dChannel\">Channel ID</label>\n                                <input id=\"dChannel\" type=\"text\" name=\"channel_id\" inputmode=\"numeric\" value=\"";
-  o += e(ds.channel_id);
-  o += "\" placeholder=\"e.g. 1234567890123456789\" class=\"";
-  o += inp;
-  o += "\">\n                            </div>\n                        </div>\n                        <div class=\"grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-bordercolor\">\n                            <div>\n                                <label class=\"";
-  o += lbl;
-  o += "\" for=\"dMention\">Ping <span class=\"text-gray-500 font-normal\">(optional)</span></label>\n                                <input id=\"dMention\" type=\"text\" name=\"mention\" maxlength=\"30\" value=\"";
-  o += e(ds.mention);
-  o += "\" placeholder=\"Role ID, “everyone” or “here”\" class=\"";
-  o += inp;
-  o += "\">\n                                <p class=\"text-xs text-gray-500 mt-1.5\">Who gets notified when an update is posted. Empty = nobody is pinged.</p>\n                            </div>\n                            <div>\n                                <label class=\"";
-  o += lbl;
-  o += "\" for=\"dInvite\">Invite link for visitors <span class=\"text-gray-500 font-normal\">(optional)</span></label>\n                                <input id=\"dInvite\" type=\"url\" name=\"invite_url\" value=\"";
-  o += e(ds.invite_url);
-  o += "\" placeholder=\"https://discord.gg/…\" class=\"";
-  o += inp;
-  o += "\">\n                                <p class=\"text-xs text-gray-500 mt-1.5\">Used for “Get updates on Discord” on /updates.</p>\n                            </div>\n                        </div>\n                        <label class=\"flex items-center gap-2 text-sm text-gray-300 cursor-pointer\"><input type=\"checkbox\" name=\"auto_post\" value=\"1\" class=\"accent-[#5865F2]\"";
-  o += phpTruthy(ds.auto_post) ? ' checked' : '';
-  o += "> Announce new updates on Discord by default</label>\n                        <div class=\"flex justify-end\">\n                            <button type=\"submit\" class=\"bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2\"><i class='bx bx-save'></i> Save settings</button>\n                        </div>\n                    </form>\n                </div>\n\n                <div class=\"grid gap-6 md:grid-cols-2\">\n                    <div class=\"bg-card border border-bordercolor rounded-xl p-5 text-sm text-gray-400\">\n                        <h3 class=\"text-white font-semibold mb-3 flex items-center gap-2\"><i class='bx bx-link'></i> Get a webhook link</h3>\n                        <ol class=\"list-decimal pl-5 space-y-1.5\">\n                            <li>In Discord, open the channel settings (gear icon) of your updates channel.</li>\n                            <li><b class=\"text-gray-300\">Integrations → Webhooks → New Webhook</b>.</li>\n                            <li>Click <b class=\"text-gray-300\">Copy Webhook URL</b> and paste it above.</li>\n                        </ol>\n                    </div>\n                    <div class=\"bg-card border border-bordercolor rounded-xl p-5 text-sm text-gray-400\">\n                        <h3 class=\"text-white font-semibold mb-3 flex items-center gap-2\"><i class='bx bx-bot'></i> Use a bot</h3>\n                        <ol class=\"list-decimal pl-5 space-y-1.5\">\n                            <li>On <b class=\"text-gray-300\">discord.com/developers</b> create an application → <b class=\"text-gray-300\">Bot</b> → copy the token.</li>\n                            <li>Invite the bot to your server with “Send Messages” and “Embed Links”.</li>\n                            <li>Enable Developer Mode in Discord, right-click the channel → <b class=\"text-gray-300\">Copy Channel ID</b>.</li>\n                        </ol>\n                    </div>\n                </div>\n                <p class=\"text-xs text-gray-500 text-center\">Webhook links and bot tokens are stored encrypted and never shown again.</p>\n            </div>\n";
+  o += "                </div>\n            </div>\n";
+  o += discordTab;
   return o;
 }

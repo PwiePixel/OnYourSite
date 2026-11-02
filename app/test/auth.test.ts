@@ -9,12 +9,13 @@ import { loginView } from '../src/app/views/login.js';
 import { registerView } from '../src/app/views/register.js';
 import { challengeView } from '../src/app/views/challenge.js';
 import { imprintView } from '../src/app/views/imprint.js';
-import { privacyView } from '../src/app/views/privacy.js';
-import { termsView } from '../src/app/views/terms.js';
+import { ADDRESS_HOLD_PARAGRAPH, SUGGESTIONS_PARAGRAPH, privacyView } from '../src/app/views/privacy.js';
+import { HONEYCOMBS_SECTION, termsView } from '../src/app/views/terms.js';
 import { registerOld } from '../src/app/auth.js';
 import { passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
 import { date } from '../src/php.js';
 import type { PhpArray } from '../src/php.js';
+import { withoutDialogs } from './support/dialogParity.js';
 import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 // PHP mit den echten Hilfsfunktionen; $in kommt als JSON, das Ergebnis geht als JSON zurück
@@ -44,7 +45,7 @@ test('login view matches views/login.php for every flash value', { skip: PHP_SKI
   const out = renderPhp('login.php', cases);
   cases.forEach((c, i) => {
     const html = loginView({ flashError: c.session.error ?? null, flashSuccess: c.session.success ?? null, csrfField: field });
-    assert.equal(html, out[i].html, `case ${i}: ${JSON.stringify(c.session)}`);
+    assert.equal(withoutDialogs(html), out[i].html, `case ${i}: ${JSON.stringify(c.session)}`);
     // Die Hinweise sind danach aus der Sitzung entfernt, das Token bleibt
     assert.deepEqual(out[i].session, { csrf: TOKEN });
   });
@@ -68,9 +69,22 @@ test('register view and its head match views/register.php', { skip: PHP_SKIP }, 
   cases.forEach((c, i) => {
     const old = registerOld(c.session.old, c.get as PhpArray);
     const html = registerView({ flashError: c.session.error ?? null, old, csrfField: field });
-    assert.equal(html, out[i].html, `case ${i}: ${JSON.stringify(c)}`);
+    // Die Adresse prüft der Browser jetzt auch auf die Mindestlänge (wie der Server: 2–30 Zeichen)
+    // und das Feld wird beim Tippen nur noch neu gesetzt, wenn sich etwas ändert (sonst prüft der Browser minlength nicht)
+    const node = withoutDialogs(html).replace(' required minlength="2" maxlength="30"', ' required maxlength="30"')
+      .replace("var v = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');\n                // Nur bei einer Änderung neu setzen: sonst prüft der Browser die Mindestlänge nicht mehr\n                if (v !== input.value) input.value = v;",
+        "input.value = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');");
+    assert.equal(node, out[i].html, `case ${i}: ${JSON.stringify(c)}`);
     assert.deepEqual(out[i].session, { csrf: TOKEN });
   });
+});
+
+// Neu gegenüber PHP: reservierte Adressen nach dem Löschen eines Kontos (content/addresses.ts) und die öffentliche
+// Vorschlagsseite – je genau einmal in der Datenschutzerklärung
+test('the privacy page explains held addresses and the public suggestions page once each', () => {
+  const page = privacyView();
+  assert.equal(page.split(ADDRESS_HOLD_PARAGRAPH).length, 2, 'the address paragraph appears once');
+  assert.equal(page.split(SUGGESTIONS_PARAGRAPH).length, 2, 'the suggestions paragraph appears once');
 });
 
 test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () => {
@@ -80,7 +94,16 @@ test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () =>
     const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${phpFile('views')}/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
     // Um Mitternacht kann sich das Datum zwischen PHP und Node ändern: dann noch einmal
     if (date('Y-m-d') !== day && attempt < 2) continue;
-    views.forEach(([name, fn], i) => assert.equal(fn(), res[i], name));
+    // Datenschutz: neu sind nur die Absätze über reservierte Adressen und die Vorschlagsseite – ohne sie wie in PHP.
+    // Bedingungen: neu ist nur Abschnitt 10 „Honeycombs and Premium“ (die Änderungen der Bedingungen rücken auf 11).
+    views.forEach(([name, fn], i) => {
+      let node = withoutDialogs(fn());
+      if (name === 'privacy.php') node = node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '');
+      if (name === 'terms.php') node = node.replace(HONEYCOMBS_SECTION, '').replace('11. Modifications to Terms', '10. Modifications to Terms');
+      // Seit 3.0 ohne „(PHP Sessions)“ – die Sitzung führt Node
+      const ref = name === 'privacy.php' ? res[i].replace('<strong>essential session cookies</strong> (PHP Sessions) which', '<strong>essential session cookies</strong> which') : res[i];
+      assert.equal(node, ref, name);
+    });
     break;
   }
 });

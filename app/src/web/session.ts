@@ -44,6 +44,10 @@ export class Session {
   private destroyed = false;
   private release: (() => void) | null = null;
   private oldIds: string[] = [];
+  // Abfrage im Hintergrund (Glocke): liest die Sitzung, zählt aber nicht als Aktivität – die Zeit bis zum Abmelden
+  // nach session_idle_seconds läuft weiter. lastSeen: die gespeicherte Zeit der letzten Aktivität
+  private background = false;
+  private lastSeen = 0;
 
   private constructor(private ctx: Ctx, id: string) {
     this.id = id;
@@ -60,6 +64,7 @@ export class Session {
       if (row && now() - Number(row.last_seen) <= idleSeconds()) {
         session = new Session(ctx, cookieId);
         session.release = release;
+        session.lastSeen = Number(row.last_seen);
         try {
           session.data = JSON.parse(row.data) as SessionData;
         } catch {
@@ -115,6 +120,11 @@ export class Session {
     this.sendCookie();
   }
 
+  // Diese Anfrage hält die Sitzung nicht wach (nur die Abfrage der Glocke im Hintergrund)
+  keepIdle(): void {
+    this.background = true;
+  }
+
   // $_SESSION = []; session_destroy() – ohne Cookie-Header (wie PHP)
   destroy(): void {
     this.data = {};
@@ -129,9 +139,11 @@ export class Session {
         await exec('DELETE FROM oys_sessions WHERE id = ?', [this.id]);
       } else {
         const json = JSON.stringify(this.data);
+        // Im Hintergrund bleibt die Zeit der letzten Aktivität stehen (geänderte Daten werden trotzdem gespeichert)
+        const idle = this.background && this.lastSeen > 0;
         if (json !== this.original) {
-          await exec('REPLACE INTO oys_sessions (id, data, last_seen) VALUES (?, ?, ?)', [this.id, json, now()]);
-        } else {
+          await exec('REPLACE INTO oys_sessions (id, data, last_seen) VALUES (?, ?, ?)', [this.id, json, idle ? this.lastSeen : now()]);
+        } else if (!idle) {
           await exec('UPDATE oys_sessions SET last_seen = ? WHERE id = ?', [now(), this.id]);
         }
       }

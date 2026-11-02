@@ -1,40 +1,30 @@
 // Admin: Konten löschen, Admin-Rechte umschalten, Passwort neu setzen (views/admin.php, Nutzerverwaltung)
-import { unlinkSync } from 'node:fs';
-import { exec, value, type Param } from '../db.js';
+import { exec, transaction, type Param } from '../db.js';
 import { passwordHash } from '../crypto.js';
 import { phpTruthy } from '../php.js';
-import { deletePage, userPages } from '../content/pages.js';
-import { codeDeleteUser } from '../code/sites.js';
-import { userUploadFiles } from '../content/uploads.js';
-import { uploadPath } from '../content/storage.js';
+import { markReconcile, reconcileNow } from '../honeycombs/reconcile.js';
+import { deleteAccount } from './accountDeletion.js';
 
-// Konto mit allem löschen: Seiten (samt Blöcken, Statistik, Nachrichten und Dateien), Benachrichtigungen, alte
-// Tabellen, Code-Seite und Honigwaben, übrige Uploads, zuletzt das Konto. Community-Daten bleiben (wie in PHP).
+// Konto mit allem löschen – alles oder nichts (accountDeletion.ts). Wirft, wenn nichts gelöscht werden konnte.
 export async function deleteUser(id: number): Promise<void> {
-  for (const page of await userPages(id)) {
-    await deletePage(page);
-  }
-  for (const table of ['notifications', 'messages', 'user_links', 'user_bookings', 'user_certificates']) {
-    await exec(`DELETE FROM ${table} WHERE user_id = ?`, [id]);
-  }
-  await codeDeleteUser(id);
-  // Was danach noch im Upload-Ordner liegt (z. B. Bilder der Code-Seite), gehört niemandem mehr
-  for (const name of userUploadFiles(id).keys()) {
-    try {
-      unlinkSync(uploadPath(name));
-    } catch {
-      // wie @unlink: Fehler still übergehen
-    }
-  }
-  await exec('DELETE FROM users WHERE id = ?', [id]);
+  await deleteAccount(null, id);
 }
 
 // Admin-Rolle umschalten; ein unbekanntes Konto gilt als „kein Admin“ (wird also „befördert“, ändert aber nichts).
-// Gibt den neuen Stand zurück (1 = Admin).
+// Gibt den neuen Stand zurück (1 = Admin). Admins haben Premium und manches mehr (includedFor): Die Rolle und der
+// Abgleich-Merker der Honigwaben ändern sich in einer Transaktion, danach läuft der Abgleich (Domains, Statusseiten …).
 export async function toggleAdmin(id: number): Promise<number> {
-  const status = await value('SELECT is_admin FROM users WHERE id = ?', [id]);
-  const next = phpTruthy(status) ? 0 : 1;
-  await exec('UPDATE users SET is_admin = ? WHERE id = ?', [next, id]);
+  const { next, exists } = await transaction(async (_conn, db) => {
+    // Erst die Zeile des Honigwaben-Kontos (der Merker sperrt sie), dann users – dieselbe Reihenfolge wie jeder Kauf
+    // (withAccount: hc_accounts, danach z. B. users.premium_until). Andersherum verklemmen sich Kauf und Rollenwechsel.
+    if ((await db.value('SELECT 1 FROM users WHERE id = ?', [id])) !== null) await markReconcile(db, id);
+    const user = await db.one('SELECT id, is_admin FROM users WHERE id = ? FOR UPDATE', [id]);
+    const next = phpTruthy(user?.is_admin) ? 0 : 1;
+    await db.exec('UPDATE users SET is_admin = ? WHERE id = ?', [next, id]);
+    return { next, exists: user !== null };
+  });
+  // Das ist eine Anfrage: nur die schnellen Abgleiche – langsame (z. B. Aufrufe bei Cloudflare) übernimmt der Job
+  if (exists) await reconcileNow(id, { inlineOnly: true });
   return next;
 }
 

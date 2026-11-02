@@ -270,7 +270,9 @@ test('moving uploads into the data folder works like PHP', { skip: PHP_SKIP }, (
       };
       listings[side] = { from: list(join(code, 'static/uploads')), to: list(target) };
     }
-    assert.deepEqual(results.node, results.php, c.name);
+    // Seit 3.0 nennt der Hinweis config.json (und den Neustart) statt config.php
+    const asPhp = (r: unknown) => JSON.parse(JSON.stringify(r).replace('Set “uploads_dir” in config.json and restart the website first.', 'Set “uploads_dir” in config.php first.'));
+    assert.deepEqual(asPhp(results.node), results.php, c.name);
     assert.deepEqual(listings.node, listings.php, c.name);
   }
 });

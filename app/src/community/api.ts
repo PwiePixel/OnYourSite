@@ -8,6 +8,14 @@ import {
   BOT_TEXT_MAX, botSecret, botSeen, botVerify, communityText, headerValue, snowflake, suggestionDecide, suggestionGet,
   suggestionPublic, ticketAddMessage, ticketClose, ticketGet, ticketPublic,
 } from './community.js';
+import { finishJob, handOut, knownFeatures, parseDone, parseFeatures } from './outbox.js';
+import { saveReport, validateReport } from '../discord/botReport.js';
+// Registriert die Aufträge update.* und bot.report (Funktion updates.v1)
+import '../discord/posts.js';
+// Öffentliche Vorschlagsseite (registriert suggestions.notice, Funktion suggestions.v2)
+import { suggestionWeb } from './suggestions.js';
+// Statusseiten (registriert status.alert/post/edit/delete, Funktion status.v1)
+import '../status/posts.js';
 
 // Größter Inhalt, den die Schnittstelle annimmt
 const MAX_BODY = 65536;
@@ -15,6 +23,17 @@ const MAX_BODY = 65536;
 // oys_json() mit den Regeln von json_encode() (ein Fehler ergibt einen leeren Inhalt)
 function json(ctx: Ctx, data: unknown, code = 200): never {
   return ctx.json(data, code, oysJsonBody);
+}
+
+// Inhalt als einfacher JS-Wert für die neuen Felder (hello, done.result); eine Liste oder ein leerer Inhalt zählt als {}
+function plainJson(raw: Buffer): unknown {
+  if (!raw.length) return {};
+  try {
+    const v = JSON.parse(raw.toString('utf8')) as unknown;
+    return Array.isArray(v) ? {} : v;
+  } catch {
+    return null;
+  }
 }
 
 // $in['key'] ?? $fallback
@@ -36,7 +55,11 @@ export async function botApi(ctx: Ctx): Promise<void> {
   // entscheidet der Kern (server.ts readBody mit web/multipart.ts) genau wie PHP: ohne gültige Grenze (boundary fehlt,
   // Anführungszeichen ohne Ende) oder über post_max_size bleibt der Inhalt lesbar.
   const raw = method === 'POST' ? ctx.rawBody : Buffer.alloc(0);
-  if (raw.length > MAX_BODY || !botVerify(method, ctx.rawUrl, raw, headerValue(ctx.headers['x-oys-timestamp']), headerValue(ctx.headers['x-oys-signature']))) {
+  // Zu groß: 413 (vor der Signatur geprüft) – so unterscheidet der Bot „zu groß“ von „falsches Geheimnis“
+  if (raw.length > MAX_BODY) {
+    json(ctx, { ok: false, error: 'Request too large.' }, 413);
+  }
+  if (!botVerify(method, ctx.rawUrl, raw, headerValue(ctx.headers['x-oys-timestamp']), headerValue(ctx.headers['x-oys-signature']))) {
     json(ctx, { ok: false, error: 'Unauthorized.' }, 401);
   }
   const data: PhpJson = raw.length ? phpJsonDecode(raw) : new PhpArr();
@@ -49,7 +72,15 @@ export async function botApi(ctx: Ctx): Promise<void> {
   let m: RegExpExecArray | null;
 
   if (route === '/ping' && method === 'GET') {
-    json(ctx, { ok: true, time: time(), site: mainUrl('/') });
+    json(ctx, { ok: true, time: time(), site: mainUrl('/'), features: knownFeatures() });
+  }
+
+  // Bericht des Bots: Version, Funktionen, Server, Kanäle mit seinen Rechten, Threads, Rollen
+  if (route === '/hello' && method === 'POST') {
+    const check = validateReport(plainJson(raw), knownFeatures());
+    if (!check.ok) json(ctx, { ok: false, error: check.error }, check.status);
+    await saveReport(check.json);
+    json(ctx, { ok: true, site: mainUrl('/'), features: knownFeatures() });
   }
 
   // --- Vorschläge ---
@@ -65,7 +96,7 @@ export async function botApi(ctx: Ctx): Promise<void> {
       [thread, author, communityText(input(data, 'author_name'), 100), title, communityText(input(data, 'body'), BOT_TEXT_MAX), 'open', now, now],
     );
     const rows = await q('SELECT * FROM community_suggestions WHERE thread_id = ?', [thread]);
-    json(ctx, { ok: true, suggestion: suggestionPublic(rows[0]) });
+    json(ctx, { ok: true, suggestion: suggestionPublic(rows[0], await suggestionWeb()) });
   }
   if ((m = /^\/suggestions\/(\d+)(\/decision)?\n?$/.exec(route)) && method === 'POST') {
     let s = await suggestionGet(intval(m[1]));
@@ -77,7 +108,11 @@ export async function botApi(ctx: Ctx): Promise<void> {
       if (msg) {
         await exec('UPDATE community_suggestions SET status_message_id = ?, updated_at = ? WHERE id = ?', [msg, now, s.id as number]);
       }
-      json(ctx, { ok: true, suggestion: suggestionPublic((await suggestionGet(intval(s.id))) as Row) });
+      // Die Statusnachricht des Bots enthält den Hinweis auf die Webseite: der Autor weiß Bescheid (nur genau true)
+      if (jsonField(data, 'web_notice') === true) {
+        await exec('UPDATE community_suggestions SET web_notice = 1, updated_at = ? WHERE id = ?', [now, s.id as number]);
+      }
+      json(ctx, { ok: true, suggestion: suggestionPublic((await suggestionGet(intval(s.id))) as Row, await suggestionWeb()) });
     }
     // Der Knopf gehört zu genau einem Beitrag – nach einem Neuanfang können Nummern wieder vorkommen
     const thread = snowflake(input(data, 'thread_id'));
@@ -90,7 +125,30 @@ export async function botApi(ctx: Ctx): Promise<void> {
     }
     let changed: boolean;
     [s, changed] = await suggestionDecide(s, status, communityText(input(data, 'reason'), 500), communityText(input(data, 'by_name', 'Team'), 100), 'discord');
-    json(ctx, { ok: true, changed, suggestion: suggestionPublic(s as Row) });
+    json(ctx, { ok: true, changed, suggestion: suggestionPublic(s as Row, await suggestionWeb()) });
+  }
+  // Beitrag im Vorschlagsforum gelöscht ({deleted: true}) oder nur seine erste Nachricht ({body_deleted: true}): der Text
+  // verschwindet von der Webseite, der Titel bleibt nur fürs Admin (suggestions.v2)
+  if ((m = /^\/suggestions\/thread\/(\d{15,22})\n?$/.exec(route)) && method === 'POST') {
+    const deleted = jsonField(data, 'deleted') === true;
+    const bodyDeleted = jsonField(data, 'body_deleted') === true;
+    if (!deleted && !bodyDeleted) {
+      json(ctx, { ok: false, error: 'deleted or body_deleted is required.' }, 400);
+    }
+    const res = deleted
+      ? await exec("UPDATE community_suggestions SET removed_at = COALESCE(removed_at, ?), body = '', updated_at = ? WHERE thread_id = ?", [now, now, m[1]])
+      : await exec("UPDATE community_suggestions SET body = '', updated_at = ? WHERE thread_id = ?", [now, m[1]]);
+    if (res.affectedRows === 0 && !(await q('SELECT id FROM community_suggestions WHERE thread_id = ?', [m[1]])).length) {
+      json(ctx, { ok: false, error: 'Suggestion not found.' }, 404);
+    }
+    json(ctx, { ok: true });
+  }
+  // Für die tägliche Prüfung des Bots: Beiträge, die noch nicht als gelöscht gelten, je 100 (after = letzte ID)
+  if (route === '/suggestions/threads' && method === 'GET') {
+    const after = typeof ctx.get.after === 'string' && /^\d{1,10}$/.test(ctx.get.after) ? intval(ctx.get.after) : 0;
+    const rows = await q("SELECT id, thread_id, body <> '' AS has_body FROM community_suggestions WHERE removed_at IS NULL AND id > ? ORDER BY id LIMIT 100", [after]);
+    const items = rows.map((r) => ({ id: intval(r.id), thread_id: phpCastString(r.thread_id), has_body: intval(r.has_body) === 1 }));
+    json(ctx, { ok: true, items, next: items.length === 100 ? items[items.length - 1].id : null });
   }
 
   // --- Tickets ---
@@ -152,20 +210,14 @@ export async function botApi(ctx: Ctx): Promise<void> {
   }
 
   // --- Aufträge der Webseite ---
+  // f: Funktionen des abholenden Bots (Teil der signierten Adresse); ohne f (Bot 0.1) nur die Aufträge, die jeder Bot kann
   if (route === '/outbox' && method === 'GET') {
-    const rows = await q('SELECT id, action, payload, attempts FROM community_outbox WHERE done_at IS NULL AND attempts < 10 ORDER BY id LIMIT 20');
-    json(ctx, {
-      ok: true,
-      items: rows.map((r) => ({ id: intval(r.id), action: r.action, data: phpJsonDecode(phpCastString(r.payload)), attempts: intval(r.attempts) })),
-    });
+    json(ctx, { ok: true, items: await handOut(parseFeatures(ctx.get.f)) });
   }
   if ((m = /^\/outbox\/(\d+)\/done\n?$/.exec(route)) && method === 'POST') {
-    const error = communityText(input(data, 'error'), 200);
-    if (error === '') {
-      await exec('UPDATE community_outbox SET done_at = ?, last_error = NULL WHERE id = ?', [now, intval(m[1])]);
-    } else {
-      await exec('UPDATE community_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?', [error, intval(m[1])]);
-    }
+    const done = parseDone(plainJson(raw) ?? {}, communityText(input(data, 'error'), 200));
+    if (!done.ok) json(ctx, { ok: false, error: 'Invalid result.' }, 400);
+    await finishJob(intval(m[1]), done.error, done.final, done.result);
     json(ctx, { ok: true });
   }
 

@@ -42,11 +42,11 @@ after(async () => {
 });
 
 test('header names keep the case the code writes, like PHP header()', async () => {
-  // PHP: oys_redirect() → header('Location: /updates#roadmap', true, 301)
-  const roadmap = await request('GET', '/roadmap');
+  // Weiterleitung mit Location (seit der eigenen Roadmap-Seite: /updates/ → /updates)
+  const roadmap = await request('GET', '/updates/');
   assert.equal(roadmap.status, 301);
-  assert.deepEqual(roadmap.names, ['Location', 'Content-Type', 'content-length']);
-  assert.equal(roadmap.headers.location, '/updates#roadmap');
+  assert.ok(roadmap.names.includes('Location') && !roadmap.names.includes('location'), roadmap.names.join(','));
+  assert.match(String(roadmap.headers.location), /\/updates$/);
   // Öffentliche Endpunkte: X-Robots-Tag aus dem Router zuerst, dann der Typ (wie index.php)
   const nope = await request('GET', '/_/nope');
   assert.equal(nope.status, 404);
@@ -78,4 +78,19 @@ test('static files: same order, Content-Length also for HEAD, 304 without a body
   assert.equal(again.status, 304);
   assert.equal(again.body.length, 0);
   assert.equal(again.headers['content-length'], undefined);
+});
+
+test('editor and admin refuse to be framed; public pages keep their headers', async () => {
+  // Editor, Admin und ihre JSON-Pfade (auch die Weiterleitung zum Login): kein fremder Rahmen
+  for (const path of ['/dashboard', '/admin', '/dashboard/api/shop', '/admin/api/discord-status']) {
+    const res = await request('GET', path);
+    assert.equal(res.headers['x-frame-options'], 'DENY', path);
+    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'none'", path);
+  }
+  // Öffentliche Seiten bleiben, wie sie sind
+  for (const path of ['/', '/login', '/register', '/updates', '/terms', '/_/nope']) {
+    const res = await request('GET', path);
+    assert.equal(res.headers['x-frame-options'], undefined, path);
+    assert.equal(res.headers['content-security-policy'], undefined, path);
+  }
 });

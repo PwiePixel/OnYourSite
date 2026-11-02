@@ -2,27 +2,58 @@
 // Die Reihenfolge der Prüfungen ist die von PHP: CSRF vor dem JSON, Seiten-ID vor allem anderen (auch vor Code-Seite
 // und Upload), dann die Aktion. Jede Antwort endet mit ctx.json() (= oys_json(); exit).
 import type { Ctx } from '../web/ctx.js';
-import { exec, q, value, type Param, type Row } from '../db.js';
-import { config } from '../config.js';
-import { csrfCheck, csrfFromRequest, rateLimit } from '../web/security.js';
-import { decryptData, encryptData } from '../crypto.js';
-import { cleanText, normalizeSlug, slugProblem, timeAgo, uploadUrl } from '../helpers.js';
+import { exec, transaction, type Db, type Param, type Row } from '../db.js';
+import { csrfCheck, csrfFromRequest, rateHit, rateLimit, rateOk } from '../web/security.js';
+import { encryptData } from '../crypto.js';
+import { baseAuthority, cleanText, normalizeSlug, reservedPaths, slugProblem, uploadUrl } from '../helpers.js';
 import { phpJson } from '../html.js';
 import { date, intval, phpStr, phpTruthy, strtolower, strtotime, time, type PhpArray } from '../php.js';
 import { IMAGE_EXTS, blockNormalize, validUpload } from '../content/blocks.js';
 import {
-  blockForEditor, createPage, deletePage, loadPage, pageForEditor, pageSettings, savePage, settingsNormalize, syncUsername, userPages,
+  blockForEditor, cleanupFiles, createPage, deletePage, isShownLinkPage, loadPage, pageForEditor, pageSettings, savePage, settingsNormalize, syncUsername,
+  userPages,
 } from '../content/pages.js';
 import { renderPage } from '../content/render.js';
+import { CSS_WARNING, brandingFor, cssTouchesBranding, footerHidden } from '../content/branding.js';
+import { isPremiumRow } from '../honeycombs/premium.js';
 import { stats } from '../content/stats.js';
 import { layoutKey, themeKey } from '../content/themes.js';
 import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, uploadKinds, userUploadFiles } from '../content/uploads.js';
-import { entries, isArr, jsonDecode, own, values, type PhpArr } from '../content/util.js';
-import { hcForEditor, hcSettings, hcSpend } from '../honeycombs/honeycombs.js';
+import { entries, isArr, jsonDecode, own, type PhpArr } from '../content/util.js';
+import { hcForEditor } from '../honeycombs/honeycombs.js';
+import { isShopAction, shopApi } from '../honeycombs/editorApi.js';
+import { domainEditorApi, isDomainAction } from '../domains/editor.js';
 import { phpFloatString } from '../community/json.js';
-import { CODE_MAX_FILES, codeCreate, codeEditorState, codeFileCount, codeSave, codeSite, codeUnlocked } from '../code/sites.js';
-import { currentPage, hasPremium } from './context.js';
+import {
+  codeDeleteRows, codeSiteById, codeSiteOfUser,
+} from '../code/sites.js';
+import {
+  SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError, pageAllowance, pageLimitText, slotRateKey,
+  withSlotLock, type SlotUser,
+} from '../code/slots.js';
+import { beforePageRemoved } from '../domains/index.js';
+import { claimAddress, isTakenError, releaseAddress } from '../content/addresses.js';
+import { currentPage, isStaff } from './context.js';
+import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
+import { statusEditorApi } from '../status/editorApi.js';
+import { codeApi } from '../code/editorApi.js';
+
+// Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
+const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
+const PAGE_SHOWS_CODE = { ok: false, error: 'This page now shows a code page. Please reload the editor.', reload: true };
+const PAGE_BLOCKED_TEXT = 'This page shows a code page that has been blocked by the team. It can’t be deleted right now.';
+// Die Seite gibt es nicht mehr (anderer Tab) oder sie gehört inzwischen einem anderen Konto (Admin-Modus)
+const PAGE_GONE = { ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true };
+
+// 30-Tage-Regel für Adressänderungen: Tage bis zur nächsten Änderung (0 = jetzt möglich)
+function addressDaysLeft(changedAt: unknown): number {
+  const changed = phpTruthy(changedAt) ? strtotime(phpStr(changedAt)) : 0;
+  if (changed === false || !phpTruthy(changed)) return 0;
+  const left = 30 - intval(Math.floor((time() - changed) / 86400));
+  return left > 0 ? left : 0;
+}
+const addressDaysText = (days: number): string => `You can change your address again in ${days} ` + (days === 1 ? 'day.' : 'days.');
 
 // is_scalar()
 const isScalar = (v: unknown): boolean => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
@@ -77,7 +108,10 @@ export function previewBlockId(b: PhpArr, key: string): string {
 
 export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
-  const premium = hasPremium(ctx, user);
+  // Team: Speicher, Seitenzahl und Adress-Wartezeit; Premium des Kontos (echter Stand aus der Datenbank): Branding
+  const staff = isStaff(ctx, user);
+  const premium = isPremiumRow(user);
+  const canEditBranding = premium || staff;
   const session = ctx.session!;
 
   const action = ctx.path.slice('/dashboard/api/'.length);
@@ -104,7 +138,12 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     // (Admin-Modus in einem zweiten Tab) → ablehnen statt die falsche Seite zu überschreiben
     page = await loadPage(requestedPage);
     if (!page || intval(page.user_id) !== userId) {
-      ctx.json({ ok: false, error: 'This page no longer exists, or you’re now logged in with a different account. Please reload the editor.', reload: true }, 409);
+      ctx.json(PAGE_GONE, 409);
+    }
+    // Der Platz zeigt inzwischen eine Code-Seite: seine Link-Seite ist geparkt und wird nicht mehr bearbeitet (ein
+    // älterer Tab darf nichts in sie schreiben)
+    if (!isShownLinkPage(page) && LINK_PAGE_ACTIONS.has(action)) {
+      ctx.json(PAGE_SHOWS_CODE, 409);
     }
     session.set('page_id', requestedPage);
   } else {
@@ -118,7 +157,15 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   if (action === 'honeycombs') {
     ctx.json({ ok: true, honeycombs: await hcForEditor(userId) });
   }
+  // Glocke, Nachrichten und Termine ebenso (auch ohne gezeigte Profilseite)
+  await accountApi(ctx, userId, action, isPost, input);
   if (action.startsWith('code')) await codeApi(ctx, user, action, isPost, input);
+  // Statusseiten (status*): gehören zum Konto bzw. zu OnYourSites eigener Seite, nie zu einer Profilseite
+  if (action === 'status' || action.startsWith('status-')) await statusEditorApi(ctx, user, action, isPost, input);
+  // Bereich „Honeycombs“ (shop, shop-*, hc-*): Shop, Kaufen, Verlauf – ebenfalls ohne Profilseite
+  if (isShopAction(action)) await shopApi(ctx, user, action, isPost, input);
+  // Eigene Domain der Seite (domain, domain-*): gehört zur gezeigten Link-Seite
+  if (isDomainAction(action)) await domainEditorApi(ctx, user, action, isPost, input, page, staff);
 
   // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
   if (action === 'upload' && isPost) {
@@ -131,7 +178,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       ctx.json({ ok: false, error: 'Too many uploads in a short time – please wait a moment.' });
     }
     // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
-    const quotaMb = premium ? UPLOAD_QUOTA_PREMIUM_MB : UPLOAD_QUOTA_MB;
+    const quotaMb = staff ? UPLOAD_QUOTA_PREMIUM_MB : UPLOAD_QUOTA_MB;
     let usedBytes = 0;
     for (const size of (await sweepUploads(userId, userUploadFiles(userId))).values()) usedBytes += size;
     // Feld file[…]: in PHP sind size und error Arrays – (int) davon ist 1, oys_handle_upload() meldet Fehler 1
@@ -144,22 +191,99 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
     ctx.json({ ok: true, file: res.file, url: uploadUrl(res.file) });
   }
 
-  // Seite anlegen geht auch ohne bestehende Seite
+  // Seite anlegen geht auch ohne bestehende Seite – unter der Sperre der Seitenplätze des Kontos (code/slots.ts):
+  // Anzahl, Adresse und Anlegen sehen denselben Stand, auch bei gleichzeitigen Anfragen
   if (action === 'page-create' && isPost) {
-    const count = (await userPages(userId)).length;
-    const max = intval(config('max_pages', 3));
-    if (count >= max && !premium) {
-      ctx.json({ ok: false, error: `You can create up to ${max} ` + (max === 1 ? 'page.' : 'pages.') });
-    }
+    if (!(await rateOk(slotRateKey(userId), SLOT_RATE_MAX, SLOT_RATE_WINDOW))) ctx.json({ ok: false, error: SLOT_RATE_TEXT });
     const slug = normalizeSlug(inp('slug') ?? '');
-    const problem = await slugProblem(slug);
-    if (problem !== null) ctx.json({ ok: false, error: problem });
     const cleanTitle = cleanText(inp('title') ?? '', 120);
     const title = phpTruthy(cleanTitle) ? cleanTitle : phpStr(user.full_name ?? '');
-    const newId = await createPage(userId, slug, title);
-    session.set('page_id', newId);
-    if (count === 0) await syncUsername(userId);
-    ctx.json({ ok: true, id: newId });
+    let created: { error: string } | { id: number; first: boolean } = { error: '' };
+    try {
+      created = await slotChange(ctx, userId, async (db, locked) => {
+        const count = intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId]));
+        const allowance = await pageAllowance(ctx, locked, db);
+        if (count >= allowance.max && !allowance.unlimited) return { error: pageLimitText(allowance.max) };
+        // Eigene reservierte Adressen (in den letzten 30 Tagen freigegeben) darf man wieder nehmen
+        const problem = await slugProblem(slug, null, null, { userId, db });
+        if (problem !== null) return { error: problem };
+        // Ist die Adresse inzwischen vergeben, wirft createPage – die Transaktion wird zurückgerollt
+        return { id: await createPage(userId, slug, title, db), first: count === 0 };
+      });
+    } catch (err) {
+      // Gleichzeitige Anfrage hat die Adresse genommen: Meldung statt Fehler 500, nichts angelegt
+      if (!isTakenError(err)) throw err;
+      ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
+    }
+    if ('error' in created) ctx.json({ ok: false, error: created.error });
+    await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
+    session.set('page_id', created.id);
+    if (created.first) await syncUsername(userId);
+    ctx.json({ ok: true, id: created.id });
+  }
+
+  // Ab hier Aktionen des Kontos, die auch ohne gezeigte Link-Seite gehen (alle Plätze können Code-Seiten zeigen)
+  if (action === 'page-delete' && isPost) {
+    const target = await loadPage(intval(inp('id') ?? 0));
+    if (!target || intval(target.user_id) !== userId) {
+      ctx.json({ ok: false, error: 'Page not found.' }, 404);
+    }
+    // Die letzte Seite bleibt – gezählt werden alle Plätze, auch die mit Code-Seite
+    if ((await userPages(userId)).length <= 1) {
+      ctx.json({ ok: false, error: 'You can’t delete your last page.' });
+    }
+    if ((inp('confirm') ?? '') !== target.slug) {
+      ctx.json({ ok: false, error: 'To confirm, please type the page’s address.' });
+    }
+    if (!isShownLinkPage(target) && phpTruthy((await codeSiteById(intval(target.code_site_id)))?.is_blocked)) {
+      ctx.json({ ok: false, error: PAGE_BLOCKED_TEXT });
+    }
+    if (!(await rateOk(slotRateKey(userId), SLOT_RATE_MAX, SLOT_RATE_WINDOW))) ctx.json({ ok: false, error: SLOT_RATE_TEXT });
+    const deleted = await slotChange(ctx, userId, async (db) => {
+      // Unter der Sperre noch einmal: die Seite, die Zahl der Plätze und die Code-Seite des Platzes (gesperrt – eine
+      // Sperre durch das Team, die gerade kommt, gilt)
+      const page = await db.one('SELECT * FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(target.id), userId]);
+      if (!page) return { error: 'Page not found.', status: 404 };
+      if (intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId])) <= 1) return { error: 'You can’t delete your last page.' };
+      const site = isShownLinkPage(page) ? null : await codeSiteOfUser(userId, intval(page.code_site_id), db, true);
+      if (site && phpTruthy(site.is_blocked)) return { error: PAGE_BLOCKED_TEXT };
+      // Eigene Domain der Seite entfernen (nur Datenbank; nach allen Prüfungen, damit eine abgelehnte Löschung nie eine
+      // Domain trennt)
+      await beforePageRemoved(intval(page.id), db);
+      const codeUploads = site ? await codeDeleteRows(db, site) : new Set<string>();
+      const files = await deletePage(page, db);
+      return { files: [...files, ...codeUploads] };
+    });
+    if ('error' in deleted) ctx.json({ ok: false, error: deleted.error }, deleted.status ?? 200);
+    // Nach dem Commit: Dateien der Seite und Bilder der Code-Seite, die nichts anderes mehr benutzt
+    await cleanupFiles(userId, deleted.files);
+    session.delete('page_id');
+    await syncUsername(userId);
+    await rateHit(slotRateKey(userId), SLOT_RATE_WINDOW);
+    ctx.json({ ok: true });
+  }
+
+  if (action === 'weekly' && isPost) {
+    await exec('UPDATE users SET weekly_report = ? WHERE id = ?', [phpTruthy(inp('enabled')) ? 1 : 0, userId]);
+    ctx.json({ ok: true });
+  }
+
+  if (action === 'weekly-test' && isPost) {
+    // Ohne gezeigte Link-Seite gibt es nichts zu berichten (zählt nicht als Test)
+    if (!(await userPages(userId)).some(isShownLinkPage)) {
+      ctx.json({ ok: false, error: 'There’s no link page to report on yet.' });
+    }
+    if (!(await rateLimit('weeklytest:' + userId, 3, 3600))) {
+      ctx.json({ ok: false, error: 'You can send up to 3 test reports per hour.' });
+    }
+    const ok = await sendWeeklyReport(user);
+    ctx.json(ok ? { ok: true } : { ok: false, error: 'The email couldn’t be sent. Please check the mail settings in the admin area.' });
+  }
+
+  if (action === 'discord' && isPost) {
+    const discord = jsonValueText(raw, 'discord_id', inp('discord_id') ?? '').replace(/[^0-9]/g, '');
+    await exec('UPDATE users SET discord_id = ? WHERE id = ?', [discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '', userId]);
+    ctx.json({ ok: true });
   }
 
   if (!page) {
@@ -182,8 +306,10 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         theme: themeKey(get('theme') ?? page.theme),
         layout: layoutKey(get('layout') ?? page.layout),
         // json_encode() ohne Optionen (renderPage liest die Einstellungen wieder daraus)
-        settings: phpJson(settingsNormalize(get('settings') ?? [], userId, premium, pageSettings(page))),
+        settings: phpJson(settingsNormalize(get('settings') ?? [], userId, canEditBranding, pageSettings(page))),
       };
+      // Die Vorschau zeigt, was Besucher sehen werden: der Schalter wirkt nur mit Premium (oder Bestandsschutz)
+      const branding = brandingFor(pageSettings(draft), premium);
       const blocks: Array<Record<string, unknown>> = [];
       const blocksIn = inp('blocks') ?? null;
       for (const [i, b] of sliceEntries(isArr(blocksIn) ? blocksIn : [], 150)) {
@@ -206,6 +332,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         mode: 'preview',
         entrance: (inp('entrance') ?? '') === 'show' ? 'show' : 'skip',
         host: ctx.host,
+        branding,
       }));
     }
     case 'save': {
@@ -215,18 +342,25 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       }
       let result;
       try {
-        result = await savePage(page, input, userId, premium);
+        result = await savePage(page, input, userId, canEditBranding);
       } catch (err) {
         console.error('Saving failed: ' + (err instanceof Error ? err.message : String(err)));
         ctx.json({ ok: false, error: 'Saving failed. Please try again.' }, 500);
       }
+      // Inzwischen gelöscht (anderer Tab): nichts mehr zu zeigen
+      if (!result.page) ctx.json(PAGE_GONE, 409);
+      const saved = result.page;
+      // Eigenes CSS, das den Hinweis anspricht, während er sichtbar bleibt: Hinweis unter dem Feld (gespeichert ist es)
+      const savedSettings = pageSettings(saved);
+      const cssWarning = !footerHidden(savedSettings, premium) && cssTouchesBranding(savedSettings.custom_css);
       ctx.json({
         ok: true,
-        page: pageForEditor(result.page as Row),
+        page: pageForEditor(saved, premium),
         blocks: result.blocks.map(blockForEditor),
         // Reihenfolge der Schlüssel wie in PHP (savePage liefert sie schon so)
         idmap: result.idmap,
         warnings: result.warnings,
+        ...(cssWarning ? { cssWarning: CSS_WARNING } : {}),
       });
     }
     case 'address': {
@@ -234,197 +368,66 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       const slug = normalizeSlug(inp('slug') ?? page.slug);
       const mode = (inp('mode') ?? 'subdomain') === 'path' ? 'path' : 'subdomain';
       if (slug !== page.slug) {
-        const changed = phpTruthy(page.slug_changed_at) ? strtotime(phpStr(page.slug_changed_at)) : 0;
-        const last = changed === false ? 0 : changed;
-        const daysLeft = 30 - intval(Math.floor((time() - last) / 86400));
-        if (phpTruthy(changed) && daysLeft > 0 && !premium) {
-          ctx.json({ ok: false, error: `You can change your address again in ${daysLeft} ` + (daysLeft === 1 ? 'day.' : 'days.') });
-        }
-        const problem = await slugProblem(slug, intval(page.id));
+        const daysLeft = addressDaysLeft(page.slug_changed_at);
+        if (daysLeft > 0 && !staff) ctx.json({ ok: false, error: addressDaysText(daysLeft) });
+        const problem = await slugProblem(slug, intval(page.id), null, { userId });
         if (problem !== null) ctx.json({ ok: false, error: problem });
-        await exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), page.id as Param]);
+        // Neue Adresse belegen, alte für den Besitzer reservieren – zusammen mit der Seite (Sperren: pages → Adressen).
+        // Die Seite wird dafür gesperrt neu gelesen: Hat ein anderer Tab die Adresse inzwischen geändert oder die Seite
+        // gelöscht, gilt das – freigegeben wird nur die Adresse, die die Seite wirklich hat, und für eine gelöschte Seite
+        // wird nichts belegt.
+        let refused: { body: Record<string, unknown>; status: number } | null = null;
+        try {
+          refused = await transaction(async (_conn, db) => {
+            const cur = await db.one('SELECT slug, slug_changed_at, code_site_id FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [intval(page.id), userId]);
+            if (!cur) return { body: PAGE_GONE, status: 409 };
+            // Zeigt der Platz inzwischen eine Code-Seite (gleichzeitiges code-connect/code-move), gilt deren Namensregel –
+            // hier nichts ändern
+            if (cur.code_site_id !== null && cur.code_site_id !== undefined) return { body: PAGE_SHOWS_CODE, status: 409 };
+            if (phpStr(cur.slug) !== phpStr(page.slug)) {
+              // Inzwischen geändert: dann gilt die Sperrfrist dieser Änderung (wie bei zwei Änderungen nacheinander)
+              const left = staff ? 0 : addressDaysLeft(cur.slug_changed_at);
+              if (left > 0) return { body: { ok: false, error: addressDaysText(left) }, status: 200 };
+              if (phpStr(cur.slug) === slug) return null;
+            }
+            await db.exec('UPDATE pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), intval(page.id)]);
+            await claimAddress(db, slug, 'page', intval(page.id), userId);
+            await releaseAddress(db, phpStr(cur.slug), userId, 'owner', { kind: 'page', refId: intval(page.id) });
+            return null;
+          });
+        } catch (err) {
+          if (!isTakenError(err)) throw err;
+          ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
+        }
+        if (refused) ctx.json(refused.body, refused.status);
+      }
+      // Namen, die OnYourSite auf der Hauptdomain selbst benutzt (z. B. /suggestions): nur als Subdomain
+      if (mode === 'path' && reservedPaths().includes(slug)) {
+        ctx.json({ ok: false, error: `This address is used by OnYourSite on the main domain – your page stays at ${slug}.${baseAuthority()}.` });
       }
       await exec('UPDATE pages SET address_mode = ? WHERE id = ?', [mode, page.id as Param]);
       await syncUsername(userId);
-      ctx.json({ ok: true, page: pageForEditor((await loadPage(intval(page.id))) as Row) });
-    }
-    case 'page-delete': {
-      if (!isPost) break;
-      const target = await loadPage(intval(inp('id') ?? 0));
-      if (!target || intval(target.user_id) !== userId) {
-        ctx.json({ ok: false, error: 'Page not found.' }, 404);
-      }
-      if ((await userPages(userId)).length <= 1) {
-        ctx.json({ ok: false, error: 'You can’t delete your last page.' });
-      }
-      if ((inp('confirm') ?? '') !== target.slug) {
-        ctx.json({ ok: false, error: 'To confirm, please type the page’s address.' });
-      }
-      await deletePage(target);
-      session.delete('page_id');
-      await syncUsername(userId);
-      ctx.json({ ok: true });
+      const saved = await loadPage(intval(page.id));
+      if (!saved) ctx.json(PAGE_GONE, 409);
+      ctx.json({ ok: true, page: pageForEditor(saved, premium) });
     }
     case 'stats': {
       let range = intval(ctx.get.range ?? 7);
       if (![7, 30, 90, 0].includes(range)) range = 7;
       ctx.json({ ok: true, stats: await stats(page, range) });
     }
-
-    case 'messages': {
-      const messages = (await q('SELECT m.*, p.slug FROM messages m LEFT JOIN pages p ON p.id = m.page_id WHERE m.user_id = ? ORDER BY m.created_at DESC, m.id DESC LIMIT 200', [userId]))
-        .map((m) => {
-          const created = strtotime(phpStr(m.created_at));
-          return {
-            id: intval(m.id),
-            page: m.slug,
-            name: decryptData(m.name as string),
-            email: decryptData(m.email as string),
-            message: decryptData(m.message as string),
-            read: phpTruthy(m.is_read),
-            date: date('M j, Y, H:i', created === false ? 0 : created),
-            ago: timeAgo(m.created_at),
-          };
-        });
-      const bookings = (await q('SELECT * FROM user_bookings WHERE user_id = ? ORDER BY booking_date DESC, booking_time DESC LIMIT 200', [userId]))
-        .map((b) => {
-          const day = phpTruthy(b.booking_date) ? strtotime(phpStr(b.booking_date)) : 0;
-          return {
-            id: intval(b.id),
-            name: decryptData((b.guest_name ?? '') as string),
-            email: decryptData((b.guest_email ?? '') as string),
-            date: phpTruthy(b.booking_date) ? date('M j, Y', day === false ? 0 : day) : '',
-            time: b.booking_time,
-            // Vergleich als Text (Y-m-d)
-            past: phpTruthy(b.booking_date) && phpStr(b.booking_date) < date('Y-m-d'),
-          };
-        });
-      ctx.json({ ok: true, messages, bookings });
-    }
-
-    case 'message': {
-      if (!isPost) break;
-      const id = intval(inp('id') ?? 0);
-      const act = phpStr(inp('action') ?? '');
-      if (act === 'delete') {
-        await exec('DELETE FROM messages WHERE id = ? AND user_id = ?', [id, userId]);
-      } else if (act === 'read' || act === 'unread') {
-        await exec('UPDATE messages SET is_read = ? WHERE id = ? AND user_id = ?', [act === 'read' ? 1 : 0, id, userId]);
-      }
-      ctx.json({ ok: true });
-    }
-
-    case 'booking-delete': {
-      if (!isPost) break;
-      await exec('DELETE FROM user_bookings WHERE id = ? AND user_id = ?', [intval(inp('id') ?? 0), userId]);
-      ctx.json({ ok: true });
-    }
-
-    case 'notifications': {
-      const items = (await q('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 15', [userId])).map((n) => ({
-        id: intval(n.id),
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        read: phpTruthy(n.is_read),
-        ago: timeAgo(n.created_at),
-      }));
-      const unread = intval(await value('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0', [userId]));
-      const messagesUnread = intval(await value('SELECT COUNT(*) FROM messages WHERE user_id = ? AND is_read = 0', [userId]));
-      ctx.json({ ok: true, unread, messages_unread: messagesUnread, items });
-    }
-
-    case 'notifications-read': {
-      if (!isPost) break;
-      await exec('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [userId]);
-      ctx.json({ ok: true });
-    }
-
-    case 'weekly': {
-      if (!isPost) break;
-      await exec('UPDATE users SET weekly_report = ? WHERE id = ?', [phpTruthy(inp('enabled')) ? 1 : 0, userId]);
-      ctx.json({ ok: true });
-    }
-
-    case 'weekly-test': {
-      if (!isPost) break;
-      if (!(await rateLimit('weeklytest:' + userId, 3, 3600))) {
-        ctx.json({ ok: false, error: 'You can send up to 3 test reports per hour.' });
-      }
-      const ok = await sendWeeklyReport(user);
-      ctx.json(ok ? { ok: true } : { ok: false, error: 'The email couldn’t be sent. Please check the mail settings in the admin area.' });
-    }
-
-    case 'discord': {
-      if (!isPost) break;
-      const discord = jsonValueText(raw, 'discord_id', inp('discord_id') ?? '').replace(/[^0-9]/g, '');
-      await exec('UPDATE users SET discord_id = ? WHERE id = ?', [discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '', userId]);
-      ctx.json({ ok: true });
-    }
   }
   ctx.json({ ok: false, error: 'Unknown action.' }, 404);
 }
 
-// Code-Seite: alle Aktionen, die mit „code“ beginnen (enden immer hier)
-async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boolean, input: PhpArr): Promise<never> {
-  const userId = intval(user.id);
-  const inp = (key: string): unknown => own(input, key);
-  const site = await codeSite(userId);
-  const termsAccepted = phpTruthy(user.code_terms_at);
-  const state = async (): Promise<Record<string, unknown>> => ({ ok: true, ...(await codeEditorState(userId)) });
-
-  if (action === 'code') ctx.json(await state());
-  if (!isPost) ctx.json({ ok: false, error: 'Not found.' }, 404);
-  // Wer die Regeln noch nicht akzeptiert hat, muss es jetzt tun
-  if ((action === 'code-unlock' || action === 'code-create') && !termsAccepted) {
-    if (!phpTruthy(inp('terms'))) {
-      ctx.json({ ok: false, error: 'Please read and accept the rules for code pages first.' });
-    }
-    await exec('UPDATE users SET code_terms_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), userId]);
+// Änderung unter der Sperre der Seitenplätze des Kontos. Kommt die Sperre nicht (3 s), antwortet die Anfrage „busy“;
+// gibt es das Konto nicht mehr, 409 mit reload. Beides beendet die Anfrage.
+async function slotChange<T>(ctx: Ctx, userId: number, fn: (db: Db, user: SlotUser) => Promise<T>): Promise<T> {
+  try {
+    return await withSlotLock(userId, fn);
+  } catch (err) {
+    if (err instanceof SlotBusyError) ctx.json({ ok: false, error: SLOT_BUSY_TEXT, busy: true });
+    if (err instanceof SlotGoneError) ctx.json({ ok: false, error: SLOT_GONE_TEXT, reload: true }, 409);
+    throw err;
   }
-  if (action === 'code-unlock') {
-    const error = await hcSpend(userId, (await hcSettings()).code_page, 'code_page');
-    if (phpTruthy(error)) ctx.json({ ok: false, error });
-    ctx.json(await state());
-  }
-  if (!(await codeUnlocked(userId))) {
-    ctx.json({ ok: false, error: 'Unlock code pages with honeycombs first.' }, 403);
-  }
-  if (action === 'code-create') {
-    const [, error] = await codeCreate(userId, normalizeSlug(inp('slug') ?? ''), phpStr(inp('title') ?? ''));
-    ctx.json(phpTruthy(error) ? { ok: false, error } : await state());
-  }
-  if (!site) {
-    ctx.json({ ok: false, error: 'Create your code page first.' }, 404);
-  }
-  if (phpTruthy(site.is_blocked)) {
-    ctx.json({ ok: false, error: 'Your code page has been blocked by the team' + (phpTruthy(site.blocked_reason) ? ': ' + phpStr(site.blocked_reason) : '.') });
-  }
-  if (action === 'code-save') {
-    // Dateien in der Reihenfolge der Anfrage (json_decode behält sie), gelöschte Pfade nur als Text
-    const filesIn = inp('files') ?? null;
-    const files: PhpArr = isArr(filesIn) ? filesIn : [];
-    const deletedIn = inp('deleted') ?? null;
-    const deleted = values(isArr(deletedIn) ? deletedIn : []).filter((x) => typeof x === 'string');
-    if (codeFileCount(files) > CODE_MAX_FILES * 2 || deleted.length > CODE_MAX_FILES * 2) {
-      ctx.json({ ok: false, error: 'Too many files.' }, 400);
-    }
-    const error = await codeSave(site, files, deleted);
-    if (phpTruthy(error)) ctx.json({ ok: false, error });
-    // array_key_exists(): auch ein null-Wert zählt als vorhanden
-    const title = Object.hasOwn(input, 'title') ? cleanText(inp('title'), 120) : site.title;
-    const online = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : phpTruthy(site.is_published);
-    await exec('UPDATE code_sites SET title = ?, is_published = ? WHERE id = ?', [(title !== '' ? title : site.slug) as Param, online ? 1 : 0, site.id as Param]);
-    ctx.json(await state());
-  }
-  if (action === 'code-address') {
-    const slug = normalizeSlug(inp('slug') ?? '');
-    if (slug !== site.slug) {
-      const problem = await slugProblem(slug, null, intval(site.id));
-      if (problem !== null) ctx.json({ ok: false, error: problem });
-      await exec('UPDATE code_sites SET slug = ?, updated_at = ? WHERE id = ?', [slug, date('Y-m-d H:i:s'), site.id as Param]);
-    }
-    ctx.json(await state());
-  }
-  ctx.json({ ok: false, error: 'Not found.' }, 404);
 }

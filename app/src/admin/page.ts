@@ -1,23 +1,32 @@
 // /admin (views/admin.php mit admin_updates, admin_community, admin_honeycombs, admin_storage) – nur für Admins.
-// POST: zuerst CSRF, dann genau in dieser Reihenfolge Speicher → Community → Honigwaben → Updates (null: weiter) →
-// Mail-Server → Konto löschen → Admin-Rolle → Passwort → Newsletter. Passt nichts, wird die Seite (200) angezeigt.
+// Honigwaben und Code-Seiten sind getrennte Bereiche (#honeycombs, #code-pages).
+// POST: zuerst CSRF und die Bestätigung (_confirmed), dann genau in dieser Reihenfolge Speicher → Community →
+// Honigwaben → Code-Seiten → Updates (null: weiter) → Mail-Server → Konto löschen → Admin-Rolle → Passwort →
+// Newsletter. Passt nichts, wird die Seite (200) angezeigt.
 import type { Ctx } from '../web/ctx.js';
 import { q, type Row } from '../db.js';
 import { Session } from '../web/session.js';
 import { csrfCheck, csrfField } from '../web/security.js';
 import { decryptData } from '../crypto.js';
-import { intval, phpTruthy } from '../php.js';
+import { intval, phpTruthy, type PhpArray } from '../php.js';
 import { storageDownloadZip, storageMoveToDataDir, uploadsDir } from '../content/storage.js';
 import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
+import { hcBackUrl } from '../honeycombs/admin.js';
+import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
+import { adminCodePagesView } from '../code/adminView.js';
+import { adminStatusView } from '../status/adminView.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
-import { deleteUser, resetPassword, toggleAdmin } from './users.js';
+import { resetPassword, toggleAdmin } from './users.js';
+import { deleteAccount } from './accountDeletion.js';
 import { emailTemplates, ensureEmailDir, saveSmtp, sendNewsletter, smtpConfig } from './newsletter.js';
 import { adminView, CutOffPage, type AdminViewData } from './views/admin.js';
 import { adminStorageData, adminStorageView } from './views/storage.js';
+import { adminBackUrl, refuseUnconfirmed } from './confirm.js';
+import { bellMarkup } from '../views/partials/ui.js';
 
 export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   const session = await Session.start(ctx);
@@ -29,6 +38,8 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     session.set('admin_error', 'Session expired – please try again.');
     ctx.redirect('/admin');
   }
+  // Formulare mit eigenem Bestätigungsdialog: ohne „1“ wird nichts ausgeführt (fällt ui.js aus, passiert nichts)
+  if (isPost) refuseUnconfirmed(ctx, session, adminBackUrl(post));
 
   // Speicherort und Backups der Uploads (lib/storage.php)
   if (isPost && post.storage_action !== undefined) {
@@ -52,16 +63,25 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     await adminCommunityPost(ctx, user);
   }
 
-  // Honigwaben vergeben/einstellen, Code-Seiten sperren
+  // Honigwaben vergeben/einstellen
   if (isPost && post.hc_action !== undefined) {
+    // Formulare der Code-Seiten von vor der Trennung (hc_action=code_*) gehen an den Bereich Code-Seiten
+    const legacy = legacyCodePost(post);
+    if (legacy) await codeAction(ctx, session, legacy);
     const result = await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
-    ctx.redirect('/admin#honeycombs');
+    // Zurück zum Unterbereich der Aktion (z. B. /admin?hc_tab=offers#honeycombs)
+    ctx.redirect(hcBackUrl(post));
+  }
+
+  // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
+  if (isPost && post.code_action !== undefined) {
+    await codeAction(ctx, session, post);
   }
 
   // Updates, Roadmap und Discord – nur weiterleiten, wenn die Aktion dorthin gehört
   if (isPost && post.oys_action !== undefined) {
-    const result = await adminUpdatesHandle(post);
+    const result = await adminUpdatesHandle(post, ctx);
     if (result) {
       flashResult(session, result);
       ctx.redirect('/admin' + (result.query ?? '') + '#' + result.tab);
@@ -84,8 +104,13 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     if (sameId(id, session.get('user_id'))) {
       session.set('admin_error', 'You cannot delete your own admin account!');
     } else {
-      await deleteUser(id);
-      session.set('admin_success', 'User successfully deleted.');
+      try {
+        await deleteAccount(ctx, id);
+        session.set('admin_success', 'User successfully deleted.');
+      } catch {
+        // Alles zurückgerollt (Grund steht im Protokoll)
+        session.set('admin_error', 'The user couldn’t be deleted – please try again.');
+      }
     }
     ctx.redirect('/admin');
   }
@@ -130,6 +155,13 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     ctx.halt();
   }
   ctx.write(page);
+}
+
+// Aktion im Bereich Code-Seiten: Meldung merken und zurück zum Bereich (beendet die Anfrage)
+async function codeAction(ctx: Ctx, session: Session, post: PhpArray): Promise<never> {
+  const result = await adminCodeHandle(post);
+  if (result) flashResult(session, result);
+  ctx.redirect('/admin#code-pages');
 }
 
 // $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok']
@@ -201,6 +233,9 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     updatesHtml: await adminUpdatesView(ctx),
     communityHtml: await adminCommunityView(ctx),
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
+    codePagesHtml: await adminCodePagesView(ctx, allUsers),
+    statusHtml: await adminStatusView(ctx),
+    bellHtml: await bellMarkup(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };
 }

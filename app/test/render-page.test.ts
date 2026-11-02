@@ -10,7 +10,9 @@ import { closePool, exec, q } from '../src/db.js';
 import { phpJson } from '../src/html.js';
 import { mbSubstr } from '../src/php.js';
 import { baseHost } from '../src/helpers.js';
-import { formatText, renderPage, renderSimple, type RenderOptions } from '../src/content/render.js';
+import { formatText, renderPage as renderPageRaw, renderSimple as renderSimpleRaw, type RenderOptions } from '../src/content/render.js';
+import { withoutDialogs } from './support/dialogParity.js';
+import { phpBranding, withoutPinnedFooter } from './support/brandingParity.js';
 import { loadBlocks, loadPage } from '../src/content/pages.js';
 import { layouts, themes, fontChoices } from '../src/content/themes.js';
 import { brands } from '../src/content/social.js';
@@ -19,6 +21,12 @@ import { phpJsonFloat, phpNumber, phpRound } from '../src/content/phpValues.js';
 import { jsonText, rng, O, Raw } from './modelHarness.js';
 import { firstDiff, normalizeTokens, runPhpList } from './renderHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
+
+// Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz. Branding wie in PHP
+// (gespeicherter Schalter), die Fußzeile ohne ihre festen Stile (premium-domains PD-1).
+const renderPage = (page: object, blocks: ReadonlyArray<object>, opts: RenderOptions = {}): string =>
+  withoutPinnedFooter(withoutDialogs(renderPageRaw(page, blocks, { ...opts, branding: phpBranding(page) })));
+const renderSimple = (...a: Parameters<typeof renderSimpleRaw>): string => withoutDialogs(renderSimpleRaw(...a));
 
 after(() => closePool());
 

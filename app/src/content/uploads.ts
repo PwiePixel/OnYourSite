@@ -126,7 +126,7 @@ export async function handleUpload(upload: UploadedFile | undefined, kind: strin
 
   const err = upload ? upload.error : 4;
   if (err === 1 || err === 2) {
-    return { error: 'The file is too large for the server (raise upload_max_filesize and post_max_size in the PHP settings).' };
+    return { error: 'The file is too large for the server (max. 16 MB per file).' };
   }
   if (err !== 0 || !upload || !Buffer.isBuffer(upload.data)) return { error: 'Upload failed (error code ' + intval(err) + ').' };
   if ((upload.size ?? 0) > cfg.maxMb * 1024 * 1024) return { error: 'The file is too large (max. ' + cfg.maxMb + ' MB).' };

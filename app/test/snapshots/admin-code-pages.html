@@ -1,0 +1,139 @@
+            <!-- ===================== Code-Seiten ===================== -->
+            <div id="tab-code-pages" class="admin-tab-content max-w-5xl mx-auto space-y-8 hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
+                        <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
+                            <i class='bx bx-key text-2xl text-brand-400'></i>
+                            <h2 class="text-base font-semibold text-white">Give code access</h2>
+                        </div>
+                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
+                            <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off">
+                            <input type="hidden" name="code_action" value="unlock">
+                            <input type="hidden" name="item" value="code_page">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-1.5" for="codeUser">User</label>
+                                <select id="codeUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
+                                    <option value="">Choose a user …</option>
+                                    <option value="10">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de</option>
+                                    <option value="7">lea@test.de · lea@test.de</option>
+                                    <option value="6">tom@test.de · tom@test.de · unlocked</option>
+                                    <option value="5">Mia Müller · mia@test.de · unlocked</option>
+                                    <option value="3">Pixel Admin · admin@test.de</option>
+                                </select>
+                            </div>
+                            <p class="text-xs text-gray-500">Unlocks code pages without honeycombs – for example for testers. Their balance stays as it is.</p>
+                            <button type="submit" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2"><i class='bx bx-lock-open-alt'></i> Unlock for free</button>
+                        </form>
+                    </div>
+
+                    <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
+                        <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
+                            <i class='bx bx-hive text-2xl text-yellow-400'></i>
+                            <h2 class="text-base font-semibold text-white">Prices</h2>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="flex items-center gap-3">
+                                <span class="flex-1 min-w-0"><span class="block text-sm text-white">Unlock code pages</span><span class="block text-xs text-gray-500">Paid once – the user keeps it for good</span></span>
+                                <span class="text-sm font-bold text-white whitespace-nowrap" id="codePrice">100 <i class='bx bx-hive text-yellow-400'></i></span>
+                            </div>
+                            <p class="text-xs text-gray-500 pt-1">Prices and offers are set in Honeycombs under “Catalogue &amp; prices”.</p>
+                            <a href="/admin?hc_tab=catalogue#honeycombs" class="text-sm text-gray-400 hover:text-white inline-flex items-center gap-1 py-2">Change prices in Honeycombs <i class='bx bx-right-arrow-alt'></i></a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-code-alt text-xl text-brand-400'></i> Code pages <span class="text-gray-500 text-sm font-normal">3</span></h2>
+                        <a href="/terms/code-pages" target="_blank" rel="noopener" class="text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2">Rules for code pages <i class='bx bx-link-external'></i></a>
+                    </div>
+                                        <div class="divide-y divide-bordercolor">
+                                                <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">miacode.oys.test:8080</a>
+                                                                        <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Online</span>
+                                                                    </div>
+                                <p class="text-xs text-gray-500 mt-1">Mia Code · Mia Müller (mia@test.de) · 2 files · 1 KB · 1,234 views · changed Oct 5, 2026</p>
+                                                            </div>
+                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="1">
+                                <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
+                                <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
+                            </form>
+                                                    </div>
+                                                <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">tomcode.oys.test:8080</a>
+                                                                        <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">Blocked</span>
+                                                                    </div>
+                                <p class="text-xs text-gray-500 mt-1">Tom · tom@test.de (tom@test.de) · 1 files · 2 KB · 3 views · changed Oct 4, 2026</p>
+                                                                <p class="text-xs text-red-300 mt-1">Reason: Spam &lt;b&gt;</p>
+                                                            </div>
+                                                        <form action="/admin" method="POST" class="m-0 shrink-0">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="code_action" value="unblock"><input type="hidden" name="site_id" value="2">
+                                <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-check-circle'></i> Unblock</button>
+                            </form>
+                                                    </div>
+                                                <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">quotecode.oys.test:8080</a>
+                                                                        <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-white/10 text-gray-400">Offline</span>
+                                                                    </div>
+                                <p class="text-xs text-gray-500 mt-1">&lt;script&gt;alert(1)&lt;/script&gt; · O&#039;Brien &lt;b&gt;&amp; “Co” (Quote@Test.de) · 0 files · 1 KB · 0 views · changed Oct 3, 2026</p>
+                                                            </div>
+                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="3">
+                                <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
+                                <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
+                            </form>
+                                                    </div>
+                                            </div>
+                                    </div>
+
+                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-lock-open-alt text-xl text-brand-400'></i> Access <span class="text-gray-500 text-sm font-normal">3</span></h2>
+                        <input type="search" id="codeAccessFilter" placeholder="Search users …" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm sm:!w-64">
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs text-gray-500 uppercase bg-inputbg">
+                                <tr><th class="px-5 py-3 font-medium">User</th><th class="px-4 py-3 font-medium">Code pages</th><th class="px-4 py-3 font-medium">Unlocked</th><th class="px-5 py-3"></th></tr>
+                            </thead>
+                            <tbody class="divide-y divide-bordercolor" id="codeAccessRows">
+                                <tr data-search="o&#039;brien &lt;b&gt;&amp; “co” quote@test.de quote quotecode.oys.test:8080">
+                                    <td class="px-5 py-3"><span class="text-white">O&#039;Brien &lt;b&gt;&amp; “Co”</span><span class="block text-xs text-gray-500 break-all">Quote@Test.de</span></td>
+                                    <td class="px-4 py-3"><a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">quotecode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><span class="text-gray-500">—</span></td>
+                                    <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
+                                            <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="10">
+                                            <button type="submit" class="text-xs text-gray-400 hover:text-white underline underline-offset-2 py-1">Unlock for free</button>
+                                        </form></td>
+                                </tr>
+                                <tr data-search="tom@test.de tom@test.de tom tomcode.oys.test:8080">
+                                    <td class="px-5 py-3"><span class="text-white">tom@test.de</span><span class="block text-xs text-gray-500 break-all">tom@test.de</span></td>
+                                    <td class="px-4 py-3"><a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">tomcode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Free</span></td>
+                                    <td class="px-5 py-3 text-right"></td>
+                                </tr>
+                                <tr data-search="mia müller mia@test.de mia miacode.oys.test:8080">
+                                    <td class="px-5 py-3"><span class="text-white">Mia Müller</span><span class="block text-xs text-gray-500 break-all">mia@test.de</span></td>
+                                    <td class="px-4 py-3"><a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">miacode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Paid 100</span></td>
+                                    <td class="px-5 py-3 text-right"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <script>
+                // Suche in der Zugangsliste (wie bei den Honigwaben)
+                document.getElementById('codeAccessFilter').addEventListener('input', e => {
+                    const q = e.target.value.trim().toLowerCase();
+                    document.querySelectorAll('#codeAccessRows tr').forEach(tr => { tr.hidden = q !== '' && !tr.dataset.search.includes(q); });
+                });
+            </script>

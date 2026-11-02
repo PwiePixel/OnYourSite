@@ -5,11 +5,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { baseHost } from '../src/helpers.js';
 import { demoPage, miniHtml } from '../src/content/demo.js';
-import { renderPage } from '../src/content/render.js';
+import { renderPage as renderPageRaw } from '../src/content/render.js';
+import { withoutDialogs } from './support/dialogParity.js';
+import { phpBranding, withoutPinnedFooter } from './support/brandingParity.js';
 import { layouts, themes } from '../src/content/themes.js';
 import { enc, jsonText } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
+
+// Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz
+const renderPage = (...a: Parameters<typeof renderPageRaw>): string =>
+  withoutPinnedFooter(withoutDialogs(renderPageRaw(a[0], a[1], { ...a[2], branding: phpBranding(a[0]) })));
 
 const THEMES = [...Object.keys(themes()), 'unknown', '', 'TRS', 'constructor', '__proto__', 'Deep-Dark'];
 const LAYOUTS = [...Object.keys(layouts()), 'zigzag', '"x'];

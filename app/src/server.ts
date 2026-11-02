@@ -11,6 +11,8 @@ import { parseFormBody, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
+import { recordWebStart } from './status/endpoints.js';
+import { startOutboxCleanup } from './community/outbox.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
 const POST_MAX = 20 * 1024 * 1024;
@@ -187,7 +189,11 @@ if (isMain) {
     const port = Number(process.env.PORT) || configInt('node_port', 3000);
     const host = process.env.HOST || '127.0.0.1';
     await app.listen({ port, host });
+    // Stündlich: alte Aufträge des Bots und hängende Discord-Beiträge aufräumen (nur ein Prozess gleichzeitig)
+    startOutboxCleanup();
     console.log(`OnYourSite is listening on http://${host}:${port}`);
+    // Statusseiten: Start merken (Heartbeat-Fristen beginnen danach neu); ohne Datenbank egal
+    await recordWebStart().catch(() => undefined);
   } catch (err) {
     if (err instanceof ConfigMissingError) console.error(err.message);
     else console.error(err);

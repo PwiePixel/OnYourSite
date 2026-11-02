@@ -13,9 +13,11 @@ import { isHalt, makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { blockFromRow } from '../src/content/pages.js';
 import { blockTarget, publicRoutes, renderGate, wantsJson } from '../src/public/routes.js';
 import { notFoundData, notFoundView } from '../src/public/notFound.js';
+import { ensureSchema } from '../src/schema.js';
 import { checkdate, kalender } from '../src/public/views/kalender.js';
 import { diffs, rng, runPhp } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
+import { withoutDialogs } from './support/dialogParity.js';
 import { PHP_SKIP, phpFile } from './support/phpRef.js';
 
 after(() => closePool());
@@ -114,7 +116,7 @@ test('renderGate() matches oys_render_gate() byte for byte (age, password, with 
   const php = runPhpList(`${PHP_FROM_ROUTES('oys_render_gate')}
     foreach ($in as $c) { $out[] = oys_render_gate($c['page'], oys_block_from_row($c['row']), $c['kind'], $c['error']); }`, JSON.stringify(cases));
   cases.forEach((c, i) => {
-    const node = renderGate(c.page, blockFromRow(c.row), c.kind as 'age' | 'password', c.error);
+    const node = withoutDialogs(renderGate(c.page, blockFromRow(c.row), c.kind as 'age' | 'password', c.error));
     assert.equal(node, php[i], `case ${i} ${JSON.stringify(c).slice(0, 200)}: ${firstDiff(php[i], node)}`);
   });
 });
@@ -128,6 +130,8 @@ test('wantsJson() matches stripos() on the Accept header (ASCII case folding onl
 });
 
 test('the 404 page matches views/404.php for every host and path form (taken, free, reserved, www, foreign)', { skip: PHP_SKIP }, async () => {
+  // Die Liste aller Adressen gehört zur Prüfung „Adresse frei?“ – die Datenbank dieses Arbeitsordners braucht sie
+  await ensureSchema();
   const hosts = ['oys.test:8080', 'OYS.TEST:8080', 'www.oys.test:8080', 'mia.oys.test:8080', 'free-name.oys.test:8080', 'admin.oys.test:8080',
     'a--b.oys.test:8080', '.oys.test:8080', 'x.y.oys.test:8080', 'example.com', 'evil-oys.test:8080', 'tomcode.oys.test'];
   const uris = ['/', '/free-name', '/Free-Name/', '/mia', '/a', '/' + 'a'.repeat(30), '/' + 'b'.repeat(31), '/kalender', '/x/y', '/%3Cscript%3E',
@@ -143,7 +147,7 @@ test('the 404 page matches views/404.php for every host and path form (taken, fr
   for (let i = 0; i < cases.length; i++) {
     const data = await notFoundData(makeTestCtx({ url: cases[i].uri, host: cases[i].host }));
     if (data.isFree) free++;
-    const node = notFoundView(data);
+    const node = withoutDialogs(notFoundView(data));
     assert.equal(node, php[i], `case ${JSON.stringify(cases[i])}: ${firstDiff(php[i], node)}`);
   }
   assert.ok(free > 0 && free < cases.length, 'both variants of the page are compared');
@@ -201,7 +205,7 @@ test('the calendar page matches views/kalender.php (form, success notice, every 
     const ctx = await run(makeTestCtx({ method: c.method, url: '/kalender' + (c.query !== '' ? '?' + c.query : ''), host: 'mia.oys.test:8080',
       post: c.method === 'POST' ? parseStr(c.body, true) : {} }), (x) => kalender(x, c.page, c.key));
     assert.equal(ctx.status, 200, `case ${i}`);
-    const node = bookingTokens(String(ctx.body), Number(c.page.id));
+    const node = bookingTokens(withoutDialogs(String(ctx.body)), Number(c.page.id));
     const want = bookingTokens(php[i], Number(c.page.id));
     assert.equal(node, want, `case ${i} ${JSON.stringify(c).slice(0, 300)}: ${firstDiff(want, node)}`);
   }

@@ -1,7 +1,8 @@
 // Wochenbericht: lib/report.php und cron/weekly_report.php gegen src/app/report.ts und src/cli/weekly-report.ts.
 // 1. Daten, HTML und die Werte für die Mail – auf einer Kopie der Testdatenbank mit erzeugten Zahlen (Trend mit halben
 //    Prozenten, Titel mit HTML, Plattformen, gelöschte Blöcke …). PHP bekommt einen Ersatz für sendCustomEmail(), der
-//    die Argumente aufzeichnet (die Mail selbst prüft mail.test.ts für jede Vorlage).
+//    die Argumente aufzeichnet (die Mail selbst prüft mail.test.ts für jede Vorlage). Gleichstände beim besten Link
+//    löst seed() auf – bei einem Gleichstand legt sich nur Node fest (eigener Test).
 // 2. Der Lauf über alle Nutzer (oys_run_weekly_reports) samt weekly_report_sent_at.
 // 3. Der Befehl selbst: PHP aus einer Kopie des Codes (eigene config.php) und Node, beide über einen kleinen SMTP-Server
 //    mit STARTTLS – verglichen werden Ausgabe, Rückgabewert, Datenbank und die zugestellten Mails.
@@ -24,6 +25,7 @@ import { weeklyReportCli } from '../src/cli/weekly-report.js';
 import { enc, rng, runPhp } from './modelHarness.js';
 import { SmtpSink } from './support/smtpSink.js';
 import { decodeWords, header, leaves, parseMessage } from './support/mime.js';
+import { ensureSchema } from '../src/schema.js';
 import { PHP_SKIP, phpFile, phpTree as phpCodeTree } from './support/phpRef.js';
 
 const BASE = loadConfig();
@@ -48,6 +50,8 @@ before(async () => {
   }
   await closePool();
   setConfigForTests(CONFIG);
+  // Die Kopie kommt aus der Test-Datenbank: auf den neuesten Stand des Schemas bringen
+  await ensureSchema();
   dir = mkdtempSync(join(tmpdir(), 'oys-report-'));
   await seed();
 });
@@ -123,15 +127,19 @@ async function seed(): Promise<void> {
     const { insertId } = await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, 0, 1, ?, NOW())', [pageId, type, data]);
     await exec("INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, '', CURDATE() - INTERVAL 2 DAY, ?, 99)", [insertId, pageId]);
   }
-  // Gleich viele Klicks für zwei Links: oys_week_best_link() sortiert nur nach den Klicks, bei Gleichstand wählt MariaDB
-  // selbst bei gleichen Daten, gleichem Plan und gleicher Statistik mal den einen, mal den anderen (auch PHP gegen
-  // PHP). Node schickt dieselbe Abfrage – verglichen wird darum ohne Gleichstand: der erste der Gleichen bekommt einen
-  // Klick mehr.
-  for (const page of await q("SELECT DISTINCT page_id FROM block_clicks_daily WHERE page_id IN (SELECT id FROM pages WHERE slug LIKE 'wr%')")) {
-    const top = await q(`SELECT block_id, item, SUM(clicks) AS clicks, MAX(day) AS day FROM block_clicks_daily WHERE page_id = ?
-      AND day BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE() - INTERVAL 1 DAY GROUP BY block_id, item ORDER BY clicks DESC, block_id, item LIMIT 2`, [page.page_id as number]);
-    if (top.length === 2 && Number(top[0].clicks) > 0 && Number(top[0].clicks) === Number(top[1].clicks)) {
-      await exec('UPDATE block_clicks_daily SET clicks = clicks + 1 WHERE block_id = ? AND item = ? AND day = ?', [top[0].block_id as number, top[0].item as string, top[0].day as string]);
+  // Kein Gleichstand beim besten Link: lib/report.php sortiert nur nach den Klicks, unter gleich oft geklickten Links
+  // liefert MariaDB dann irgendeinen (je nach Ausführungsplan – auch im PHP- und im Node-Lauf verschieden). Node nimmt
+  // bewusst den ersten nach block_id und item; dieser Link bekommt hier einen Klick mehr (gestern), damit PHP und Node
+  // denselben nennen und alle Vergleiche exakt bleiben. Den Gleichstand selbst prüft ein eigener Test (nur Node).
+  const groups = await q<{ page_id: number; block_id: number; item: string; clicks: string }>(`SELECT page_id, block_id, item, SUM(clicks) AS clicks
+    FROM block_clicks_daily WHERE day BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE() - INTERVAL 1 DAY
+    GROUP BY page_id, block_id, item ORDER BY page_id, clicks DESC, block_id, item`);
+  for (const [n, best] of groups.entries()) {
+    if (n > 0 && groups[n - 1].page_id === best.page_id) continue; // nur der beste Link jeder Seite
+    const next = groups[n + 1];
+    if (next?.page_id === best.page_id && Number(best.clicks) > 0 && Number(next.clicks) === Number(best.clicks)) {
+      await exec('INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, ?, CURDATE() - INTERVAL 1 DAY, ?, 1) ON DUPLICATE KEY UPDATE clicks = clicks + 1',
+        [best.block_id, best.item, best.page_id]);
     }
   }
 }
@@ -192,6 +200,36 @@ test('report data and HTML match PHP for every generated user', { skip: PHP_SKIP
   for (let i = 0; i < ids.length; i++) assert.equal(nodeOut[i], phpOut[i], 'user ' + ids[i]);
 });
 
+// Gleichstand beim besten Link – nur Node (PHP überlässt die Wahl MariaDB): Es gewinnt der Block mit der kleinsten ID,
+// innerhalb eines Social-Blocks die Plattform nach dem Alphabet, auch wenn der andere Link seine Klicks früher bekam.
+// Eigener Nutzer ohne Wochenbericht: Die Läufe über alle Nutzer (2. und 3.) schicken ihm nichts.
+test('a tie for the best link goes to the first block, then to the first platform', async () => {
+  const userId = 3200;
+  await exec("INSERT INTO users (id, email, password, full_name, username, weekly_report) VALUES (?, 'tie@example.org', 'x', 'Tie', 'tie', 0)", [userId]);
+  const page = async (position: number): Promise<number> => (await exec("INSERT INTO pages (user_id, slug, position, title, subtitle, bio, theme, layout, address_mode, settings, created_at, updated_at) VALUES (?, ?, ?, 'Tie', '', '', 'deep-dark', 'buttons', 'subdomain', '{}', NOW(), NOW())",
+    [userId, 'tie-' + position, position])).insertId;
+  const block = async (pageId: number, type: string, data: string): Promise<number> =>
+    (await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, 0, 1, ?, NOW())', [pageId, type, data])).insertId;
+  const click = (pageId: number, blockId: number, item: string, daysAgo: number, clicks: number) =>
+    exec('INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, ?, CURDATE() - INTERVAL ? DAY, ?, ?)', [blockId, item, daysAgo, pageId, clicks]);
+  // Zwei Links mit je 7 Klicks …
+  const links = await page(0);
+  const older = await block(links, 'link', '{"title":"Older"}');
+  const newer = await block(links, 'link', '{"title":"Newer"}');
+  await click(links, newer, '', 7, 7);
+  await click(links, older, '', 2, 4);
+  await click(links, older, '', 1, 3);
+  // … und zwei Plattformen eines Social-Blocks mit je 5 Klicks, dazu ein späterer Block mit ebenso vielen
+  const socials = await page(1);
+  const icons = await block(socials, 'socials', '{}');
+  const later = await block(socials, 'link', '{"title":"Later"}');
+  await click(socials, later, '', 6, 5);
+  await click(socials, icons, 'youtube', 5, 5);
+  await click(socials, icons, 'instagram', 3, 5);
+  const report = await weeklyReportData(userId);
+  assert.deepEqual(report.pages.map((p) => p.best), [{ title: 'Older', clicks: 7 }, { title: 'Instagram', clicks: 5 }]);
+});
+
 const MAIL_IDS = (): number[] => [...USERS, 3, 5, 8];
 async function nodeMailCalls(ids: number[]): Promise<string[]> {
   recordMails();
@@ -245,6 +283,8 @@ test('running all reports sends, counts and marks users', async () => {
   const state = await sentState();
   await restoreSent(before);
   assert.ok(result.sent > 3 && result.failed > 3, JSON.stringify(result));
+  // Neu in Node: übersprungene Konten (alle Plätze zeigen Code-Seiten) – hier gibt es keine
+  assert.equal(result.skipped, 0);
   // Jeder gesendete Bericht ging an den Versand, fehlgeschlagen sind auch Nutzer ohne Seiten (ohne Mail)
   assert.ok(calls.length >= result.sent && calls.length <= result.sent + result.failed, String(calls.length));
   assert.ok(state.filter((s) => s.endsWith(':NOW')).length >= result.sent, 'sent reports are marked');
@@ -261,7 +301,9 @@ test('running all reports sends, counts and marks the same users as PHP', { skip
   const result = await runWeeklyReports();
   const nodeState = await sentState();
   await restoreSent(before);
-  assert.deepEqual({ result, to: calls.map((c) => c[0]) }, phpOut);
+  // Neu in Node: übersprungene Konten (alle Plätze zeigen Code-Seiten) – hier gibt es keine
+  assert.equal(result.skipped, 0);
+  assert.deepEqual({ result: { sent: result.sent, failed: result.failed }, to: calls.map((c) => c[0]) }, phpOut);
   assert.deepEqual(nodeState, phpState);
   assert.ok((phpOut.result as { sent: number }).sent > 3 && (phpOut.result as { failed: number }).failed > 3, JSON.stringify(phpOut.result));
 });
@@ -384,27 +426,13 @@ test('the command prints the same line, sends the same mails and marks the same 
   }
 });
 
-test('without a database the command prints the setup page and ends with 0', async () => {
+// 2.x (PHP) gab hier die HTML-Hinweisseite aus und endete mit 0 – der Timer sah keinen Fehler. Seit 3.0: Meldung und 1.
+test('without a database the command says so and ends with 1', async () => {
   const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
   await closePool();
   const nodeRun = await runNodeCli(broken, null);
   await closePool();
-  assert.equal(nodeRun.code, 0);
-  assert.match(nodeRun.stdout, /^<!DOCTYPE html>.*Database connection failed\..*<code>config\.json<\/code>/s);
-  assert.match(nodeRun.stderr, /^DB connection failed: /);
-});
-
-test('without a database the command prints the setup page and ends with 0 like PHP', { skip: PHP_SKIP }, async () => {
-  const broken: ConfigData = { ...CONFIG, db: { ...(CONFIG.db as Record<string, string>), name: 'oys_missing_' + Date.now() } };
-  const root = phpTree(broken, null);
-  const phpRun = await runPhpCli(root, '/dev/null');
-  await closePool();
-  const nodeRun = await runNodeCli(broken, null);
-  await closePool();
-  assert.equal(phpRun.code, 0);
-  assert.equal(nodeRun.code, 0);
-  // Gleiche Seite – die Node-Version nennt config.json statt config.php (wie der Server)
-  assert.equal(nodeRun.stdout, phpRun.stdout.replace('<code>config.php</code>', '<code>config.json</code>'));
-  assert.match(phpRun.stdout, /^<!DOCTYPE html>.*Database connection failed\./s);
-  assert.match(nodeRun.stderr, /^DB connection failed: /);
+  assert.equal(nodeRun.code, 1);
+  assert.equal(nodeRun.stdout, '');
+  assert.match(nodeRun.stderr, /^The database can’t be reached: \S/);
 });

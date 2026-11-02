@@ -6,6 +6,7 @@ import { Session } from '../web/session.js';
 import { csrfCheck } from '../web/security.js';
 import { value, type Param } from '../db.js';
 import { intval, phpTruthy } from '../php.js';
+import { refuseUnconfirmed } from '../admin/confirm.js';
 
 // isset($_SESSION[…])
 const isSet = (v: unknown): boolean => v !== undefined && v !== null;
@@ -19,6 +20,8 @@ export async function adminImpersonate(ctx: Ctx): Promise<void> {
   // Admin ist, wer ursprünglich angemeldet war (auch mitten im Nutzer-Modus)
   const adminId = session.get('original_admin_id') ?? session.get('user_id');
   if (!phpTruthy(await value('SELECT is_admin FROM users WHERE id = ?', [adminId as Param]))) ctx.redirect('/dashboard');
+  // Ohne bestätigten Dialog (ui.js fehlt) wird niemand gewechselt
+  refuseUnconfirmed(ctx, session, '/admin');
 
   const targetUserId = intval(ctx.post.id ?? 0);
   const exists = await value('SELECT id FROM users WHERE id = ?', [targetUserId]);

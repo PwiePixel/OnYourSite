@@ -35,6 +35,8 @@ export function requestFromOwnSite(ctx: Ctx): boolean {
   if (origin === '' || origin === 'null') return true;
   const parsed = phpParseUrl(origin) as false | { host?: string };
   const host = strtolower(parsed === false ? '' : phpStr(parsed.host ?? ''));
+  // Auf einer eigenen Domain zählen Aufrufe von genau dieser Domain (welche Seite, prüft domains/host.ts)
+  if (ctx.customDomain && host === ctx.host) return true;
   const base = baseHost();
   return host === base || host.endsWith('.' + base);
 }

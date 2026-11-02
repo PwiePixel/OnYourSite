@@ -83,11 +83,18 @@ const LOCK = String((BASE.db as ConfigData).name ?? 'oys_test') + '_lock';
 
 test('named locks: a busy lock fails or runs as asked', async () => {
   let inner: unknown = null;
-  await withNamedLock(LOCK, 1, async () => {
-    // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
-    await outsidePinned(() => assert.rejects(withNamedLock(LOCK, 0, async () => 'never', 'fail'), LockBusyError));
-    inner = await outsidePinned(() => withNamedLock(LOCK, 0, async () => 'ran anyway', 'run'));
-  });
+  // Die zweite Verbindung ist hier gewollt – der strenge Schalter (OYS_DB_STRICT) gilt für diesen Test nicht
+  const strict = process.env.OYS_DB_STRICT;
+  delete process.env.OYS_DB_STRICT;
+  try {
+    await withNamedLock(LOCK, 1, async () => {
+      // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
+      await outsidePinned(() => assert.rejects(withNamedLock(LOCK, 0, async () => 'never', 'fail'), LockBusyError));
+      inner = await outsidePinned(() => withNamedLock(LOCK, 0, async () => 'ran anyway', 'run'));
+    });
+  } finally {
+    if (strict !== undefined) process.env.OYS_DB_STRICT = strict;
+  }
   assert.equal(inner, 'ran anyway');
   assert.equal(await withNamedLock(LOCK, 1, async () => 'free again', 'fail'), 'free again');
 });

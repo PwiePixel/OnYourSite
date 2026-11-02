@@ -22,7 +22,10 @@ import { PhpArr, PhpFloat, PhpInt, phpCastString, phpFloatString, phpJsonDecode,
 import { botVerify, communitySeal, communityText, snowflake, communityOpen } from '../src/community/community.js';
 import { adminCommunityHandle, adminCommunityPost } from '../src/community/admin.js';
 import { adminCommunityView } from '../src/community/adminView.js';
+import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { withoutPublicPage, withoutWeb } from './support/suggestionsParity.js';
 import { PHP_SKIP, phpRef, writePhpConfig } from './support/phpRef.js';
+import { withoutBotExtra } from './support/discordParity.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung), damit zwei
@@ -139,11 +142,19 @@ async function fixtures(variant: 'full' | 'empty' = 'full', meta: string | null 
   ]) await admin.query(o, r);
 }
 
+const NODE_OUTBOX_COLUMNS = ['ref', 'next_try_at', 'claimed_at'];
+
 // Inhalt der Community-Tabellen: Zeitstempel von „jetzt“ vereinheitlicht, verschlüsselte Texte entschlüsselt
 async function snapshot(): Promise<unknown> {
   const out: Record<string, unknown> = {};
   for (const t of ['community_suggestions', 'community_tickets', 'community_ticket_messages', 'community_outbox', 'oys_meta']) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${DB}\`.\`${t}\` ORDER BY 1`);
+    // Reihenfolge (ref), Pause und Abholzeit der Aufträge gibt es nur in Node (eigener Test unten)
+    if (t === 'community_outbox') for (const row of rows) for (const k of NODE_OUTBOX_COLUMNS) delete row[k];
+    // Spalten der öffentlichen Vorschlagsseite gibt es nur in Node (eigene Tests in suggestions-*.test.ts)
+    if (t === 'community_suggestions') for (const row of rows) for (const k of ['web_state', 'web_notice', 'removed_at']) delete row[k];
+    // Der Vorschlag für den Bot trägt in Node zusätzlich web
+    if (t === 'community_outbox') for (const row of rows) row.payload = withoutWeb(String(row.payload));
     out[t] = rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => {
       if (typeof v === 'string' && v.startsWith('ENC:')) return [k, 'DEC(' + JSON.stringify(decrypt(v)) + ')'];
       // Zeitpunkte dieses Tests („jetzt“) – auch innerhalb von JSON (decided_at in der Warteschlange)
@@ -365,6 +376,16 @@ test('admin actions change the same rows and answer like PHP', { skip: PHP_SKIP 
   }
 });
 
+test('community jobs carry a ref, so a reply and the close of one ticket stay in order', async () => {
+  await useTestDb();
+  await fixtures('full', String(time() - 10));
+  await adminCommunityHandle({ community_action: 'suggestion_decide', id: '1', status: 'accepted' } as never, 'Pixel Admin');
+  await adminCommunityHandle({ community_action: 'ticket_reply', id: '1', body: 'Hello' } as never, 'Pixel Admin');
+  await adminCommunityHandle({ community_action: 'ticket_close', id: '1' } as never, 'Pixel Admin');
+  const [rows] = await admin.query<RowDataPacket[]>(`SELECT action, ref FROM \`${DB}\`.community_outbox WHERE id > 4 ORDER BY id`);
+  assert.deepEqual(rows.map((r) => [r.action, r.ref]), [['suggestion.decided', 'suggestion:1'], ['ticket.reply', 'ticket:1'], ['ticket.close', 'ticket:1']]);
+});
+
 // ---------------------------------------------------------------- Admin-Ansicht
 
 function fakeCtx(query: string): Ctx {
@@ -399,7 +420,7 @@ const VIEW_CASES: Array<{ name: string; query: string; get: unknown; variant?: '
 test('admin view offers a fresh bot secret while the bot isn’t set up', async () => {
   await useTestDb({ bot_secret: null });
   await fixtures('full', String(time() - 10));
-  assert.match(await adminCommunityView(fakeCtx('')), /'bot_secret' =&gt; '[0-9a-f]{64}'/);
+  assert.match(await adminCommunityView(fakeCtx('')), /<code>config\.json<\/code>.*&quot;bot_secret&quot;: &quot;[0-9a-f]{64}&quot;,/);
   await useTestDb();
 });
 
@@ -412,8 +433,11 @@ test('admin view renders the same HTML as PHP', { skip: PHP_SKIP }, async () => 
     const mine = await adminCommunityView(fakeCtx(c.query));
     // Nur das frisch erzeugte Geheimnis im Hinweis „Connect the Discord bot“ ist zufällig
     const norm = (h: string) => h.replace(/('bot_secret' =&gt; ')[0-9a-f]{64}'/, '$1SECRET\'');
-    assert.equal(norm(mine), norm(ref), c.name);
-    if (c.noSecret) assert.match(mine, /'bot_secret' =&gt; '[0-9a-f]{64}'/);
+    // Seit 3.0 eine JSON-Zeile für config.json (mit Neustart) statt der PHP-Zeile für config.php
+    const asPhp = (h: string) => h.replace(/<code>config\.json<\/code> \(a random secret, made just now\) and restart the website: <code class="text-white break-all">&quot;bot_secret&quot;: &quot;([0-9a-f]{64})&quot;,<\/code>/,
+      '<code>config.php</code> (a random secret, made just now): <code class="text-white break-all">\'bot_secret\' =&gt; \'$1\',</code>');
+    assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(norm(asPhp(mine))))), withoutNativeConfirms(norm(ref)), c.name);
+    if (c.noSecret) assert.match(mine, /&quot;bot_secret&quot;: &quot;[0-9a-f]{64}&quot;,/);
   }
   await useTestDb();
 });
@@ -439,7 +463,7 @@ test('the view shows a pending count only for open work like PHP', { skip: PHP_S
   const ref = php(`$_SESSION = ['csrf' => 'x']; $_GET = []; ob_start(); include $root . '/views/admin_community.php'; return ob_get_clean();`, { db: DB });
   const ctx = fakeCtx('');
   ctx.session = { get: () => 'x', set: () => undefined } as unknown as Session;
-  assert.equal(await adminCommunityView(ctx), ref);
+  assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(await adminCommunityView(ctx)))), withoutNativeConfirms(ref));
   assert.match(ref, /1 change waiting for the bot/);
   assert.match(ref, new RegExp('Offline – last seen ' + date('M j, Y H:i', time() - 7200)));
 });

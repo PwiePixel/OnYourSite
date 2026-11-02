@@ -1,6 +1,6 @@
 // Blöcke einer Seite: Typen, Prüfung der Eingaben, Einbettungen und Zeitsteuerung (lib/blocks.php).
 // Eingaben kommen aus json_decode(…, true): Werte werden mit PHP-Regeln gelesen (own() statt obj[key]).
-import { cleanText, cleanUrl, pageUrls, type PageLike } from '../helpers.js';
+import { cleanText, cleanUrl, customOrigin, pageUrls, type PageLike } from '../helpers.js';
 import { hmac, passwordHash } from '../crypto.js';
 import { intval, mbStrlen, mbSubstr, parseStr, phpRtrim, phpStr, phpTrim, phpTruthy, rawurlencode, strtolower, wallTime } from '../php.js';
 import { phpParseUrl } from '../compat/core.js';
@@ -34,15 +34,22 @@ export const PROTECTIONS: readonly string[] = Object.freeze(['none', 'password',
 export const LINK_PASSWORD_MIN = 6;
 
 // oys_booking_is_internal(): zeigt ein Termin-Block auf den eingebauten Kalender dieser Seite?
-// ('', '/kalender' oder die volle eigene Adresse)
-export function bookingIsInternal(data: unknown, page: PageLike): boolean {
+// ('', '/kalender' oder die volle eigene Adresse). extraHosts: eigene Domain der Seite in jedem Zustand (Premium) –
+// so bleibt der Schlüssel eines geschützten Kalenders auch dann nötig, wenn die Domain ausfällt oder pausiert.
+export function bookingIsInternal(data: unknown, page: PageLike, extraHosts: readonly string[] = []): boolean {
   let url = strtolower(phpRtrim(phpTrim(phpStr(own(data, 'url') ?? '')), '/'));
   if (url === '' || url === '/kalender') return true;
   url = url.replace(/^https?:\/\//, '');
   for (const pageOwn of Object.values(pageUrls(page))) {
     if (url === strtolower(pageOwn.replace(/^https?:\/\//, '')) + '/kalender') return true;
   }
-  return false;
+  return extraHosts.some((host) => bookingPointsTo(data, host));
+}
+
+// Zeigt ein Termin-Block mit voller Adresse auf den Kalender unter dieser eigenen Domain? (gleiche Schreibweisen wie oben)
+export function bookingPointsTo(data: unknown, host: string): boolean {
+  const url = strtolower(phpRtrim(phpTrim(phpStr(own(data, 'url') ?? '')), '/')).replace(/^https?:\/\//, '');
+  return url === strtolower(customOrigin(host).replace(/^https?:\/\//, '')) + '/kalender';
 }
 
 // oys_calendar_key(): Schlüssel, mit dem ein geschützter Termin-Block den Kalender freigibt (ändert sich mit dem Passwort)

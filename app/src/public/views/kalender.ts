@@ -11,6 +11,8 @@ import { sendCustomEmail } from '../../mail.js';
 import { clientKey, rateLimit } from '../../web/security.js';
 import { notify } from '../../content/messages.js';
 import { renderSimple } from '../../content/render.js';
+import { faviconUrl, pageBranding } from '../../content/branding.js';
+import { pageSettings } from '../../content/pages.js';
 import { uiIcon } from '../../content/social.js';
 import { own } from '../../content/util.js';
 
@@ -115,7 +117,9 @@ export async function kalender(ctx: Ctx, page: Row, calendarKey: string): Promis
     today: date('Y-m-d'),
     maxDate: date('Y-m-d', strtotime('+1 year') as number),
   });
-  ctx.send(renderSimple(page, 'Request a meeting | ' + name, body));
+  // Favicon wie auf der Seite (mit Premium das Profilbild; nachgeschlagen nur, wenn der Schalter an ist)
+  const favicon = faviconUrl(page, (await pageBranding(page, pageSettings(page))).fullyUnbranded);
+  ctx.send(renderSimple(page, 'Request a meeting | ' + name, body, favicon));
 }
 
 // Inhalt der Seite (ob_start() … ob_get_clean()) – der feste Text ist Byte für Byte übernommen (view2ts)
@@ -153,17 +157,17 @@ export function kalenderView(d: KalenderData): string {
     o += e(d.selfUrl);
     o += "\">\n      <input type=\"hidden\" name=\"t\" value=\"";
     o += e(d.token);
-    o += "\">\n      <div class=\"oys-hp\" aria-hidden=\"true\"><label>Website <input type=\"text\" name=\"website\" tabindex=\"-1\" autocomplete=\"off\"></label></div>\n      <label class=\"oys-field\"><span>Your name</span><input type=\"text\" name=\"guest_name\" required maxlength=\"80\" autocomplete=\"name\" value=\"";
+    o += "\">\n      <div class=\"oys-hp\" aria-hidden=\"true\"><label>Website <input type=\"text\" name=\"website\" tabindex=\"-1\" autocomplete=\"off\"></label></div>\n      <label class=\"oys-field\"><span>Your name</span><input type=\"text\" name=\"guest_name\" required maxlength=\"80\" autocomplete=\"name\" data-error-required=\"Please enter your name.\" value=\"";
     o += e(own(d.post, 'guest_name') ?? '');
-    o += "\"></label>\n      <label class=\"oys-field\"><span>Your email</span><input type=\"email\" name=\"guest_email\" required autocomplete=\"email\" value=\"";
+    o += "\"></label>\n      <label class=\"oys-field\"><span>Your email</span><input type=\"email\" name=\"guest_email\" required autocomplete=\"email\" data-error-required=\"Please enter a valid email address.\" data-error-type=\"Please enter a valid email address.\" value=\"";
     o += e(own(d.post, 'guest_email') ?? '');
-    o += "\"></label>\n      <div class=\"oys-grid2\">\n        <label class=\"oys-field\"><span>Preferred date</span><input type=\"date\" name=\"booking_date\" required min=\"";
+    o += "\"></label>\n      <div class=\"oys-grid2\">\n        <label class=\"oys-field\"><span>Preferred date</span><input type=\"date\" name=\"booking_date\" required data-error-required=\"Please choose a date between today and one year from now.\" data-error-min=\"Please choose a date between today and one year from now.\" data-error-max=\"Please choose a date between today and one year from now.\" data-error-number=\"Please choose a date between today and one year from now.\" min=\"";
     o += d.today;
     o += "\" max=\"";
     o += d.maxDate;
     o += "\" value=\"";
     o += e(own(d.post, 'booking_date') ?? '');
-    o += "\"></label>\n        <label class=\"oys-field\"><span>Time</span>\n          <select name=\"booking_time\" required>\n            <option value=\"\" disabled";
+    o += "\"></label>\n        <label class=\"oys-field\"><span>Time</span>\n          <select name=\"booking_time\" required data-error-required=\"Please choose a time.\">\n            <option value=\"\" disabled";
     o += (phpEmpty(own(d.post, 'booking_time')) ? ' selected' : '');
     o += ">Please choose…</option>\n            ";
     for (const slot of SLOTS) {

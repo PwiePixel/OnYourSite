@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { configString, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, q } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { register, setAuthMailerForTests } from '../src/app/auth.js';
 import type { PhpArray } from '../src/php.js';
@@ -29,6 +30,8 @@ before(async () => {
   await admin.query(`DELETE FROM \`${DB}\`.rate_limits`);
   await closePool();
   setConfigForTests({ ...BASE, db: { ...(BASE.db as Record<string, string>), name: DB } });
+  // Kopie auf den Stand dieses Codes (die Quelle ist vielleicht noch nicht migriert)
+  await ensureSchema();
 });
 
 after(async () => {

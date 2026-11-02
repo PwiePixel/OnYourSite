@@ -7,7 +7,7 @@ import { date, intval, numberFormat, phpStr, phpTruthy } from '../php.js';
 import { mainUrl, pageDisplayUrl, type PageLike } from '../helpers.js';
 import { sendCustomEmail } from '../mail.js';
 import { blockTypes } from '../content/blocks.js';
-import { userPages } from '../content/pages.js';
+import { isShownLinkPage, userPages } from '../content/pages.js';
 import { brands } from '../content/social.js';
 import { phpRound } from '../content/phpMath.js';
 import { jsonDecode, own } from '../content/util.js';
@@ -15,6 +15,8 @@ import { jsonDecode, own } from '../content/util.js';
 export interface WeeklyResult {
   sent: number;
   failed: number;
+  // Konten, deren Plätze alle Code-Seiten zeigen: nichts zu berichten (nicht gesendet, nicht fehlgeschlagen)
+  skipped: number;
 }
 
 // Ein Kalendertag (ohne Uhrzeit) – wie DateTimeImmutable('yesterday') mit modify('-N days'): reine Kalenderrechnung,
@@ -73,9 +75,13 @@ async function weekNumbers(pageId: number, from: string, to: string): Promise<{ 
   return { views: intval(row?.views), clicks: intval(row?.clicks) };
 }
 
-// oys_week_best_link(): der meistgeklickte Block (bzw. die Plattform eines Social-Icons) der Woche
+// oys_week_best_link(): der meistgeklickte Block (bzw. die Plattform eines Social-Icons) der Woche.
+// Bewusst anders als lib/report.php: Bei gleich vielen Klicks entscheiden block_id und dann item. PHP sortiert nur nach
+// clicks – unter gleichauf liegenden Links darf MariaDB dann irgendeinen liefern (je nach Ausführungsplan), und derselbe
+// Bericht nannte mal den einen, mal den anderen Link. So gewinnt immer der Block mit der kleinsten ID, innerhalb eines
+// Social-Blocks die Plattform nach dem Alphabet.
 async function weekBestLink(pageId: number, from: string, to: string): Promise<BestLink | null> {
-  const row = await one('SELECT block_id, item, SUM(clicks) AS clicks FROM block_clicks_daily WHERE page_id = ? AND day BETWEEN ? AND ? GROUP BY block_id, item ORDER BY clicks DESC LIMIT 1', [pageId, from, to]);
+  const row = await one('SELECT block_id, item, SUM(clicks) AS clicks FROM block_clicks_daily WHERE page_id = ? AND day BETWEEN ? AND ? GROUP BY block_id, item ORDER BY clicks DESC, block_id, item LIMIT 1', [pageId, from, to]);
   if (!row || intval(row.clicks) === 0) return null;
   const block = await one('SELECT * FROM page_blocks WHERE id = ?', [row.block_id as Param]);
   if (!block) return null;
@@ -96,7 +102,8 @@ async function weekBestLink(pageId: number, from: string, to: string): Promise<B
   return { title, clicks: intval(row.clicks) };
 }
 
-// oys_weekly_report_data(): Zahlen aller Seiten eines Nutzers (letzte 7 volle Tage und die Woche davor)
+// oys_weekly_report_data(): Zahlen aller gezeigten Link-Seiten eines Nutzers (letzte 7 volle Tage und die Woche davor).
+// Ein Platz, der eine Code-Seite zeigt, fehlt: seine Link-Seite ist geparkt, ihre Zahlen stehen still.
 export async function weeklyReportData(userId: number): Promise<WeeklyReport> {
   const to = addDays(today(), -1);
   const from = addDays(to, -6);
@@ -104,7 +111,7 @@ export async function weeklyReportData(userId: number): Promise<WeeklyReport> {
   const prevFrom = addDays(prevTo, -6);
 
   const pages: WeeklyPage[] = [];
-  for (const page of await userPages(userId)) {
+  for (const page of (await userPages(userId)).filter(isShownLinkPage)) {
     const pageId = intval(page.id);
     const now = await weekNumbers(pageId, dayYmd(from), dayYmd(to));
     const prev = await weekNumbers(pageId, dayYmd(prevFrom), dayYmd(prevTo));
@@ -173,13 +180,26 @@ export async function sendWeeklyReport(user: Row): Promise<boolean> {
   }, 'Your weekly report: ' + numberFormat(report.views) + (report.views === 1 ? ' view, ' : ' views, ') + numberFormat(report.clicks) + (report.clicks === 1 ? ' click' : ' clicks'));
 }
 
-// oys_run_weekly_reports(): allen Nutzern mit Wochenbericht ihre Mail schicken (höchstens einmal am Tag)
+// Hat das Konto Seiten, aber keine gezeigte Link-Seite (alle Plätze zeigen Code-Seiten)?
+export async function onlyCodeSlots(userId: number): Promise<boolean> {
+  const row = await one('SELECT COUNT(*) AS total, COALESCE(SUM(code_site_id IS NULL), 0) AS shown FROM pages WHERE user_id = ?', [userId]);
+  return intval(row?.total) > 0 && intval(row?.shown) === 0;
+}
+
+// oys_run_weekly_reports(): allen Nutzern mit Wochenbericht ihre Mail schicken (höchstens einmal am Tag). Konten, deren
+// Plätze alle Code-Seiten zeigen, haben nichts zu berichten: übersprungen und für heute erledigt, nicht fehlgeschlagen.
 export async function runWeeklyReports(): Promise<WeeklyResult> {
   const todayStart = date('Y-m-d 00:00:00');
   const users = await q('SELECT id, email, full_name FROM users WHERE weekly_report = 1 AND (weekly_report_sent_at IS NULL OR weekly_report_sent_at < ?)', [todayStart]);
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
   for (const user of users) {
+    if (await onlyCodeSlots(intval(user.id))) {
+      skipped++;
+      await exec('UPDATE users SET weekly_report_sent_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), user.id as Param]);
+      continue;
+    }
     if (await sendWeeklyReport(user)) {
       sent++;
       await exec('UPDATE users SET weekly_report_sent_at = ? WHERE id = ?', [date('Y-m-d H:i:s'), user.id as Param]);
@@ -187,5 +207,5 @@ export async function runWeeklyReports(): Promise<WeeklyResult> {
       failed++;
     }
   }
-  return { sent, failed };
+  return { sent, failed, skipped };
 }

@@ -21,7 +21,10 @@ import { setMailDirForTests } from '../src/mail.js';
 import { runCli, weeklyReport, type CliIo } from '../src/cli.js';
 import { SmtpSink } from './support/smtpSink.js';
 import { parseMessage, leaves, header, decodeWords } from './support/mime.js';
+import { SCHEMA_VERSION } from '../src/schema.js';
 import { PHP_SKIP, phpRef, phpTree, writePhpConfig } from './support/phpRef.js';
+// Eine Schema-Version, die neuer ist als diese Ausgabe (der Wert wächst mit jedem Schritt)
+const NEWER = SCHEMA_VERSION + 2;
 
 const BASE = loadConfig();
 const PREFIX = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
@@ -99,20 +102,20 @@ after(async () => {
 test('migrate brings a database to this release, prints the version and reports pending steps', async () => {
   await recreate(DB.fresh);
   let r = await node(['migrate', '--pending'], DB.fresh);
-  assert.deepEqual(r, { code: 2, out: 'Database schema: version 0 – this release needs 5\n', err: '' });
+  assert.deepEqual(r, { code: 2, out: `Database schema: version 0 – this release needs ${SCHEMA_VERSION}\n`, err: '' });
   r = await node(['migrate'], DB.fresh);
-  assert.deepEqual(r, { code: 0, out: 'Database schema: version 5 (was 0)\n', err: '' });
+  assert.deepEqual(r, { code: 0, out: `Database schema: version ${SCHEMA_VERSION} (was 0)\n`, err: '' });
   r = await node(['migrate'], DB.fresh);
-  assert.deepEqual(r, { code: 0, out: 'Database schema: version 5\n', err: '' });
+  assert.deepEqual(r, { code: 0, out: `Database schema: version ${SCHEMA_VERSION}\n`, err: '' });
   r = await node(['migrate', '--pending'], DB.fresh);
-  assert.deepEqual(r, { code: 0, out: 'Database schema: version 5 – up to date\n', err: '' });
+  assert.deepEqual(r, { code: 0, out: `Database schema: version ${SCHEMA_VERSION} – up to date\n`, err: '' });
   // Eine neuere Datenbank (z. B. nach dem Zurückspielen einer älteren Version ohne die Datenbank) wird nicht angefasst
-  await admin.query(`REPLACE INTO \`${DB.fresh}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', '7')`);
+  await admin.query(`REPLACE INTO \`${DB.fresh}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', '${NEWER}')`);
   r = await node(['migrate', '--pending'], DB.fresh);
-  assert.deepEqual(r, { code: 0, out: 'Database schema: version 7 – up to date (newer than this release: 5)\n', err: '' });
+  assert.deepEqual(r, { code: 0, out: `Database schema: version ${NEWER} – up to date (newer than this release: ${SCHEMA_VERSION})\n`, err: '' });
   r = await node(['migrate'], DB.fresh);
   assert.equal(r.code, 0);
-  assert.equal(r.out, 'Database schema: version 7 – newer than this release (5)\n');
+  assert.equal(r.out, `Database schema: version ${NEWER} – newer than this release (${SCHEMA_VERSION})\n`);
 });
 
 test('migrate fails with exit code 1 and a clear message when the database can’t be reached', async () => {
@@ -297,12 +300,13 @@ test('create-admin answers like server/create-admin.php and writes the same rows
   }
 });
 
-test('create-admin prints the setup page and ends with 0 when the database is down', async () => {
+// Der Installer wertet den Rückgabewert aus: ohne Datenbank kein Erfolg (2.x endete hier mit 0 und einer HTML-Seite)
+test('create-admin ends with 1 and a clear message when the database is down', async () => {
   const db = BASE.db as ConfigData;
   const n = await node(['create-admin'], DB.node, { OYS_NAME: 'x' }, { db: { ...db, name: DB.node, pass: 'wrong-' + 'password' } });
-  assert.equal(n.code, 0);
-  assert.match(n.out, /^<!DOCTYPE html>.*Database connection failed\./);
-  assert.match(n.err, /^DB connection failed: /);
+  assert.equal(n.code, 1);
+  assert.equal(n.out, '');
+  assert.match(n.err, /^The database can’t be reached: \S/);
 });
 
 // ---------------------------------------------------------------- cert-alert = server/cert-alert.php

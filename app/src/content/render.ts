@@ -14,6 +14,8 @@ import { brands, brandSvg, iconHtml, iconUsesBoxicons, socialUrl, uiIcon } from 
 import { DEFAULT_THEME, layoutKey, themeKey, themes } from './themes.js';
 import { idx, JsonEncodeError, nullableStrArg, PhpFloat, phpFloatStr, phpNumber, phpRound, strArg, withPhpFloats } from './phpValues.js';
 import { basename, entries, isArr, own, parseLocalDateTime, values } from './util.js';
+import { uiAssets } from '../views/partials/ui.js';
+import { brandingFooter, brandingFor, DEFAULT_FAVICON, faviconUrl, type Branding } from './branding.js';
 
 type Rec = Record<string, unknown>;
 
@@ -24,6 +26,8 @@ export interface RenderOptions {
   now?: number;
   host?: string;
   notice?: string | null;
+  // Wirksames Branding (Premium des Besitzers, Bestandsschutz) – ohne Angabe zählt der Besitzer als ohne Premium
+  branding?: Branding;
 }
 
 // $ctx der Block-Funktionen
@@ -92,6 +96,7 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   const mode = opts.mode ?? 'public';
   const isPreview = mode !== 'public';
   const settings = pageSettings(page);
+  const branding = opts.branding ?? brandingFor(settings, false);
   const theme = themeKey(page.theme ?? DEFAULT_THEME);
   const layout = layoutKey(page.layout ?? 'buttons');
   const themeMeta = themes()[theme];
@@ -100,7 +105,9 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   const seo = settings.seo;
 
   const title = phpTrim(phpStr(page.title ?? ''));
-  const seoTitle: unknown = phpTruthy(idx(seo, 'title')) ? idx(seo, 'title') : (title !== '' ? title : phpStr(idx(page, 'slug'))) + ' | OnYourSite';
+  // Mit Premium (fullyUnbranded) ohne „| OnYourSite“
+  const seoTitle: unknown = phpTruthy(idx(seo, 'title')) ? idx(seo, 'title')
+    : (title !== '' ? title : phpStr(idx(page, 'slug'))) + (branding.fullyUnbranded ? '' : ' | OnYourSite');
   const description: unknown = phpTruthy(idx(seo, 'description'))
     ? idx(seo, 'description')
     : mbSubstr(phpTrim(phpStr(page.bio ?? '').replace(U_SPACES, ' ')), 0, 160);
@@ -108,7 +115,7 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   const avatarUrl = phpTruthy(page.avatar) ? uploadUrlOf(page.avatar) : '';
   // Vorschaubild für geteilte Links: eigene Karte, sonst das Profilbild
   const ogCard = !isPreview && phpTruthy(page.id) && canonical !== '' && ogSupported();
-  const ogImage = ogCard ? ogUrl(page) : avatarUrl !== '' ? mainUrl(avatarUrl) : '';
+  const ogImage = ogCard ? ogUrl(page, branding.footerHidden) : avatarUrl !== '' ? mainUrl(avatarUrl) : '';
   const shareTitle = title !== '' ? title : phpStr(page.slug ?? '');
 
   // Sichtbare Blöcke bestimmen
@@ -220,7 +227,7 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
       o += OG_HEIGHT;
       o += "\"><meta property=\"og:image:alt\" content=\"";
       o += e(shareTitle);
-      o += " on OnYourSite\">";
+      o += branding.fullyUnbranded ? "\">" : " on OnYourSite\">";
     }
   }
   o += "<meta name=\"twitter:card\" content=\"";
@@ -240,7 +247,10 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   }
   o += "<meta name=\"theme-color\" content=\"";
   o += e(themeMeta.dark ? '#0b0b0d' : '#ffffff');
-  o += "\">\n<link rel=\"icon\" type=\"image/png\" href=\"/static/images/favicon.png\">\n<link rel=\"preload\" href=\"/static/fonts/";
+  // Favicon: mit Premium das Profilbild (/_/icon/…), sonst das von OnYourSite
+  o += "\">\n<link rel=\"icon\" type=\"image/png\" href=\"";
+  o += e(faviconUrl(page, branding.fullyUnbranded));
+  o += "\">\n<link rel=\"preload\" href=\"/static/fonts/";
   o += e(phpTruthy(settings.font) ? settings.font : themeMeta.font);
   o += ".woff2\" as=\"font\" type=\"font/woff2\" crossorigin>\n<link rel=\"stylesheet\" href=\"";
   o += e(asset('/static/css/fonts.css'));
@@ -328,10 +338,9 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
     o += '<p class="oys-empty">Add links or blocks in the editor on the left – they’ll show up here right away.</p>';
   }
   o += "  </section>\n\n  ";
-  if (!phpTruthy(settings.hide_branding)) {
-    o += "  <footer class=\"oys-foot\"><a href=\"";
-    o += e(mainUrl('/'));
-    o += "\" target=\"_blank\" rel=\"noopener\">Made with <strong>OnYourSite</strong></a></footer>\n  ";
+  // „Made with OnYourSite“ mit festen Stilen (eigenes CSS blendet ihn ohne Premium nicht aus)
+  if (!branding.footerHidden) {
+    o += brandingFooter();
   }
   o += "</main>\n\n";
   if (showEntrance) {
@@ -407,7 +416,9 @@ export function renderPage(pageIn: object, blocks: ReadonlyArray<object>, opts: 
   } catch (err) {
     if (!(err instanceof JsonEncodeError)) throw err;
   }
-  o += "</script>\n<script src=\"";
+  o += "</script>\n";
+  // Eigene Dialoge und Formularprüfungen im Design der Seite (vor page.js; beide defer, die Reihenfolge bleibt)
+  o += uiAssets('page') + "\n<script src=\"";
   o += e(asset('/static/js/page.js'));
   o += "\" defer></script>\n</body>\n</html>\n";
   return o;
@@ -750,9 +761,10 @@ function renderContact(b: Rec, ctx: RenderCtx): string {
   }
   html += '<input type="hidden" name="b" value="' + e(blockId) + '"><input type="hidden" name="t" value="' + e(token) + '">';
   html += '<div class="oys-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
-  html += '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Your name"></label>';
-  html += '<label class="oys-field"><span>Email</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="you@example.com"></label>';
-  html += '<label class="oys-field"><span>Message</span><textarea name="message" rows="4" maxlength="2000" required placeholder="Your message…"></textarea></label>';
+  // Meldungen unter den Feldern (ui.js) mit den Worten des Servers (lib/spam.php); die Mindestlänge wie dort
+  html += '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Your name" data-error-required="Please enter your name."></label>';
+  html += '<label class="oys-field"><span>Email</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="you@example.com" data-error-required="Please enter a valid email address." data-error-type="Please enter a valid email address."></label>';
+  html += '<label class="oys-field"><span>Message</span><textarea name="message" rows="4" maxlength="2000" minlength="5" required placeholder="Your message…" data-error-required="Your message is a bit short." data-error-short="Your message is a bit short."></textarea></label>';
   html += '<button type="submit" class="oys-contact-send">' + uiIcon('send') + '<span>' + e(phpTruthy(own(d, 'button') ?? '') ? own(d, 'button') : 'Send message') + '</span></button>';
   html += '<p class="oys-contact-status' + (sent ? ' ok' : '') + '" role="status" data-success="' + e(success()) + '">'
     + (sent ? e(success()) : '') + '</p>';
@@ -763,8 +775,9 @@ function renderContact(b: Rec, ctx: RenderCtx): string {
   return html + '</form>';
 }
 
-// oys_render_simple(): kleine Seite im Design des Profils (Kalender, Passwort-Abfrage ohne JS …)
-export function renderSimple(pageIn: object, title: string, bodyHtml: string | SafeHtml): string {
+// oys_render_simple(): kleine Seite im Design des Profils (Kalender, Passwort-Abfrage ohne JS …). favicon: mit Premium
+// das der Seite (faviconUrl in branding.ts)
+export function renderSimple(pageIn: object, title: string, bodyHtml: string | SafeHtml, favicon: string = DEFAULT_FAVICON): string {
   const page = pageIn as Rec;
   const settings = pageSettings(page);
   const theme = themeKey(page.theme ?? DEFAULT_THEME);
@@ -773,10 +786,11 @@ export function renderSimple(pageIn: object, title: string, bodyHtml: string | S
   if (phpTruthy(settings.button)) classes.push('btn-' + phpStr(settings.button));
   const style = phpTruthy(settings.accent) ? ' style="--accent:' + e(settings.accent) + '"' : '';
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-    + '<title>' + e(title) + '</title><meta name="robots" content="noindex"><link rel="icon" type="image/png" href="/static/images/favicon.png">'
+    + '<title>' + e(title) + '</title><meta name="robots" content="noindex"><link rel="icon" type="image/png" href="' + e(favicon) + '">'
     + '<link rel="stylesheet" href="' + e(asset('/static/css/fonts.css')) + '">'
     + '<link rel="stylesheet" href="' + e(asset('/static/css/themes.css')) + '">'
     + '<link rel="stylesheet" href="' + e(asset('/static/css/page.css')) + '">'
+    + uiAssets('page')
     + '</head><body class="' + e(classes.join(' ')) + '"' + style + '>'
     + '<div class="oys-bg" aria-hidden="true"><span class="oys-deco oys-deco-1"></span><span class="oys-deco oys-deco-2"></span><span class="oys-deco oys-deco-3"></span></div>'
     + '<main class="oys-main oys-simple">' + String(bodyHtml) + '</main></body></html>';

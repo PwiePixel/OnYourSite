@@ -172,7 +172,9 @@ function compare(node: Array<ReturnType<typeof normalize>>, php: Array<ReturnTyp
     .map((d) => (d.req.includes('/robots.txt') ? { ...d, node: { ...d.node, type: '' }, php: { ...d.php, type: '' } } : d));
   // Gesperrte Ordner beantwortet im Betrieb Apache selbst (403 mit Apaches Seite) – Node antwortet genauso, php -S nicht
   for (const d of diffs.filter((x) => x.req.endsWith('/server/install.sh'))) assert.equal(d.node.status, 403, `${label}: ${d.req}`);
-  assert.deepEqual(diffs.filter((d) => !d.req.endsWith('/server/install.sh') && JSON.stringify(d.node) !== JSON.stringify(d.php)), [], label);
+  // Fremde Hosts berühren die Datenbank nie (premium-domains PD-2): die 404-Seite statt der Hinweisseite von PHP
+  for (const d of diffs.filter((x) => x.req.includes('other.example'))) assert.equal(d.node.status, 404, `${label}: ${d.req}`);
+  assert.deepEqual(diffs.filter((d) => !d.req.endsWith('/server/install.sh') && !d.req.includes('other.example') && JSON.stringify(d.node) !== JSON.stringify(d.php)), [], label);
 }
 
 test('without the database Node shows the notice page for everything but files – at start and when it fails later', async () => {
@@ -184,6 +186,8 @@ test('without the database Node shows the notice page for everything but files �
       if (path === '/robots.txt') assert.deepEqual([r.status, r.body], [200, readFileSync(join(ROOT_DIR, 'robots.txt'), 'utf8')], req);
       else if (path === '/static/uploads/none.png') assert.equal(r.status, 404, req);
       else if (path === '/server/install.sh') assert.equal(r.status, 403, req);
+      // Fremde Hosts berühren die Datenbank nie (premium-domains PD-2): 404 statt der Hinweisseite
+      else if (opts?.host === 'other.example') assert.equal(r.status, 404, req);
       else {
         assert.deepEqual([r.status, r.type], [503, 'text/html'], req);
         // HEAD ohne Inhalt, sonst die Hinweisseite (mit dem Verweis auf config.php statt config.json, siehe normalize)

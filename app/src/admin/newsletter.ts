@@ -203,5 +203,5 @@ export async function sendNewsletter(post: PhpArray): Promise<{ ok: string } | {
   if (sent > 0) {
     return { ok: 'Successfully sent ' + sent + ' email(s)!' };
   }
-  return { error: 'Failed to send emails. Check your SMTP settings and PHPMailer installation.' };
+  return { error: 'Failed to send emails. Check the mail server settings.' };
 }
