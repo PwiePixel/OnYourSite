@@ -85,7 +85,8 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     ok(lime.test(color), 'Active entry in lime (' + color + ')');
     const text = await p.locator('#tab-status').innerText();
     ok(text.includes('Health') && /Checker\s+RUNNING/i.test(text), 'Health card: the checker runs');
-    ok(/Notifier\s+NOT RUNNING/i.test(text) && text.includes('Not installed yet'), 'Health card: no notifier yet');
+    // Seit ST-3 gibt es den Notifier-Dienst; im Test läuft er nicht und hat sich noch nie gemeldet
+    ok(/Notifier\s+NOT RUNNING/i.test(text) && text.includes('It hasn’t reported yet'), 'Health card: the notifier hasn’t reported yet');
     ok(text.includes('OK') && text.includes('canaries 3/3'), 'Platform gate with the canaries');
     ok(text.includes('OnYourSite components') && text.includes('Website') && text.includes('Database'), 'The own components are listed');
     await shot(p, 'admin-status');
