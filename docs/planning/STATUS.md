@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 02:15 (UTC+1).
+Last update: 2026-11-02 02:50 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -9,11 +9,11 @@ Last update: 2026-11-02 02:15 (UTC+1).
 | Wave 1 port: page model, rendering, files, sign-in, honeycombs and code pages, updates, community and mail | Done and reviewed – in `main` (PR #13) |
 | Public routes: profile pages, path and subdomain addresses, calendar page, 404, the API | Done and reviewed – on `feature/node-complete` |
 | Admin page | Done and reviewed – on `feature/node-complete` |
-| Editor, dashboard, landing page, impersonation, weekly report (+ CLI) | Ported; independent review almost finished, then onto `feature/node-complete` (an unreviewed preview is already on `feature/new-features`) |
+| Editor, dashboard, landing page, impersonation, weekly report (+ CLI) | Done and reviewed – on `feature/node-complete`; uploads and forms are read by a port of PHP's own multipart parser |
 | Installer without PHP: Node behind Apache, `--update` migrates PHP installs (backup first, switch only after checks, automatic revert if the check after the switch fails) | Being built, then reviewed |
 | Core hardening: password hashing off the event loop, raw bytes for invalid UTF-8 in forms, `parseStr` edge cases, exact float printing, errors while a response is sent, database down, test isolation | In progress |
-| Parity gate: full comparison of every request PHP vs Node (golden master) plus the browser suites | Next, after the editor review |
-| Input-handling audit: regular expressions on user input (V8 has no backtracking limit), quadratic loops, static files, multipart parsing, prototype pollution | Next, after the editor review |
+| Parity gate: full comparison of every request PHP vs Node (golden master) plus the browser suites | In progress |
+| Input-handling audit: regular expressions on user input (V8 has no backtracking limit), quadratic loops, static files, multipart parsing, prototype pollution | In progress |
 | Remove PHP; branch `php-2.x` keeps the last PHP version as reference; parity tests read `OYS_PHP_REF` | After the installer |
 
 Points to settle before or soon after 3.0:
@@ -34,22 +34,22 @@ Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests a
 
 | # | Item | Title | State |
 |---|---|---|---|
-| 1 | CORE-1 | Shared foundations | Built; review in progress |
-| 6 | CD-5a | Notification core and bell API | Built; review in progress |
+| 1 | CORE-1 | Shared foundations | Built and reviewed |
+| 6 | CD-5a | Notification core and bell API | Built and reviewed |
 | 21 | CS-1 | Admin split (Honeycombs and Code pages as separate sections) | Built and reviewed |
 | 28 | HC-1 | Yellow honeycomb icons | Built and reviewed |
-| 2 | DP-1 | Discord settings form and real errors (the webhook / channel ID loop of Q13) | Being built |
-| 4 | DP-4 | Own pages: changelog and roadmap | Being built |
+| 2 | DP-1 | Discord settings form and real errors (the webhook / channel ID loop of Q13) | Built and reviewed |
+| 4 | DP-4 | Own pages: changelog and roadmap | Built and reviewed |
 | 3, 5, 12 | CD-0, CD-1, CD-3 | Dialog contract, dialog and notice library, admin and sign-in confirmations | Being built |
 | 8, 16 | HC-2, HC-3 | Ledger, entitlements, Premium status; catalogue, offers, purchases, refunds | Being built |
 | 9, 29 | ST-1, ST-2 | Status core; checker, sensor, installer units | Being built |
 | 10, 18 | CS-2, CS-3 | Address registry with holds; code slots data model and routing | Being built |
-| 11 | PD-2 | Custom domain core (dormant) | Being built |
+| 11 | PD-2 | Custom domain core (dormant) | Built; review in progress |
+| 7, 13, 14 | DP-2a, DP-3, DP-5 | Delivery model and bot API; bot 0.2.0; public suggestions page | Being built (no separate review – covered by the final security review) |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
-- Discord: DP-2a (delivery model and bot API), DP-3 (bot 0.2.0), DP-5 (public suggestions page, + 5b bot part), DP-2b
-  (admin UI for bot posting).
+- Discord: DP-2b (admin UI for bot posting, after the dialog library).
 - Dialogs: CD-2 (editor), CD-4 (profile pages), CD-5b (bell in the editor and admin header).
 - Premium and domains: PD-1 (Premium flags, branding), PD-3 (domain worker), PD-1b, PD-4 (domain in the editor), PD-5,
   PD-6.
@@ -59,4 +59,5 @@ Next, as soon as their dependencies are in:
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Work in progress lives on branches of the current workspace and is pushed when it is merged into
-`feature/new-features`; this file says what is already in.
+`feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
+requests into `feature/new-features` (for example #16, the weekly report's best link).
