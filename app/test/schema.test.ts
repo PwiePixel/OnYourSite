@@ -159,6 +159,7 @@ test('a fresh install creates every table and the seeds', async () => {
   const all = await tables(DBS.nodeFresh);
   for (const t of [...DATA_TABLES, 'oys_meta', 'oys_sessions']) assert.ok(all.includes(t), t);
   assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
+  assert.match(await ddl(DBS.nodeFresh, 'notifications'), /KEY `idx_user_id` \(`user_id`,`id`\)/);
 });
 
 test('a fresh install creates the same tables and seeds as PHP', { skip: PHP_SKIP }, async () => {

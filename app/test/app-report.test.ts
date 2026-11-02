@@ -283,6 +283,8 @@ test('running all reports sends, counts and marks users', async () => {
   const state = await sentState();
   await restoreSent(before);
   assert.ok(result.sent > 3 && result.failed > 3, JSON.stringify(result));
+  // Neu in Node: übersprungene Konten (alle Plätze zeigen Code-Seiten) – hier gibt es keine
+  assert.equal(result.skipped, 0);
   // Jeder gesendete Bericht ging an den Versand, fehlgeschlagen sind auch Nutzer ohne Seiten (ohne Mail)
   assert.ok(calls.length >= result.sent && calls.length <= result.sent + result.failed, String(calls.length));
   assert.ok(state.filter((s) => s.endsWith(':NOW')).length >= result.sent, 'sent reports are marked');

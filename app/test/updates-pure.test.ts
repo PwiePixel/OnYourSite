@@ -103,6 +103,22 @@ test('webhook links without a query and the API base match PHP', { skip: PHP_SKI
   assert.deepEqual(settings.map((x) => discordConfigured(v2(x))), php('return array_map("oys_discord_configured", $in);', settings));
 });
 
+// Ohne Ziel oder über ein anderes Ziel wird nichts gesendet: wie PHP „disconnected“ bzw. „unreachable“ (die Ziele der
+// Beiträge führt nur Node, darum ohne PHP)
+test('posts without a destination or on another destination are not sent', () => {
+  const s = (over: Partial<DiscordSettingsV1>): DiscordSettings => v2({ ...discordDefaults(), webhook_url: 'https://discord.com/api/webhooks/12345/abcdefghijklmnopqrstuvwxyz', ...over });
+  const dl = (st: DiscordSettings): Delivery => ({ s: st, hook: activeWebhook(st), token: tokenUsable(st), bot: null, botInstalled: false, botOnline: false, botCanPost: false });
+  const row = (via: 'webhook' | 'token', target: string): PostRow => ({ id: 1, update_id: 1, via, target, kind: 'message', channel_id: via === 'token' ? '1301234567890123456' : null,
+    message_id: '123456', state: 'posted', dirty: false, legacy: via === 'token', error: null, created_at: '', updated_at: '' });
+  const bot = s({ mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', mention: '1301234567890123457\n', username: 'ignored', avatar_url: 'https://x.y/a.png' });
+  assert.equal(reach(dl(s({})), row('token', 'bot:1301234567890123456')), 'unreachable');
+  assert.equal(reach(dl(v2(discordDefaults())), row('webhook', 'webhook:1')), 'disconnected');
+  assert.equal(anyDestination(dl(v2(discordDefaults()))), false);
+  assert.equal(reach(dl(s({})), row('webhook', 'webhook:12345')), 'ok');
+  assert.equal(reach(dl(s({})), row('webhook', 'webhook:99999')), 'unreachable');
+  assert.equal(reach(dl(bot), row('token', 'bot:1301234567890123456')), 'ok');
+});
+
 test('Discord messages, unchanged targets and notes match PHP', { skip: PHP_SKIP }, async () => {
   const s = (over: Partial<DiscordSettingsV1>): DiscordSettingsV1 => ({ ...discordDefaults(), webhook_url: 'https://discord.com/api/webhooks/12345/abcdefghijklmnopqrstuvwxyz', ...over });
   const settings = [
@@ -124,16 +140,6 @@ test('Discord messages, unchanged targets and notes match PHP', { skip: PHP_SKIP
   assert.deepEqual(ours, theirs);
   // Dieselbe Reihenfolge der Schlüssel (sie bestimmt das gesendete JSON)
   assert.equal(JSON.stringify(ours), JSON.stringify(theirs));
-  // Ohne Ziel oder über ein anderes Ziel wird nichts gesendet: wie PHP „disconnected“ bzw. „unreachable“
-  const dl = (st: DiscordSettings): Delivery => ({ s: st, hook: activeWebhook(st), token: tokenUsable(st), bot: null, botInstalled: false, botOnline: false, botCanPost: false });
-  const row = (via: 'webhook' | 'token', target: string): PostRow => ({ id: 1, update_id: 1, via, target, kind: 'message', channel_id: via === 'token' ? '1301234567890123456' : null,
-    message_id: '123456', state: 'posted', dirty: false, legacy: via === 'token', error: null, created_at: '', updated_at: '' });
-  assert.equal(reach(dl(v2(settings[0])), row('token', 'bot:1301234567890123456')), 'unreachable');
-  assert.equal(reach(dl(v2(discordDefaults())), row('webhook', 'webhook:1')), 'disconnected');
-  assert.equal(anyDestination(dl(v2(discordDefaults()))), false);
-  assert.equal(reach(dl(v2(settings[0])), row('webhook', 'webhook:12345')), 'ok');
-  assert.equal(reach(dl(v2(settings[0])), row('webhook', 'webhook:99999')), 'unreachable');
-  assert.equal(reach(dl(v2(settings[4])), row('token', 'bot:1301234567890123456')), 'ok');
   const test = { embeds: [{ title: 'Discord is connected', color: 6514417 }] };
   assert.equal(JSON.stringify(settings.map((st) => discordWithMention(test, v2(st)))), JSON.stringify(php('return array_map(function ($s) use ($in) { return oys_discord_with_mention($in[0], $s); }, $in[1]);', [test, settings])));
   assert.equal(JSON.stringify(settings.map((st) => discordWithMention({}, v2(st)))), JSON.stringify(php('return array_map(function ($s) { return oys_discord_with_mention([], $s); }, $in);', settings)));

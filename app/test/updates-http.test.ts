@@ -145,6 +145,11 @@ test('Discord requests carry JSON, the bot header and the user agent; answers an
   const refused = await discordRequest('POST', `http://127.0.0.1:${closedPort}/api`, { a: 1 }, []);
   assert.equal(refused.status, 0);
   assert.notEqual(refused.error, '');
+  // Bricht die Antwort mitten im Inhalt ab, zählt sie als „keine Antwort“ (Status 0), auch wenn der Status schon gelesen
+  // war – gewollt anders als curl (siehe den Vergleich unten)
+  const cut = await discordRequest('POST', base + '/r/truncated', { a: 1 }, []);
+  assert.equal(cut.status, 0);
+  assert.notEqual(cut.error, '');
 });
 
 test('Discord requests leave the server byte for byte like curl in PHP', { skip: PHP_SKIP }, async () => {

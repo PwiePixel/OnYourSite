@@ -79,6 +79,14 @@ test('register view and its head match views/register.php', { skip: PHP_SKIP }, 
   });
 });
 
+// Neu gegenüber PHP: reservierte Adressen nach dem Löschen eines Kontos (content/addresses.ts) und die öffentliche
+// Vorschlagsseite – je genau einmal in der Datenschutzerklärung
+test('the privacy page explains held addresses and the public suggestions page once each', () => {
+  const page = privacyView();
+  assert.equal(page.split(ADDRESS_HOLD_PARAGRAPH).length, 2, 'the address paragraph appears once');
+  assert.equal(page.split(SUGGESTIONS_PARAGRAPH).length, 2, 'the suggestions paragraph appears once');
+});
+
 test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () => {
   const views: Array<[string, () => string]> = [['challenge.php', challengeView], ['imprint.php', imprintView], ['privacy.php', privacyView], ['terms.php', termsView]];
   for (let attempt = 0; ; attempt++) {
@@ -86,11 +94,9 @@ test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () =>
     const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${phpFile('views')}/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
     // Um Mitternacht kann sich das Datum zwischen PHP und Node ändern: dann noch einmal
     if (date('Y-m-d') !== day && attempt < 2) continue;
-    // Datenschutz: neu ist nur der Absatz über reservierte Adressen (content/addresses.ts) – ohne ihn wie in PHP
+    // Datenschutz: neu sind nur die Absätze über reservierte Adressen und die Vorschlagsseite – ohne sie wie in PHP
     views.forEach(([name, fn], i) => {
       const node = withoutDialogs(fn());
-      if (name === 'privacy.php') assert.equal(node.split(ADDRESS_HOLD_PARAGRAPH).length, 2, 'the address paragraph appears once');
-      if (name === 'privacy.php') assert.equal(node.split(SUGGESTIONS_PARAGRAPH).length, 2, 'the suggestions paragraph appears once');
       assert.equal(name === 'privacy.php' ? node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '') : node, res[i], name);
     });
     break;
