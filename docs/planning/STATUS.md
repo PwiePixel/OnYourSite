@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 06:58 (UTC+1).
+Last update: 2026-11-02 08:12 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, `feature/node-complete`)
 
@@ -55,7 +55,7 @@ review get one shared security review at the end.
 | 20 | DP-2b | Admin UI for bot posting | Built |
 | 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built |
 | 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built |
-| 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Being built |
+| 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Built |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
@@ -75,11 +75,11 @@ steps take the next free number when they are merged.
    `main` into `feature/new-features` with `git merge -s ours origin/main` – only when the tree of `main` equals the
    tree of `feature/node-complete` – so #14 shows only the feature changes). Then deploy with
    `sudo bash server/install.sh --update` (see `server/README.md`).
-2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 909 tests pass
+2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 927 tests pass
    (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
-   - Shop: HC-4 (editor "Honeycombs" tab) and HC-5 (shop admin I) – being built; then HC-6a, HC-8, HC-7a, HC-6b,
-     HC-9, HC-7b.
+   - Shop: HC-6a (shop admin II: users, unlock grants, refunds), HC-8, HC-7a (time-limited lifecycle – switches on
+     Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-4 (custom domain in the editor – needs HC-4), PD-5 (domains admin), PD-6 (installer:
      Cloudflare for SaaS, systemd unit for the domain worker).
    - Code pages: CS-4 (editor API), CS-5 (moderation), CS-6 (code slots in the editor, live).
