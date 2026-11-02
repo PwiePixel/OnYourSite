@@ -27,6 +27,7 @@ import { adminCommunityView } from '../src/community/adminView.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 import { withoutPublicPage, withoutWeb } from './support/suggestionsParity.js';
 import { PHP_SKIP, phpRef, phpTree as phpCodeTree, removePhpTree } from './support/phpRef.js';
+import { withoutBotExtra } from './support/discordParity.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung)
@@ -543,7 +544,7 @@ test('names like __proto__ in the address or a form stay ordinary keys, as in PH
     assert.equal(await adminCommunityHandle(parseStr(body), 'Pixel Admin'), phpResult);
     const query = '?__proto__[ticket]=1&__proto__[suggestions]=all';
     const phpView = await runPhp(`$_SESSION = ['csrf' => $in['csrf']]; parse_str($in['q'], $_GET); ob_start(); include $root . '/views/admin_community.php'; return ob_get_clean();`, { q: query.slice(1), csrf: CSRF });
-    assert.equal(withoutDialogs(withoutPublicPage(await adminCommunityView(adminCtx(query)))), withoutNativeConfirms(phpView));
+    assert.equal(withoutDialogs(withoutBotExtra(withoutPublicPage(await adminCommunityView(adminCtx(query))))), withoutNativeConfirms(phpView));
     assert.doesNotMatch(phpView, /Close view/);
   } finally {
     for (const k of polluted()) delete (Object.prototype as Record<string, unknown>)[k];

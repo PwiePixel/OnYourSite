@@ -91,7 +91,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
   // 2. Hauptdomain: App und Profile im Pfad-Modus
   if (isMainHost(host)) {
-    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
+    // /admin/api/…: JSON des Admin-Bereichs (admin/api.ts)
+    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
     // Die eigenen Seiten in jeder anderen Schreibweise (Schrägstrich am Ende, Groß-/Kleinschreibung): zur richtigen
     // Adresse – sonst landete z. B. /updates/ oder /Updates bei einer Profilseite mit diesem Namen. Nur eine Stunde im
@@ -116,5 +117,5 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
 // Seiten der App auf der Hauptdomain (wie oben in dispatch) – auf eigenen Domains antworten sie nie
 function isAppPath(path: string): boolean {
-  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path);
+  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path);
 }

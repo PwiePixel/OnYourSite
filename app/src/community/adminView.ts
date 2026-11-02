@@ -11,6 +11,8 @@ import { botLastSeen, botSecret, ticketGet, ticketMessages } from './community.j
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 import { baseAuthority } from '../helpers.js';
 import { hiddenReason, suggestionsPageOn, visible, webCounts } from './suggestions.js';
+import { DISCORD_TAB_JOBS_SQL } from '../discord/jobs.js';
+import { report } from '../discord/botReport.js';
 
 const FILTERS = ['open', 'accepted', 'declined', 'all'];
 const FILTER_LABELS: Array<[string, string]> = [['open', 'Open'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['all', 'All']];
@@ -46,7 +48,10 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
   const ticketView = ctx.get.ticket !== undefined ? await ticketGet(intval(ctx.get.ticket)) : null;
   const messages = ticketView ? await ticketMessages(intval(ticketView.id)) : [];
   const pendingOutbox = intval(await value('SELECT COUNT(*) FROM community_outbox WHERE done_at IS NULL AND attempts < 10'));
-  const failedOutbox = await q('SELECT action, last_error, attempts FROM community_outbox WHERE done_at IS NULL AND last_error IS NOT NULL ORDER BY id DESC LIMIT 3');
+  // Aufträge für Updates, den Bericht und den Test des Bots und die Richtlinien von #suggestions stehen mit Retry/Forget
+  // im Reiter Discord (discord/jobs.ts) – hier nur Vorschläge und Tickets
+  const failedOutbox = await q(`SELECT action, last_error, attempts FROM community_outbox WHERE done_at IS NULL AND last_error IS NOT NULL AND NOT ${DISCORD_TAB_JOBS_SQL} ORDER BY id DESC LIMIT 3`);
+  const botVersion = botReady ? (await report())?.version ?? '' : '';
 
   const inputClass = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
   const btn = 'inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors';
@@ -72,6 +77,10 @@ export async function adminCommunityView(ctx: Ctx): Promise<string> {
     o += " change";
     o += (pendingOutbox === 1 ? '' : 's');
     o += " waiting for the bot</p>\n                        ";
+  }
+  // Version des Bots (aus seinem Bericht) und der Weg zu den Discord-Einstellungen
+  if (botReady) {
+    o += '<p class="text-xs text-gray-500 mt-1" data-bot-extra>' + (botVersion !== '' ? 'Version ' + e(botVersion) + ' · ' : '') + '<a href="#discord" class="text-brand-400 hover:text-white">Discord settings</a></p>\n';
   }
   o += "                    </div>\n                </div>\n\n                ";
   if (!botReady) {
