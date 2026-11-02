@@ -2,7 +2,8 @@
 import type { Ctx } from '../web/ctx.js';
 import type { Row } from '../db.js';
 import { landingView } from './views/landing.js';
+import { suggestionsPageOn } from '../community/suggestions.js';
 
 export async function landing(ctx: Ctx, user: Row | null): Promise<void> {
-  ctx.write(landingView({ user }));
+  ctx.write(landingView({ user, suggestions: await suggestionsPageOn() }));
 }

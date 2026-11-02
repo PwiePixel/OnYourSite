@@ -4,14 +4,18 @@
 // Speicher- und Testversuche stehen mit ihrem Grund im Server-Protokoll (nie mit Link oder Token).
 import type { Ctx } from '../web/ctx.js';
 import { rateLimit } from '../web/security.js';
-import { baseHost, cleanText, cleanUrl, mainUrl } from '../helpers.js';
+import { cleanText, cleanUrl } from '../helpers.js';
+import { transaction } from '../db.js';
 import { date, intval, mbStrlen, mbSubstr, phpTrim, phpTruthy } from '../php.js';
+import { botSecret } from '../community/community.js';
 import { discordBase, discordError, discordRequest, type DiscordResponse, type Payload } from './rest.js';
 import { checkWebhook, cleanWebhookLink, parseWebhookLink, webhookPost, type WebhookLink } from './webhook.js';
 import {
-  POST_IN, activeDestination, discordSettings, displayNameInput, displayNameProblem, parseMention, snowflake, storeDiscordSettings,
-  webhookName, type DiscordSettings,
+  POST_IN, activeWebhook, discordSettings, displayNameInput, displayNameProblem, parseMention, snowflake, storeDiscordSettings,
+  tokenUsable, webhookDefaults, type DiscordSettings,
 } from './settings.js';
+import { styleOf, testPayload as buildTestPayload } from './payload.js';
+import { dropWebhookRows, tokenRowsToBot } from './posts.js';
 
 export interface AdminResult { tab: string; ok?: string; error?: string; query?: string }
 
@@ -51,22 +55,20 @@ function unconfirmed(post: Record<string, unknown>): boolean {
 
 // Testnachricht (wie bisher), ohne Ping
 export function testPayload(s: DiscordSettings, via: 'webhook' | 'token'): Payload {
-  const p: Payload = {
-    embeds: [{
-      title: 'Discord is connected',
-      description: 'New updates from ' + baseHost() + ' will show up here.',
-      url: mainUrl('/updates'),
-      color: 0x6366f1,
-      footer: { text: 'OnYourSite Updates' },
-    }],
-    allowed_mentions: { parse: [] },
-  };
-  if (via === 'webhook') {
-    const name = webhookName(s);
-    if (name !== '') p.username = name;
-    if (s.avatar_url !== '') p.avatar_url = s.avatar_url;
+  return buildTestPayload(styleOf(s, via), via);
+}
+
+// Neue Einstellungen speichern; geht dabei der alte Token, übernimmt der installierte Bot dessen Beiträge (oder sie
+// werden vergessen) – beides in einer Transaktion
+async function storeWithoutToken(next: DiscordSettings, hadToken: boolean): Promise<void> {
+  if (!hadToken) {
+    await storeDiscordSettings(next);
+    return;
   }
-  return p;
+  await transaction(async (_conn, db) => {
+    await storeDiscordSettings(next);
+    await tokenRowsToBot(db, botSecret() !== '');
+  });
 }
 
 // discord_* aus dem Admin; null = gehört nicht hierher
@@ -79,12 +81,13 @@ export async function discordAdminHandle(action: string, post: Record<string, un
     case 'discord_webhook_remove': {
       if (unconfirmed(post)) return fail(ctx, 'Please confirm removing the webhook.');
       const s = await discordSettings();
-      if (!parseWebhookLink(s.webhook_url)) return fail(ctx, 'There is no webhook to remove.');
-      Object.assign(s, {
-        webhook_url: '', post_in: 'channel', thread_id: '', thread_verified: false, test_thread_id: '', checked_at: '', check_error: '',
-        hook_name: '', hook_channel_id: '', hook_guild_id: '',
+      if (!parseWebhookLink(s.webhook.url)) return fail(ctx, 'There is no webhook to remove.');
+      s.webhook = webhookDefaults();
+      // Seine Beiträge werden vergessen (sie bleiben in Discord)
+      await transaction(async (_conn, db) => {
+        await storeDiscordSettings(s);
+        await dropWebhookRows(db);
       });
-      await storeDiscordSettings(s);
       return ok('Webhook removed. Its earlier posts stay in Discord.');
     }
     case 'discord_token_test':
@@ -95,9 +98,9 @@ export async function discordAdminHandle(action: string, post: Record<string, un
       if (s.bot_token === '') return fail(ctx, 'There is no old bot token stored.');
       s.bot_token = '';
       s.channel_id = '';
-      s.mode = 'webhook';
-      await storeDiscordSettings(s);
-      return ok('The old bot token is deleted from the website.' + (activeDestination(s) === 'webhook' ? ' Updates are posted with the webhook now.' : ''));
+      s.mention = '';
+      await storeWithoutToken(s, true);
+      return ok('The old bot token is deleted from the website.' + (activeWebhook(s) ? ' Updates are posted with the webhook now.' : ''));
     }
     case 'discord_defaults_save': {
       const s = await discordSettings();
@@ -123,7 +126,7 @@ export async function discordAdminHandle(action: string, post: Record<string, un
 // discord_webhook_save: Link (optional, wenn einer gespeichert ist), wo gepostet wird, Name, Bild, Ping – dann Discord
 async function webhookSave(post: Record<string, unknown>, ctx?: Ctx): Promise<AdminResult> {
   const s = await discordSettings();
-  const stored = parseWebhookLink(s.webhook_url);
+  const stored = parseWebhookLink(s.webhook.url);
   const linkRaw = phpTrim(str(post.webhook_link));
   let postIn = str(post.post_in);
   if (!(POST_IN as readonly string[]).includes(postIn)) postIn = 'channel';
@@ -190,49 +193,59 @@ async function webhookSave(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
   // Erst nach der Prüfung (bis zu 10 s) neu lesen: was inzwischen anderswo gespeichert wurde (z. B. die Vorgaben),
   // bleibt; dieses Formular ändert nur seine eigenen Felder. Gespeichert wird der Link, der eben geprüft wurde.
   const fresh = await discordSettings();
-  const current = parseWebhookLink(fresh.webhook_url);
+  const current = parseWebhookLink(fresh.webhook.url);
   const sameHook = !!current && current.id === hook.id;
+  const was = fresh.webhook;
   const next: DiscordSettings = {
     ...fresh,
-    mode: 'webhook',
-    webhook_url: linkRaw !== '' ? cleanWebhookLink(linkRaw) : s.webhook_url,
-    username: displayName,
-    avatar_url: avatar,
-    mention: mention.value,
-    post_in: postIn,
-    thread_id: threadId,
-    // Bestätigt bleibt ein Thread nur, wenn sich nichts geändert hat; der Test-Beitrag im Forum gehört zum Webhook
-    thread_verified: postIn === 'thread' && sameHook && fresh.post_in === 'thread' && fresh.thread_id === threadId && fresh.thread_verified,
-    test_thread_id: sameHook && postIn === 'forum' ? fresh.test_thread_id : '',
+    webhook: {
+      ...was,
+      enabled: true,
+      url: linkRaw !== '' ? cleanWebhookLink(linkRaw) : s.webhook.url,
+      display_name: displayName,
+      avatar_url: avatar,
+      mention: mention.value,
+      post_in: postIn,
+      thread_id: threadId,
+      // Bestätigt bleibt ein Thread nur, wenn sich nichts geändert hat; der Test-Beitrag im Forum gehört zum Webhook
+      thread_verified: postIn === 'thread' && sameHook && was.post_in === 'thread' && was.thread_id === threadId && was.thread_verified,
+      test_thread_id: sameHook && postIn === 'forum' ? was.test_thread_id : '',
+    },
   };
   // Der alte Token wird gelöscht, sobald ein Webhook gespeichert ist – die Website hält dann keinen Bot-Token mehr
   const hadToken = fresh.bot_token !== '';
   next.bot_token = '';
   next.channel_id = '';
+  next.mention = '';
   const tokenNote = hadToken ? ' The old bot token is deleted from the website.' : '';
-  const threadNote = postIn === 'thread' && !next.thread_verified ? ' The thread is checked with the first post into it.' : '';
+  const threadNote = postIn === 'thread' && !next.webhook.thread_verified ? ' The thread is checked with the first post into it.' : '';
 
   if (reachable) {
     const data = res.data ?? {};
-    next.hook_name = cleanText(typeof data.name === 'string' ? data.name : '', 100);
-    next.hook_channel_id = typeof data.channel_id === 'string' && snowflake(data.channel_id) ? data.channel_id : '';
-    next.hook_guild_id = typeof data.guild_id === 'string' && snowflake(data.guild_id) ? data.guild_id : '';
-    next.checked_at = date('Y-m-d H:i:s');
-    next.check_error = '';
-    await storeDiscordSettings(next);
-    const known = next.hook_name !== '' ? '“' + next.hook_name + '”' : 'this webhook';
-    return ok('Webhook saved and checked – Discord knows it as ' + known + (next.hook_channel_id !== '' ? ' (channel ' + next.hook_channel_id + ')' : '') + '.' + threadNote + tokenNote);
+    const channel = typeof data.channel_id === 'string' && snowflake(data.channel_id) ? data.channel_id : '';
+    // Der Bot postet schon in diesen Kanal: jedes Update käme zweimal
+    if (channel !== '' && next.bot.saved_at !== '' && next.bot.enabled && next.bot.channel_id === channel) {
+      return fail(ctx, 'The bot already posts into this channel – updates would show up twice.', 'webhook_link', keep);
+    }
+    next.webhook.hook_name = cleanText(typeof data.name === 'string' ? data.name : '', 100);
+    next.webhook.hook_channel_id = channel;
+    next.webhook.hook_guild_id = typeof data.guild_id === 'string' && snowflake(data.guild_id) ? data.guild_id : '';
+    next.webhook.checked_at = date('Y-m-d H:i:s');
+    next.webhook.check_error = '';
+    await storeWithoutToken(next, hadToken);
+    const known = next.webhook.hook_name !== '' ? '“' + next.webhook.hook_name + '”' : 'this webhook';
+    return ok('Webhook saved and checked – Discord knows it as ' + known + (channel !== '' ? ' (channel ' + channel + ')' : '') + '.' + threadNote + tokenNote);
   }
   // Discord gerade nicht erreichbar: speichern, aber sagen, dass nicht geprüft wurde
   const why = discordError(res, 'webhook');
-  next.check_error = why;
+  next.webhook.check_error = why;
   if (!sameHook) {
-    next.hook_name = '';
-    next.hook_channel_id = '';
-    next.hook_guild_id = '';
-    next.checked_at = '';
+    next.webhook.hook_name = '';
+    next.webhook.hook_channel_id = '';
+    next.webhook.hook_guild_id = '';
+    next.webhook.checked_at = '';
   }
-  await storeDiscordSettings(next);
+  await storeWithoutToken(next, hadToken);
   logDiscord('saved without a check: ' + why);
   return { tab: 'discord', error: 'Webhook saved, but Discord couldn’t be asked right now – ' + lowerFirst(why) + ' Use “Send test” to try it.' + threadNote + tokenNote };
 }
@@ -243,17 +256,19 @@ const lowerFirst = (t: string): string => (t.startsWith('Discord') ? t : t.charA
 // discord_webhook_test: an den gespeicherten Webhook, so wie Updates gepostet würden (Kanal, Forum, Thread)
 async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<AdminResult> {
   const s = await discordSettings();
-  const hook = parseWebhookLink(s.webhook_url);
+  const hook = parseWebhookLink(s.webhook.url);
   if (!hook) return fail(ctx, 'There is no webhook to test yet – paste a webhook link under “Post with a webhook” and save it.');
   if (!(await rateLimit('discord_test:' + adminKey(ctx), TEST_LIMIT, 60))) return fail(ctx, 'Please wait a minute before sending another test.');
   const payload = testPayload(s, 'webhook');
 
-  if (s.post_in === 'forum') {
-    if (s.test_thread_id !== '') {
-      const res = await webhookPost(hook, payload, { threadId: s.test_thread_id });
+  if (s.webhook.post_in === 'forum') {
+    if (s.webhook.test_thread_id !== '') {
+      const res = await webhookPost(hook, payload, { threadId: s.webhook.test_thread_id });
       if (res.status >= 200 && res.status < 300) return ok('Test message sent – check your Discord channel.');
       if (res.status === 404 && res.code === 10003) {
-        await storeDiscordSettings({ ...(await discordSettings()), test_thread_id: '' });
+        const fresh = await discordSettings();
+        fresh.webhook.test_thread_id = '';
+        await storeDiscordSettings(fresh);
         return fail(ctx, 'The earlier test post was deleted in Discord – send the test again to create a new one.');
       }
       return fail(ctx, discordError(res, 'webhook'));
@@ -263,18 +278,25 @@ async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
     const res = await webhookPost(hook, payload, { threadName: 'OnYourSite test' });
     if (res.status >= 200 && res.status < 300) {
       const thread = typeof res.data?.channel_id === 'string' && snowflake(res.data.channel_id) ? res.data.channel_id : '';
-      if (thread !== '') await storeDiscordSettings({ ...(await discordSettings()), test_thread_id: thread });
+      if (thread !== '') {
+        const fresh = await discordSettings();
+        fresh.webhook.test_thread_id = thread;
+        await storeDiscordSettings(fresh);
+      }
       return ok('Test message sent – check your Discord channel.');
     }
     return fail(ctx, discordError(res, 'webhook'));
   }
 
-  const threadId = s.post_in === 'thread' ? s.thread_id : '';
+  const threadId = s.webhook.post_in === 'thread' ? s.webhook.thread_id : '';
   const res = await webhookPost(hook, payload, { threadId });
   if (res.status >= 200 && res.status < 300) {
-    if (threadId !== '' && !s.thread_verified) {
+    if (threadId !== '' && !s.webhook.thread_verified) {
       const fresh = await discordSettings();
-      if (fresh.thread_id === threadId) await storeDiscordSettings({ ...fresh, thread_verified: true });
+      if (fresh.webhook.thread_id === threadId) {
+        fresh.webhook.thread_verified = true;
+        await storeDiscordSettings(fresh);
+      }
     }
     return ok('Test message sent – check your Discord channel.');
   }
@@ -285,7 +307,7 @@ async function webhookTest(post: Record<string, unknown>, ctx?: Ctx): Promise<Ad
 async function tokenTest(ctx?: Ctx): Promise<AdminResult> {
   const s = await discordSettings();
   if (s.bot_token === '') return fail(ctx, 'There is no old bot token stored.');
-  if (s.channel_id === '') return fail(ctx, 'The old bot token has no channel – delete it and use a webhook.');
+  if (!tokenUsable(s)) return fail(ctx, 'The old bot token has no channel – delete it and use a webhook.');
   if (!(await rateLimit('discord_test:' + adminKey(ctx), TEST_LIMIT, 60))) return fail(ctx, 'Please wait a minute before sending another test.');
   const res = await discordRequest('POST', discordBase() + '/v10/channels/' + s.channel_id + '/messages', testPayload(s, 'token'), ['Authorization: Bot ' + s.bot_token]);
   if (res.status >= 200 && res.status < 300) return ok('Test message sent – check your Discord channel.');

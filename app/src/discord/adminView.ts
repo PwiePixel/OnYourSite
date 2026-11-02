@@ -6,16 +6,17 @@ import { ROOT_DIR } from '../config.js';
 import { e } from '../html.js';
 import { timeAgo } from '../helpers.js';
 import { date, strtotime, time } from '../php.js';
-import { botLastSeen, botSecret } from '../community/community.js';
 import { WEBHOOK_KEEP } from './admin.js';
 import { activeDestination, discordSettings, displayNameProblem, type DiscordSettings } from './settings.js';
 import { maskedWebhook, parseWebhookLink } from './webhook.js';
 import { confirmAttrs as uiConfirmAttrs, confirmField as uiConfirmField } from '../views/partials/ui.js';
+import { botStatus, botTarget, type BotTarget } from './botReport.js';
 
 export interface DiscordTabData {
   csrf: string;
   s: DiscordSettings;
-  bot: { installed: boolean; lastSeen: number | null };
+  // target: der Bot postet neue Updates (Kanal); canPost: sein Bericht nennt updates.v1; channel: sein Kanal #updates
+  bot: { installed: boolean; lastSeen: number | null; target: BotTarget | null; canPost: boolean; channel: string };
   codeDir: string;
   errorField: string;
   keep: Record<string, string> | null;
@@ -28,10 +29,13 @@ export async function discordTabData(ctx: Ctx, csrf: string): Promise<DiscordTab
   const keep = session?.take<Record<string, unknown>>('discord_keep');
   const kept: Record<string, string> = {};
   if (keep && typeof keep === 'object') for (const k of WEBHOOK_KEEP) if (typeof keep[k] === 'string') kept[k] = keep[k] as string;
+  const s = await discordSettings();
+  const st = await botStatus();
+  const updates = st.report?.channels.find((c) => c.id === st.report?.updates_channel_id);
   return {
     csrf,
-    s: await discordSettings(),
-    bot: { installed: botSecret() !== '', lastSeen: await botLastSeen() },
+    s,
+    bot: { installed: st.installed, lastSeen: st.lastSeen, target: botTarget(s, st.report, st.installed), canPost: st.canPostUpdates, channel: updates?.name ?? '' },
     codeDir: ROOT_DIR,
     errorField: typeof field === 'string' ? field : '',
     keep: keep ? kept : null,
@@ -63,25 +67,30 @@ const confirmField = uiConfirmField();
 export function discordTabView(d: DiscordTabData): string {
   const { csrf, s, bot } = d;
   const active = activeDestination(s);
-  const hook = parseWebhookLink(s.webhook_url);
+  const w = s.webhook;
+  const hook = parseWebhookLink(w.url);
   const err = (name: string): string => (d.errorField === name ? ' ring-1 ring-red-500' : '');
   const kept = (name: string, fallback: string): string => (d.keep && d.keep[name] !== undefined ? d.keep[name] : fallback);
   const online = bot.lastSeen !== null && time() - bot.lastSeen < 300;
   const seen = bot.lastSeen !== null ? timeAgo(date('Y-m-d H:i:s', bot.lastSeen)) : '';
-  const where = s.post_in === 'forum' ? 'a new forum post for each update' : s.post_in === 'thread' ? 'thread ' + s.thread_id : 'the channel';
-  const checked = s.checked_at !== '' && s.check_error === '';
+  const where = w.post_in === 'forum' ? 'a new forum post for each update' : w.post_in === 'thread' ? 'thread ' + w.thread_id : 'the channel';
+  const checked = w.checked_at !== '' && w.check_error === '';
 
   // Kopf: wohin Updates gerade gehen
   let title = 'Discord isn’t connected yet';
   let subline = 'Paste a webhook link below.';
   if (active === 'webhook' && hook) {
-    title = 'Posting with the webhook' + (s.hook_name !== '' ? ' “' + s.hook_name + '”' : '');
-    subline = maskedWebhook(hook) + ' · into ' + where + ' · ' + (checked ? 'checked ' + when(s.checked_at) : 'not checked yet');
+    title = 'Posting with the webhook' + (w.hook_name !== '' ? ' “' + w.hook_name + '”' : '');
+    subline = maskedWebhook(hook) + ' · into ' + where + ' · ' + (checked ? 'checked ' + when(w.checked_at) : 'not checked yet');
   } else if (active === 'token') {
     title = 'Posting with the old bot token';
     subline = 'Channel ' + s.channel_id;
+  } else if (bot.target) {
+    title = 'Posting with the bot' + (bot.target.name !== '' ? ' in #' + bot.target.name : '');
+    subline = 'The bot that runs on your server posts new updates – no token needed here.';
   }
   const hookBadge = !hook ? badge('gray', 'Off') : active !== 'webhook' ? badge('gray', 'Not in use') : checked ? badge('green', 'Checked') : badge('amber', 'Not verified');
+  const botNote = bot.target ? 'posts new updates' + (bot.target.name !== '' ? ' in #' + bot.target.name : '') : bot.canPost ? 'can post updates' : 'doesn’t post updates yet';
   const botBadge = !bot.installed ? badge('amber', 'Not set up') : online ? badge('green', 'Online') : badge('gray', 'Offline');
 
   let o = `
@@ -96,12 +105,12 @@ export function discordTabView(d: DiscordTabData): string {
                         </div>
                     </div>
                     <div class="mt-5 pt-4 border-t border-bordercolor flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                        <span class="flex items-center gap-2"><i class='bx bx-bot text-lg text-gray-400'></i><span class="text-gray-300">Bot</span> ${botBadge}${bot.installed ? ' <span class="text-xs text-gray-500">doesn’t post updates yet</span>' : ''}</span>
+                        <span class="flex items-center gap-2"><i class='bx bx-bot text-lg text-gray-400'></i><span class="text-gray-300">Bot</span> ${botBadge}${bot.installed ? ' <span class="text-xs text-gray-500">' + e(botNote) + '</span>' : ''}</span>
                         <span class="flex items-center gap-2"><i class='bx bx-link text-lg text-gray-400'></i><span class="text-gray-300">Webhook</span> ${hookBadge}</span>
 ${s.bot_token !== '' ? `                        <span class="flex items-center gap-2"><i class='bx bx-key text-lg text-gray-400'></i><span class="text-gray-300">Old bot token</span> ${badge(active === 'token' ? 'amber' : 'gray', active === 'token' ? 'In use' : 'Not in use')}</span>\n` : ''}                    </div>
                 </div>
 `;
-  if (s.auto_post && !active) {
+  if (s.auto_post && !active && !bot.target) {
     o += `                <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">Updates aren’t announced on Discord right now – no destination is on.</div>\n`;
   }
 
@@ -111,7 +120,15 @@ ${s.bot_token !== '' ? `                        <span class="flex items-center g
 `;
   if (bot.installed) {
     const status = online ? 'online · last seen ' + seen : bot.lastSeen !== null ? 'offline · last seen ' + seen : 'it hasn’t checked in yet';
-    o += `                    <p class="text-sm text-gray-400">The Discord bot on this server is connected to the website (${e(status)}). It doesn’t announce updates yet – until it does, post them with a webhook below. You never need to enter its token here.</p>\n`;
+    // Was der Bot mit Updates macht: er postet sie (in #updates, solange kein anderes Ziel an ist), er könnte es,
+    // oder er braucht erst eine neuere Version
+    const channel = bot.channel !== '' ? '#' + bot.channel : 'its updates channel';
+    const what = bot.target
+      ? 'It posts new updates' + (bot.target.name !== '' ? ' in #' + bot.target.name : '') + ' by itself.'
+      : bot.canPost
+        ? 'It can post new updates in ' + channel + ' – it does that as soon as no webhook or old bot token is set up here.'
+        : 'It doesn’t announce updates yet – until it does, post them with a webhook below.';
+    o += `                    <p class="text-sm text-gray-400">The Discord bot on this server is connected to the website (${e(status)}). ${e(what)} You never need to enter its token here.</p>\n`;
   } else {
     o += `                    <p class="text-sm text-gray-400">The Discord bot isn’t set up on this server. Run <code class="text-white break-all">sudo bash ${e(d.codeDir)}/server/install.sh</code> and answer y at “Set up the Discord bot on this server too?” – until then you can use a webhook below.</p>\n`;
   }
@@ -119,9 +136,9 @@ ${s.bot_token !== '' ? `                        <span class="flex items-center g
 `;
 
   // Webhook
-  const postIn = kept('post_in', s.post_in);
+  const postIn = kept('post_in', w.post_in);
   // Ein gespeicherter Name, den Discord ablehnt, wird nicht gesendet (webhookName) – das Feld sagt warum
-  const storedNameProblem = d.keep === null ? displayNameProblem(s.username) : null;
+  const storedNameProblem = d.keep === null ? displayNameProblem(w.display_name) : null;
   const nameRing = d.errorField === 'display_name' || storedNameProblem !== null ? ' ring-1 ring-red-500' : '';
   const showInput = !hook || d.replaceLink || d.errorField === 'webhook_link';
   const linkInput = `<label class="${lbl}" for="dLink">Webhook link</label>
@@ -139,10 +156,10 @@ ${s.bot_token !== '' ? `                        <span class="flex items-center g
                         <input type="hidden" name="oys_action" value="discord_webhook_save">
 `;
   if (hook) {
-    const line = 'Webhook' + (s.hook_name !== '' ? ' “' + s.hook_name + '”' : '') + ' · ' + maskedWebhook(hook) + (checked ? ' · checked ' + when(s.checked_at) : '');
+    const line = 'Webhook' + (w.hook_name !== '' ? ' “' + w.hook_name + '”' : '') + ' · ' + maskedWebhook(hook) + (checked ? ' · checked ' + when(w.checked_at) : '');
     o += `                        <div class="rounded-xl border border-bordercolor bg-white/[.02] p-4 text-sm space-y-1">
                             <p class="text-gray-200 break-all">${e(line)}</p>
-${active !== 'webhook' ? `                            <p class="text-xs text-gray-500">Saved, but not in use${active === 'token' ? ' – updates are posted with the old bot token. Save here to post with the webhook instead.' : '. Save to check it and post with it.'}</p>\n` : ''}${s.check_error !== '' ? `                            <p class="text-xs text-amber-400">Not checked: ${e(s.check_error)}</p>\n` : ''}                        </div>
+${active !== 'webhook' ? `                            <p class="text-xs text-gray-500">Saved, but not in use${active === 'token' ? ' – updates are posted with the old bot token. Save here to post with the webhook instead.' : '. Save to check it and post with it.'}</p>\n` : ''}${w.check_error !== '' ? `                            <p class="text-xs text-amber-400">Not checked: ${e(w.check_error)}</p>\n` : ''}                        </div>
                         <div id="discordLinkSlot">
 `;
     o += showInput
@@ -163,30 +180,30 @@ ${radio('channel', 'In the channel', 'Each update is a message in the webhook’
                             <p data-show-for="forum thread" class="text-xs text-gray-500 mt-2${postIn === 'channel' ? ' hidden' : ''}">A webhook can’t rename or delete forum posts or threads: edits keep the first title, and unpublishing removes the message but leaves an empty post.</p>
                             <div data-show-for="thread" class="mt-4${postIn === 'thread' ? '' : ' hidden'}">
                                 <label class="${lbl}" for="dThread">Thread ID</label>
-                                <input id="dThread" type="text" name="thread_id" inputmode="numeric" autocomplete="off" maxlength="25" value="${e(kept('thread_id', s.thread_id))}" placeholder="e.g. 1234567890123456789" class="${inp}${err('thread_id')}">
-                                <p class="text-xs text-gray-500 mt-1.5">In Discord turn on Developer Mode, right-click the thread → Copy Thread ID.${s.post_in === 'thread' && s.thread_id !== '' && !s.thread_verified ? ' <span class="text-amber-400">Thread not verified yet – it is checked with the first post into it.</span>' : ''}</p>
+                                <input id="dThread" type="text" name="thread_id" inputmode="numeric" autocomplete="off" maxlength="25" value="${e(kept('thread_id', w.thread_id))}" placeholder="e.g. 1234567890123456789" class="${inp}${err('thread_id')}">
+                                <p class="text-xs text-gray-500 mt-1.5">In Discord turn on Developer Mode, right-click the thread → Copy Thread ID.${w.post_in === 'thread' && w.thread_id !== '' && !w.thread_verified ? ' <span class="text-amber-400">Thread not verified yet – it is checked with the first post into it.</span>' : ''}</p>
                             </div>
                         </fieldset>
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div>
                                 <label class="${lbl}" for="dDisplayName">Display name <span class="text-gray-500 font-normal">(optional)</span></label>
-                                <input id="dDisplayName" type="text" name="display_name" maxlength="80" autocomplete="off" data-1p-ignore data-lpignore="true" value="${e(kept('display_name', s.username))}" placeholder="OnYourSite Updates" class="${inp}${nameRing}">
+                                <input id="dDisplayName" type="text" name="display_name" maxlength="80" autocomplete="off" data-1p-ignore data-lpignore="true" value="${e(kept('display_name', w.display_name))}" placeholder="OnYourSite Updates" class="${inp}${nameRing}">
                                 <p class="text-xs text-gray-500 mt-1.5">Up to 80 characters, without @ # : and without the words “discord” or “clyde”.</p>
 ${storedNameProblem !== null ? `                                <p class="text-xs text-amber-400 mt-1">${e(storedNameProblem + ' It isn’t sent until you change it.')}</p>\n` : ''}                            </div>
                             <div>
                                 <label class="${lbl}" for="dAvatar">Avatar image link <span class="text-gray-500 font-normal">(optional)</span></label>
-                                <input id="dAvatar" type="text" name="avatar_url" inputmode="url" autocomplete="off" value="${e(kept('avatar_url', s.avatar_url))}" placeholder="https://…/logo.png" class="${inp}${err('avatar_url')}">
+                                <input id="dAvatar" type="text" name="avatar_url" inputmode="url" autocomplete="off" value="${e(kept('avatar_url', w.avatar_url))}" placeholder="https://…/logo.png" class="${inp}${err('avatar_url')}">
                             </div>
                             <div>
                                 <label class="${lbl}" for="dMention">Ping <span class="text-gray-500 font-normal">(optional)</span></label>
-                                <input id="dMention" type="text" name="mention" maxlength="30" autocomplete="off" value="${e(kept('mention', s.mention))}" placeholder="Role ID, “everyone” or “here”" class="${inp}${err('mention')}">
+                                <input id="dMention" type="text" name="mention" maxlength="30" autocomplete="off" value="${e(kept('mention', w.mention))}" placeholder="Role ID, “everyone” or “here”" class="${inp}${err('mention')}">
                                 <p class="text-xs text-gray-500 mt-1.5">Who gets notified when an update is posted. Empty = nobody is pinged.</p>
                             </div>
                         </div>
                         <div class="flex flex-wrap items-center justify-end gap-2">
 `;
   if (hook) {
-    const firstForumTest = s.post_in === 'forum' && s.test_thread_id === '';
+    const firstForumTest = w.post_in === 'forum' && w.test_thread_id === '';
     o += `                            <button type="submit" form="discordWebhookTestForm" class="${btn}"${firstForumTest ? confirmAttrs('Send a test?', 'In a forum channel this creates a post “OnYourSite test”; later tests go into that post.', 'Send test', 'warn') : ''}><i class='bx bx-paper-plane'></i> Send test</button>
                             <button type="submit" form="discordWebhookRemoveForm" class="${btn} hover:text-red-400"${confirmAttrs('Remove the webhook?', 'Its earlier posts stay in Discord and can’t be edited from here any more.', 'Remove', 'danger')}><i class='bx bx-unlink'></i> Remove</button>
 `;
@@ -197,7 +214,7 @@ ${storedNameProblem !== null ? `                                <p class="text-x
 `;
   if (hook) {
     // Das Bestätigungsfeld nur, wenn gefragt wird (sonst lehnte die zentrale Prüfung den Test ohne Dialog ab)
-    const firstForumTest = s.post_in === 'forum' && s.test_thread_id === '';
+    const firstForumTest = w.post_in === 'forum' && w.test_thread_id === '';
     o += `                    <form action="/admin" method="POST" id="discordWebhookTestForm" class="hidden">${csrf}<input type="hidden" name="oys_action" value="discord_webhook_test">${firstForumTest ? confirmField : ''}</form>
                     <form action="/admin" method="POST" id="discordWebhookRemoveForm" class="hidden">${csrf}<input type="hidden" name="oys_action" value="discord_webhook_remove">${confirmField}</form>
 `;
@@ -217,7 +234,7 @@ ${storedNameProblem !== null ? `                                <p class="text-x
                     <p class="text-sm text-gray-400">${e(note)}</p>
                     <div class="flex flex-wrap gap-2 mt-4">
                         <form action="/admin" method="POST" class="m-0">${csrf}<input type="hidden" name="oys_action" value="discord_token_test"><button type="submit" class="${btn}"><i class='bx bx-paper-plane'></i> Send test</button></form>
-                        <form action="/admin" method="POST" class="m-0"${confirmAttrs('Delete the old bot token?', 'Updates posted with it can’t be edited or removed from here any more.', 'Delete token', 'danger')}>${csrf}<input type="hidden" name="oys_action" value="discord_token_remove">${confirmField}<button type="submit" class="${btn} hover:text-red-400"><i class='bx bx-trash'></i> Delete token</button></form>
+                        <form action="/admin" method="POST" class="m-0"${confirmAttrs('Delete the old bot token?', bot.installed ? 'Updates posted with it are then edited and removed by the installed bot, if it can.' : 'Updates posted with it can’t be edited or removed from here any more.', 'Delete token', 'danger')}>${csrf}<input type="hidden" name="oys_action" value="discord_token_remove">${confirmField}<button type="submit" class="${btn} hover:text-red-400"><i class='bx bx-trash'></i> Delete token</button></form>
                     </div>
                 </div>
 `;

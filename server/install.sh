@@ -1805,7 +1805,8 @@ step_admin() {
 step_bot() {
   local secret
   bold "9/9  Discord bot"
-  if [ -f "$UNITS/onyoursite-bot.service" ]; then
+  # Als Systemdienst – oder in Docker im Code-Ordner (dieselbe Prüfung wie discord-bot/install.sh)
+  if [ -f "$UNITS/onyoursite-bot.service" ] || { [ -s "$CODE/discord-bot/.env" ] && [ -f "$CODE/discord-bot/docker-compose.yml" ]; }; then
     bash "$CODE/discord-bot/install.sh" --update || warn "The bot update didn’t finish – see above."
     return 0
   fi

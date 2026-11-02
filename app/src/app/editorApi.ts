@@ -5,7 +5,7 @@ import type { Ctx } from '../web/ctx.js';
 import { exec, transaction, type Db, type Param, type Row } from '../db.js';
 import { csrfCheck, csrfFromRequest, rateHit, rateLimit, rateOk } from '../web/security.js';
 import { encryptData } from '../crypto.js';
-import { cleanText, normalizeSlug, slugProblem, uploadUrl } from '../helpers.js';
+import { baseAuthority, cleanText, normalizeSlug, reservedPaths, slugProblem, uploadUrl } from '../helpers.js';
 import { phpJson } from '../html.js';
 import { date, intval, phpStr, phpTruthy, strtolower, strtotime, time, type PhpArray } from '../php.js';
 import { IMAGE_EXTS, blockNormalize, validUpload } from '../content/blocks.js';
@@ -372,6 +372,10 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
           ctx.json({ ok: false, error: `Sorry, the address “${slug}” is already taken.` });
         }
         if (refused) ctx.json(refused.body, refused.status);
+      }
+      // Namen, die OnYourSite auf der Hauptdomain selbst benutzt (z. B. /suggestions): nur als Subdomain
+      if (mode === 'path' && reservedPaths().includes(slug)) {
+        ctx.json({ ok: false, error: `This address is used by OnYourSite on the main domain – your page stays at ${slug}.${baseAuthority()}.` });
       }
       await exec('UPDATE pages SET address_mode = ? WHERE id = ?', [mode, page.id as Param]);
       await syncUsername(userId);

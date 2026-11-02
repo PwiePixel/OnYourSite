@@ -79,7 +79,7 @@ Code pages only answer `GET` and `HEAD`, and names used by mail and network auto
 
 ## Discord bot
 
-The folder `discord-bot/` contains a small Node.js bot for the community server: welcome messages, a suggestion forum whose posts are saved on the website (accept or decline them in Discord or under **Admin → Community** – both stay in sync) and support tickets in private channels that you can read and answer on the website. It talks to the website at `/_/bot/…` with signed requests (`bot_secret` in `config.php`); without the secret, these endpoints don’t exist. Ticket messages are stored encrypted, nothing about suggestions or tickets is public, and the admin panel and endpoints are kept out of search engines. Setup: `discord-bot/README.md`.
+The folder `discord-bot/` contains a small Node.js bot for the community server: welcome messages, a suggestion forum whose posts are saved on the website (accept or decline them in Discord or under **Admin → Community** – both stay in sync) and support tickets in private channels that you can read and answer on the website. It talks to the website at `/_/bot/…` with signed requests (`bot_secret` in `config.php`); without the secret, these endpoints don’t exist. Ticket messages are stored encrypted and tickets are never public. Suggestions the team has decided can be shown on `/suggestions`, without names, when the admin turns that page on under **Admin → Community** (it starts off). The admin panel and endpoints are kept out of search engines. Setup: `discord-bot/README.md`.
 
 ## Updates, roadmap & Discord
 

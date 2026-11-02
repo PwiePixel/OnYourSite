@@ -9,7 +9,7 @@ import { loginView } from '../src/app/views/login.js';
 import { registerView } from '../src/app/views/register.js';
 import { challengeView } from '../src/app/views/challenge.js';
 import { imprintView } from '../src/app/views/imprint.js';
-import { ADDRESS_HOLD_PARAGRAPH, privacyView } from '../src/app/views/privacy.js';
+import { ADDRESS_HOLD_PARAGRAPH, SUGGESTIONS_PARAGRAPH, privacyView } from '../src/app/views/privacy.js';
 import { termsView } from '../src/app/views/terms.js';
 import { registerOld } from '../src/app/auth.js';
 import { passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
@@ -89,7 +89,8 @@ test('static pages match the PHP views byte for byte', () => {
     views.forEach(([name, fn], i) => {
       const node = withoutDialogs(fn());
       if (name === 'privacy.php') assert.equal(node.split(ADDRESS_HOLD_PARAGRAPH).length, 2, 'the address paragraph appears once');
-      assert.equal(name === 'privacy.php' ? node.replace(ADDRESS_HOLD_PARAGRAPH, '') : node, res[i], name);
+      if (name === 'privacy.php') assert.equal(node.split(SUGGESTIONS_PARAGRAPH).length, 2, 'the suggestions paragraph appears once');
+      assert.equal(name === 'privacy.php' ? node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '') : node, res[i], name);
     });
     break;
   }

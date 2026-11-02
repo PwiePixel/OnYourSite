@@ -36,6 +36,8 @@ function readConfig() {
     tagDeclinedId: id('TAG_DECLINED_ID'),
     supportChannelId: id('SUPPORT_CHANNEL_ID'),
     supportCategoryId: id('SUPPORT_CATEGORY_ID'),
+    // Kanal für Updates der Webseite (optional; der Installer legt #updates an)
+    updatesChannelId: id('UPDATES_CHANNEL_ID'),
     siteUrl: String(env.SITE_URL || '').trim().replace(/\/+$/, ''),
     botSecret: String(env.BOT_SECRET || '').trim(),
     pollSeconds: Math.max(5, Math.min(300, parseInt(env.POLL_SECONDS || '10', 10) || 10)),

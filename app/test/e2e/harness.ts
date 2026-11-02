@@ -140,8 +140,16 @@ export async function login(page: Page, email = 'admin@test.de', password = 'tes
   await Promise.all([page.waitForURL((u) => !u.pathname.startsWith('/login')), page.click('button[type=submit]')]);
 }
 
-// Meldung nach einem Formular (der Erfolg verschwindet nach fünf Sekunden – darum gleich nach dem Laden lesen)
+// Meldung nach einem Formular (der Erfolg verschwindet nach fünf Sekunden – darum gleich nach dem Laden lesen). Mit den
+// eigenen Dialogen (ui.js) wird das Banner zu einem Toast; ohne ui.js bleibt es das Banner.
 export async function flash(page: Page): Promise<string> {
+  const toast = page.locator('.ui-toast .ui-toast-text').first();
+  try {
+    await toast.waitFor({ state: 'attached', timeout: 2000 });
+    return (await toast.innerText()).trim();
+  } catch {
+    // kein Toast
+  }
   const el = page.locator('.animate-fade-in').first();
   if (!(await el.count())) return '';
   return (await el.innerText()).trim();

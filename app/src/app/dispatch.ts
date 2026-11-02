@@ -12,16 +12,17 @@ import { editorApi } from './editorApi.js';
 import { adminPage } from '../admin/page.js';
 import { roadmapPage, updateLink, updatesFeed, updatesPage } from '../updates/pages.js';
 import { notFound } from '../public/notFound.js';
+import { suggestionLink, suggestionsPage } from '../community/suggestionsPage.js';
 
 // Startseite und Updates setzen für Besucher kein Cookie
-const COOKIELESS = new Set(['/', '/updates', '/updates/feed.xml', '/roadmap']);
+const COOKIELESS = new Set(['/', '/updates', '/updates/feed.xml', '/roadmap', '/suggestions']);
 const STATIC = new Map<string, StaticPage>([
   ['/challenge', 'challenge'], ['/imprint', 'imprint'], ['/privacy', 'privacy'], ['/terms', 'terms'], ['/terms/code-pages', 'terms-code-pages'],
 ]);
 
 export async function appRoutes(ctx: Ctx): Promise<void> {
   const path = ctx.path;
-  const cookieless = COOKIELESS.has(path) || /^\/updates\/\d+$/.test(path);
+  const cookieless = COOKIELESS.has(path) || /^\/(updates|suggestions)\/\d+$/.test(path);
   if (!cookieless || ctx.cookie(SESSION_COOKIE) !== undefined) await Session.start(ctx);
 
   const page = STATIC.get(path);
@@ -34,6 +35,10 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   if (path === '/updates/feed.xml') return updatesFeed(ctx);
   const m = /^\/updates\/(\d+)$/.exec(path);
   if (m) return updateLink(ctx, intval(m[1]));
+  // Vorschläge aus Discord (öffentlich, solange die Seite an ist)
+  if (path === '/suggestions') return suggestionsPage(ctx, ctx.session ? await currentUser(ctx) : null);
+  const sm = /^\/suggestions\/(\d+)$/.exec(path);
+  if (sm) return suggestionLink(ctx, intval(sm[1]));
 
   if (path === '/logout') return logout(ctx);
   if (path === '/register') return register(ctx);

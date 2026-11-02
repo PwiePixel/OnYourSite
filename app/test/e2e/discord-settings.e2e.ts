@@ -87,7 +87,7 @@ after(async () => {
 beforeEach(async () => {
   discord.restart();
   await exec("DELETE FROM rate_limits WHERE rl_key LIKE 'discord%'");
-  await exec('UPDATE updates SET discord_message_id = NULL, discord_target = NULL');
+  await exec('DELETE FROM update_discord_posts');
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   page = await context.newPage();
   page.on('dialog', (d) => void d.accept());
@@ -104,8 +104,10 @@ test('Q13: with the bot mode stored, pasting a webhook link saves and checks it,
   assert.match(saved, /^Webhook saved and checked – Discord knows it as “Captain Hook”/, 'saving the webhook link works whatever mode was stored');
   assert.equal(discord.calls().filter((c) => c.method === 'GET' && c.path.includes('/webhooks/' + OK_HOOK + '/')).length, 1, 'saving asked Discord once');
   const stored = await storedDiscord();
-  assert.equal(stored?.mode, 'webhook');
-  assert.equal(stored?.webhook_url, hookLink(OK_HOOK));
+  const hook = stored?.webhook as Record<string, unknown>;
+  assert.equal(stored?.v, 2);
+  assert.equal(hook.enabled, true);
+  assert.equal(hook.url, hookLink(OK_HOOK));
   assert.match(await page.locator('#tab-discord').innerText(), /Posting with the webhook “Captain Hook”/);
 
   await Promise.all([page.waitForNavigation(), page.locator('#discordWebhookForm').getByRole('button', { name: 'Send test' }).click()]);
@@ -218,8 +220,9 @@ test('Q13: a webhook link pasted into another field goes into the webhook link f
   assert.equal(await form.locator('input[name=thread_id]').inputValue(), thread);
   assert.match(await submitFormOf(link), /^Webhook saved and checked/);
   const stored = await storedDiscord();
-  assert.equal(stored?.webhook_url, hookLink('1309876543210987654'));
-  assert.equal(stored?.post_in, 'thread');
+  const hook = stored?.webhook as Record<string, unknown>;
+  assert.equal(hook.url, hookLink('1309876543210987654'));
+  assert.equal(hook.post_in, 'thread');
 });
 
 test('the installed bot is shown without asking for a token', async () => {
@@ -239,18 +242,15 @@ test('forum webhook: the first test creates one post after a confirmation, later
   await form.getByLabel('Webhook link', { exact: true }).fill(hookLink(FORUM_HOOK));
   await form.getByText('As a new forum post for each update', { exact: true }).click();
   assert.match(await submitFormOf(form.getByLabel('Webhook link', { exact: true })), /^Webhook saved and checked/);
-  const dialogs: string[] = [];
-  page.removeAllListeners('dialog');
-  page.on('dialog', (d) => {
-    dialogs.push(d.message());
-    void d.accept();
-  });
+  // Der erste Test im Forum fragt zuerst (eigener Dialog der Seite), dann entsteht der Beitrag
+  await form.getByRole('button', { name: 'Send test' }).click();
+  await page.waitForSelector('.ui-dialog');
+  assert.equal((await page.locator('.ui-dialog .ui-title').innerText()).trim(), 'Send a test?', 'the first forum test asks first');
+  await Promise.all([page.waitForNavigation(), page.click('.ui-dialog .ui-foot .ui-btn:not(.is-ghost)')]);
+  assert.equal(await checkedFlash(), 'Test message sent – check your Discord channel.');
+  // Der zweite geht ohne Rückfrage in denselben Beitrag (mit einem Dialog käme keine neue Seite)
   await Promise.all([page.waitForNavigation(), form.getByRole('button', { name: 'Send test' }).click()]);
   assert.equal(await checkedFlash(), 'Test message sent – check your Discord channel.');
-  assert.equal(dialogs.length, 1, 'the first forum test asks first');
-  await Promise.all([page.waitForNavigation(), form.getByRole('button', { name: 'Send test' }).click()]);
-  assert.equal(await checkedFlash(), 'Test message sent – check your Discord channel.');
-  assert.equal(dialogs.length, 1, 'the second test goes into the same post without asking');
   const posts = discord.calls().filter((c) => c.method === 'POST' && c.path.includes('/webhooks/' + FORUM_HOOK + '/'));
   assert.equal(posts.length, 2);
   assert.equal((posts[0].body as { thread_name?: string }).thread_name, 'OnYourSite test');

@@ -8,4 +8,5 @@ COPY index.js ./
 COPY src ./src
 # Nicht als root laufen
 USER node
+ENV OYS_BOT_RUNTIME=docker
 CMD ["node", "index.js"]

@@ -6,8 +6,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import type { RowDataPacket } from 'mysql2/promise';
 import { ROOT_DIR, setConfigForTests, type ConfigData } from '../src/config.js';
-import { exec } from '../src/db.js';
+import { exec, withConnection } from '../src/db.js';
+import { convertLegacyPosts } from '../src/schema.js';
 import { date, time } from '../src/php.js';
 import { Ctx } from '../src/web/ctx.js';
 import { adminUpdatesHandle } from '../src/updates/admin.js';
@@ -100,6 +102,43 @@ function bigFixture(): Record<string, Array<Record<string, unknown>>> {
   return f;
 }
 
+// Node liest Beiträge nur noch aus update_discord_posts: die Spalten des Ausgangsstands übernehmen, wie es der Schritt
+// V_DISCORD_DELIVERY tut. Beiträge des alten Tokens bleiben beim Token – ohne gespeicherten Token sind sie dann wie in
+// PHP „nicht verbunden“ bzw. „über ein anderes Ziel gepostet“.
+async function convertForNode(): Promise<void> {
+  await withConnection((_db, conn) => convertLegacyPosts(conn, { tokenStored: true, botInstalled: true }));
+}
+
+// Wo jedes Update in Discord steht – PHP: Spalten in updates, Node: update_discord_posts (je Update der Beitrag des
+// Webhooks vor dem des Tokens), als gespeichertes Ziel der alten Form
+async function discordState(side: 'php' | 'node'): Promise<string> {
+  if (side === 'php') {
+    const [rows] = await env.admin.query<RowDataPacket[]>(`SELECT id, discord_message_id AS m, discord_target AS t FROM \`${env.db}\`.updates WHERE discord_message_id IS NOT NULL ORDER BY id`);
+    return JSON.stringify(rows.map((r) => [r.id, r.m, r.t]));
+  }
+  const [rows] = await env.admin.query<RowDataPacket[]>(`SELECT p.update_id, p.message_id, p.via, p.target, p.kind, p.channel_id FROM \`${env.db}\`.update_discord_posts p
+    JOIN \`${env.db}\`.updates u ON u.id = p.update_id WHERE p.state = 'posted' ORDER BY p.update_id, FIELD(p.via, 'webhook', 'token', 'bot')`);
+  const seen = new Set<number>();
+  const out: unknown[] = [];
+  for (const r of rows) {
+    if (seen.has(r.update_id)) continue;
+    seen.add(r.update_id);
+    const target = r.via === 'webhook' ? r.target + (r.kind !== 'message' ? ':' + r.channel_id : '') : r.via === 'token' ? r.target : 'bot:' + r.channel_id;
+    out.push([r.update_id, r.message_id, target]);
+  }
+  return JSON.stringify(out);
+}
+
+// Die alten Spalten schreibt Node nicht mehr – im Vergleich der Tabellen zählen sie nicht (discordState vergleicht sie)
+function withoutDiscordColumns(snap: string): string {
+  const data = JSON.parse(snap) as { updates: Array<Record<string, unknown>> };
+  for (const u of data.updates) {
+    delete u.discord_message_id;
+    delete u.discord_target;
+  }
+  return JSON.stringify(data, null, 1);
+}
+
 async function runSteps(side: 'php' | 'node', steps: Step[], base: string): Promise<unknown[]> {
   if (side === 'php') {
     return (await env.php(`$out = [];
@@ -148,6 +187,7 @@ async function same(steps: Step[], opts: { fixture?: () => Record<string, Array<
   const runs: Record<string, { results: string; log: string; snap: string; raw: unknown[]; rawLog: unknown[] }> = {};
   for (const side of ['php', 'node'] as const) {
     await loadFixture(env, (opts.fixture ?? fixture)());
+    if (side === 'node') await convertForNode();
     await fetch(mockRoot + '/__restart');
     const from = time();
     const raw = await runSteps(side, steps, base);
@@ -156,7 +196,7 @@ async function same(steps: Step[], opts: { fixture?: () => Record<string, Array<
     runs[side] = {
       results: normalizeNow(JSON.stringify(raw, null, 1), from, to),
       log: normalizeNow(JSON.stringify(rawLog, null, 1), from, to),
-      snap: normalizeNow(await snapshot(env), from, to),
+      snap: normalizeNow(withoutDiscordColumns(await snapshot(env)) + '\n' + (await discordState(side)), from, to),
       raw,
       rawLog,
     };
@@ -386,9 +426,16 @@ test('random admin action sequences behave like PHP', async () => {
     }
     return post(action, f);
   };
+  // Beiträge des alten Tokens gibt es hier nicht: Node behandelt sie bewusst anders (sie bleiben beim Token bzw. gehen an
+  // den installierten Bot – discord-admin.test.ts), PHP vergisst sie neben einem Webhook
+  const webhookOnly = () => {
+    const f = fixture();
+    for (const u of f.updates) if (String(u.discord_target ?? '').startsWith('bot:')) Object.assign(u, { discord_message_id: null, discord_target: null });
+    return f;
+  };
   for (let run = 0; run < 4; run++) {
     const steps = [discordSetup({ webhook_url: hook('123456') }), ...Array.from({ length: 45 }, step)];
-    await same(steps);
+    await same(steps, { fixture: webhookOnly });
   }
 });
 
@@ -427,6 +474,7 @@ test('admin view: the HTML of admin_updates.php for every state (Updates and Roa
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, fixture());
       await runSteps(side, v.setup, apiBase);
+      if (side === 'node') await convertForNode();
       if (side === 'php') {
         html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
           { get: v.get, csrf })) as string;
@@ -636,6 +684,7 @@ test('random data: the admin view renders the same HTML as PHP (Updates and Road
     for (const side of ['php', 'node'] as const) {
       await loadFixture(env, structuredClone(rows));
       await runSteps(side, setup, apiBase);
+      if (side === 'node') await convertForNode();
       if (side === 'php') {
         html.php = (await env.php(`$_GET = $in['get']; $_SESSION = ['csrf' => $in['csrf']]; ob_start(); require '${ROOT_DIR}/views/admin_updates.php'; return ob_get_clean();`,
           { get, csrf })) as string;

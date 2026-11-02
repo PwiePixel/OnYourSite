@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { configString, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
-import { closePool, exec, one, q, value } from '../src/db.js';
+import { closePool, exec, one, q, value, withConnection } from '../src/db.js';
+import { convertLegacyPosts, ensureSchema } from '../src/schema.js';
 import { decryptData, encryptData } from '../src/crypto.js';
 import { isHalt, makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { Session } from '../src/web/session.js';
@@ -48,6 +49,8 @@ before(async () => {
   }
   await closePool();
   useConfig();
+  // Die Kopie auf den Stand dieses Codes bringen (die Quelle ist nach pkg-env.sh noch nicht migriert)
+  await ensureSchema();
 });
 
 after(async () => {
@@ -64,15 +67,25 @@ beforeEach(async () => {
   await exec("DELETE FROM oys_meta WHERE meta_key IN ('discord', 'bot_last_seen')");
   await exec("DELETE FROM rate_limits WHERE rl_key LIKE 'discord%'");
   await exec('DELETE FROM updates');
+  await exec('DELETE FROM update_discord_posts');
+  await exec('DELETE FROM community_outbox');
+  await exec("DELETE FROM oys_meta WHERE meta_key = 'discord_bot_report'");
 });
 
 async function store(settings: Record<string, unknown> | null): Promise<void> {
   if (settings === null) await exec("DELETE FROM oys_meta WHERE meta_key = 'discord'");
   else await exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', ?)", [encryptData(JSON.stringify(settings)) ?? null]);
 }
-async function stored(): Promise<Record<string, unknown> | null> {
+// Gespeicherte Einstellungen (Form v2: webhook, bot, alter Token oben)
+interface Stored { v: number; auto_post: boolean; invite_url: string; webhook: Record<string, unknown>; bot: Record<string, unknown>; bot_token: string; channel_id: string; mention: string }
+async function stored(): Promise<Stored | null> {
   const raw = await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'discord'");
-  return raw === null ? null : (JSON.parse(String(decryptData(String(raw)))) as Record<string, unknown>);
+  return raw === null ? null : (JSON.parse(String(decryptData(String(raw)))) as Stored);
+}
+const storedHook = async (): Promise<Record<string, unknown>> => (await stored())?.webhook ?? {};
+// Der Beitrag eines Updates an einem Ziel (update_discord_posts)
+async function postRow(updateId: number, via = 'webhook'): Promise<Record<string, unknown> | null> {
+  return one('SELECT * FROM update_discord_posts WHERE update_id = ? AND via = ?', [updateId, via]);
 }
 
 interface Result { status: number; location: string; ok?: string; error?: string; field?: string; keep?: Record<string, string>; ctx: Ctx }
@@ -114,19 +127,21 @@ test('saving a webhook checks it with Discord (GET, nothing posted) and stores i
   assert.equal(calls('GET', '/webhooks/' + HOOK + '/').length, 1);
   assert.equal(calls('POST', '/webhooks/').length, 0, 'saving posts nothing');
   assert.match(String(await value("SELECT meta_value FROM oys_meta WHERE meta_key = 'discord'")), /^ENC:/);
-  const s = await stored();
-  assert.equal(s?.mode, 'webhook');
-  assert.equal(s?.webhook_url, link(HOOK), 'stored without the query');
-  assert.equal(s?.username, 'OnYourSite News');
-  assert.equal(s?.mention, 'here');
-  assert.equal(s?.hook_name, 'Captain Hook');
-  assert.equal(s?.hook_guild_id, '1100000000000000001');
-  assert.match(String(s?.checked_at), /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+  const st = await stored();
+  assert.equal(st?.v, 2);
+  const s = st!.webhook;
+  assert.equal(s.enabled, true);
+  assert.equal(s.url, link(HOOK), 'stored without the query');
+  assert.equal(s.display_name, 'OnYourSite News');
+  assert.equal(s.mention, 'here');
+  assert.equal(s.hook_name, 'Captain Hook');
+  assert.equal(s.hook_guild_id, '1100000000000000001');
+  assert.match(String(s.checked_at), /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
   // Ohne neuen Link wird der gespeicherte noch einmal geprüft
   const again = await save({ display_name: 'Other' });
   assert.match(String(again.ok), /^Webhook saved and checked/);
   assert.equal(calls('GET', '/webhooks/' + HOOK + '/').length, 2);
-  assert.equal((await stored())?.webhook_url, link(HOOK));
+  assert.equal((await storedHook()).url, link(HOOK));
 });
 
 test('Discord’s refusal is shown with its own message and nothing is stored', async () => {
@@ -139,7 +154,7 @@ test('Discord’s refusal is shown with its own message and nothing is stored', 
   // Ein schon gespeicherter Webhook bleibt, wenn der neue Link abgelehnt wird
   await save({ webhook_link: link(HOOK) });
   await save({ webhook_link: link('4041234567890123456') });
-  assert.equal((await stored())?.webhook_url, link(HOOK));
+  assert.equal((await storedHook()).url, link(HOOK));
 });
 
 test('Discord not reachable or busy: the webhook is saved with a warning and marked as not checked', async () => {
@@ -153,10 +168,10 @@ test('Discord not reachable or busy: the webhook is saved with a warning and mar
   useConfig({ discord_api_base: closed });
   const r = await save({ webhook_link: `${closed}/webhooks/${HOOK}/${token('cl')}` });
   assert.equal(r.error, 'Webhook saved, but Discord couldn’t be asked right now – couldn’t reach Discord (connection refused). Use “Send test” to try it.');
-  const s = await stored();
-  assert.equal(s?.webhook_url, `${closed}/webhooks/${HOOK}/${token('cl')}`);
-  assert.equal(s?.check_error, 'Couldn’t reach Discord (connection refused).');
-  assert.equal(s?.checked_at, '');
+  const s = await storedHook();
+  assert.equal(s.url, `${closed}/webhooks/${HOOK}/${token('cl')}`);
+  assert.equal(s.check_error, 'Couldn’t reach Discord (connection refused).');
+  assert.equal(s.checked_at, '');
   useConfig();
   await store(null);
   const busy = await save({ webhook_link: link('4291234567890123456') });
@@ -188,9 +203,9 @@ test('Q13 loop: from the owner’s state, in every order of the steps, nothing l
   const steps: Record<string, () => Promise<void>> = {
     link: async () => {
       assert.match(said(await save({ webhook_link: link(HOOK) })), /^Webhook saved and checked – Discord knows it as “Captain Hook”/);
-      const s = await stored();
-      assert.equal(s?.mode, 'webhook');
-      assert.equal(s?.webhook_url, link(HOOK));
+      const s = await storedHook();
+      assert.equal(s.enabled, true);
+      assert.equal(s.url, link(HOOK));
       assert.equal(said(await post({ oys_action: 'discord_webhook_test' })), 'Test message sent – check your Discord channel.');
     },
     channelIdAlone: () => unchanged(async () => {
@@ -211,8 +226,8 @@ test('Q13 loop: from the owner’s state, in every order of the steps, nothing l
     discord.restart();
     for (const name of order) await steps[name]();
     // Am Ende postet der Webhook – egal, was vorher oder danach versucht wurde
-    const s = await stored();
-    assert.equal(s?.webhook_url, link(HOOK), order.join(' → '));
+    const s = await storedHook();
+    assert.equal(s.url, link(HOOK), order.join(' → '));
     assert.ok(discord.calls().some((c) => c.method === 'POST' && c.path.includes('/webhooks/' + HOOK + '/')), order.join(' → '));
   }
   assert.ok(texts.length >= 6 * 6);
@@ -230,13 +245,24 @@ test('a display name stored before the fix that Discord refuses (A4: the login e
     assert.equal((p.body as Record<string, unknown>).username, undefined, 'the refused name is left out – Discord uses the webhook’s own name');
     assert.equal((p.body as Record<string, unknown>).avatar_url, 'https://x.y/a.png');
   }
-  // Das Formular zeigt den Namen mit dem Grund, warum er nicht benutzt wird
+  // Beim Umwandeln in die neue Form fällt der Name weg; das Formular zeigt ein leeres Feld
   const view = makeTestCtx({ url: '/admin' });
   await Session.start(view);
   const html = await adminUpdatesView(view);
   await view.session?.close();
-  assert.match(html, /name="display_name"[^>]*value="admin@test.de"[^>]*ring-1 ring-red-500/);
-  assert.ok(html.includes('Display name: Discord doesn’t allow “@” in names. It isn’t sent until you change it.'));
+  assert.match(html, /name="display_name"[^>]*value=""/);
+  assert.ok(!html.includes('admin@test.de'));
+  // Ein Name, den Discord ablehnt, kann auch in v2 nicht gesendet werden (falls er von Hand gespeichert wurde)
+  await store({ v: 2, auto_post: true, invite_url: '', bot: {}, webhook: { enabled: true, url: link(HOOK), display_name: 'admin@test.de' }, bot_token: '', channel_id: '', mention: '' });
+  discord.restart();
+  assert.equal((await post({ oys_action: 'discord_webhook_test' })).ok, 'Test message sent – check your Discord channel.');
+  assert.equal((calls('POST', '/webhooks/' + HOOK + '/')[0].body as Record<string, unknown>).username, undefined);
+  const view2 = makeTestCtx({ url: '/admin' });
+  await Session.start(view2);
+  const html2 = await adminUpdatesView(view2);
+  await view2.session?.close();
+  assert.match(html2, /name="display_name"[^>]*value="admin@test.de"[^>]*ring-1 ring-red-500/);
+  assert.ok(html2.includes('Display name: Discord doesn’t allow “@” in names. It isn’t sent until you change it.'));
 });
 
 test('a slow check with Discord doesn’t undo what was saved meanwhile', async () => {
@@ -251,7 +277,7 @@ test('a slow check with Discord doesn’t undo what was saved meanwhile', async 
   assert.match(String(check.ok), /^Webhook saved and checked/);
   assert.equal(defaults.ok, 'Discord settings saved.');
   const s = await stored();
-  assert.equal(s?.username, 'News');
+  assert.equal(s?.webhook.display_name, 'News');
   assert.equal(s?.invite_url, 'https://discord.gg/new', 'the invite link saved during the check stays');
   assert.equal(s?.auto_post, false);
 });
@@ -272,15 +298,19 @@ test('updates through the old bot token: posted, edited and removed in its chann
   assert.equal(sent.auth, 'Bot ' + GOOD_TOKEN);
   assert.equal((sent.body as Record<string, unknown>).content, '@here');
   assert.equal((sent.body as Record<string, unknown>).username, undefined);
-  const row = (await one('SELECT discord_message_id, discord_target FROM updates WHERE id = 5'))!;
-  assert.equal(row.discord_target, 'bot:' + CHANNEL);
+  const row = (await postRow(5, 'token'))!;
+  assert.equal(row.target, 'bot:' + CHANNEL);
+  assert.equal(row.state, 'posted');
+  assert.equal(row.legacy, 1);
+  // Die alten Spalten schreibt Node nicht mehr
+  assert.equal((await one('SELECT discord_message_id FROM updates WHERE id = 5'))!.discord_message_id, null);
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_save', id: '5', title: 'Token news, edited', body: 'New', category: 'new', publish: '1' }))?.ok, 'Update published. The Discord post was updated too.');
-  const [edit] = calls('PATCH', '/channels/' + CHANNEL + '/messages/' + row.discord_message_id);
+  const [edit] = calls('PATCH', '/channels/' + CHANNEL + '/messages/' + row.message_id);
   assert.equal(edit.auth, 'Bot ' + GOOD_TOKEN);
   assert.equal((edit.body as Record<string, unknown>).content, undefined, 'an edit never pings again');
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_publish', id: '5', state: '' }))?.ok, 'Moved back to drafts and removed from Discord.');
-  assert.equal(calls('DELETE', '/channels/' + CHANNEL + '/messages/' + row.discord_message_id).length, 1);
-  assert.equal((await one('SELECT discord_message_id FROM updates WHERE id = 5'))!.discord_message_id, null);
+  assert.equal(calls('DELETE', '/channels/' + CHANNEL + '/messages/' + row.message_id).length, 1);
+  assert.equal(await postRow(5, 'token'), null);
 });
 
 test('every field rule names the field, keeps the other values and never calls Discord', async () => {
@@ -322,14 +352,14 @@ test('A1/A2: fields of the old form or of another form have no effect', async ()
   const r = await save({ webhook_link: link(HOOK), webhook_url: 'admin@test.de', bot_token: 'hunter2', channel_id: '123', username: 'admin@test.de', mode: 'bot', invite_url: 'x' });
   assert.match(String(r.ok), /^Webhook saved and checked/);
   const s = await stored();
-  assert.equal(s?.mode, 'webhook');
+  assert.equal(s?.webhook.enabled, true);
   assert.equal(s?.bot_token, '');
   assert.equal(s?.channel_id, '');
-  assert.equal(s?.username, '');
+  assert.equal(s?.webhook.display_name, '');
   assert.equal(s?.invite_url, '');
   // Die Vorgaben ändern den Webhook nicht
   await post({ oys_action: 'discord_defaults_save', webhook_link: link('1309999999999999999'), auto_post: '1' });
-  assert.equal((await stored())?.webhook_url, link(HOOK));
+  assert.equal((await storedHook()).url, link(HOOK));
   // Das alte gemeinsame Formular ändert nichts mehr
   for (const action of ['discord_save', 'discord_test', 'discord_disconnect']) {
     const before = await stored();
@@ -375,49 +405,52 @@ test('forum webhook: updates become forum posts; edits and removal reach them th
   assert.equal(r.ok, 'Posted to Discord.');
   const [created] = calls('POST', '/webhooks/' + FORUM + '/');
   assert.equal((created.body as { thread_name: string }).thread_name, '2.5 – Own pages');
-  const row = (await one('SELECT discord_message_id, discord_target FROM updates WHERE id = 1'))!;
-  assert.equal(row.discord_target, 'webhook:' + FORUM + ':' + row.discord_message_id, 'a forum post’s thread has the ID of its first message');
+  const row = (await postRow(1))!;
+  assert.equal(row.target, 'webhook:' + FORUM);
+  assert.equal(row.kind, 'forum_post');
+  assert.equal(row.channel_id, row.message_id, 'a forum post’s thread has the ID of its first message');
   await post({ oys_action: 'update_save', id: '1', title: 'Own pages, edited', body: 'New', version: '2.5', category: 'new', publish: '1' });
   const [edit] = calls('PATCH', '/webhooks/' + FORUM + '/');
-  assert.ok(edit.path.endsWith('?thread_id=' + row.discord_message_id));
+  assert.ok(edit.path.endsWith('?thread_id=' + row.message_id));
   assert.equal((edit.body as Record<string, unknown>).thread_name, undefined);
   const removed = await post({ oys_action: 'update_discord_remove', id: '1' });
   assert.equal(removed.ok, 'Removed from Discord.');
-  assert.ok(calls('DELETE', '/webhooks/' + FORUM + '/')[0].path.endsWith('?thread_id=' + row.discord_message_id));
+  assert.ok(calls('DELETE', '/webhooks/' + FORUM + '/')[0].path.endsWith('?thread_id=' + row.message_id));
   // Test-Beitrag: erst nach Bestätigung, danach in denselben Beitrag; ist er weg, fragt der nächste Test neu
   t = await post({ oys_action: 'discord_webhook_test', _confirmed: '0' });
   // Unbestätigt fängt schon der gemeinsame Schutz des Admin-Bereichs die Sendung ab
   assert.equal(t.error, UNCONFIRMED_MESSAGE);
   t = await post({ oys_action: 'discord_webhook_test', _confirmed: '1' });
   assert.equal(t.ok, 'Test message sent – check your Discord channel.');
-  const testThread = String((await stored())?.test_thread_id);
+  const testThread = String((await storedHook()).test_thread_id);
   assert.match(testThread, /^\d{19}$/);
   t = await post({ oys_action: 'discord_webhook_test' });
   assert.equal(t.ok, 'Test message sent – check your Discord channel.');
   assert.ok(calls('POST', '/webhooks/' + FORUM + '/').at(-1)!.path.endsWith('&thread_id=' + testThread));
-  await store({ ...(await stored()), test_thread_id: '4041234567890123456' });
+  const cur = (await stored())!;
+  await store({ ...cur, webhook: { ...cur.webhook, test_thread_id: '4041234567890123456' } });
   t = await post({ oys_action: 'discord_webhook_test' });
   assert.equal(t.error, 'The earlier test post was deleted in Discord – send the test again to create a new one.');
-  assert.equal((await stored())?.test_thread_id, '');
+  assert.equal((await storedHook()).test_thread_id, '');
 });
 
 test('thread: not verified until the first post into it works; a link with ?thread_id= chooses it', async () => {
   const r = await save({ webhook_link: link(HOOK) + '?thread_id=1401234567890123456' });
   assert.equal(r.ok, 'Webhook saved and checked – Discord knows it as “Captain Hook” (channel 1200000000000000001). The thread is checked with the first post into it.');
-  let s = await stored();
-  assert.equal(s?.post_in, 'thread');
-  assert.equal(s?.thread_id, '1401234567890123456');
-  assert.equal(s?.thread_verified, false);
+  let s = await storedHook();
+  assert.equal(s.post_in, 'thread');
+  assert.equal(s.thread_id, '1401234567890123456');
+  assert.equal(s.thread_verified, false);
   const t = await post({ oys_action: 'discord_webhook_test' });
   assert.equal(t.ok, 'Test message sent – check your Discord channel.');
   assert.ok(calls('POST', '/webhooks/' + HOOK + '/')[0].path.endsWith('?wait=true&thread_id=1401234567890123456'));
-  s = await stored();
-  assert.equal(s?.thread_verified, true);
+  s = await storedHook();
+  assert.equal(s.thread_verified, true);
   // Unverändert gespeichert bleibt er bestätigt, ein anderer Thread nicht
   await save({ post_in: 'thread', thread_id: '1401234567890123456' });
-  assert.equal((await stored())?.thread_verified, true);
+  assert.equal((await storedHook()).thread_verified, true);
   await save({ post_in: 'thread', thread_id: '1401234567890129999' });
-  assert.equal((await stored())?.thread_verified, false);
+  assert.equal((await storedHook()).thread_verified, false);
   const bad = await (async () => {
     await save({ post_in: 'thread', thread_id: '4041234567890123456' });
     return post({ oys_action: 'discord_webhook_test' });
@@ -442,9 +475,10 @@ test('no webhook yet: the test says what to do; removing needs the confirmation'
   assert.equal((await post({ oys_action: 'discord_webhook_test' })).error, 'There is no webhook to test yet – paste a webhook link under “Post with a webhook” and save it.');
   await save({ webhook_link: link(HOOK) });
   assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '0' })).error, UNCONFIRMED_MESSAGE);
-  assert.equal((await stored())?.webhook_url, link(HOOK));
+  assert.equal((await storedHook()).url, link(HOOK));
   assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '1' })).ok, 'Webhook removed. Its earlier posts stay in Discord.');
-  assert.equal((await stored())?.webhook_url, '');
+  assert.equal((await storedHook()).url, '');
+  assert.equal((await storedHook()).enabled, false);
   assert.equal((await post({ oys_action: 'discord_webhook_remove', _confirmed: '1' })).error, 'There is no webhook to remove.');
 });
 
@@ -527,6 +561,8 @@ test('updates: errors from Discord, deleted posts, other webhooks and broken mes
     (2, 'Two', '', '', 'new', 1, NOW(), 1, '1300000000000000099', 'webhook:${HOOK}', NOW(), NOW()),
     (3, 'Three', '', '', 'new', 1, NOW(), 1, '1300000000000000098', 'webhook:1309999999999999999', NOW(), NOW()),
     (4, 'Four', '', '', 'new', 1, NOW(), 1, '1300000000000000097\n', 'webhook:${HOOK}', NOW(), NOW())`);
+  // Gepostete Updates von vorher übernimmt der Schritt V_DISCORD_DELIVERY als Zeilen
+  await withConnection((_db, conn) => convertLegacyPosts(conn, { tokenStored: false, botInstalled: false }));
   discord.restart();
   discord.failNext(500);
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '1' }))?.error, 'Discord had a problem (500) – please try again in a moment.');
@@ -534,7 +570,7 @@ test('updates: errors from Discord, deleted posts, other webhooks and broken mes
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '1' }))?.error, 'Discord is rate limiting us – try again in 2 s.');
   // In Discord gelöscht: vergessen und neu posten
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '2' }))?.ok, 'Posted to Discord.');
-  assert.notEqual((await one('SELECT discord_message_id FROM updates WHERE id = 2'))!.discord_message_id, '1300000000000000099');
+  assert.notEqual((await postRow(2))!.message_id, '1300000000000000099');
   // Über einen anderen Webhook gepostet: wird nicht angefasst, nur vergessen
   const other = await adminUpdatesHandle({ oys_action: 'update_discord_remove', id: '3' });
   assert.equal(other?.error, 'Its Discord post couldn’t be removed (it was posted through a different webhook or bot) – please delete it in Discord yourself.');
@@ -542,16 +578,19 @@ test('updates: errors from Discord, deleted posts, other webhooks and broken mes
   discord.restart();
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord_remove', id: '4' }))?.ok, 'Removed from Discord.');
   assert.equal(discord.calls().length, 0);
-  assert.equal((await one('SELECT discord_message_id FROM updates WHERE id = 4'))!.discord_message_id, null);
+  assert.equal(await postRow(4), null);
   // Löschen mit kurzem Aussetzer bei Discord: nichts wird gelöscht
-  await exec(`UPDATE updates SET discord_message_id = (SELECT id FROM (SELECT discord_message_id AS id FROM updates WHERE id = 2) x), discord_target = 'webhook:${HOOK}' WHERE id = 1`);
+  const two = (await postRow(2))!;
+  await exec("DELETE FROM update_discord_posts WHERE update_id = 1");
+  await exec(`INSERT INTO update_discord_posts (update_id, via, target, kind, message_id, state, created_at, updated_at) VALUES (1, 'webhook', 'webhook:${HOOK}', 'message', ?, 'posted', NOW(), NOW())`, [String(two.message_id)]);
   discord.failNext(503);
   const del = await adminUpdatesHandle({ oys_action: 'update_delete', id: '1' });
   assert.equal(del?.error, 'Nothing was deleted, because its Discord post couldn’t be removed: Discord had a problem (503) – please try again in a moment.');
   assert.ok(await one('SELECT id FROM updates WHERE id = 1'));
   // Discord nicht erreichbar
   useConfig({ discord_api_base: 'http://127.0.0.1:1/api' });
-  await store({ ...(await stored()), webhook_url: `http://127.0.0.1:1/api/webhooks/${HOOK}/${token('zz')}` });
+  const cur = (await stored())!;
+  await store({ ...cur, webhook: { ...cur.webhook, url: `http://127.0.0.1:1/api/webhooks/${HOOK}/${token('zz')}` } });
   assert.equal((await adminUpdatesHandle({ oys_action: 'update_discord', id: '3' }))?.error, 'Couldn’t reach Discord (connection refused).');
   useConfig();
   assert.equal((await q('SELECT id FROM updates')).length, 4);

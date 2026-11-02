@@ -99,7 +99,7 @@ export const TABLES = ['updates', 'milestones', 'milestone_tasks'] as const;
 export async function loadFixture(env: TestEnv, rows: Record<string, Array<Record<string, unknown>>>, meta: Record<string, string | null> = {}): Promise<void> {
   const c = env.admin;
   await c.query(`USE \`${env.db}\``);
-  for (const t of [...TABLES, 'oys_sessions']) await c.query(`TRUNCATE TABLE \`${t}\``);
+  for (const t of [...TABLES, 'oys_sessions', 'update_discord_posts', 'community_outbox']) await c.query(`TRUNCATE TABLE \`${t}\``);
   await c.query("DELETE FROM oys_meta WHERE meta_key <> 'schema_version'");
   for (const [table, list] of Object.entries(rows)) {
     for (const row of list) {

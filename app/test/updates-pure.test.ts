@@ -8,9 +8,15 @@ import { ROOT_DIR } from '../src/config.js';
 import { intval } from '../src/php.js';
 import { milestoneFromRow, milestoneProgress, taskLines, updateFromRow } from '../src/updates/updates.js';
 import {
-  discordBase, discordChange, discordConfigured, discordDefaults, discordParseWebhook, discordRemoveNote, discordUpdatePayload,
-  discordWithMention, type DiscordChange, type DiscordSettings,
+  discordBase, discordConfigured, discordParseWebhook, discordRemoveNote, discordUpdatePayload, discordWithMention, type DiscordChange,
 } from '../src/updates/discord.js';
+import { discordDefaultsV1, discordSettingsFromV1, normalizeV1, type DiscordSettings, type DiscordSettingsV1 } from '../src/discord/settings.js';
+import { anyDestination, reach, type Delivery, type PostRow } from '../src/discord/posts.js';
+import { activeWebhook, tokenUsable } from '../src/discord/settings.js';
+
+// PHP bekommt die alte Form (v1), Node dieselben Werte umgewandelt (v2)
+const discordDefaults = discordDefaultsV1;
+const v2 = (s: DiscordSettingsV1): DiscordSettings => discordSettingsFromV1(normalizeV1(s));
 import { xmlEscape } from '../src/html.js';
 import type { Update } from '../src/updates/updates.js';
 
@@ -84,7 +90,7 @@ test('webhook links without a query and the API base match PHP', () => {
   ];
   assert.deepEqual(urls.map(discordParseWebhook), php('return array_map("oys_discord_parse_webhook", $in);', urls));
   assert.equal(base, php('return oys_discord_base();', null));
-  const settings: DiscordSettings[] = [
+  const settings: DiscordSettingsV1[] = [
     discordDefaults(),
     { ...discordDefaults(), webhook_url: urls[0] },
     { ...discordDefaults(), webhook_url: urls[9] },
@@ -93,11 +99,11 @@ test('webhook links without a query and the API base match PHP', () => {
     { ...discordDefaults(), mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '' },
     { ...discordDefaults(), mode: 'other', webhook_url: urls[0] },
   ];
-  assert.deepEqual(settings.map(discordConfigured), php('return array_map("oys_discord_configured", $in);', settings));
+  assert.deepEqual(settings.map((x) => discordConfigured(v2(x))), php('return array_map("oys_discord_configured", $in);', settings));
 });
 
 test('Discord messages, unchanged targets and notes match PHP', async () => {
-  const s = (over: Partial<DiscordSettings>): DiscordSettings => ({ ...discordDefaults(), webhook_url: 'https://discord.com/api/webhooks/12345/abcdefghijklmnopqrstuvwxyz', ...over });
+  const s = (over: Partial<DiscordSettingsV1>): DiscordSettingsV1 => ({ ...discordDefaults(), webhook_url: 'https://discord.com/api/webhooks/12345/abcdefghijklmnopqrstuvwxyz', ...over });
   const settings = [
     s({}), s({ mention: 'everyone' }), s({ mention: 'here', username: 'News', avatar_url: 'https://x.y/a.png' }), s({ mention: '1301234567890123457' }),
     s({ mode: 'bot', bot_token: 'x'.repeat(60), channel_id: '1301234567890123456', mention: '1301234567890123457\n', username: 'ignored', avatar_url: 'https://x.y/a.png' }),
@@ -112,21 +118,24 @@ test('Discord messages, unchanged targets and notes match PHP', async () => {
     u({ category: 'news', body: '\u{E4}'.repeat(3801) }), u({ body: 'word '.repeat(800) + '\u{1F41D}'.repeat(10) }), u({ published_at: '2026-03-29 02:30:00' }),
     u({ published_at: '2026-07-01 23:59:59', title: '"quotes" & <tags> / slashes \u{2028}' }), u({ published_at: 'garbage' }),
   ];
-  const ours = updates.flatMap((x) => settings.map((st) => discordUpdatePayload(x, st)));
+  const ours = updates.flatMap((x) => settings.map((st) => discordUpdatePayload(x, v2(st))));
   const theirs = php('$r = []; foreach ($in[0] as $u) foreach ($in[1] as $s) $r[] = oys_discord_update_payload($u, $s); return $r;', [updates, settings]);
   assert.deepEqual(ours, theirs);
   // Dieselbe Reihenfolge der Schlüssel (sie bestimmt das gesendete JSON)
   assert.equal(JSON.stringify(ours), JSON.stringify(theirs));
-  // Ohne Ziel oder über ein anderes Ziel wird nichts gesendet (kein Aufruf bei Discord)
-  const changeStates = await Promise.all([
-    discordChange(settings[0], 'bot:1', '123456', null), discordChange(discordDefaults(), 'webhook:1', '123456', null),
-    discordChange(settings[0], 'webhook:12345', 'abc', null), discordChange(settings[0], 'webhook:12345', '1234', { embeds: [] }),
-  ]);
-  assert.deepEqual(changeStates, php(`return [oys_discord_change($in[0], 'bot:1', '123456', null), oys_discord_change(oys_discord_defaults(), 'webhook:1', '123456', null),
-    oys_discord_change($in[0], 'webhook:12345', 'abc', null), oys_discord_change($in[0], 'webhook:12345', '1234', ['embeds' => []])];`, settings));
+  // Ohne Ziel oder über ein anderes Ziel wird nichts gesendet: wie PHP „disconnected“ bzw. „unreachable“
+  const dl = (st: DiscordSettings): Delivery => ({ s: st, hook: activeWebhook(st), token: tokenUsable(st), bot: null, botInstalled: false, botOnline: false, botCanPost: false });
+  const row = (via: 'webhook' | 'token', target: string): PostRow => ({ id: 1, update_id: 1, via, target, kind: 'message', channel_id: via === 'token' ? '1301234567890123456' : null,
+    message_id: '123456', state: 'posted', dirty: false, legacy: via === 'token', error: null, created_at: '', updated_at: '' });
+  assert.equal(reach(dl(v2(settings[0])), row('token', 'bot:1301234567890123456')), 'unreachable');
+  assert.equal(reach(dl(v2(discordDefaults())), row('webhook', 'webhook:1')), 'disconnected');
+  assert.equal(anyDestination(dl(v2(discordDefaults()))), false);
+  assert.equal(reach(dl(v2(settings[0])), row('webhook', 'webhook:12345')), 'ok');
+  assert.equal(reach(dl(v2(settings[0])), row('webhook', 'webhook:99999')), 'unreachable');
+  assert.equal(reach(dl(v2(settings[4])), row('token', 'bot:1301234567890123456')), 'ok');
   const test = { embeds: [{ title: 'Discord is connected', color: 6514417 }] };
-  assert.equal(JSON.stringify(settings.map((st) => discordWithMention(test, st))), JSON.stringify(php('return array_map(function ($s) use ($in) { return oys_discord_with_mention($in[0], $s); }, $in[1]);', [test, settings])));
-  assert.equal(JSON.stringify(settings.map((st) => discordWithMention({}, st))), JSON.stringify(php('return array_map(function ($s) { return oys_discord_with_mention([], $s); }, $in);', settings)));
+  assert.equal(JSON.stringify(settings.map((st) => discordWithMention(test, v2(st)))), JSON.stringify(php('return array_map(function ($s) use ($in) { return oys_discord_with_mention($in[0], $s); }, $in[1]);', [test, settings])));
+  assert.equal(JSON.stringify(settings.map((st) => discordWithMention({}, v2(st)))), JSON.stringify(php('return array_map(function ($s) { return oys_discord_with_mention([], $s); }, $in);', settings)));
 
   const changes: DiscordChange[] = [
     { state: 'ok', error: null, transient: false }, { state: 'missing', error: null, transient: false },

@@ -43,6 +43,7 @@ function setupCommands(cfg, site, support) {
           { name: 'Welcome channel', value: show(cfg.welcomeChannelId), inline: true },
           { name: 'Suggestion forum', value: show(cfg.suggestionForumId), inline: true },
           { name: 'Ticket category', value: show(cfg.supportCategoryId), inline: true },
+          { name: 'Updates channel', value: show(cfg.updatesChannelId), inline: true },
           { name: 'Checks the website every', value: `${cfg.pollSeconds} seconds`, inline: true },
         )] });
     }

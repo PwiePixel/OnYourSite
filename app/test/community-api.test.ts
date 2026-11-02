@@ -26,6 +26,7 @@ import { communitySeal } from '../src/community/community.js';
 import { adminCommunityHandle } from '../src/community/admin.js';
 import { adminCommunityView } from '../src/community/adminView.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
+import { withoutPublicPage, withoutWeb } from './support/suggestionsParity.js';
 
 const BASE = loadConfig();
 // Eigene Datenbank je Arbeitsordner (der Name der Test-Datenbank aus den Einstellungen plus Endung)
@@ -202,7 +203,8 @@ async function sendNode(r: Req, secret = SECRET): Promise<Res> {
 
 // Zeitpunkte dieser Anfrage („jetzt“) und /ping-Uhrzeit vereinheitlichen
 function normalizeBody(text: string): string {
-  return text
+  // Der Vorschlag trägt in Node zusätzlich web (eigener Test in suggestions-db.test.ts)
+  return withoutWeb(text)
     .replace(/"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"/g, (m, v: string) => {
       const at = strtotime(v);
       return at !== false && at >= started - 5 && at <= time() + 5 ? '"NOW"' : m;
@@ -246,10 +248,16 @@ async function fixtures(): Promise<void> {
 }
 
 // Inhalt der Community-Tabellen: verschlüsselte Texte entschlüsselt, Zeitpunkte von „jetzt“ vereinheitlicht
+// Reihenfolge (ref), Pause und Abholzeit der Aufträge gibt es nur in Node (community-outbox.test.ts)
+const NODE_OUTBOX_COLUMNS = ['ref', 'next_try_at', 'claimed_at'];
+
 async function snapshot(): Promise<Record<string, unknown[]>> {
   const out: Record<string, unknown[]> = {};
   for (const t of ['community_suggestions', 'community_tickets', 'community_ticket_messages', 'community_outbox', 'oys_meta']) {
     const [rows] = await admin.query<RowDataPacket[]>(`SELECT * FROM \`${DB}\`.\`${t}\` ORDER BY 1`);
+    if (t === 'community_outbox') for (const row of rows) for (const k of NODE_OUTBOX_COLUMNS) delete row[k];
+    if (t === 'community_suggestions') for (const row of rows) for (const k of ['web_state', 'web_notice', 'removed_at']) delete row[k];
+    if (t === 'community_outbox') for (const row of rows) row.payload = withoutWeb(String(row.payload));
     out[t] = rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => {
       if (typeof v === 'string' && v.startsWith('ENC:')) return [k, 'DEC(' + JSON.stringify(decrypt(v)) + ')'];
       if (typeof v === 'string') v = v.replace(/\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/g, (m) => {
@@ -301,12 +309,12 @@ const msg = (o: Record<string, unknown> = {}) => J({ message_id: '60000000000000
 const post = (path: string, body: string, extra: Partial<Req> = {}): Req => ({ method: 'POST', path, body, ...extra });
 const get = (path: string, extra: Partial<Req> = {}): Req => ({ method: 'GET', path, ...extra });
 
+// Bewusst anders als PHP (discord-pages §5.4): /ping nennt die Funktionen der Website, ein zu großer Inhalt ist 413
+// statt 401 – beides prüft der Test „ping and body size“ unten ohne PHP
 const CASES: Array<[string, Req]> = [
-  ['ping with query', get('/_/bot/ping?x=1&y=%C3%A4')],
   ['unsigned', get('/_/bot/ping', { sign: 'none' })],
   ['bad signature', get('/_/bot/outbox', { sign: 'bad' })],
   ['old timestamp', get('/_/bot/outbox', { sign: 'old' })],
-  ['body too big', post('/_/bot/outbox/2/done', J({ error: 'x'.repeat(65537) }))],
   ['invalid JSON', post('/_/bot/suggestions', '{"thread_id":')],
   ['JSON scalar', post('/_/bot/suggestions', '"text"')],
   ['JSON list', post('/_/bot/suggestions', '[1,2]')],
@@ -372,6 +380,23 @@ test('every bot API route answers and writes like PHP', async () => {
     assert.equal(normalizeBody(n.body), normalizeBody(p.body), `${name}: body`);
     assert.deepEqual(nodeDb, phpDb, `${name}: database`);
   }
+});
+
+test('ping lists the website’s features; a body over 64 KiB gets 413 before the signature is checked', async () => {
+  await fixtures();
+  const ping = await sendNode(get('/_/bot/ping?x=1&y=%C3%A4'));
+  assert.equal(ping.status, 200);
+  const body = JSON.parse(ping.body) as Record<string, unknown>;
+  assert.equal(body.site, 'http://oys.test:8080/');
+  assert.deepEqual((body.features as string[]).slice(0, 2), ['hello', 'updates.v1']);
+  for (const sign of ['ok', 'bad', 'none'] as const) {
+    const big = await sendNode(post('/_/bot/outbox/2/done', J({ error: 'x'.repeat(65537) }), { sign }));
+    assert.equal(big.status, 413, sign);
+    assert.deepEqual(JSON.parse(big.body), { ok: false, error: 'Request too large.' });
+  }
+  // Genau 64 KiB gehen noch durch (und werden geprüft)
+  const edge = await sendNode(post('/_/bot/outbox/2/done', '{"error":"' + 'y'.repeat(65536 - 12) + '"}', { sign: 'bad' }));
+  assert.equal(edge.status, 401);
 });
 
 test('without a usable bot secret the API does not exist, like in PHP', async () => {
@@ -466,7 +491,7 @@ test('names like __proto__ in the address or a form stay ordinary keys, as in PH
     assert.equal(await adminCommunityHandle(parseStr(body), 'Pixel Admin'), phpResult);
     const query = '?__proto__[ticket]=1&__proto__[suggestions]=all';
     const phpView = await runPhp(`$_SESSION = ['csrf' => $in['csrf']]; parse_str($in['q'], $_GET); ob_start(); include $root . '/views/admin_community.php'; return ob_get_clean();`, { q: query.slice(1), csrf: CSRF });
-    assert.equal(withoutDialogs(await adminCommunityView(adminCtx(query))), withoutNativeConfirms(phpView));
+    assert.equal(withoutDialogs(withoutPublicPage(await adminCommunityView(adminCtx(query)))), withoutNativeConfirms(phpView));
     assert.doesNotMatch(phpView, /Close view/);
   } finally {
     for (const k of polluted()) delete (Object.prototype as Record<string, unknown>)[k];

@@ -33,8 +33,8 @@ export function isMainHost(host: string): boolean {
 }
 
 // Eigene Seiten der Hauptdomain, deren Namen der Profil-Pfad sonst einer Profilseite gäbe
-const OWN_PAGES = new Set(['updates', 'roadmap']);
-const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap']);
+const OWN_PAGES = new Set(['updates', 'roadmap', 'suggestions']);
+const APP_ROUTES = new Set(['/', '/login', '/register', '/logout', '/dashboard', '/admin', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages', '/updates', '/updates/feed.xml', '/roadmap', '/suggestions']);
 
 export async function dispatch(ctx: Ctx): Promise<void> {
   // Apache prüft die Adresse vor allem anderen: kaputte %-Folge oder /../ über die Wurzel hinaus 400, kodierter
@@ -91,7 +91,7 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
   // 2. Hauptdomain: App und Profile im Pfad-Modus
   if (isMainHost(host)) {
-    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path)) return appRoutes(ctx);
+    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
     // Die eigenen Seiten in jeder anderen Schreibweise (Schrägstrich am Ende, Groß-/Kleinschreibung): zur richtigen
     // Adresse – sonst landete z. B. /updates/ oder /Updates bei einer Profilseite mit diesem Namen. Nur eine Stunde im
@@ -116,5 +116,5 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
 // Seiten der App auf der Hauptdomain (wie oben in dispatch) – auf eigenen Domains antworten sie nie
 function isAppPath(path: string): boolean {
-  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/updates\/\d+$/.test(path);
+  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path);
 }

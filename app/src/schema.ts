@@ -16,6 +16,11 @@ import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
 import { cleanCss } from './css.js';
 import { partitionClauseFor } from './status/partitions.js';
+import { decodeStored, discordSettingsFromV1, encodeSettings, normalizeV1 } from './discord/settings.js';
+import { legacyPostRow } from './discord/legacy.js';
+import { botSecret } from './community/community.js';
+import { baseAuthority } from './helpers.js';
+import { notify } from './notify/notify.js';
 
 // Stand der portierten Seite (Release 3.0 migriert genau bis hier)
 export const V_PAGES = 1; // Profilseiten + Übernahme der alten Profile
@@ -31,6 +36,8 @@ export const V_CODE_SLOTS = 9; // Code-Seiten auch auf Seitenadressen (Plätze),
 export const V_STATUS_TABLES = 10; // Statusseiten: Tabellen, eigene Seite von OnYourSite
 export const V_SHOP_CORE = 11; // Honigwaben: Konten, Berechtigungen, Premium-Status, Admin-Protokoll
 export const V_SHOP_CATALOGUE = 12; // Honigwaben: Katalog mit Preisen, Angebote, Käufe
+export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge des Bots mit ref und Pausen, Einstellungen v2
+export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -67,6 +74,8 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_STATUS_TABLES, name: 'statusTables', run: statusTables },
   { version: V_SHOP_CORE, name: 'shopCore', run: shopCore },
   { version: V_SHOP_CATALOGUE, name: 'shopCatalogue', run: shopCatalogue },
+  { version: V_DISCORD_DELIVERY, name: 'discordDelivery', run: discordDelivery },
+  { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1291,5 +1300,109 @@ async function migrateLegacyUsers(conn: PoolConnection): Promise<void> {
       await conn.rollback().catch(() => undefined);
       console.error(`Migration for user #${phpStr(user.id)} failed: ${(err as Error).message}`);
     }
+  }
+}
+
+// V_DISCORD_DELIVERY (braucht V_UPDATES und V_COMMUNITY): je Update und Ziel eine Zeile für seinen Beitrag in Discord
+// (bot, webhook oder token = alter Bot-Token), Aufträge an den Bot mit ref (Reihenfolge), Pause nach Fehlern und
+// Abholzeit, die Discord-Einstellungen in Form v2 (ohne Kopie der alten Form) und die schon geposteten Updates als
+// Zeilen. updates.discord_message_id/discord_target bleiben stehen und werden nur hier gelesen.
+async function discordDelivery(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS update_discord_posts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        update_id INT NOT NULL,
+        via VARCHAR(10) NOT NULL,
+        target VARCHAR(80) NOT NULL,
+        kind VARCHAR(12) NOT NULL DEFAULT 'message',
+        channel_id VARCHAR(22) NULL,
+        message_id VARCHAR(22) NULL,
+        state VARCHAR(16) NOT NULL DEFAULT 'queued',
+        dirty TINYINT(1) NOT NULL DEFAULT 0,
+        legacy TINYINT(1) NOT NULL DEFAULT 0,
+        error VARCHAR(300) NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uq_update_via (update_id, via),
+        KEY idx_state (state, updated_at)
+    ) ${OPTS}`);
+  await addColumn(conn, 'community_outbox', 'ref', 'VARCHAR(40) NULL');
+  await addColumn(conn, 'community_outbox', 'next_try_at', 'DATETIME NULL');
+  await addColumn(conn, 'community_outbox', 'claimed_at', 'DATETIME NULL');
+  await addIndex(conn, 'community_outbox', 'idx_ref', 'KEY idx_ref (ref, done_at)');
+
+  // Einstellungen v1 → v2. Ein falscher Schlüssel oder kaputter Wert: nichts speichern (es gelten die Vorgaben).
+  const meta = await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'discord'");
+  let tokenStored = false;
+  if (meta.length) {
+    const data = decodeStored(phpStr(meta[0].meta_value));
+    if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+      if ((data as Record<string, unknown>).v === 2) {
+        tokenStored = phpStr((data as Record<string, unknown>).bot_token ?? '') !== '';
+      } else {
+        const v2 = discordSettingsFromV1(normalizeV1(data));
+        tokenStored = v2.bot_token !== '';
+        await run(conn, "REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('discord', ?)", [encodeSettings(v2)]);
+      }
+    }
+  }
+  await convertLegacyPosts(conn, { tokenStored, botInstalled: botSecret() !== '' });
+}
+
+// Schon gepostete Updates (Spalten in updates) als Zeilen – wiederholbar (INSERT IGNORE)
+export async function convertLegacyPosts(conn: PoolConnection, opts: { tokenStored: boolean; botInstalled: boolean }): Promise<number> {
+  const now = date('Y-m-d H:i:s');
+  let added = 0;
+  const posted = await rows(conn, "SELECT id, discord_message_id, discord_target FROM updates WHERE discord_message_id IS NOT NULL AND discord_message_id <> '' AND discord_target IS NOT NULL ORDER BY id");
+  for (const u of posted) {
+    const messageId = phpStr(u.discord_message_id);
+    const p = legacyPostRow(phpStr(u.discord_target), messageId, opts);
+    if (!p) continue;
+    const res = await run(conn, `INSERT IGNORE INTO update_discord_posts (update_id, via, target, kind, channel_id, message_id, state, legacy, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?)`, [u.id, p.via, p.target, p.kind, p.channel_id, messageId.slice(0, 22), p.legacy, now, now]);
+    added += res.affectedRows;
+  }
+  return added;
+}
+
+// V_PUBLIC_PAGES (braucht V_COMMUNITY und V_NOTIFICATIONS_INDEX): für die öffentliche Vorschlagsseite je Vorschlag, ob
+// das Team ihn zeigt oder verbirgt (web_state), ob der Bot dem Autor im Beitrag gesagt hat, dass er auf der Webseite
+// erscheinen kann (web_notice – bei allen bisherigen 0, so erscheint keiner von selbst), und ob der Beitrag in Discord
+// gelöscht ist (removed_at). Dazu wird „suggestions“ eine Adresse der Hauptseite (reserveSuggestions).
+async function publicPages(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'community_suggestions', 'web_state', "VARCHAR(8) NOT NULL DEFAULT 'auto'");
+  await addColumn(conn, 'community_suggestions', 'web_notice', 'TINYINT(1) NOT NULL DEFAULT 0');
+  await addColumn(conn, 'community_suggestions', 'removed_at', 'DATETIME NULL');
+  await addIndex(conn, 'community_suggestions', 'idx_web', 'KEY idx_web (removed_at, web_state, status, id)');
+  await reserveSuggestions(conn);
+}
+
+// {base}/suggestions gehört jetzt der Vorschlagsseite: Link-Seiten mit diesem Namen im Pfad-Modus ziehen auf ihre
+// Subdomain um; ihre Besitzer und die einer Code-Seite mit diesem Namen (deren Kurzlink {base}/suggestions endet)
+// bekommen vorher eine Nachricht. Alles in einer Transaktion; die Markierung reserved_suggestions lässt es nur einmal
+// laufen (auch wenn ein früherer Lauf nach den Spalten abbrach).
+export async function reserveSuggestions(conn: PoolConnection): Promise<void> {
+  await conn.beginTransaction();
+  try {
+    if ((await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'reserved_suggestions'")).length) {
+      await conn.commit();
+      return;
+    }
+    const base = baseAuthority();
+    for (const r of await rows(conn, "SELECT DISTINCT user_id FROM pages WHERE slug = 'suggestions' AND address_mode = 'path' ORDER BY user_id")) {
+      await notify(intval(r.user_id), 'system', 'Your page address changed',
+        `${base}/suggestions now opens OnYourSite’s suggestions page. Your page stays at suggestions.${base} – please update links and printed QR codes that use the old address.`,
+        '/dashboard', { db: conn });
+    }
+    for (const r of await rows(conn, "SELECT DISTINCT user_id FROM code_sites WHERE slug = 'suggestions' ORDER BY user_id")) {
+      await notify(intval(r.user_id), 'system', 'A short link to your code page changed',
+        `${base}/suggestions no longer forwards to your code page – it now opens OnYourSite’s suggestions page. Your code page stays at suggestions.${base}.`,
+        '/dashboard', { db: conn });
+    }
+    await run(conn, "UPDATE pages SET address_mode = 'subdomain' WHERE slug = 'suggestions' AND address_mode = 'path'");
+    await run(conn, "INSERT INTO oys_meta (meta_key, meta_value) VALUES ('reserved_suggestions', ?)", [date('Y-m-d H:i:s')]);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   }
 }

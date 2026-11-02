@@ -14,6 +14,8 @@ export interface RoadmapPageData {
   // Update zu einem fertigen Meilenstein (das neueste)
   updateForMilestone: Map<number, number>;
   invite: string;
+  // Die Vorschlagsseite ist an (Pille in der Unternavigation)
+  suggestions?: boolean;
 }
 
 export const ROADMAP_DESCRIPTION = 'What we’re working on right now, what’s up next and what has shipped. Progress comes from finished tasks – no guesswork.';
@@ -209,6 +211,7 @@ ${rest.map((m) => shippedCard(m, updateForMilestone.get(m.id) ?? null)).join('')
     canonical: '/roadmap',
     loggedIn: d.loggedIn,
     invite,
+    suggestions: d.suggestions === true,
   }, {
     badge: 'Roadmap',
     headline: 'What we’re <span class="' + GRADIENT + '">building</span>',

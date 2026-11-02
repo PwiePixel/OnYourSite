@@ -9,9 +9,10 @@ import { date, intval, phpLtrim, phpStr, phpTruthy, strtotime } from '../php.js'
 import {
   MILESTONE_STATUSES, UPDATE_CATEGORIES, milestoneGet, milestones, updateGet, updatesList, type Milestone, type Update,
 } from './updates.js';
-import { discordConfigured, discordSettings, type DiscordSettings } from './discord.js';
+import type { DiscordSettings } from '../discord/settings.js';
 import { discordTabData, discordTabView } from '../discord/adminView.js';
 import { confirmAttrs, confirmField } from '../views/partials/ui.js';
+import { anyDestination, delivery, isOnDiscord, postsOf, type PostRow } from '../discord/posts.js';
 
 export interface AdminUpdatesData {
   // oys_csrf_field() – überall dasselbe Feld
@@ -41,17 +42,28 @@ interface UpdateForm {
   discord_announce: unknown;
 }
 
+// Steht ein Update in Discord? Die Vorlage fragt wie früher discord_message_id ab – der Wert kommt jetzt aus den
+// Beiträgen (update_discord_posts), nicht mehr aus der alten Spalte
+function withPosts(u: Update, posts: Map<number, PostRow[]>): Update {
+  const rows = posts.get(u.id);
+  const first = rows?.find((r) => r.state !== 'failed');
+  return { ...u, discord_message_id: isOnDiscord(rows) ? first?.message_id ?? first?.state ?? '' : '' };
+}
+
 // Daten wie am Anfang von admin_updates.php: ?edit_update=, ?new_update_for= und ?edit_milestone= aus der Adresse
 export async function adminUpdatesView(ctx: Ctx): Promise<string> {
-  const settings = await discordSettings();
+  const d = await delivery();
   const csrf = (await csrfField(ctx)).value;
   const get = ctx.get;
+  const all = await updatesList(false, 300);
+  const edit = get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null;
+  const posts = await postsOf([...all.map((u) => u.id), ...(edit ? [edit.id] : [])]);
   return adminUpdatesTemplate({
-    discordSettings: settings,
-    discordReady: discordConfigured(settings),
-    allUpdates: await updatesList(false, 300),
+    discordSettings: d.s,
+    discordReady: anyDestination(d),
+    allUpdates: all.map((u) => withPosts(u, posts)),
     allMilestones: await milestones(false),
-    editUpdate: get.edit_update !== undefined ? await updateGet(intval(get.edit_update)) : null,
+    editUpdate: edit ? withPosts(edit, posts) : null,
     prefillMs: get.new_update_for !== undefined ? await milestoneGet(intval(get.new_update_for)) : null,
     editMilestone: get.edit_milestone !== undefined ? await milestoneGet(intval(get.edit_milestone)) : null,
     csrf,
