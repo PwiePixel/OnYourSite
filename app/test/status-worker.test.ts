@@ -139,6 +139,36 @@ test('failures: down after the retries with the first failure as start, back up,
   await c.stop();
 });
 
+test('alerts (ST-3): down and back up write rows to status_outbox with the flush – admins, bell, bot; “up” merges a waiting “down”', { skip }, async () => {
+  await q('DELETE FROM status_outbox');
+  const clock = testClock();
+  const id = await addMonitor({ target: `http://site.zz:${t.httpPort}/switch`, config: { retries: 0 } });
+  const c = await fresh(clock);
+  await runOnce(c, id);
+  await c.flush();
+  assert.equal(Number((await q('SELECT COUNT(*) AS n FROM status_outbox WHERE monitor_id = ?', [id]))[0].n), 0, 'the first “up” is no alert');
+  clock.advance(60_000);
+  t.status.set('/switch', 500);
+  await runOnce(c, id);
+  assert.equal(c.snapshot(id)?.state.state, 'down');
+  await c.flush();
+  let rows = await q('SELECT channel, class, event, state, payload FROM status_outbox WHERE monitor_id = ? ORDER BY id', [id]);
+  assert.deepEqual(rows.map((r) => [r.channel, r.class, r.event, r.state]), [['admins', 'system', 'down', 'pending'], ['bell', 'system', 'down', 'pending'], ['bot', 'system', 'down', 'pending']]);
+  const p = JSON.parse(String(rows[0].payload)) as { page: { system: boolean }; monitor: { id: number; target: string }; error: string; code: number };
+  assert.deepEqual([p.page.system, p.monitor.id, p.error, p.code], [true, id, 'status', 500]);
+  // Wieder da, bevor der Benachrichtigungsdienst das „down“ zugestellt hat: eine Nachricht „was down for …“
+  clock.advance(60_000);
+  t.status.delete('/switch');
+  await runOnce(c, id);
+  await c.flush();
+  rows = await q('SELECT channel, event, state, payload FROM status_outbox WHERE monitor_id = ? ORDER BY id', [id]);
+  assert.deepEqual(rows.map((r) => [r.event, r.state]), [['down', 'merged'], ['down', 'merged'], ['down', 'merged'], ['up', 'pending'], ['up', 'pending'], ['up', 'pending']]);
+  const up = JSON.parse(String(rows[3].payload)) as { merged: boolean; down_for: number };
+  assert.equal(up.merged, true);
+  assert.ok(up.down_for >= 59 && up.down_for <= 62, String(up.down_for));
+  await c.stop();
+});
+
 test('429 delays without a result and pauses the host; 503 is a failure', { skip }, async () => {
   const clock = testClock();
   const limited = await addMonitor({ target: `http://site.zz:${t.httpPort}/429` });

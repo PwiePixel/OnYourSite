@@ -10,6 +10,7 @@ import { GRADIENT, cardButton, discordButton, layoutPage } from '../updates/layo
 import { fmtDate } from '../updates/views/updatesView.js';
 import { invite } from '../updates/pages.js';
 import { report } from '../discord/botReport.js';
+import { systemStatusLink } from '../status/links.js';
 import {
   PUBLIC_FILTERS, SUGGESTIONS_PER_PAGE, excerpt, publicCounts, publicSuggestions, suggestionPageOf, suggestionText, suggestionsPageOn,
   type PublicFilter, type PublicSuggestion,
@@ -36,6 +37,8 @@ export interface SuggestionsPageData {
   invite: string;
   // Server des Bots (für „Discuss on Discord“); leer, solange er unbekannt ist
   guildId: string;
+  // OnYourSites Statusseite (online): „Status“ in Navigation und Fußzeile
+  statusUrl?: string;
 }
 
 // ?status=…: nur bekannte Werte, sonst alle
@@ -64,7 +67,7 @@ export async function suggestionsPage(ctx: Ctx, user: Row | null): Promise<void>
   const items = await publicSuggestions(true, filter, pageNo);
   const rep = await report();
   const guildId = rep && SNOWFLAKE.test(rep.guild.id) ? rep.guild.id : '';
-  ctx.write(suggestionsView({ loggedIn: phpTruthy(user), filter, counts, pageNo, lastPage, items, invite: await invite(), guildId }));
+  ctx.write(suggestionsView({ loggedIn: phpTruthy(user), filter, counts, pageNo, lastPage, items, invite: await invite(), guildId, statusUrl: await systemStatusLink() }));
 }
 
 // GET /suggestions/{id}: zur Seite, auf der der Vorschlag steht (nicht sichtbar: zur Liste)
@@ -164,6 +167,7 @@ ${d.items.map((s) => card(s, d.guildId)).join('')}            </div>
     loggedIn: d.loggedIn,
     invite: d.invite,
     suggestions: true,
+    statusUrl: d.statusUrl,
     // Gefilterte Ansichten nicht in Suchmaschinen (nur die ganze Liste)
     robots: filter === 'all' ? undefined : 'noindex, follow',
   }, {

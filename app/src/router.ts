@@ -11,8 +11,9 @@ import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
-import { dbReachable } from './db.js';
+import { DbUnavailableError, dbReachable } from './db.js';
 import { statusHealth, statusHeartbeat } from './status/endpoints.js';
+import { statusDbDownHost } from './status/routes.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -67,8 +68,14 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // Nur für die eigenen Adressen: ein fremder Host (eigene Domains nicht eingerichtet) bekommt die 404-Seite ohne jede
   // Abfrage (premium-domains PD-2)
   if (isMainHost(ctx.host) || ctx.host.endsWith('.' + baseHost())) {
-    await ensureSchemaOnce();
-    await dbReachable();
+    try {
+      await ensureSchemaOnce();
+      await dbReachable();
+    } catch (err) {
+      // Statusseiten: ohne Datenbank ihre letzte Ausgabe bzw. die Notfall-Seite statt der allgemeinen 503-Seite
+      if (err instanceof DbUnavailableError && !isMainHost(ctx.host)) statusDbDownHost(ctx, ctx.host.slice(0, ctx.host.length - baseHost().length - 1));
+      throw err;
+    }
   }
   // Frühere PHP-Einstiege unter derselben Adresse
   if (ctx.path === '/api.php') return api(ctx);
@@ -91,7 +98,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
   // 2. Hauptdomain: App und Profile im Pfad-Modus
   if (isMainHost(host)) {
-    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
+    // /admin/api/…: JSON des Admin-Bereichs (admin/api.ts)
+    if (APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path)) return appRoutes(ctx);
     const m = /^\/([a-z0-9-]{1,63})(?:\/(kalender))?\/?$/.exec(strtolower(path));
     // Die eigenen Seiten in jeder anderen Schreibweise (Schrägstrich am Ende, Groß-/Kleinschreibung): zur richtigen
     // Adresse – sonst landete z. B. /updates/ oder /Updates bei einer Profilseite mit diesem Namen. Nur eine Stunde im
@@ -116,5 +124,5 @@ export async function dispatch(ctx: Ctx): Promise<void> {
 
 // Seiten der App auf der Hauptdomain (wie oben in dispatch) – auf eigenen Domains antworten sie nie
 function isAppPath(path: string): boolean {
-  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || /^\/(updates|suggestions)\/\d+$/.test(path);
+  return APP_ROUTES.has(path) || path.startsWith('/dashboard/') || path.startsWith('/admin/api/') || /^\/(updates|suggestions)\/\d+$/.test(path);
 }

@@ -103,7 +103,7 @@ function settings(d) {
 
 const modeOf = (file) => fs.statSync(file).mode & 0o777;
 
-test('--update adds #updates once: one new line, every other line byte for byte, still readable only by root', { skip }, async () => {
+test('--update adds #updates, #status and #alerts once: one new line each, every other line byte for byte, still readable only by root', { skip }, async () => {
   const d = await startFakeDiscord({ community: true });
   const h = prepare();
   try {
@@ -113,21 +113,29 @@ test('--update adds #updates once: one new line, every other line byte for byte,
     const r = await install(h, d, ['--docker', '--update']);
     assert.equal(r.code, 0, r.out);
     const created = d.state.channels.find((c) => c.name === 'updates');
-    assert.ok(created, r.out);
-    const after = `${before}\nUPDATES_CHANNEL_ID=${created.id}\n`;
+    const status = d.state.channels.find((c) => c.name === 'status');
+    const alerts = d.state.channels.find((c) => c.name === 'alerts');
+    assert.ok(created && status && alerts, r.out);
+    const after = `${before}\nUPDATES_CHANNEL_ID=${created.id}\nSTATUS_CHANNEL_ID=${status.id}\nALERTS_CHANNEL_ID=${alerts.id}\n`;
     assert.equal(fs.readFileSync(h.env, 'utf8'), after);
     assert.equal(modeOf(h.env), 0o600);
     assert.match(r.out, /Adding the #updates channel …\n\s+Created channel #updates\n/);
-    assert.deepEqual(d.writes().map((c) => `${c.method} ${c.path}`), [`POST /api/v10/guilds/${d.guildId}/channels`], 'only this one channel – no roles, no other channels');
+    assert.match(r.out, /Adding the #status channel …\n\s+Created channel #status\n/);
+    assert.match(r.out, /Adding the #alerts channel …\n\s+Created the private channel #alerts \(only Staff and the bot\)\n/);
+    assert.deepEqual(d.writes().map((c) => `${c.method} ${c.path}`), Array(3).fill(`POST /api/v10/guilds/${d.guildId}/channels`), 'only these channels – no roles, no other channels');
+    // #alerts: die Rolle des Teams aus den Einstellungen sieht ihn, @everyone nicht
+    assert.ok(alerts.permission_overwrites.some((o) => o.id === '1500000000000000901' && BigInt(o.allow) & 1024n), JSON.stringify(alerts.permission_overwrites));
+    assert.ok(alerts.permission_overwrites.some((o) => o.id === d.guildId && BigInt(o.deny) & 1024n));
+    assert.equal(status.type, 5, '#status is an announcement channel on a community server');
     assert.equal(r.out.includes(d.token), false, 'the token is never shown');
-    assert.match(fs.readFileSync(h.log, 'utf8'), /compose run --rm --no-deps -T .*-e UPDATES_CHANNEL_ID bot node index\.js --discord-channel UPDATES_CHANNEL_ID \d+/);
+    assert.match(fs.readFileSync(h.log, 'utf8'), /compose run --rm --no-deps -T .*-e TEAM_ROLE_ID .*-e UPDATES_CHANNEL_ID -e STATUS_CHANNEL_ID -e ALERTS_CHANNEL_ID +bot node index\.js --discord-channel ALERTS_CHANNEL_ID \d+/);
 
     // Das nächste --update hat nichts mehr anzulegen
     const again = await install(h, d, ['--docker', '--update']);
     assert.equal(again.code, 0, again.out);
     assert.equal(fs.readFileSync(h.env, 'utf8'), after);
     assert.doesNotMatch(again.out, /Adding the #/);
-    assert.equal(d.writes().length, 1);
+    assert.equal(d.writes().length, 3);
     assert.deepEqual(fs.readdirSync(path.join(h.root, 'fakeroot')), [], 'nothing outside the bot folder');
   } finally {
     h.cleanup();
@@ -144,22 +152,24 @@ test('a channel that can’t be added is stored empty with a note; --update does
     d.state.failCreate = { status: 403, code: 50013, message: 'Missing Permissions' };
     const r = await install(h, d, ['--docker', '--update']);
     assert.equal(r.code, 0, r.out);
-    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=\n`);
+    const empty = 'UPDATES_CHANNEL_ID=\nSTATUS_CHANNEL_ID=\nALERTS_CHANNEL_ID=\n';
+    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}${empty}`);
     assert.match(r.out, /Note: The #updates channel couldn’t be added: Missing Permissions \(HTTP 403\) – run bash \S+\/install\.sh --channel UPDATES_CHANNEL_ID to try again\./);
-    assert.equal(d.writes().length, 1);
+    assert.match(r.out, /Note: The #alerts channel couldn’t be added: Missing Permissions \(HTTP 403\) – run bash \S+\/install\.sh --channel ALERTS_CHANNEL_ID to try again\./);
+    assert.equal(d.writes().length, 3);
 
     // Kein neuer Versuch beim nächsten --update
     const again = await install(h, d, ['--docker', '--update']);
     assert.equal(again.code, 0, again.out);
-    assert.equal(d.writes().length, 1);
-    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=\n`);
+    assert.equal(d.writes().length, 3);
+    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}${empty}`);
 
     // --channel versucht es noch einmal: der Wert steht danach in derselben Zeile
     d.state.failCreate = null;
     const retry = await install(h, d, ['--docker', '--channel', 'UPDATES_CHANNEL_ID']);
     assert.equal(retry.code, 0, retry.out);
     const id = d.state.channels.find((c) => c.name === 'updates').id;
-    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=${id}\n`);
+    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=${id}\nSTATUS_CHANNEL_ID=\nALERTS_CHANNEL_ID=\n`);
     assert.match(retry.out, /Created channel #updates \(a text channel – announcement channels need a community server\)/);
     assert.equal(modeOf(h.env), 0o600);
 
@@ -170,15 +180,15 @@ test('a channel that can’t be added is stored empty with a note; --update does
     const invalid = await install(h, d, ['--docker', '--channel', 'x;y']);
     assert.notEqual(invalid.code, 0);
     assert.match(invalid.out, /Use --channel with the name of a channel setting/);
-    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=${id}\n`);
-    assert.equal(d.writes().length, 2);
+    assert.equal(fs.readFileSync(h.env, 'utf8'), `${before}UPDATES_CHANNEL_ID=${id}\nSTATUS_CHANNEL_ID=\nALERTS_CHANNEL_ID=\n`);
+    assert.equal(d.writes().length, 4);
   } finally {
     h.cleanup();
     await d.close();
   }
 });
 
-test('a later version with a second channel adds only that one – #updates stays as it is', { skip }, async () => {
+test('a later version with another channel adds only that one – #updates, #status and #alerts stay as they are', { skip }, async () => {
   const d = await startFakeDiscord({ community: true });
   // Eine spätere Version kennt noch einen Kanal
   const h = prepare((src) => {
@@ -189,7 +199,7 @@ test('a later version with a second channel adds only that one – #updates stay
     fs.writeFileSync(file, code.replace(spec, `${spec}\n  NEWS_CHANNEL_ID: { name: 'news', topic: 'News.' },`));
   });
   try {
-    const before = `${settings(d)}\nUPDATES_CHANNEL_ID=1500000000000000909\n`;
+    const before = `${settings(d)}\nUPDATES_CHANNEL_ID=1500000000000000909\nSTATUS_CHANNEL_ID=1500000000000000910\nALERTS_CHANNEL_ID=\n`;
     fs.writeFileSync(h.env, before, { mode: 0o600 });
     const r = await install(h, d, ['--docker', '--update']);
     assert.equal(r.code, 0, r.out);

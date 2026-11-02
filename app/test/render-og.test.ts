@@ -12,6 +12,7 @@ import http from 'node:http';
 import net from 'node:net';
 import sharp from 'sharp';
 import { closePool, one } from '../src/db.js';
+import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt } from '../src/web/ctx.js';
 import { ogClean, ogContrast, ogFit, ogFont, ogHash, ogLoadImage, ogMix, ogRender, ogRgb, ogServe, ogWidth, ogWrap } from '../src/content/share.js';
 import { themes } from '../src/content/themes.js';
@@ -19,6 +20,7 @@ import { uploadsDir } from '../src/content/storage.js';
 import { jsonDecode } from '../src/content/util.js';
 import { jsonText, rng, runPhp } from './modelHarness.js';
 import { PHP_SKIP, phpRoot } from './support/phpRef.js';
+import { storedHidden } from './support/brandingParity.js';
 
 after(() => closePool());
 
@@ -172,7 +174,7 @@ test('OG cards have the same size, format and picture as the GD version', { skip
   const expected = (php('foreach ($in as $p) { $out[] = base64_encode(oys_og_render($p)); }', pages) as string[]).map((b) => Buffer.from(b, 'base64'));
   const problems: string[] = [];
   for (const [i, p] of pages.entries()) {
-    const ours = await ogRender(jsonDecode(jsonText(p)) as object);
+    const ours = await ogRender(jsonDecode(jsonText(p)) as object, storedHidden(p));
     assert.deepEqual(pngHeader(ours), pngHeader(expected[i]));
     assert.deepEqual(pngHeader(ours), { width: 1200, height: 630, depth: 8, colorType: 2 });
     const a = await pixels(expected[i]);
@@ -331,7 +333,7 @@ test('GIF avatars load like imagecreatefromgif: first frame in its own size, sam
     const page = { id: 40, slug: 'gif', address_mode: 'subdomain', title: 'Gif', subtitle: '', bio: '', avatar: offset, theme: 'galaxy', settings: '{}' };
     const php = Buffer.from(JSON.parse(runPhp(`echo json_encode(base64_encode(oys_og_render($in)));`, jsonText(page))) as string, 'base64');
     const a = await pixels(php);
-    const b = await pixels(await ogRender(jsonDecode(jsonText(page)) as object));
+    const b = await pixels(await ogRender(jsonDecode(jsonText(page)) as object, false));
     let diff = 0;
     for (let y = 165; y < 465; y++) {
       for (let x = 96; x < 396; x++) {
@@ -553,8 +555,12 @@ function prepareCache(id: number): void {
 const listCache = (): string[] => (existsSync(OG_DIR()) ? readdirSync(OG_DIR()).sort() : []);
 
 test('/_/og/ serves, caches and cleans up (status, headers, files)', async () => {
+  // Node liest für das wirksame Branding den Premium-Stand des Besitzers (users.premium_until) – wie im Betrieb erst
+  // nach der Migration
+  await ensureSchema();
   const page = (await one('SELECT * FROM pages WHERE id = 1'))!;
-  const hash = ogHash(page);
+  // Seite des Admins: Premium – wirksam wie gespeichert
+  const hash = ogHash(page, storedHidden(page));
   try {
     // Unbekannte Seite: nichts; alte Kennung: weiter zum aktuellen Bild
     assert.equal((await nodeGet(99999, hash)).status, 404);
@@ -586,9 +592,13 @@ test('/_/og/ serves, caches and cleans up (status, headers, files)', async () =>
 });
 
 test('/_/og/ serves, caches and cleans up like oys_og_serve (status, headers, files)', { skip: PHP_SKIP }, async () => {
+  // Node liest für das wirksame Branding den Premium-Stand des Besitzers (users.premium_until) – wie im Betrieb erst
+  // nach der Migration
+  await ensureSchema();
   await startPhp();
   const page = (await one('SELECT * FROM pages WHERE id = 1'))!;
-  const hash = ogHash(page);
+  // Seite des Admins: Premium – wirksam wie gespeichert
+  const hash = ogHash(page, storedHidden(page));
   try {
     // Unbekannte Seite und alte Kennung
     for (const [id, h] of [[99999, hash], [1, '000000000000'], [1, hash === 'abcdefabcdef' ? '111111111111' : 'abcdefabcdef']] as Array<[number, string]>) {

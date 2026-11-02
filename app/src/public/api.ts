@@ -7,6 +7,7 @@ import { cleanUrl, mainUrl, normalizeSlug, pageOrigin, pageUrl, pageUrls, pretty
 import { intval, phpStr, phpTruthy } from '../php.js';
 import { scheduleActive } from '../content/blocks.js';
 import { isShownLinkPage, loadBlocks, loadPageBySlug, pageSettings } from '../content/pages.js';
+import { pageBranding } from '../content/branding.js';
 import { detectBrand, socialUrl } from '../content/social.js';
 import { layoutKey, themeKey, themes } from '../content/themes.js';
 import { isArr, own, values } from '../content/util.js';
@@ -71,6 +72,8 @@ export async function api(ctx: Ctx): Promise<void> {
     }
 
     const mediaUrl = (f: unknown): string | null => (phpTruthy(f) ? mainUrl(uploadUrl(f)) : null);
+    // Wirksamer Wert: ausgeblendet nur mit Premium des Besitzers oder Bestandsschutz
+    const brandingHidden = (await pageBranding(page, settings)).footerHidden;
     ctx.send(phpJson({
       status: 'success',
       data: {
@@ -81,7 +84,7 @@ export async function api(ctx: Ctx): Promise<void> {
           urls: pageUrls(pageLike),
           bio: page.bio,
           profession: page.subtitle,
-          hide_branding: phpTruthy(settings.hide_branding),
+          hide_branding: brandingHidden,
         },
         media: {
           profile_image: mediaUrl(page.avatar),

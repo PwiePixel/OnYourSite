@@ -120,7 +120,7 @@ test('page settings: defaults, checked values, unknown keys dropped, bot channel
   assert.equal(statusPageSettings({ settings: '{"auto_incident":120}' }).auto_incident, 300);
   assert.equal(statusPageSettings({ settings: '{"auto_incident":0}' }).auto_incident, 0);
   const system = statusPageSettings({ is_system: 1, settings: '{"bot":{"status_channel_id":"123456789012345678","alerts_channel_id":"1"}}' });
-  assert.deepEqual(system.bot, { status_channel_id: '123456789012345678', alerts_channel_id: '' });
+  assert.deepEqual(system.bot, { status_channel_id: '123456789012345678', alerts_channel_id: '', saved: false });
   assert.equal(statusPageSettings({ is_system: 0, settings: '{"bot":{"status_channel_id":"123456789012345678"}}' }).bot, undefined);
 });
 

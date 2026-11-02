@@ -11,6 +11,8 @@ import { sendCustomEmail } from '../../mail.js';
 import { clientKey, rateLimit } from '../../web/security.js';
 import { notify } from '../../content/messages.js';
 import { renderSimple } from '../../content/render.js';
+import { faviconUrl, pageBranding } from '../../content/branding.js';
+import { pageSettings } from '../../content/pages.js';
 import { uiIcon } from '../../content/social.js';
 import { own } from '../../content/util.js';
 
@@ -115,7 +117,9 @@ export async function kalender(ctx: Ctx, page: Row, calendarKey: string): Promis
     today: date('Y-m-d'),
     maxDate: date('Y-m-d', strtotime('+1 year') as number),
   });
-  ctx.send(renderSimple(page, 'Request a meeting | ' + name, body));
+  // Favicon wie auf der Seite (mit Premium das Profilbild; nachgeschlagen nur, wenn der Schalter an ist)
+  const favicon = faviconUrl(page, (await pageBranding(page, pageSettings(page))).fullyUnbranded);
+  ctx.send(renderSimple(page, 'Request a meeting | ' + name, body, favicon));
 }
 
 // Inhalt der Seite (ob_start() … ob_get_clean()) – der feste Text ist Byte für Byte übernommen (view2ts)

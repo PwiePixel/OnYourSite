@@ -252,7 +252,7 @@ test('a parked link page does not exist for visitors: no views, clicks, password
     const contactForm = await get(HOST, '/_/contact', { method: 'POST', post: contactPost, headers: { 'content-type': 'application/x-www-form-urlencoded' } });
     out.contactForm = [contactForm.status, contactForm.header('Location')];
     const page = (await loadPage(pageId))!;
-    out.og = ogSupported() ? (await get(HOST, new URL(ogUrl(page)).pathname)).status : 'unsupported';
+    out.og = ogSupported() ? (await get(HOST, new URL(ogUrl(page, false)).pathname)).status : 'unsupported';
     const track = await get(HOST, '/track-click', { method: 'POST', rawBody: Buffer.from(JSON.stringify({ link_id: 777001 })), headers: { 'content-type': 'application/json', 'user-agent': own['user-agent'] } });
     out.track = String(track.body);
     out.api = JSON.parse(String((await get(HOST, '/api.php?user=tom-parked')).body)).status;

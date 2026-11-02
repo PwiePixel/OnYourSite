@@ -22,6 +22,8 @@ import { date } from '../php.js';
 import { uploadsDir } from '../content/storage.js';
 import { statusServerConfig } from './settings.js';
 import { smtpConfigured } from './system.js';
+import { outboxAdd } from '../community/community.js';
+import { alertRef, botChannels } from './posts.js';
 
 export interface SensorOptions {
   stateDir: string;
@@ -238,6 +240,16 @@ async function watchdog(now: number, admins: string[], domain: string, send: Non
     if (last !== null && last !== undefined && now - Number(last) < HOUR) return false;
     await db.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('status_watchdog_at', ?)", [String(now)]);
     for (const p of problems) await notifyAdmins('status', p.title, p.text, '/admin#status', { db });
+    // Der Kanal #alerts des eigenen Bots (nur mit status.v1) – direkt als Auftrag, denn der Benachrichtigungsdienst
+    // läuft vielleicht gerade nicht
+    const page = await db.one('SELECT settings FROM status_pages WHERE is_system = 1 ORDER BY id LIMIT 1');
+    const ch = await botChannels(db, page && page.settings !== null ? String(page.settings) : null);
+    if (ch.supported && ch.alertsChannel !== '') {
+      for (const p of problems) {
+        const embed = { title: p.title, description: p.text, color: 0xef4444, url: mainUrl('/admin#status'), footer: { text: 'OnYourSite status · OnYourSite' }, timestamp: new Date(now * 1000).toISOString() };
+        await outboxAdd('status.alert', { channel_id: ch.alertsChannel, message: { embeds: [embed] } }, { ref: alertRef(null), db });
+      }
+    }
     return true;
   });
   if (!send1) return;

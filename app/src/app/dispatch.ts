@@ -10,6 +10,7 @@ import { login, logout, register } from './auth.js';
 import { dashboard } from './dashboard.js';
 import { editorApi } from './editorApi.js';
 import { adminPage } from '../admin/page.js';
+import { adminApi } from '../admin/api.js';
 import { roadmapPage, updateLink, updatesFeed, updatesPage } from '../updates/pages.js';
 import { notFound } from '../public/notFound.js';
 import { suggestionLink, suggestionsPage } from '../community/suggestionsPage.js';
@@ -47,9 +48,11 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   // Ab hier nur mit Login
   const user = await currentUser(ctx);
   if (!user) {
-    if (path.startsWith('/dashboard/api/')) ctx.json({ ok: false, error: 'Please log in again.' }, 401);
+    if (path.startsWith('/dashboard/api/') || path.startsWith('/admin/api/')) ctx.json({ ok: false, error: 'Please log in again.' }, 401);
     ctx.redirect('/login');
   }
+  // JSON des Admin-Bereichs: ohne Admin-Rechte 403 als JSON statt der Weiterleitung
+  if (path.startsWith('/admin/api/')) return adminApi(ctx, user);
   if (path === '/admin') {
     if (!phpTruthy(user.is_admin)) ctx.redirect('/dashboard');
     return adminPage(ctx, user);

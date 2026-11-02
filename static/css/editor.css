@@ -538,3 +538,10 @@ body.code-mode .pv-note { display: block; }
   .code-hero { padding: 30px 16px; }
   .code-hero h2 { font-size: 19px; }
 }
+
+/* ---------- Bereiche nur für den Schreibtisch: auf Telefonen öffnen sie aus der App heraus (Status aus den Einstellungen) ---------- */
+@media (max-width: 639px) {
+  #mainNav > .nav-desktop { display: none !important; }
+}
+/* Statusseite: keine Vorschau des Profils, kein Speichern-Knopf (der Bereich speichert jede Änderung selbst) */
+body.status-mode #previewPane, body.status-mode #mobilePreviewBtn, body.status-mode #navPreviewBtn, body.status-mode #saveBtn { display: none !important; }

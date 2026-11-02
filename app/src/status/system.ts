@@ -168,3 +168,14 @@ registerSystemProbe('job:runner', async (ctx) => {
   }
   return degraded ? { kind: 'ok', slow: true, error: 'job_failed' } : { kind: 'ok' };
 });
+
+// Ist ein eigener Bestandteil gerade versteckt (Funktion nicht eingerichtet)? Dieselben Regeln wie die Prüfungen oben –
+// für die Webseite, die die Prüfungen nicht selbst ausführt (öffentliche Seite, JSON, Editor).
+export function systemHidden(key: string, facts: SystemFacts, jobsMeta: boolean): boolean {
+  if (!registry.has(key) && !JOB_HEARTBEATS.has(key)) return true;
+  if (key === 'bot') return !facts.botSecret;
+  if (key === 'mail') return !facts.smtp;
+  if (key === 'tunnel') return !facts.tunnel;
+  if (key === 'job:runner') return !jobsMeta;
+  return false;
+}

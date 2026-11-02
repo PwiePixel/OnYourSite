@@ -423,6 +423,9 @@
       preview.refresh();
       toast('Changes saved – your page is up to date.');
       (res.warnings || []).forEach(function (w) { toast(w, 'info'); });
+      // Eigenes CSS spricht den Hinweis an, der ohne Premium sichtbar bleibt
+      showCssWarning(res.cssWarning);
+      if (cssWarning) toast(cssWarning, 'info');
     });
   }
 
@@ -637,7 +640,7 @@
         (cur ? '<i class="bx bx-check text-brand-400 text-lg"></i>' : '') + '</button>';
     });
     html += '<div class="dd-sep"></div>';
-    if (state.pages.length < max || E.premium) {
+    if (state.pages.length < max || E.pagesUnlimited) {
       html += '<button type="button" class="dd-item" data-action="new-page"><span class="ps-avatar"><i class="bx bx-plus"></i></span><span>Create a new page<small>With its own address and stats</small></span></button>';
     } else {
       html += '<div class="px-3 py-2 text-xs text-gray-500">Up to ' + max + ' pages per account.</div>';
@@ -731,7 +734,7 @@
 
   function openNewPageModal() {
     var max = E.maxPages || 3;
-    if (state.pages.length >= max && !E.premium) { toast('You already have ' + max + ' pages.', 'err'); return; }
+    if (state.pages.length >= max && !E.pagesUnlimited) { toast('You already have ' + max + ' pages.', 'err'); return; }
     openModal('Create a new page',
       '<p class="text-sm text-gray-400 mb-4">Each page has its own address, its own theme and its own stats – for example, one for you and one for your project.</p>' +
       '<label class="lbl">Address</label>' +
@@ -1058,10 +1061,12 @@
   // ================================================================
   // Tabs
   // ================================================================
-  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', settings: 'Settings' };
+  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', status: 'Status', settings: 'Settings' };
   function switchTab(name) {
-    if (!TAB_TITLES[name]) name = 'content';
+    // Den Bereich „Status“ gibt es nur für Admins: ohne seinen Container bleibt alles beim Inhalt
+    if (!TAB_TITLES[name] || !$('#tab-' + name)) name = 'content';
     var wasCode = activeTab === 'code';
+    var wasStatus = activeTab === 'status';
     activeTab = name;
     $$('.tab-content').forEach(function (t) { t.classList.add('hidden'); });
     $('#tab-' + name).classList.remove('hidden');
@@ -1070,8 +1075,10 @@
     if (history.replaceState) history.replaceState(null, '', '#' + name);
     $('#editorScroll').scrollTop = 0;
     document.body.classList.toggle('code-mode', name === 'code');
-    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code';
-    if (wasCode !== (name === 'code')) fitPhone();
+    // Statusseite: ohne Vorschau des Profils und ohne den Speichern-Knopf (der Bereich speichert jede Änderung selbst)
+    document.body.classList.toggle('status-mode', name === 'status');
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status';
+    if (wasCode !== (name === 'code') || wasStatus !== (name === 'status')) fitPhone();
     paintSave(name === 'code' ? code.state : pageSaveState);
     if (name === 'code') loadCode();
     if (wasCode && name !== 'code' && state.page) {
@@ -1081,12 +1088,49 @@
     }
     // Nachrichten und Termine gehören zum Konto: auch ohne Seite
     if (name === 'messages') loadMessages();
+    if (name === 'status') loadStatus();
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
     if (name === 'settings') renderSettings();
   }
   $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
+  // Telefone: „OnYourSite status“ in den Einstellungen öffnet den Bereich
+  document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('[data-open-status]')) switchTab('status');
+  });
+
+  // ================================================================
+  // OnYourSites eigene Statusseite (nur Admins): static/js/status-manage.js, erst beim ersten Öffnen geladen
+  // ================================================================
+  var statusLoading = null;
+  function loadStatus() {
+    var root = $('#tab-status');
+    if (!root || !E.statusManage) return;
+    if (!statusLoading) {
+      statusLoading = new Promise(function (resolve, reject) {
+        var css = document.createElement('link');
+        css.rel = 'stylesheet';
+        css.href = E.statusManage.css;
+        document.head.appendChild(css);
+        var js = document.createElement('script');
+        js.src = E.statusManage.js;
+        js.onload = resolve;
+        js.onerror = reject;
+        document.head.appendChild(js);
+      });
+    }
+    statusLoading.then(function () {
+      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: 'system', baseHost: E.baseHost, user: E.user || {} });
+    }, function () {
+      statusLoading = null;
+      root.textContent = '';
+      var box = document.createElement('div');
+      box.className = 'panel max-w-3xl mx-auto';
+      box.textContent = 'The status page manager couldn’t load. Please reload the page.';
+      root.appendChild(box);
+    });
+  }
   $('#tab-design').addEventListener('click', function (ev) { onDesignClick(ev); });
 
   // ================================================================
@@ -2848,6 +2892,39 @@
     }
   });
 
+  // Schalter „Made with OnYourSite“ (Premium): frei mit Premium oder als Team, mit Bestandsschutz nur zum Ausschalten.
+  // Der gespeicherte Wert bleibt auch ohne Premium erhalten – er wirkt dann nur nicht.
+  var cssWarning = '';
+  function cssWarningHtml() {
+    return cssWarning ? '<p class="hint text-amber-400" id="cssWarning"><i class="bx bx-error"></i> ' + esc(cssWarning) + '</p>' : '';
+  }
+  // Nach dem Speichern: Hinweis unter dem CSS-Feld setzen oder entfernen (ohne die Einstellungen neu zu zeichnen)
+  function showCssWarning(text) {
+    cssWarning = text || '';
+    var old = $('#cssWarning');
+    if (old) old.remove();
+    var area = $('[data-bind="page.settings.custom_css"]');
+    if (cssWarning && area) area.insertAdjacentHTML('afterend', cssWarningHtml());
+  }
+  // Standard-Titel für Suchmaschinen: mit Premium und ausgeblendetem Branding ohne „| OnYourSite“
+  function seoTitleDefault(p, hidden) {
+    return 'Default: ' + (p.title || p.slug) + (hidden && E.premium ? '' : ' | OnYourSite');
+  }
+  function brandingSwitch(s) {
+    var legacy = !!(s.branding_legacy && s.hide_branding);
+    var free = E.premium || E.staff || legacy;
+    // Bestandsschutz ohne Premium blendet nur den Hinweis aus (Titel und Vorschaubild-Zeichen nicht)
+    var hint = !E.premium && legacy ? 'Removes the note at the bottom of your page.'
+      : 'Removes the note at the bottom of your page, “| OnYourSite” from the default page title and the OnYourSite mark on your preview image.';
+    var note = '';
+    if (!E.premium && legacy) note = '<p class="hint">Kept from before Premium existed. If you turn it off, you’ll need Premium to turn it back on.</p>';
+    else if (!E.premium && s.hide_branding && !E.staff) note = '<p class="hint text-amber-400">' + (E.premiumUntil ? 'Premium ended – the note is shown again. Renew Premium to hide it.' : 'The note is still shown – hiding it is part of Premium.') + '</p>';
+    else if (!E.premium && E.staff) note = '<p class="hint text-amber-400">Only takes effect while this account has Premium.</p>';
+    else if (!E.premium) hint += ' Included in Premium.';
+    return '<div class="flex items-center justify-between gap-4"><div><div class="text-sm text-white font-medium flex items-center gap-2">Hide “Made with OnYourSite” ' + (E.premium || E.staff ? '' : '<span class="premium-pill"><i class="bx bxs-lock"></i> Premium</span>') + '</div><p class="hint" style="margin-top:2px">' + hint + '</p>' + note + '</div>' +
+      '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (free ? '' : ' disabled') + '><span class="track"></span></label></div>';
+  }
+
   function renderSettings() {
     var root = $('#settingsDynamic');
     var p = state.page, s = p.settings;
@@ -2870,10 +2947,10 @@
           (cur ? '' : '<button type="button" class="btn-secondary" data-page="' + pg.id + '">Edit</button>') +
           (state.pages.length > 1 ? '<button type="button" class="icon-btn danger" data-del-page="' + pg.id + '" data-slug="' + esc(pg.slug) + '" title="Delete page"><i class="bx bx-trash"></i></button>' : '') + '</div>';
       }).join('') +
-      (state.pages.length < max || E.premium ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>' +
+      (state.pages.length < max || E.pagesUnlimited ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Search engines (SEO) <small>Applied when you save</small></h2><div class="panel space-y-4">' +
-      '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="Default: ' + esc((p.title || p.slug) + ' | OnYourSite') + '"></div>' +
+      '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="' + esc(seoTitleDefault(p, s.hide_branding)) + '"></div>' +
       '<div><label class="lbl">Description</label><textarea class="field" rows="2" data-bind="page.settings.seo.description" maxlength="300" placeholder="Default: your bio"></textarea></div>' +
       '<div><label class="lbl">Keywords</label><input class="field" data-bind="page.settings.seo.keywords" maxlength="255" placeholder="separated, by, commas"></div></div></section>' +
 
@@ -2887,9 +2964,9 @@
       '<button type="button" class="btn-secondary" id="weeklyTest"><i class="bx bx-send"></i> Send test report</button></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Branding & custom CSS</h2><div class="panel space-y-5">' +
-      '<div class="flex items-center justify-between gap-4"><div><div class="text-sm text-white font-medium flex items-center gap-2">Hide “Made with OnYourSite” ' + (E.premium ? '' : '<span class="premium-pill"><i class="bx bxs-lock"></i> Premium</span>') + '</div><p class="hint" style="margin-top:2px">Removes the note at the bottom of your page.</p></div>' +
-      '<label class="switch"><input type="checkbox" data-bind="page.settings.hide_branding"' + (E.premium ? '' : ' disabled') + '><span class="track"></span></label></div>' +
+      brandingSwitch(s) +
       '<div><label class="lbl">Custom CSS <small>(for pros)</small></label><textarea class="field css-editor" rows="6" data-bind="page.settings.custom_css" placeholder="/* e.g. .oys-name { letter-spacing: .1em; } */"></textarea>' +
+      cssWarningHtml() +
       '<p class="hint">All elements have classes like <code>.oys-name</code>, <code>.oys-link</code>, <code>.oys-socials</code>. URLs pointing to other servers (<code>url(https://…)</code>, <code>@import</code>) are removed for privacy reasons – upload images here in the editor instead.</p></div></div></section>' +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Integrations</h2><div class="panel space-y-3">' +
@@ -2922,7 +2999,7 @@
         state.page.address_mode = res.page.address_mode;
         state.page.urls = res.page.urls;
         state.page.url = res.page.url;
-        if (changed) E.slugDaysLeft = E.premium ? 0 : 30;
+        if (changed) E.slugDaysLeft = E.staff ? 0 : 30;
         updatePageInfo();
         renderSettings();
         toast('Address saved: ' + prettyUrl(res.page.url));
@@ -2949,6 +3026,12 @@
           if (deleted) reloadTo('/dashboard#settings');
         });
       });
+    });
+    // Der Standard-Titel folgt dem Schalter für das Branding
+    var brandingBox = $('[data-bind="page.settings.hide_branding"]', root);
+    if (brandingBox) brandingBox.addEventListener('change', function () {
+      var seoTitle = $('[data-bind="page.settings.seo.title"]', root);
+      if (seoTitle) seoTitle.placeholder = seoTitleDefault(state.page, brandingBox.checked);
     });
     $('#weeklyToggle').addEventListener('change', function (ev) {
       var on = ev.target.checked;
@@ -3037,7 +3120,9 @@
     messages: function () { switchTab('messages'); },
     code: function () { switchTab('code'); },
     settings: function () { if (state.page) switchTab('settings'); },
-    honeycombs: function () { openHoneycombs(); }
+    honeycombs: function () { openHoneycombs(); },
+    // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
+    status: function () { if ($('#tab-status')) switchTab('status'); }
   };
   // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
   var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' };
@@ -3321,6 +3406,7 @@
     $('#psLabel').textContent = 'No page yet';
     if (startHash === '#code') switchTab('code');
     else if (/^#messages\b/.test(startHash)) switchTab('messages');
+    else if (/^#status\b/.test(startHash) && $('#tab-status')) switchTab('status');
   }
   draft.start();
   startBell();

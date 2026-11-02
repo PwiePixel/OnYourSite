@@ -38,6 +38,10 @@ function readConfig() {
     supportCategoryId: id('SUPPORT_CATEGORY_ID'),
     // Kanal für Updates der Webseite (optional; der Installer legt #updates an)
     updatesChannelId: id('UPDATES_CHANNEL_ID'),
+    // Vorschläge für die Statusseite: #status (Vorfälle, öffentlich) und #alerts (Meldungen ans Team, privat) – die
+    // Webseite nimmt sie, solange der Admin dort nichts anderes wählt
+    statusChannelId: id('STATUS_CHANNEL_ID'),
+    alertsChannelId: id('ALERTS_CHANNEL_ID'),
     siteUrl: String(env.SITE_URL || '').trim().replace(/\/+$/, ''),
     botSecret: String(env.BOT_SECRET || '').trim(),
     pollSeconds: Math.max(5, Math.min(300, parseInt(env.POLL_SECONDS || '10', 10) || 10)),

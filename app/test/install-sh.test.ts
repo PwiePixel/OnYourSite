@@ -304,6 +304,7 @@ write_config_json() { log write_config_json; }
 build_app() { log build_app; }
 cfg_file() { echo config.json; }
 stage_check() { log stage_check; }
+status_window() { log "status_window $1"; }
 switch_release() { log switch_release; }
 retire_php() { log retire_php; }
 update_finish() { log update_finish; }
@@ -320,6 +321,9 @@ test('--update takes a backup first, also when there is no new version', async (
     assert.ok(before_(log, 'preflight', 'take_backup before-update'), log.join('\n'));
     assert.ok(before_(log, 'take_backup before-update', last), `${release}: ${log.join('\n')}`);
     assert.equal(log.filter((l) => l.startsWith('take_backup')).length, 1, log.join('\n'));
+    // Vor dem Umschalten ein geplantes Fenster für die Statusseite (der Neustart zählt nicht als Störung)
+    if (release === 'newer') assert.ok(before_(log, 'status_window 600', 'switch_release'), log.join('\n'));
+    else assert.ok(!log.some((l) => l.startsWith('status_window')), log.join('\n'));
   }
 });
 
@@ -362,4 +366,61 @@ step_website`, 10_000);
     assert.equal(log.includes('app_cli check --crypto'), imported === 1, log.join('\n'));
     assert.equal(/doesn’t read the encrypted data of the imported database/.test(r.out), expectWarning, r.out);
   }
+});
+
+// ---------------------------------------------------------------- Statusseiten (ST-3): Dienste im Installer
+
+// Ein Abschnitt von install.sh zwischen zwei Zeilen (für die Reihenfolge der Aufrufe in einem Modus)
+function block(start: string, end: string): string {
+  const i = SCRIPT.indexOf(start);
+  assert.ok(i >= 0, `${start} not found`);
+  const j = SCRIPT.indexOf(end, i + start.length);
+  assert.ok(j > i, `${end} not found after ${start}`);
+  return SCRIPT.slice(i, j);
+}
+const order = (text: string, ...parts: string[]): boolean => parts.every((p, k) => k === 0 || text.indexOf(parts[k - 1]) < text.indexOf(p)) && parts.every((p) => text.includes(p));
+
+test('the status services are set up wherever the topology can change: install, --update, --https and --tunnel', () => {
+  assert.ok(order(fn('step_services'), 'step_protect', 'write_timers', 'status_services'), fn('step_services'));
+  assert.ok(order(fn('update_finish'), 'write_timers', 'status_services update', 'check_site', 'status_window 0'), fn('update_finish'));
+  assert.ok(order(fn('update_site'), 'stage_check', 'status_window 600', 'switch_release'));
+  assert.ok(order(block('  https)', ';;'), 'step_https force', 'write_timers', 'status_services'));
+  assert.ok(order(block('  tunnel)', ';;'), 'status_window 600', 'step_tunnel force', 'step_protect', 'status_services', 'check_site', 'status_window 0'));
+  // --reset hält alle Status-Units vor DROP DATABASE an
+  assert.ok(order(block('  reset)', ';;'), 'systemctl stop onyoursite-web', 'status_units_stop', 'DROP DATABASE'));
+  // Der Tunnel hat einen festen Port für die Messwerte (der Sensor fragt /ready)
+  assert.match(fn('tunnel_local'), /^Environment=TUNNEL_METRICS=\$\{STATUS_TUNNEL_METRICS:-127\.0\.0\.1:20241\}$/m);
+  // MariaDB: der Puffer kommt aus status_buffer_pool_line in dieselbe Datei
+  assert.ok(order(fn('step_protect'), 'status_load', 'status_buffer_pool_line', '90-onyoursite.cnf', 'systemctl restart mariadb'));
+  assert.match(fn('summary'), /status_summary_line "\$DOMAIN"/);
+  // Sicherung: ohne die einzelnen Messungen, danach der Heartbeat
+  const backup = readFileSync(join(ROOT_DIR, 'server', 'backup.sh'), 'utf8');
+  assert.ok(order(backup, '. "$CODE/server/status-units.sh"', 'status_backup_dump "$DB"', 'status_ping backup'));
+});
+
+test('status_services: only with Node.js and a built checker; a failure only warns', async () => {
+  const root = mkdtempSync(join(dir, 'status-'));
+  const code = join(root, 'code');
+  mkdirSync(join(code, 'server'), { recursive: true });
+  writeFileSync(join(code, 'server', 'status-units.sh'), 'write_status_units() { echo "write_status_units $* port=$PORT"; return ${STATUS_RC:-0}; }\n');
+  const run = (env: string): Promise<{ code: number | null; out: string }> => bash(`set -euo pipefail
+${HELPERS}
+${fn('status_load')}
+${fn('status_services')}
+web_port() { echo 3123; }
+CODE=${code}
+${env}
+status_services update
+echo end`, 10_000);
+  let r = await run('NODE=/usr/bin/node');
+  assert.equal(r.out.includes('write_status_units'), false, 'no built checker yet: nothing');
+  mkdirSync(join(code, 'app', 'dist', 'status'), { recursive: true });
+  writeFileSync(join(code, 'app', 'dist', 'status', 'worker.js'), '');
+  r = await run('NODE=""');
+  assert.equal(r.out.includes('write_status_units'), false, 'without Node.js: nothing');
+  r = await run('NODE=/usr/bin/node');
+  assert.match(r.out, /write_status_units update port=3123\nend/);
+  r = await run('NODE=/usr/bin/node; export STATUS_RC=1');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /The status services weren’t set up – see above\. The website works without them\.[\s\S]*end/);
 });

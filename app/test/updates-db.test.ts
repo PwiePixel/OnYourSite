@@ -23,6 +23,7 @@ import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type T
 import { random } from './fixtures/updates/random.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 import { PHP_SKIP, phpFile } from './support/phpRef.js';
+import { withoutDiscordChips } from './support/discordParity.js';
 
 let env: TestEnv;
 let standIn: StandIn | null = null;
@@ -530,7 +531,7 @@ test('admin view: the HTML of admin_updates.php for every state (Updates and Roa
         await ctx.session?.close();
       }
     }
-    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), JSON.stringify(v.get));
+    assert.equal(withoutDialogs(withoutDiscordChips(beforeDiscordTab(html.node))), withoutNativeConfirms(beforeDiscordTab(html.php)), JSON.stringify(v.get));
   }
 });
 
@@ -740,6 +741,6 @@ test('random data: the admin view renders the same HTML as PHP (Updates and Road
         await ctx.session?.close();
       }
     }
-    assert.equal(withoutDialogs(beforeDiscordTab(html.node)), withoutNativeConfirms(beforeDiscordTab(html.php)), `round ${round} ${JSON.stringify(get)}`);
+    assert.equal(withoutDialogs(withoutDiscordChips(beforeDiscordTab(html.node))), withoutNativeConfirms(beforeDiscordTab(html.php)), `round ${round} ${JSON.stringify(get)}`);
   }
 });

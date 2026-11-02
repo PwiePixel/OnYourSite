@@ -14,6 +14,8 @@ import { saveReport, validateReport } from '../discord/botReport.js';
 import '../discord/posts.js';
 // Öffentliche Vorschlagsseite (registriert suggestions.notice, Funktion suggestions.v2)
 import { suggestionWeb } from './suggestions.js';
+// Statusseiten (registriert status.alert/post/edit/delete, Funktion status.v1)
+import '../status/posts.js';
 
 // Größter Inhalt, den die Schnittstelle annimmt
 const MAX_BODY = 65536;

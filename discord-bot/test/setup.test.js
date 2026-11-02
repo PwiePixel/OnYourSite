@@ -97,6 +97,58 @@ test('a missing #updates is created read-only in the OnYourSite category: an ann
   assert.equal('parent_id' in writes(rest3)[0][2], false);
 });
 
+test('#status is created like #updates: read-only for members, an announcement channel on community servers', async () => {
+  const rest = fakeRest([{ id: ID(2), name: 'OnYourSite', type: ChannelType.GuildCategory }]);
+  const r = await ensureNamedChannel(rest, GUILD, 'STATUS_CHANNEL_ID', {});
+  const [post] = writes(rest);
+  assert.equal(post[2].name, 'status');
+  assert.equal(post[2].type, ChannelType.GuildAnnouncement);
+  assert.equal(post[2].parent_id, ID(2));
+  assert.ok(BigInt(post[2].permission_overwrites[0].deny) & 2048n, 'members can’t write');
+  assert.deepEqual(r, { id: post[2].id ?? r.id, done: ['Created channel #status'], warnings: [] });
+});
+
+test('#alerts is created private: hidden from @everyone, visible to the Staff role and the bot – always a text channel', async () => {
+  const VIEW = 1024n;
+  const rest = fakeRest([{ id: ID(2), name: 'OnYourSite', type: ChannelType.GuildCategory }]);
+  const r = await ensureNamedChannel(rest, GUILD, 'ALERTS_CHANNEL_ID', { TEAM_ROLE_ID: ID(7) });
+  const [post] = writes(rest);
+  assert.equal(post[2].name, 'alerts');
+  assert.equal(post[2].type, ChannelType.GuildText, 'never an announcement channel');
+  const [everyone, staff, bot] = post[2].permission_overwrites;
+  assert.equal(everyone.id, GUILD);
+  assert.ok(BigInt(everyone.deny) & VIEW, '@everyone can’t see it');
+  assert.equal(staff.id, ID(7));
+  assert.ok(BigInt(staff.allow) & VIEW);
+  assert.equal(bot.id, BOT);
+  assert.ok(BigInt(bot.allow) & VIEW && BigInt(bot.allow) & 2048n && BigInt(bot.allow) & 16384n);
+  assert.deepEqual(r.done, ['Created the private channel #alerts (only Staff and the bot)']);
+  assert.deepEqual(r.warnings, []);
+  // Ohne Rolle: nur Bot und Admins – mit Hinweis
+  const rest2 = fakeRest([]);
+  const r2 = await ensureNamedChannel(rest2, GUILD, 'ALERTS_CHANNEL_ID', { TEAM_ROLE_ID: 'x' });
+  assert.equal(writes(rest2)[0][2].permission_overwrites.length, 2);
+  assert.match(r2.warnings[0], /give your team’s role access/);
+});
+
+test('an existing #alerts is used unchanged – with a note when everyone can see it', async () => {
+  const VIEW = String(1024n);
+  const cases = [
+    [{ id: ID(30), name: 'alerts', type: ChannelType.GuildText, permission_overwrites: [] }, true],
+    [{ id: ID(30), name: 'alerts', type: ChannelType.GuildText, permission_overwrites: [{ id: GUILD, type: 0, deny: VIEW, allow: '0' }] }, false],
+    [{ id: ID(30), name: 'alerts', type: ChannelType.GuildText, parent_id: ID(5), permission_overwrites: [] }, false],
+    [{ id: ID(30), name: 'alerts', type: ChannelType.GuildText, parent_id: ID(5), permission_overwrites: [{ id: GUILD, type: 0, allow: VIEW, deny: '0' }] }, true],
+  ];
+  for (const [channel, warn] of cases) {
+    const rest = fakeRest([{ id: ID(5), name: 'Team', type: ChannelType.GuildCategory, permission_overwrites: [{ id: GUILD, type: 0, deny: VIEW, allow: '0' }] }, channel]);
+    const r = await ensureNamedChannel(rest, GUILD, 'ALERTS_CHANNEL_ID', {});
+    assert.equal(r.id, ID(30));
+    assert.deepEqual(writes(rest), [], 'nothing is changed');
+    assert.equal(r.warnings.length, warn ? 1 : 0, JSON.stringify(channel));
+    if (warn) assert.match(r.warnings[0], /Everyone on the server can see #alerts/);
+  }
+});
+
 // index.js als eigener Prozess (wie install.sh es aufruft)
 function run(args, env) {
   return new Promise((resolve) => {
@@ -110,7 +162,7 @@ const lines = (out) => out.trim().split('\n').filter(Boolean);
 test('--channel-keys lists the channels this version knows, without a token', async () => {
   const r = await run(['--channel-keys'], {});
   assert.equal(r.code, 0);
-  assert.deepEqual(lines(r.stdout), ['UPDATES_CHANNEL_ID=updates']);
+  assert.deepEqual(lines(r.stdout), ['UPDATES_CHANNEL_ID=updates', 'STATUS_CHANNEL_ID=status', 'ALERTS_CHANNEL_ID=alerts']);
 });
 
 test('--discord-channel creates #updates once, then finds it; Discord’s refusal is an error with its message', async () => {
@@ -162,7 +214,17 @@ async function fullSetupTwice(base, token, guildId) {
 test('the full setup adds #updates next to the other channels and reuses it on the next run', async () => {
   const d = await startFakeDiscord({ community: false });
   try {
-    await fullSetupTwice(d.base, d.token, d.guildId);
+    const { first } = await fullSetupTwice(d.base, d.token, d.guildId);
+    // #status und #alerts (privat, für die Rolle Staff) entstehen mit – je einmal
+    const ids = Object.fromEntries(lines(first.stdout).filter((l) => /^[A-Z_]+_ID=/.test(l)).map((l) => l.split('=')));
+    const alerts = d.state.channels.find((c) => c.name === 'alerts');
+    assert.equal(ids.STATUS_CHANNEL_ID, d.state.channels.find((c) => c.name === 'status').id);
+    assert.equal(ids.ALERTS_CHANNEL_ID, alerts.id);
+    assert.ok(alerts.permission_overwrites.some((o) => o.id === ids.TEAM_ROLE_ID), 'Staff sees #alerts');
+    assert.ok(alerts.permission_overwrites.some((o) => o.id === d.guildId && BigInt(o.deny) & 1024n), '@everyone doesn’t');
+    const made = d.writes().filter((c) => c.method === 'POST' && /\/channels$/.test(c.path));
+    assert.equal(made.filter((c) => c.body.name === 'status').length, 1);
+    assert.equal(made.filter((c) => c.body.name === 'alerts').length, 1);
     const created = d.writes().filter((c) => c.method === 'POST' && /\/channels$/.test(c.path));
     assert.equal(created.filter((c) => c.body.name === 'updates').length, 1, '#updates is created once');
     const updates = d.state.channels.find((c) => c.name === 'updates');

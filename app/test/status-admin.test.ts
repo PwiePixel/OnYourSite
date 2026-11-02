@@ -55,7 +55,7 @@ test('the health card before any service has run', async () => {
   const s = section(await adminPage());
   assert.ok(s.includes('class="admin-tab-content max-w-5xl mx-auto space-y-8 hidden"'));
   assert.match(s, /Checker<\/p>\n\s+<p class="mt-2 flex items-center gap-2 flex-wrap"><span class="[^"]+">Not running<\/span> <span class="text-sm text-gray-300">It hasn’t reported yet – see journalctl -u onyoursite-status<\/span>/);
-  assert.match(s, /Notifier[\s\S]*?Not installed yet/);
+  assert.match(s, /Notifier[\s\S]*?It hasn’t reported yet – see journalctl -u onyoursite-status-notify/);
   assert.match(s, /Local probe[\s\S]*?No measurement yet/);
   assert.match(s, /Kernel guard<\/dt>[\s\S]*?Not checked yet/);
   assert.match(s, /Platform gate<\/dt>[\s\S]*?OK<\/span> <span class="text-sm text-gray-300">canaries not checked yet/);

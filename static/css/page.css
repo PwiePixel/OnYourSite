@@ -201,7 +201,8 @@ i.oys-ico { width: auto; height: auto; font-size: 1.35em; line-height: 1; }
 
 .oys-foot { margin-top: auto; padding-top: 40px; text-align: center; font-size: .78em; }
 .oys-foot a { display: inline-block; padding: 10px 14px; text-decoration: none; color: var(--muted); opacity: .75; transition: opacity .2s; }
-.oys-foot a:hover { opacity: 1; }
+/* Die Deckkraft steht fest im Element (Premium: der Hinweis bleibt sichtbar) – beim Darüberfahren unterstreichen */
+.oys-foot a:hover { text-decoration: underline; }
 
 /* ---------- Links: Grundform (Knöpfe) ---------- */
 .oys-links { display: flex; flex-direction: column; gap: 12px; }

@@ -6,6 +6,8 @@
 //   node app/dist/cli.js create-admin             erstes Admin-Konto (wie server/create-admin.php in 2.x)
 //   node app/dist/cli.js cert-alert <tage>        Mail an alle Admins, wenn das Zertifikat bald abläuft (cert-alert.php in 2.x)
 //   node app/dist/cli.js weekly-report            Wochenbericht (src/cli/weekly-report.ts)
+//   node app/dist/cli.js domains:worker           Domain-Dienst für eigene Domains (onyoursite-domains.service)
+//   node app/dist/cli.js domains:check <domain>   Diagnose einer eigenen Domain (liest nur, ändert nichts)
 // Rückgabe 0 = in Ordnung, 1 = Fehler (mit Meldung auf stderr). Entwicklung: node --import tsx src/cli.ts …
 import { existsSync, readFileSync } from 'node:fs';
 import { ConfigMissingError, ROOT_DIR, loadConfig } from './config.js';
@@ -39,9 +41,12 @@ export async function runCli(argv: string[], io: CliIo = processIo()): Promise<n
     'create-admin': () => createAdmin(io),
     'cert-alert': () => certAlert(args, io),
     'weekly-report': () => weeklyReport(io),
+    'domains:worker': async () => (await import('./domains/worker/main.js')).domainsWorkerCommand(io),
+    'domains:check': async () => (await import('./domains/worker/main.js')).domainsCheckCommand(args, io),
   };
   if (!command || !Object.hasOwn(commands, command)) {
-    io.err('Usage: node app/dist/cli.js migrate [--pending] | check --native | check --crypto | create-admin | cert-alert <days> | weekly-report\n');
+    io.err('Usage: node app/dist/cli.js migrate [--pending] | check --native | check --crypto | create-admin | cert-alert <days> | weekly-report'
+      + ' | domains:worker | domains:check <domain>\n');
     return 1;
   }
   // Wie der Server: ohne config.json geht nichts (Meldung, Rückgabe 1). check --native prüft nur die Pakete – das geht
@@ -56,6 +61,8 @@ export async function runCli(argv: string[], io: CliIo = processIo()): Promise<n
     }
     process.env.TZ = timeZone();
   }
+  // Der Domain-Dienst hat einen eigenen kleinen Pool (4 Verbindungen plus die der Leitsperre)
+  if (command === 'domains:worker') process.env.OYS_DB_POOL_SIZE ??= '4';
   try {
     return await commands[command]();
   } finally {

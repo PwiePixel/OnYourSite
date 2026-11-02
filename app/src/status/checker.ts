@@ -19,7 +19,9 @@ import { registrableDomain } from './psl.js';
 import { dnsOutcome, resolverCanary, type PublicResolver } from './resolver.js';
 import { ROBOTS_TTL, robotsAfterFetch, robotsAllows, rulesFromJson, type RobotsRule } from './robots.js';
 import { Scheduler, firstDue, nextDue, retryDelay, type Job } from './scheduler.js';
-import { statusSettings, type StatusSettings } from './settings.js';
+import { statusPageSettings, statusSettings, type PageSettings, type StatusSettings } from './settings.js';
+import { alertRows, gateAlertRows, writeAlertRows, type OutboxRow } from './alerts.js';
+import { autoIncidentRound, maintenanceRound, type AutoMonitor, type AutoPage } from './auto.js';
 import {
   BLOCKED_PAUSE_AFTER, REFUSED_PAUSE_AFTER, discardHeld, heartbeatVerdict, initialState, releaseHeld, step, type CheckResult, type StateEvent,
   type StateRecord, type StepConfig,
@@ -54,6 +56,9 @@ interface PageRt {
   isSystem: boolean;
   blocked: boolean;
   ownerSeenAt: string | null;
+  slug: string;
+  title: string;
+  settings: PageSettings; // Alarme, automatische Vorfälle
 }
 
 interface MonitorRt {
@@ -62,6 +67,7 @@ interface MonitorRt {
   userId: number | null;
   type: string;
   name: string;
+  isPublic: boolean;
   target: string;
   host: string;
   domain: string;
@@ -94,7 +100,8 @@ interface MonitorRt {
   runSoon: boolean; // geändert: in den nächsten 5 s prüfen (Entwurf §4.8.2)
 }
 
-export type Periodic = 'sync' | 'runs' | 'sweep' | 'flush' | 'aggregates' | 'canaries' | 'gate' | 'meta' | 'purge' | 'retention' | 'partitions' | 'reload' | 'robots';
+export type Periodic = 'sync' | 'runs' | 'sweep' | 'flush' | 'aggregates' | 'canaries' | 'gate' | 'meta' | 'purge' | 'retention' | 'partitions' | 'reload' | 'robots'
+  | 'incidents';
 
 const DAY = 86400;
 
@@ -130,6 +137,8 @@ export class Checker {
   private readonly agg: Aggregator;
   private raw: Array<[number, number, number, number | null, number | null, string | null]> = [];
   private events: Array<[number, number, string, string | null, number | null]> = [];
+  // Alarme zu den Ereignissen – mit ihnen in derselben Transaktion geschrieben (status_outbox)
+  private alerts: OutboxRow[] = [];
   private readonly inflight = new Map<number, Promise<void>>();
   private readonly aborts = new Map<number, AbortController>();
   private readonly hostResults = new Map<string, { at: number; failed: boolean }>();
@@ -215,14 +224,17 @@ export class Checker {
     await withConnection(async (db) => {
       this.settings = await statusSettings(db);
       this.policy = this.deps.policy(this.settings);
-      const pageRows = await db.q('SELECT id, user_id, is_system, is_blocked, owner_seen_at, changed_at FROM status_pages WHERE changed_at >= ?', [since]);
+      const pageRows = await db.q('SELECT id, user_id, is_system, is_blocked, owner_seen_at, changed_at, slug, title, settings FROM status_pages WHERE changed_at >= ?', [since]);
       const changedOwners = new Set<number | null>();
       for (const p of pageRows) {
-        const page: PageRt = { id: Number(p.id), userId: num(p.user_id), isSystem: truthy(p.is_system), blocked: truthy(p.is_blocked), ownerSeenAt: p.owner_seen_at === null ? null : String(p.owner_seen_at) };
+        const page: PageRt = {
+          id: Number(p.id), userId: num(p.user_id), isSystem: truthy(p.is_system), blocked: truthy(p.is_blocked), ownerSeenAt: p.owner_seen_at === null ? null : String(p.owner_seen_at),
+          slug: String(p.slug ?? ''), title: String(p.title ?? ''), settings: statusPageSettings({ settings: p.settings, is_system: p.is_system }),
+        };
         this.pages.set(page.id, page);
         if (!full) changedOwners.add(page.userId);
       }
-      const monitorRows = await db.q(`SELECT id, page_id, user_id, type, name, target, target_host, target_domain, position, interval_s, config,
+      const monitorRows = await db.q(`SELECT id, page_id, user_id, type, name, is_public, target, target_host, target_domain, position, interval_s, config,
           is_paused, admin_paused, auto_paused, hb_last_ping_at, hb_last_fail_at, changed_at FROM status_monitors WHERE changed_at >= ?`, [since]);
       const ids = monitorRows.map((m) => Number(m.id));
       const states = new Map<number, Record<string, unknown>>();
@@ -274,7 +286,7 @@ export class Checker {
     }
     if (type === 'http' && domain === '' && host !== '') domain = registrableDomain(host);
     const rt: MonitorRt = prev ?? {
-      id, pageId: 0, userId: null, type, name: '', target: '', host: '', domain: '', position: 0, intervalS: 300, config: {}, paused: false, adminPaused: false,
+      id, pageId: 0, userId: null, type, name: '', isPublic: true, target: '', host: '', domain: '', position: 0, intervalS: 300, config: {}, paused: false, adminPaused: false,
       autoPaused: null, st: initialState(), lastCheckAt: null, lastOkAt: null, lastResultAt: null, lastMs: null, lastCode: null, lastError: null,
       certExpires: null, throttledAt: null, seen: { ping: null, fail: null, missedFor: null }, hbPing: null, hbFail: null, dirty: false, active: false,
       hidden: false, effectiveInterval: 300, maintenance: false, lastFail: { error: null, code: null }, changedAt: 0, runSoon: false,
@@ -284,7 +296,8 @@ export class Checker {
     const changedAt = Number(m.changed_at ?? 0);
     if (prev !== undefined && changedAt > prev.changedAt) rt.runSoon = true;
     Object.assign(rt, {
-      pageId: Number(m.page_id), userId: num(m.user_id), type, name: String(m.name ?? ''), target: String(m.target ?? ''), host, domain,
+      pageId: Number(m.page_id), userId: num(m.user_id), type, name: String(m.name ?? ''), isPublic: m.is_public === undefined ? true : truthy(m.is_public),
+      target: String(m.target ?? ''), host, domain,
       position: Number(m.position ?? 0), intervalS: Math.max(15, Number(m.interval_s ?? 300)), config, paused: truthy(m.is_paused),
       adminPaused: truthy(m.admin_paused), autoPaused: m.auto_paused === null || m.auto_paused === undefined || m.auto_paused === '' ? null : String(m.auto_paused),
       hbPing: num(m.hb_last_ping_at), hbFail: num(m.hb_last_fail_at), changedAt,
@@ -473,6 +486,8 @@ export class Checker {
     // Täglich die Prüfungen nachsehen, die wegen robots.txt ruhen (eigene Aufgabe: eine hängende robots.txt hält so
     // keinen Gesundheitseintrag auf)
     run('robots', DAY * 1000, () => this.robotsRecheck());
+    // Wartungen beginnen und enden, automatische Vorfälle öffnen und schließen sich
+    run('incidents', 30_000, () => this.incidentRound());
     const d = new Date(now);
     if (d.getUTCMinutes() === 7) run('retention', 3_000_000, () => this.retention());
     if (d.getUTCHours() === 0 && d.getUTCMinutes() === 20) run('partitions', 3_000_000, () => this.maintainPartitions());
@@ -735,7 +750,25 @@ export class Checker {
       if (ev.kind === 'down' || ev.kind === 'up') {
         this.log(`monitor #${m.id} ${ev.kind}${ev.error ? ` (${ev.error})` : ''}`);
       }
+      this.queueAlerts(m, ev);
+      // Wieder da: einen automatischen Vorfall bald schließen
+      if (ev.kind === 'up') this.makeDue('incidents');
     }
+  }
+
+  // Alarm-Zeilen zu einem Ereignis (Empfänger nach den Einstellungen der Seite)
+  private queueAlerts(m: MonitorRt, ev: StateEvent): void {
+    const page = this.pages.get(m.pageId);
+    if (!page || m.hidden) return;
+    const c = m.config;
+    this.alerts.push(...alertRows({
+      page: { id: page.id, userId: page.userId, isSystem: page.isSystem, slug: page.slug, title: page.title },
+      monitor: {
+        id: m.id, name: m.name, type: m.type, target: m.target, isPublic: m.isPublic,
+        ...(m.type === 'http' ? { timeout: Math.min(this.settings.timeout_max, cfgNum(c, 'timeout', 10, 1, 30)), retries: cfgNum(c, 'retries', 1, 0, 3) } : {}),
+      },
+      event: { kind: ev.kind, at: ev.at, error: ev.error ?? (ev.kind === 'down' ? m.lastFail.error : null), code: ev.code, muted: ev.muted, downFor: ev.downFor, certDays: ev.certDays, since: ev.since },
+    }, page.settings));
   }
 
   private async autoPause(m: MonitorRt, why: 'private_ip' | 'refused' | 'robots'): Promise<void> {
@@ -840,6 +873,45 @@ export class Checker {
     }
   }
 
+  // ---------------------------------------------------------------- Vorfälle (alle 30 s und nach einem „up“)
+
+  async incidentRound(): Promise<void> {
+    const now = this.nowS();
+    const changes = await maintenanceRound(now);
+    if (changes.length) {
+      await this.refreshMaintenance();
+      // Ende einer Wartung: was dann noch unten ist, meldet sich jetzt (während der Wartung blieb es stumm)
+      for (const ch of changes) {
+        if (!ch.ended) continue;
+        for (const id of ch.monitorIds) {
+          const m = this.monitors.get(id);
+          if (m && m.active && !m.hidden && m.st.state === 'down') {
+            this.queueAlerts(m, { kind: 'down', at: now, error: m.lastError, code: m.lastCode, muted: m.st.flapping, since: m.st.since ?? now });
+          }
+        }
+      }
+    }
+    const pages = new Map<number, AutoPage>();
+    for (const p of this.pages.values()) pages.set(p.id, { id: p.id, autoIncident: p.settings.auto_incident });
+    const list: AutoMonitor[] = [];
+    for (const m of this.monitors.values()) {
+      if (m.type === 'manual') continue;
+      list.push({
+        id: m.id, pageId: m.pageId, name: m.name, isPublic: m.isPublic, state: m.st.state, since: m.st.since, flapping: m.st.flapping,
+        monitored: m.active && !m.hidden, maintenance: m.maintenance,
+      });
+    }
+    await autoIncidentRound(pages, list, this.gate.state, now);
+  }
+
+  // Welche Bestandteile eine laufende Wartung deckt (nach Beginn oder Ende einer Wartung)
+  private async refreshMaintenance(): Promise<void> {
+    const maint = new Set<number>();
+    for (const r of await withConnection((db) => db.q(`SELECT im.monitor_id FROM status_incidents i JOIN status_incident_monitors im ON im.incident_id = i.id
+        WHERE i.kind = 'maintenance' AND i.status = 'in_progress' AND i.resolved_at IS NULL`))) maint.add(Number(r.monitor_id));
+    for (const m of this.monitors.values()) m.maintenance = maint.has(m.id);
+  }
+
   // ---------------------------------------------------------------- Plattform-Sperre
 
   private async canaryRound(): Promise<void> {
@@ -889,6 +961,15 @@ export class Checker {
     if (this.gate.state === before) return;
     this.log(`Status gate: ${before} → ${this.gate.state}${this.gate.reason ? ` (${this.gate.reason})` : ''}`);
     const now = this.nowS();
+    // Das Team erfährt es (OnYourSites eigene Seite): Prüfungen der Nutzer ruhen bzw. laufen wieder
+    if (this.gate.state === 'frozen' || before === 'frozen') {
+      const system = [...this.pages.values()].find((p) => p.isSystem);
+      if (system) {
+        const c = this.gate.canaries;
+        this.alerts.push(...gateAlertRows({ id: system.id, userId: null, isSystem: true, slug: system.slug, title: system.title }, system.settings,
+          this.gate.state === 'frozen' ? 'gate_frozen' : 'gate_ok', now, { ok: Number(c.ok ?? 0), of: Number(c.of ?? 0) }));
+      }
+    }
     if (before === 'hold' && this.gate.state === 'ok') {
       // Die Ausfälle waren echt: wartende Wechsel jetzt, mit der Zeit des ersten Fehlschlags – bei Websites wie bei
       // Heartbeats (auch deren Frist kann in einem „hold“ ablaufen; gemeldet wird sie nur einmal)
@@ -923,10 +1004,12 @@ export class Checker {
   async flush(): Promise<void> {
     const raw = this.raw;
     const events = this.events;
+    const alerts = this.alerts;
     const dirty = [...this.monitors.values()].filter((m) => m.dirty);
-    if (!raw.length && !events.length && !dirty.length) return;
+    if (!raw.length && !events.length && !dirty.length && !alerts.length) return;
     this.raw = [];
     this.events = [];
+    this.alerts = [];
     for (const m of dirty) m.dirty = false;
     try {
       await transaction(async (_conn, db) => {
@@ -952,11 +1035,14 @@ export class Checker {
           await db.exec(`INSERT INTO status_events (monitor_id, at, kind, error, code) VALUES ${part.map(() => '(?, ?, ?, ?, ?)').join(', ')}`,
             part.map((e) => [e[0], e[1], e[2], e[3] === null ? null : e[3].slice(0, 20), e[4]]).flat());
         }
+        // Alarme mit dem Wechsel, über den sie berichten
+        if (alerts.length) await writeAlertRows(db, alerts, this.nowS());
       });
       this.dbOk = true;
     } catch (err) {
       this.raw = raw.concat(this.raw);
       this.events = events.concat(this.events);
+      this.alerts = alerts.concat(this.alerts);
       for (const m of dirty) m.dirty = true;
       this.dbOk = false;
       throw err;
