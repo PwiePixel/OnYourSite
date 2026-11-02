@@ -6,7 +6,8 @@
 //   node tests/e2e/admin-split.js
 // Umgebung: OYS_E2E_PORT (Port des Node-Servers, Vorgabe 14204), OYS_CONFIG (Vorgabe config.json im Projekt),
 // OYS_E2E_PASSWORD (Passwort der Test-Konten), OYS_E2E_SHOTS (Ordner für Bildschirmfotos, optional).
-// Der Test schreibt nur in die Datenbank aus der Konfiguration: Code-Seiten und Honigwaben-Buchungen der Testkonten
+// Der Test schreibt nur in die Datenbank aus der Konfiguration und läuft nur, wenn deren Name mit oys_test beginnt
+// (sonst Abbruch mit Code 2, bevor er die Datenbank aufruft): Code-Seiten und Honigwaben-Buchungen der Testkonten
 // mia (5), tom (6) und lea (7) werden am Anfang angelegt und am Ende wieder entfernt (Ausgangsstand: keine), ebenso
 // jede Buchung, die während des Laufs entsteht (z. B. die Tagesbelohnung beim Anmelden).
 const { chromium } = require('playwright');
@@ -18,6 +19,12 @@ const ROOT = path.resolve(__dirname, '../..');
 const PORT = Number(process.env.OYS_E2E_PORT || 14204);
 const CONFIG = process.env.OYS_CONFIG || path.join(ROOT, 'config.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
+// Nur gegen eine Test-Datenbank (Name beginnt mit oys_test): der Ablauf löscht Code-Seiten und Buchungen
+const DB_NAME = String((cfg.db && cfg.db.name) || '');
+if (!DB_NAME.startsWith('oys_test')) {
+  console.error(`Refusing to run: ${CONFIG} uses the database "${DB_NAME}", which is not a test database (oys_test…).`);
+  process.exit(2);
+}
 const HOST = String(cfg.base_domain || 'on-your.site').split(':')[0];
 const BASE = `http://${HOST}:${PORT}`;
 // Passwort der Testkonten aus dem Seed (zur Laufzeit zusammengesetzt)

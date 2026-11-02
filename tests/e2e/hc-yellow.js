@@ -5,6 +5,7 @@
 // Start (Datenbank muss laufen, z. B. über oys-db.sh run):
 //   node tests/e2e/hc-yellow.js
 // Umgebung wie tests/e2e/admin-split.js: OYS_E2E_PORT, OYS_CONFIG, OYS_E2E_PASSWORD, OYS_E2E_SHOTS.
+// Nur gegen eine Test-Datenbank (Name beginnt mit oys_test; sonst Abbruch mit Code 2, bevor er die Datenbank aufruft).
 // Der Test löscht die Honigwaben-Buchungen und Code-Seiten des Testkontos lea@test.de (id 7) vorher und nachher
 // (Ausgangsstand: keine) und am Ende jede Buchung, die während des Laufs entstanden ist.
 const { chromium } = require('playwright');
@@ -16,6 +17,12 @@ const ROOT = path.resolve(__dirname, '../..');
 const PORT = Number(process.env.OYS_E2E_PORT || 14204);
 const CONFIG = process.env.OYS_CONFIG || path.join(ROOT, 'config.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
+// Nur gegen eine Test-Datenbank (Name beginnt mit oys_test): der Ablauf löscht Code-Seiten und Buchungen
+const DB_NAME = String((cfg.db && cfg.db.name) || '');
+if (!DB_NAME.startsWith('oys_test')) {
+  console.error(`Refusing to run: ${CONFIG} uses the database "${DB_NAME}", which is not a test database (oys_test…).`);
+  process.exit(2);
+}
 const HOST = String(cfg.base_domain || 'on-your.site').split(':')[0];
 const BASE = `http://${HOST}:${PORT}`;
 const PASSWORD = process.env.OYS_E2E_PASSWORD || ['test', '1234'].join('');
