@@ -23,6 +23,7 @@ export interface AutoMonitor {
   flapping: boolean;
   monitored: boolean; // läuft (nicht pausiert, nicht über der Grenze, Seite nicht gesperrt …)
   maintenance: boolean;
+  gateExempt?: boolean; // OnYourSites eigene Bestandteile: die Plattform-Sperre gilt für sie nicht (Entwurf §4.8.15)
 }
 
 export interface AutoPage {
@@ -107,7 +108,7 @@ export async function autoIncidentRound(pages: ReadonlyMap<number, AutoPage>, mo
   const candidates = new Map<number, AutoMonitor[]>();
   for (const m of monitors) {
     const page = pages.get(m.pageId);
-    if (!page || covered.has(m.id) || !opensIncident(m, page, gate === 'ok', now)) continue;
+    if (!page || covered.has(m.id) || !opensIncident(m, page, gate === 'ok' || m.gateExempt === true, now)) continue;
     const list = candidates.get(m.pageId);
     if (list) list.push(m);
     else candidates.set(m.pageId, [m]);
@@ -153,59 +154,60 @@ export async function autoIncidentRound(pages: ReadonlyMap<number, AutoPage>, mo
 
   // Schließen: jeder Bestandteil ist wieder da oder wird nicht mehr geprüft. Eine eingefrorene Sperre ist kein „nicht
   // mehr geprüft“ – dann wird gewartet.
-  if (gate !== 'frozen') {
-    for (const inc of open.filter((i) => i.isAuto)) {
-      const states = inc.monitors.map((im) => {
-        const m = byId.get(im.id);
-        const unmonitored = !m || !m.monitored;
-        return { im, back: !!m && m.monitored && m.state !== 'down' && m.state !== 'unknown', unmonitored };
-      });
-      const newlyUnmonitored = states.filter((s) => s.unmonitored);
-      const done = states.length > 0 && states.every((s) => s.back || s.unmonitored);
-      if (!newlyUnmonitored.length && !done) continue;
-      const touched = await transaction(async (_conn, db) => {
-        if (!(await lockStatusPage(db, inc.pageId))) return false;
-        const cur = await loadIncident(db, inc.pageId, inc.id, true);
-        if (!cur || cur.resolvedAt !== null) return false;
-        const page = await pageRow(db, inc.pageId);
-        if (!page) return false;
-        let any = false;
-        // „{Name} is no longer monitored.“ – je Bestandteil einmal
-        for (const s of newlyUnmonitored) {
-          const text = autoTexts.unmonitored(s.im.name);
-          if (cur.updates.some((u) => u.isAuto && u.body === text)) continue;
-          await db.exec('INSERT INTO status_incident_updates (incident_id, status, body, is_auto, created_at) VALUES (?, ?, ?, 1, ?)', [cur.id, cur.status, text, now]);
-          any = true;
-        }
-        if (done) {
-          const allBack = states.every((s) => s.back);
-          const noneChecked = states.every((s) => s.unmonitored);
-          const text = noneChecked ? autoTexts.closedUnmonitored : allBack ? (states.length === 1 ? autoTexts.back(states[0].im.name) : autoTexts.allBack) : autoTexts.mixedBack;
-          if (!cur.autoEdited) {
-            const res = await db.exec("UPDATE status_incidents SET status = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND auto_edited = 0 AND resolved_at IS NULL",
-              [now, date('Y-m-d H:i:s', now), cur.id]);
-            if (res.affectedRows) {
-              await db.exec("INSERT INTO status_incident_updates (incident_id, status, body, is_auto, created_at) VALUES (?, 'resolved', ?, 1, ?)", [cur.id, text, now]);
-              result.resolved.push(cur.id);
-              any = true;
-            }
-          } else {
-            // Der Besitzer hat eingegriffen: nur melden (einmal), schließen tut er selbst
-            const last = cur.updates[cur.updates.length - 1];
-            if (!(last && last.isAuto && last.status === 'monitoring')) {
-              await addIncidentUpdate(db, cur, 'monitoring', text, null, now, true);
-              any = true;
-            }
+  for (const inc of open.filter((i) => i.isAuto)) {
+    // Eingefroren: warten – außer alle Bestandteile sind von der Sperre ausgenommen
+    if (gate === 'frozen' && inc.monitors.some((im) => byId.get(im.id)?.gateExempt !== true)) continue;
+    const states = inc.monitors.map((im) => {
+      const m = byId.get(im.id);
+      const unmonitored = !m || !m.monitored;
+      return { im, back: !!m && m.monitored && m.state !== 'down' && m.state !== 'unknown', unmonitored };
+    });
+    const newlyUnmonitored = states.filter((s) => s.unmonitored);
+    // Ohne verbliebene Bestandteile (alle gelöscht) wird nichts mehr geprüft: auch dann schließt er sich
+    const done = states.every((s) => s.back || s.unmonitored);
+    if (!newlyUnmonitored.length && !done) continue;
+    const touched = await transaction(async (_conn, db) => {
+      if (!(await lockStatusPage(db, inc.pageId))) return false;
+      const cur = await loadIncident(db, inc.pageId, inc.id, true);
+      if (!cur || cur.resolvedAt !== null) return false;
+      const page = await pageRow(db, inc.pageId);
+      if (!page) return false;
+      let any = false;
+      // „{Name} is no longer monitored.“ – je Bestandteil einmal
+      for (const s of newlyUnmonitored) {
+        const text = autoTexts.unmonitored(s.im.name);
+        if (cur.updates.some((u) => u.isAuto && u.body === text)) continue;
+        await db.exec('INSERT INTO status_incident_updates (incident_id, status, body, is_auto, created_at) VALUES (?, ?, ?, 1, ?)', [cur.id, cur.status, text, now]);
+        any = true;
+      }
+      if (done) {
+        const allBack = states.every((s) => s.back);
+        const noneChecked = states.every((s) => s.unmonitored);
+        const text = noneChecked ? autoTexts.closedUnmonitored : allBack ? (states.length === 1 ? autoTexts.back(states[0].im.name) : autoTexts.allBack) : autoTexts.mixedBack;
+        if (!cur.autoEdited) {
+          const res = await db.exec("UPDATE status_incidents SET status = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? AND auto_edited = 0 AND resolved_at IS NULL",
+            [now, date('Y-m-d H:i:s', now), cur.id]);
+          if (res.affectedRows) {
+            await db.exec("INSERT INTO status_incident_updates (incident_id, status, body, is_auto, created_at) VALUES (?, 'resolved', ?, 1, ?)", [cur.id, text, now]);
+            result.resolved.push(cur.id);
+            any = true;
+          }
+        } else {
+          // Der Besitzer hat eingegriffen: nur melden (einmal), schließen tut er selbst
+          const last = cur.updates[cur.updates.length - 1];
+          if (!(last && last.isAuto && last.status === 'monitoring')) {
+            await addIncidentUpdate(db, cur, 'monitoring', text, null, now, true);
+            any = true;
           }
         }
-        if (any) {
-          await syncIncidentPosts(db, page, cur.id);
-          await bumpRev(db, cur.pageId, now);
-        }
-        return any;
-      });
-      if (touched) changed.add(inc.pageId);
-    }
+      }
+      if (any) {
+        await syncIncidentPosts(db, page, cur.id);
+        await bumpRev(db, cur.pageId, now);
+      }
+      return any;
+    });
+    if (touched) changed.add(inc.pageId);
   }
   result.changedPages = [...changed];
   return result;

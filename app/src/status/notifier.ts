@@ -92,6 +92,9 @@ async function defaultSend(m: MailRequest): Promise<boolean> {
   return sendCustomEmail(m.to, m.template, m.vars, m.subject, null, { timeoutMs: 15_000 });
 }
 
+// Ergebnis eines Versands, das noch geschrieben werden muss
+type Outcome = { state: 'sent'; payload?: Record<string, unknown> } | { state: 'retry'; error: string; payload: Record<string, unknown> };
+
 export class Notifier {
   budget: MailBudget;
   settings!: StatusSettings;
@@ -100,6 +103,9 @@ export class Notifier {
   private readonly log: (line: string) => void;
   private readonly last = new Map<Periodic, number>();
   private readonly busy = new Set<Periodic>();
+  // Zugestellt, aber das Ergebnis ließ sich nicht schreiben (Datenbank kurz weg): der nächste Durchgang trägt nur das
+  // Ergebnis nach – sonst ginge dieselbe E-Mail noch einmal hinaus
+  private readonly unsaved = new Map<number, Outcome>();
   private readonly bg = new Set<Promise<void>>();
   private started = 0;
   private stopping = false;
@@ -191,6 +197,12 @@ export class Notifier {
       if (this.stopping) break;
       const item = itemFrom(r);
       try {
+        const open = this.unsaved.get(item.id);
+        if (open) {
+          await this.record(item, open);
+          handled++;
+          continue;
+        }
         if (now - item.createdAt > STALE_AFTER) {
           await this.finish(item, 'skipped', 'Not sent: it was more than 30 minutes old.');
         } else if (item.channel === 'bell') {
@@ -207,7 +219,8 @@ export class Notifier {
         handled++;
       } catch (err) {
         this.log(`Status notifier: message #${item.id} failed – ${(err as Error).message}`);
-        await this.retry(item, 'Sending failed.').catch(() => undefined);
+        // Schon zugestellt: kein neuer Versuch ohne das Ergebnis (sent_to)
+        if (!this.unsaved.has(item.id)) await this.retry(item, 'Sending failed.').catch(() => undefined);
       }
     }
     return handled;
@@ -226,6 +239,18 @@ export class Notifier {
       params.push(JSON.stringify(payload));
     }
     await withConnection((db) => db.exec(`UPDATE status_outbox SET ${sets.join(', ')} WHERE id = ? AND state = 'pending'`, [...params, item.id]));
+  }
+
+  // Ergebnis nach einem Versand schreiben; scheitert das, bleibt es im Speicher (unsaved) für den nächsten Durchgang
+  private async record(item: OutboxItem, outcome: Outcome): Promise<void> {
+    try {
+      if (outcome.state === 'sent') await this.finish(item, 'sent', null, outcome.payload);
+      else await this.retry(item, outcome.error, outcome.payload);
+      this.unsaved.delete(item.id);
+    } catch (err) {
+      this.unsaved.set(item.id, outcome);
+      throw err;
+    }
   }
 
   // Fehlversuch: später noch einmal (30 s, 2 min, 10 min), dann failed
@@ -303,8 +328,7 @@ export class Notifier {
       }
     }
     const payload = { ...item.payload, sent_to: [...sentTo] };
-    if (failed) await this.retry(item, 'The mail server didn’t take the email.', payload);
-    else await this.finish(item, 'sent', null, payload);
+    await this.record(item, failed ? { state: 'retry', error: 'The mail server didn’t take the email.', payload } : { state: 'sent', payload });
   }
 
   // Seiten von Nutzern: höchstens PAGE_ALERTS_HOUR Alarme je Stunde über alle Wege
@@ -354,7 +378,7 @@ export class Notifier {
     if (ok) {
       this.smtpFail = 0;
       this.sentTotal++;
-      await this.finish(item, 'sent', null);
+      await this.record(item, { state: 'sent' });
     } else {
       this.budget.giveBack('owner');
       this.smtpFail++;
@@ -384,7 +408,7 @@ export class Notifier {
       let reason: string | null = null;
       if (!ch.installed) reason = 'The Discord bot isn’t set up.';
       else if (!ch.supported) reason = 'The bot doesn’t support status messages yet – update it with discord-bot/install.sh --update.';
-      else if (ch.alertsChannel === '') reason = 'No channel for team alerts is chosen.';
+      else if (ch.alertsChannel === '') reason = ch.alertsNote || 'No channel for team alerts is chosen.';
       if (reason !== null) {
         await db.exec("UPDATE status_outbox SET state = 'skipped', error = ?, attempts = attempts + 1 WHERE id = ?", [reason, item.id]);
         return reason;

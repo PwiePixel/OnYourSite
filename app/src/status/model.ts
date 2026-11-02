@@ -72,6 +72,12 @@ export async function statusPageForUser(db: Db, userId: number): Promise<StatusP
 }
 
 // Adresse einer Statusseite: immer ihre eigene Subdomain (eigener Ursprung)
+// Benutzt eine Profil- oder Code-Seite die Adresse der Statusseite? (Dann bleibt sie offline, Entwurf §3.1 – die
+// Subdomain zeigt zuerst diese Seite)
+export async function slugTaken(db: Db, slug: string): Promise<boolean> {
+  return Number(await db.value('SELECT (SELECT COUNT(*) FROM pages WHERE slug = ?) + (SELECT COUNT(*) FROM code_sites WHERE slug = ?)', [slug, slug])) > 0;
+}
+
 export function statusPageUrl(slug: string, path = '/'): string {
   return scheme() + '://' + slug + '.' + baseAuthority() + path;
 }

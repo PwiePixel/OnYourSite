@@ -28,6 +28,13 @@ function byPosition(a, b) {
   return (a.rawPosition || 0) - (b.rawPosition || 0) || String(a.id).localeCompare(String(b.id));
 }
 
+// Ohne die Rolle @everyone gilt ein Kanal als öffentlich (im Zweifel nie Meldungen ans Team dorthin)
+function publicChannel(c, everyone) {
+  if (!everyone || typeof c.permissionsFor !== 'function') return true;
+  const p = c.permissionsFor(everyone);
+  return !p || Boolean(p.has(P.ViewChannel));
+}
+
 // Verbindung zu Discord: bereit und der letzte Ping (vor dem ersten Herzschlag -1 → 0)
 function gatewayOf(client) {
   const ping = client && client.ws ? Number(client.ws.ping) : NaN;
@@ -36,6 +43,8 @@ function gatewayOf(client) {
 
 function buildReport(guild, me, cfg, features, gateway = null) {
   const all = [...guild.channels.cache.values()];
+  // Die Rolle @everyone: sieht jeder auf dem Server den Kanal? (Meldungen ans Team nur in Kanäle, die nicht alle sehen)
+  const everyone = guild.roles ? guild.roles.everyone || (guild.roles.cache && guild.roles.cache.get(guild.id)) || null : null;
   const inTickets = (c) => Boolean(cfg.supportCategoryId) && c.parentId === cfg.supportCategoryId;
   const isSuggestionForum = (c) => Boolean(cfg.suggestionForumId) && c.id === cfg.suggestionForumId;
   const categories = new Map();
@@ -52,6 +61,7 @@ function buildReport(guild, me, cfg, features, gateway = null) {
       can_post: has('ViewChannel') && has('SendMessages') && has('EmbedLinks'),
       can_mention_everyone: has('MentionEveryone'),
       missing: NEEDED[type].filter((name) => !has(name)),
+      everyone_can_view: publicChannel(c, everyone),
     });
     const parent = c.parentId ? guild.channels.cache.get(c.parentId) : null;
     if (parent) categories.set(parent.id, String(parent.name || ''));

@@ -42,6 +42,12 @@ class Lru<V> {
     this.map.set(k, v);
     if (this.map.size > this.max) this.map.delete(this.map.keys().next().value as string);
   }
+  delete(k: string): void {
+    this.map.delete(k);
+  }
+  values(): V[] {
+    return [...this.map.values()];
+  }
   clear(): void {
     this.map.clear();
   }
@@ -56,8 +62,9 @@ interface Cached {
 }
 
 const outputs = new Lru<Cached>(500);
-// Letzte gute Ansicht je Seite (für den Ausfall der Datenbank) und welche Adressen Statusseiten sind
-const lastViews = new Map<number, { at: number; view: PageView; links: RenderLinks }>();
+// Letzte gute Ansicht je Seite (für den Ausfall der Datenbank; begrenzt, nur öffentliche Ansichten – keine Vorschau,
+// und eine Seite, die offline oder gesperrt ist, verliert ihre) und welche Adressen Statusseiten sind
+const lastViews = new Lru<{ at: number; view: PageView; links: RenderLinks }>(200);
 const knownSlugs = new Lru<{ id: number; system: boolean; title: string }>(5000);
 let linksCache: { at: number; links: RenderLinks } | null = null;
 let dbDownSince: number | null = null;
@@ -156,12 +163,13 @@ const routeKey = (r: Route): string => (r.kind === 'incident' ? 'i' + r.id : r.k
 
 // Darf die Seite gezeigt werden? Gesperrt → 451, offline (ohne Vorschau) oder ohne Freischaltung → 404
 async function gate(ctx: Ctx, db: Db, page: StatusPageRow): Promise<{ preview: boolean }> {
-  if (page.blocked) notice(ctx, page, 451, 'This status page has been blocked', 'It broke the rules for status pages on OnYourSite.');
   const preview = typeof ctx.get.preview === 'string' && statusPreviewValid(page, ctx.get.preview);
+  const unpaid = !page.isSystem && (await statusLimits(page.userId, db)).plan === 'none';
+  // Nicht öffentlich: die gemerkte Ansicht darf auch ohne Datenbank niemand mehr sehen
+  if (page.blocked || !page.published || unpaid) lastViews.delete(String(page.id));
+  if (page.blocked) notice(ctx, page, 451, 'This status page has been blocked', 'It broke the rules for status pages on OnYourSite.');
   if (!page.published && !preview) notice(ctx, page, 404, 'This status page is offline', 'It isn’t available right now.');
-  if (!page.isSystem && (await statusLimits(page.userId, db)).plan === 'none' && !preview) {
-    notice(ctx, page, 404, 'This status page is offline', 'It isn’t available right now.');
-  }
+  if (unpaid && !preview) notice(ctx, page, 404, 'This status page is offline', 'It isn’t available right now.');
   return { preview };
 }
 
@@ -203,11 +211,22 @@ export async function statusServe(ctx: Ctx, page: StatusPageRow): Promise<void> 
   send(ctx, out, CACHE_PUBLIC);
 }
 
+// Gibt es die Adresse? Erst billig nachsehen (eine Abfrage), dann die ganze Seite bauen – sonst kostete jede
+// unbekannte Vorfall-Nummer oder Verlaufsseite hinter der letzten den vollen Aufbau
+async function exists(db: Db, page: StatusPageRow, route: Route): Promise<boolean> {
+  if (route.kind === 'incident') return (await db.one('SELECT id FROM status_incidents WHERE id = ? AND page_id = ?', [route.id, page.id])) !== null;
+  if (route.kind === 'history' && route.page > 1) {
+    return (await db.one(`SELECT id FROM status_incidents WHERE page_id = ? ORDER BY starts_at DESC, id DESC LIMIT 1 OFFSET ${(route.page - 1) * HISTORY_PER_PAGE}`, [page.id])) !== null;
+  }
+  return true;
+}
+
 async function build(db: Db, page: StatusPageRow, route: Route, preview: boolean): Promise<Cached> {
   const now = Math.floor(Date.now() / 1000);
+  if (!(await exists(db, page, route))) return { at: Date.now(), status: 404, body: '', type: 'text/html; charset=UTF-8', noindex: true };
   const view = await loadPageView(db, page, now);
   const links = page.isSystem ? await renderLinks() : { discord: '' };
-  lastViews.set(page.id, { at: Date.now(), view, links });
+  if (!preview) lastViews.set(String(page.id), { at: Date.now(), view, links });
   const noindex = view.noindex || preview;
   const html = (body: string): Cached => ({ at: Date.now(), status: 200, body, type: 'text/html; charset=UTF-8', noindex });
   if (route.kind === 'summary') return { at: Date.now(), status: 200, body: JSON.stringify(summaryJson(view)), type: 'application/json; charset=utf-8', noindex };
@@ -218,7 +237,8 @@ async function build(db: Db, page: StatusPageRow, route: Route, preview: boolean
     return html(renderIncidentPage({ ...view, noindex }, iv, links));
   }
   if (route.kind === 'history') {
-    const list = await loadIncidents(db, 'page_id = ?', [page.id], { order: 'starts_at DESC, id DESC', limit: HISTORY_PER_PAGE + 1, offset: (route.page - 1) * HISTORY_PER_PAGE });
+    // Der Verlauf zeigt keine Updates – nur das letzte laden
+    const list = await loadIncidents(db, 'page_id = ?', [page.id], { order: 'starts_at DESC, id DESC', limit: HISTORY_PER_PAGE + 1, offset: (route.page - 1) * HISTORY_PER_PAGE, updates: 'last' });
     const items = list.slice(0, HISTORY_PER_PAGE).map((i) => ({ ...i, affected: i.monitors.filter((m) => m.isPublic).map((m) => m.name) }));
     if (route.page > 1 && !items.length) return { at: Date.now(), status: 404, body: '', type: 'text/html; charset=UTF-8', noindex: true };
     return html(renderHistoryPage({ ...view, noindex }, { items, page: route.page, more: list.length > HISTORY_PER_PAGE }, links));
@@ -231,7 +251,7 @@ function serveDown(ctx: Ctx, slug: string, route: Route): never {
   const since = dbDown();
   const known = knownSlugs.get(slug);
   const system = known?.system ?? slug === SYSTEM_SLUG;
-  const last = known ? lastViews.get(known.id) : [...lastViews.values()].find((v) => v.view.page.isSystem && v.view.page.slug === slug);
+  const last = known ? lastViews.get(String(known.id)) : lastViews.values().find((v) => v.view.page.isSystem && v.view.page.slug === slug);
   baseHeaders(ctx);
   ctx.header('Cache-Control', 'no-store');
   if (last && Date.now() - last.at <= LAST_GOOD && (route.kind === 'home' || route.kind === 'summary')) {

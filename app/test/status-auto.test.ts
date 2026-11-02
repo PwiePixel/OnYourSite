@@ -134,3 +134,77 @@ test('maintenance starts and ends on time, each with one automatic update', asyn
   assert.equal(Number(row.resolved_at), NOW + 600);
   assert.deepEqual((await updatesOf(id)).slice(1), [['in_progress', autoTexts.maintenanceStarted], ['completed', autoTexts.maintenanceDone]]);
 });
+
+test('an auto incident whose components were all deleted closes as “no longer monitored”', async () => {
+  await sql(`INSERT INTO \`DB\`.status_monitors (page_id, user_id, type, name, is_public, target, config, interval_s, changed_at, created_at, updated_at)
+    VALUES (?, NULL, 'http', 'Gone', 1, 'https://example.com/', '{}', 300, 0, NOW(), NOW())`, [pageId]);
+  const gone = Number((await sql('SELECT MAX(id) AS id FROM `DB`.status_monitors'))[0].id);
+  const r = await autoIncidentRound(pages(), [{ ...mon(0), id: gone, name: 'Gone' }], 'ok', NOW);
+  assert.equal(r.opened.length, 1);
+  // Gelöscht wie im Editor (status-monitor-delete): Verknüpfung und Bestandteil weg
+  await sql('DELETE FROM `DB`.status_incident_monitors WHERE monitor_id = ?', [gone]);
+  await sql('DELETE FROM `DB`.status_monitors WHERE id = ?', [gone]);
+  const r2 = await autoIncidentRound(pages(), [], 'ok', NOW + 30);
+  assert.deepEqual(r2.resolved, r.opened);
+  const [inc] = await openAuto();
+  assert.equal(inc.status, 'resolved');
+  const ups = await updatesOf(Number(inc.id));
+  assert.deepEqual(ups[ups.length - 1], ['resolved', autoTexts.closedUnmonitored]);
+});
+
+// Discord: ein Bot mit status.v1 schlägt #status vor
+const CH = (n: number): string => String(1300000000000000000n + BigInt(n));
+const report = (): string => JSON.stringify({
+  reported_at: Math.floor(Date.now() / 1000), version: '0.3.0', runtime: 'service', features: ['updates.v1', 'status.v1'],
+  guild: { id: CH(1), name: 'OnYourSite', community: true }, updates_channel_id: '', status_channel_id: CH(20), categories: [],
+  channels: [{ id: CH(20), name: 'status', type: 'announcement', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] }],
+  threads: [], roles: [], truncated: false,
+});
+
+test('no Discord post while OnYourSite’s status page is offline or its address belongs to a profile page', async () => {
+  const posts = async () => (await sql("SELECT COUNT(*) AS n FROM `DB`.community_outbox WHERE action = 'status.post'"))[0].n
+    + (await sql('SELECT COUNT(*) AS n FROM `DB`.status_incident_posts'))[0].n;
+  const reset = async () => {
+    for (const q of ['DELETE FROM `DB`.status_incident_posts', "DELETE FROM `DB`.community_outbox WHERE action LIKE 'status.%'", 'DELETE FROM `DB`.status_incident_updates',
+      'DELETE FROM `DB`.status_incident_monitors', 'DELETE FROM `DB`.status_incidents']) await sql(q);
+  };
+  await sql("REPLACE INTO `DB`.oys_meta (meta_key, meta_value) VALUES ('discord_bot_report', ?)", [report()]);
+  await sql("INSERT IGNORE INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (9, 'mia@test.de', 'x', 'Mia', 0, NOW())");
+  try {
+    await reset();
+    await sql('UPDATE `DB`.status_pages SET is_published = 0 WHERE id = ?', [pageId]);
+    assert.equal((await autoIncidentRound(pages(), [mon(0)], 'ok', NOW)).opened.length, 1);
+    assert.equal(Number(await posts()), 0, 'offline: the incident stays on the site');
+    // Online, aber die Adresse gehört einer Profilseite
+    await reset();
+    await sql('UPDATE `DB`.status_pages SET is_published = 1 WHERE id = ?', [pageId]);
+    const slug = String((await sql('SELECT slug FROM `DB`.status_pages WHERE id = ?', [pageId]))[0].slug);
+    await sql("INSERT INTO `DB`.pages (user_id, slug, title, created_at) VALUES (9, ?, 'x', NOW())", [slug]);
+    assert.equal((await autoIncidentRound(pages(), [mon(0)], 'ok', NOW)).opened.length, 1);
+    assert.equal(Number(await posts()), 0, 'the address is used by a profile page');
+    // Ohne Konflikt: ein Beitrag
+    await reset();
+    await sql('DELETE FROM `DB`.pages WHERE user_id = 9');
+    assert.equal((await autoIncidentRound(pages(), [mon(0)], 'ok', NOW)).opened.length, 1);
+    assert.equal(Number(await posts()), 2, 'one post row and one status.post job');
+  } finally {
+    await reset();
+    await sql('DELETE FROM `DB`.pages WHERE user_id = 9');
+    await sql("DELETE FROM `DB`.oys_meta WHERE meta_key = 'discord_bot_report'");
+  }
+});
+
+test('OnYourSite’s own components (exempt from the platform gate) open and close auto incidents while the gate is on hold or frozen', async () => {
+  const sys = (over: Partial<AutoMonitor> = {}): AutoMonitor => mon(0, { gateExempt: true, ...over });
+  for (const gate of ['hold', 'frozen'] as const) {
+    await sql('DELETE FROM `DB`.status_incident_updates');
+    await sql('DELETE FROM `DB`.status_incident_monitors');
+    await sql('DELETE FROM `DB`.status_incidents');
+    const r = await autoIncidentRound(pages(), [sys(), mon(1)], gate, NOW);
+    assert.equal(r.opened.length, 1, gate);
+    const [inc] = await openAuto();
+    assert.deepEqual((await sql('SELECT monitor_id FROM `DB`.status_incident_monitors WHERE incident_id = ?', [inc.id])).map((x) => Number(x.monitor_id)), [ids[0]], 'only the exempt one');
+    const r2 = await autoIncidentRound(pages(), [sys({ state: 'up' }), mon(1)], gate, NOW + 60);
+    assert.deepEqual(r2.resolved, [Number(inc.id)], gate);
+  }
+});

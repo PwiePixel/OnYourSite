@@ -17,7 +17,7 @@ import { ensureSchema } from '../src/schema.js';
 import { alertRows, writeAlertRows, type AlertSource } from '../src/status/alerts.js';
 import { Notifier, RETRY_AFTER, STALE_AFTER, type MailRequest } from '../src/status/notifier.js';
 import { statusPageSettings } from '../src/status/settings.js';
-import { syncIncidentPosts } from '../src/status/posts.js';
+import { removeIncidentPosts, syncIncidentPosts } from '../src/status/posts.js';
 import { createIncident, addIncidentUpdate, loadIncident } from '../src/status/incidents.js';
 import { systemStatusPage } from '../src/status/model.js';
 import { testDatabase, type TestDb } from './coreHarness.js';
@@ -38,13 +38,13 @@ async function sql(query: string, params: unknown[] = []): Promise<RowDataPacket
   return r;
 }
 
-function botReport(features: string[]): string {
+function botReport(features: string[], alertsSeenByAll = false): string {
   return JSON.stringify({
     reported_at: time(), version: '0.3.0', runtime: 'service', features, guild: { id: CH(1), name: 'OnYourSite', community: true },
     updates_channel_id: '', status_channel_id: CH(20), alerts_channel_id: CH(21), categories: [],
     channels: [
-      { id: CH(20), name: 'status', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] },
-      { id: CH(21), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] },
+      { id: CH(20), name: 'status', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: true },
+      { id: CH(21), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: alertsSeenByAll },
     ],
     threads: [], roles: [], truncated: false,
   });
@@ -246,7 +246,20 @@ test('bot alerts: skipped without the bot, without status.v1 or without a channe
   await sql("UPDATE `DB`.status_pages SET settings = JSON_SET(COALESCE(settings, '{}'), '$.bot', JSON_OBJECT('status_channel_id', '', 'alerts_channel_id', '', 'saved', true)) WHERE id = ?", [pageId]);
   r = await deliver();
   assert.deepEqual([r.state, r.error], ['skipped', 'No channel for team alerts is chosen.']);
+  // Nichts gespeichert: der Vorschlag des Bots (#alerts) gilt nicht – niemand hat den Kanal gewählt
   await sql("UPDATE `DB`.status_pages SET settings = JSON_REMOVE(settings, '$.bot') WHERE id = ?", [pageId]);
+  r = await deliver();
+  assert.deepEqual([r.state, r.error], ['skipped', 'No channel for team alerts is chosen.']);
+  // Nie in den öffentlichen Kanal #status, den der Bot vorschlägt – auch nicht, wenn er für Beiträge aus ist
+  await sql("UPDATE `DB`.status_pages SET settings = JSON_SET(COALESCE(settings, '{}'), '$.bot', JSON_OBJECT('status_channel_id', '', 'alerts_channel_id', ?, 'saved', true)) WHERE id = ?", [CH(20), pageId]);
+  r = await deliver();
+  assert.deepEqual([r.state, r.error], ['skipped', 'No channel for team alerts is chosen.']);
+  await sql("UPDATE `DB`.status_pages SET settings = JSON_SET(COALESCE(settings, '{}'), '$.bot', JSON_OBJECT('status_channel_id', ?, 'alerts_channel_id', ?, 'saved', true)) WHERE id = ?", [CH(20), CH(21), pageId]);
+  // Der gespeicherte Kanal wurde später für alle sichtbar: nichts dorthin
+  await setReport(botReport(['updates.v1', 'status.v1'], true));
+  r = await deliver();
+  assert.deepEqual([r.state, r.error], ['skipped', 'Everyone on the server can see that channel – team alerts need a private one.']);
+  await setReport(botReport(['updates.v1', 'status.v1']));
   r = await deliver();
   assert.equal(r.state, 'sent');
   const jobs = await sql('SELECT action, ref, payload FROM `DB`.community_outbox');
@@ -363,4 +376,86 @@ test('status.alert jobs the bot hasn’t picked up within 2 hours expire; a fina
   await bot('POST', `/_/bot/outbox/${job.id}/done`, { error: 'The bot can’t post in #status: it needs Embed Links there.', final: true });
   const post = (await sql('SELECT state, error FROM `DB`.status_incident_posts WHERE incident_id = ?', [incId]))[0];
   assert.deepEqual([post.state, post.error], ['failed', 'The bot can’t post in #status: it needs Embed Links there.']);
+});
+
+test('a post queued while the page was online is not handed out once the page is offline', async () => {
+  await setReport(botReport(['status.v1']));
+  const page = (await withConnection((db) => systemStatusPage(db)))!;
+  const now = time();
+  const incId = await transaction(async (_conn, db) => {
+    const id = await createIncident(db, pageId, { kind: 'incident', title: 'Down', status: 'investigating', impact: 'major', startsAt: now, endsAt: null, monitors: [], body: 'x' }, 3, now);
+    await syncIncidentPosts(db, page, id, { post: true });
+    return id;
+  });
+  assert.equal((await sql('SELECT state FROM `DB`.status_incident_posts WHERE incident_id = ?', [incId]))[0].state, 'queued');
+  await sql('UPDATE `DB`.status_pages SET is_published = 0 WHERE id = ?', [pageId]);
+  try {
+    const out = await bot('GET', '/_/bot/outbox?f=status.v1');
+    assert.deepEqual(out.json.items, []);
+    const row = (await sql('SELECT state, error FROM `DB`.status_incident_posts WHERE incident_id = ?', [incId]))[0];
+    assert.deepEqual([row.state, row.error], ['failed', 'Not posted: the status page was offline.']);
+    // Ein neues Update mit „Post to Discord“, solange die Seite offline ist: kein neuer Beitrag
+    await transaction(async (_conn, db) => {
+      const offline = (await systemStatusPage(db))!;
+      await syncIncidentPosts(db, offline, incId, { post: true });
+    });
+    assert.equal((await sql('SELECT state FROM `DB`.status_incident_posts WHERE incident_id = ?', [incId]))[0].state, 'failed');
+    assert.equal(Number((await sql("SELECT COUNT(*) AS n FROM `DB`.community_outbox WHERE action = 'status.post' AND done_at IS NULL"))[0].n), 0);
+  } finally {
+    await sql('UPDATE `DB`.status_pages SET is_published = 1 WHERE id = ?', [pageId]);
+  }
+});
+
+test('mails sent, but the status write fails: the next round only writes the state – nobody gets the mail twice', async () => {
+  await write(source());
+  const { n, mails } = notifier();
+  await n.start();
+  // Die Datenbank fällt nach dem Versand kurz aus: das Schreiben des Ergebnisses und der Ersatz-Versuch scheitern
+  const raw = n as unknown as { finish: (...a: unknown[]) => Promise<void>; retry: (...a: unknown[]) => Promise<void> };
+  const finish = raw.finish.bind(n);
+  const retry = raw.retry.bind(n);
+  let down = true;
+  raw.finish = async (...a: unknown[]) => {
+    if (down) throw new Error('Pool timeout');
+    return finish(...a);
+  };
+  raw.retry = async (...a: unknown[]) => {
+    if (down) throw new Error('Pool timeout');
+    return retry(...a);
+  };
+  await n.deliverDue();
+  assert.equal(mails.length, 2, 'both admins once');
+  assert.equal((await sql("SELECT state FROM `DB`.status_outbox WHERE channel = 'admins'"))[0].state, 'pending');
+  down = false;
+  await n.deliverDue();
+  assert.equal(mails.length, 2, 'not again');
+  const row = (await sql("SELECT state, payload FROM `DB`.status_outbox WHERE channel = 'admins'"))[0];
+  assert.equal(row.state, 'sent');
+  assert.deepEqual(JSON.parse(String(row.payload)).sent_to.sort(), [3, 4]);
+  assert.equal(n.budget.used.system, 2, 'counted once');
+});
+
+test('an incident deleted while the answer to its first post was lost: the hand-out still carries the incident link', async () => {
+  await setReport(botReport(['status.v1']));
+  const page = (await withConnection((db) => systemStatusPage(db)))!;
+  const now = time();
+  const incId = await transaction(async (_conn, db) => {
+    const id = await createIncident(db, pageId, { kind: 'incident', title: 'Gone soon', status: 'investigating', impact: 'major', startsAt: now, endsAt: null, monitors: [], body: 'x' }, 3, now);
+    await syncIncidentPosts(db, page, id, { post: true });
+    return id;
+  });
+  // Der Bot holt den Auftrag ab und postet – seine Antwort geht verloren
+  let out = await bot('GET', '/_/bot/outbox?f=status.v1');
+  assert.equal((out.json.items as Array<{ action: string }>)[0].action, 'status.post');
+  // Der Vorfall wird gelöscht (wie im Editor)
+  await transaction(async (_conn, db) => {
+    await removeIncidentPosts(db, incId);
+    for (const table of ['status_incident_updates', 'status_incident_monitors']) await db.exec(`DELETE FROM ${table} WHERE incident_id = ?`, [incId]);
+    await db.exec('DELETE FROM status_incidents WHERE id = ?', [incId]);
+  });
+  out = await bot('GET', '/_/bot/outbox?f=status.v1');
+  const [item] = out.json.items as Array<{ action: string; data: Record<string, any> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  assert.equal(item.action, 'status.post');
+  assert.deepEqual([item.data.recheck, item.data.only_if_posted], [true, true]);
+  assert.equal(item.data.incident_url, `http://status.oys.test:8080/incidents/${incId}`, 'the bot finds its post by this link');
 });

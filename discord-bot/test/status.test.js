@@ -102,3 +102,12 @@ test('version 0.3.0 reports status.v1 and handles every status.* job', () => {
   assert.match(index, /const FEATURES = \['updates\.v1', 'suggestions\.v2', 'status\.v1'\];/);
   for (const action of ['status.post', 'status.edit', 'status.delete', 'status.alert']) assert.ok(index.includes(`'${action}': `), action);
 });
+
+test('status.post for a deleted incident (no embed left): the incident link from the website finds the bot’s own post', async () => {
+  const ch = new FakeChannel({ name: 'status' });
+  const own = new FakeMessage(ch, { embeds: [{ url: URL }] });
+  ch.sent.push(own);
+  const data = { channel_id: ch.id, recheck: true, only_if_posted: true, message: { embeds: [] }, incident_url: URL };
+  assert.deepEqual(await statusOf([ch]).post(data, job(80, 'status.post')), { message_id: own.id, channel_id: ch.id, found: true });
+  assert.equal(ch.sent.length, 1, 'nothing new');
+});

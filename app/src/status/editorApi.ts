@@ -18,7 +18,7 @@ import { ALERT_EVENTS, statusPageSettings, statusServerConfig, statusSettings, t
 import { statusLimits } from './limits.js';
 import { runtimePolicy } from './policy.js';
 import { PublicResolver } from './resolver.js';
-import { bumpRev, lockStatusPage, metaJson, numOrNull, statusPageUrl, systemStatusPage, type StatusPageRow } from './model.js';
+import { bumpRev, lockStatusPage, metaJson, numOrNull, slugTaken, statusPageUrl, systemStatusPage, type StatusPageRow } from './model.js';
 import {
   capacityProblem, checkDns, checkMonitorInput, checkSite, loadMonitorRows, maintenanceMonitors, monitorViews, newHeartbeatToken, stamp, MANUAL_STATUSES,
 } from './monitors.js';
@@ -26,7 +26,7 @@ import {
   addIncidentUpdate, checkNewIncident, cleanBody, createIncident, deleteIncidentRows, editIncidentFields, followLatestUpdate, isFinal, loadIncident,
   loadIncidents, pageMonitorIds, statusesOf, STATUS_LABEL, type Incident,
 } from './incidents.js';
-import { botChannels, postableChannel, removeIncidentPosts, syncIncidentPosts, STATUS_FEATURE } from './posts.js';
+import { alertsChannelProblem, botChannels, pagePostable, postableChannel, removeIncidentPosts, syncIncidentPosts, STATUS_FEATURE } from './posts.js';
 import { statusPreviewToken } from './routes.js';
 import { alertMessage, type AlertPayload } from './alerts.js';
 import { loadPageView } from './view.js';
@@ -138,11 +138,6 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
   ctx.json(out);
 }
 
-// Benutzt eine Profil- oder Code-Seite die Adresse der Statusseite? (Dann bleibt sie offline, Entwurf §3.1)
-async function slugTaken(db: Db, slug: string): Promise<boolean> {
-  return Number(await db.value('SELECT (SELECT COUNT(*) FROM pages WHERE slug = ?) + (SELECT COUNT(*) FROM code_sites WHERE slug = ?)', [slug, slug])) > 0;
-}
-
 async function monitorsOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
   const out = await withConnection(async (db) => {
     const rows = await loadMonitorRows(db, page.id);
@@ -213,7 +208,8 @@ async function incidentsOf(ctx: Ctx, page: StatusPageRow, before: number): Promi
       upcoming: upcoming.map((i) => incidentJson(i, posts)),
       past: past.slice(0, 20).map((i) => incidentJson(i, posts)),
       more: past.length > 20,
-      discord: bot.supported && bot.statusChannel !== '',
+      // Der Schalter „Post to Discord“ nur, solange die Seite erreichbar ist (offline wird nichts gepostet)
+      discord: bot.supported && bot.statusChannel !== '' && (await pagePostable(db, page)),
     };
   });
   ctx.json(out);
@@ -245,7 +241,7 @@ async function alertsState(db: Db, page: StatusPageRow): Promise<Record<string, 
     admins: { enabled: s.alerts.admins, events: s.alerts.events, count: admins },
     bot: {
       installed: ch.installed, supported: ch.supported, ready: ch.ready, reportedAt: ch.reportedAt, version: ch.version,
-      statusChannel: ch.statusChannel, alertsChannel: ch.alertsChannel, saved: ch.saved,
+      statusChannel: ch.statusChannel, alertsChannel: ch.alertsChannel, alertsNote: ch.alertsNote, saved: ch.saved,
       suggested: { status: rep?.status_channel_id ?? '', alerts: rep?.alerts_channel_id ?? '' }, choices,
     },
     recent,
@@ -611,6 +607,10 @@ async function saveBotChannels(ctx: Ctx, page: StatusPageRow, input: Input): Pro
       if (id !== '' && !postableChannel(rep, id)) return { ok: false, error: 'That channel isn’t in the bot’s latest report – refresh the list.', field };
     }
     if (statusId !== '' && statusId === alertsId) return { ok: false, error: 'Public incident posts and team alerts need two different channels.', field: 'alerts_channel_id' };
+    // Auch nicht in den öffentlichen Kanal #status des Bots, wenn die Beiträge dort aus sind
+    if (alertsId !== '' && alertsId === (rep?.status_channel_id ?? '')) return { ok: false, error: 'Team alerts can’t go to the public #status channel – choose a private channel.', field: 'alerts_channel_id' };
+    const problem = alertsChannelProblem(rep, alertsId);
+    if (problem !== '') return { ok: false, error: problem, field: 'alerts_channel_id' };
     const cur = (await systemStatusPage(db))!;
     const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
     raw.bot = { status_channel_id: statusId, alerts_channel_id: alertsId, saved: true };

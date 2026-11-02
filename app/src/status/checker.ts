@@ -898,7 +898,7 @@ export class Checker {
       if (m.type === 'manual') continue;
       list.push({
         id: m.id, pageId: m.pageId, name: m.name, isPublic: m.isPublic, state: m.st.state, since: m.st.since, flapping: m.st.flapping,
-        monitored: m.active && !m.hidden, maintenance: m.maintenance,
+        monitored: m.active && !m.hidden, maintenance: m.maintenance, gateExempt: m.type !== 'http' && m.type !== 'heartbeat',
       });
     }
     await autoIncidentRound(pages, list, this.gate.state, now);

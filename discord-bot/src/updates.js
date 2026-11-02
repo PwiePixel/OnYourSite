@@ -69,7 +69,8 @@ function setupUpdates(client, log = () => {}) {
   // Ein eigener, schon geposteter Beitrag zu diesem Update (Erkennung über den Link im ersten Embed) – nach einer
   // Unterbrechung zwischen Beitrag und Rückmeldung an die Webseite
   async function findOwnPost(channel, data) {
-    const url = urlOf(data.message);
+    // Ohne Embed (Vorfall gelöscht): der mitgeschickte Link
+    const url = urlOf(data.message) || (typeof data.incident_url === 'string' && /^https?:\/\//.test(data.incident_url) ? data.incident_url : '');
     if (!url || !client.user) return null;
     const me = client.user.id;
     if (channel.type === ChannelType.GuildForum) {

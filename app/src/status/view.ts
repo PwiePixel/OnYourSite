@@ -196,7 +196,7 @@ export async function loadPageView(db: Db, page: StatusPageRow, now = Math.floor
       }
       const effect = dayEffect.get(`${id}:${d.day}`) ?? null;
       const color = barColor(b, effect);
-      return { day: d.day, color, label: barLabel(d.start, b, dayIncidents.get(`${id}:${d.day}`) ?? 0, color) };
+      return { day: d.day, color, label: barLabel(d.start, b, dayIncidents.get(`${id}:${d.day}`) ?? 0, color, settings.show_uptime) };
     });
     const spark: number[] = [];
     if (settings.show_response) {
@@ -208,7 +208,8 @@ export async function loadPageView(db: Db, page: StatusPageRow, now = Math.floor
     components.push({
       id, name: String(r.name ?? ''), description: String(r.description ?? ''), group: String(r.group_name ?? ''), type,
       key: type === 'system' ? String(r.target ?? '') : '', status,
-      uptime: uptimePercent(down, covered, maint), bars, spark, updatedAt: checked, stale: checkerStale && type !== 'manual',
+      // „Show uptime“ aus: keine Zahl auf der Seite und in summary.json
+      uptime: settings.show_uptime ? uptimePercent(down, covered, maint) : null, bars, spark, updatedAt: checked, stale: checkerStale && type !== 'manual',
     });
   }
 
@@ -237,10 +238,11 @@ export async function loadPageView(db: Db, page: StatusPageRow, now = Math.floor
 }
 
 // „Nov 1, 2026: 99.2% uptime, 12 min down, 1 incident“
-function barLabel(start: number, b: { covered_s: number; down_s: number; maint_s: number } | null, incidents: number, color: BarColor): string {
+function barLabel(start: number, b: { covered_s: number; down_s: number; maint_s: number } | null, incidents: number, color: BarColor, showUptime = true): string {
   const day = date('M j, Y', start + 3600);
   if (!b || b.covered_s <= 0) return incidents ? `${day}: no data, ${incidents} ${incidents === 1 ? 'incident' : 'incidents'}` : `${day}: no data`;
-  const parts = [`${day}: ${(uptimePercent(b.down_s, b.covered_s, b.maint_s) ?? 100).toFixed(2).replace(/\.?0+$/, '')}% uptime`];
+  // Ohne „Show uptime“ nur der Tag (und was an ihm war)
+  const parts = [showUptime ? `${day}: ${(uptimePercent(b.down_s, b.covered_s, b.maint_s) ?? 100).toFixed(2).replace(/\.?0+$/, '')}% uptime` : day];
   if (b.down_s > 0) parts.push(`${Math.max(1, Math.round(b.down_s / 60))} min down`);
   if (b.maint_s > 0 || color === 'd-maint') parts.push('maintenance');
   if (incidents) parts.push(`${incidents} ${incidents === 1 ? 'incident' : 'incidents'}`);

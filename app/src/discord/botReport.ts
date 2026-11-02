@@ -19,6 +19,8 @@ export const ONLINE_SECONDS = 300;
 export type ChannelType = 'text' | 'announcement' | 'forum';
 export interface ReportChannel {
   id: string; name: string; type: ChannelType; parent_id: string; can_post: boolean; can_mention_everyone: boolean; missing: string[];
+  // Sieht jeder auf dem Server den Kanal? (fehlt oder null = unbekannt, ein älterer Bot)
+  everyone_can_view?: boolean | null;
 }
 export interface ReportThread { id: string; name: string; parent_id: string; can_post: boolean }
 export interface ReportRole { id: string; name: string; mentionable: boolean }
@@ -109,6 +111,7 @@ export function validateReport(body: unknown, known: readonly string[], now = ti
       return {
         id: id(c.id), name: name(c.name), type, parent_id: optionalId(c.parent_id), can_post: bool(c.can_post),
         can_mention_everyone: bool(c.can_mention_everyone, false), missing: [...new Set(missing)],
+        ...(c.everyone_can_view === undefined ? {} : { everyone_can_view: bool(c.everyone_can_view) }),
       };
     });
     const threads = list(body.threads, REPORT_CAPS.threads, (t): ReportThread => {

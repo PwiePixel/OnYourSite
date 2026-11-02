@@ -28,7 +28,11 @@ function setupStatus(client, updates) {
   // status.post: neuer Beitrag (oder der schon vorhandene eigene)
   async function post(data, item) {
     await checkChannel(data.channel_id);
-    return updates.post({ channel_id: data.channel_id, message: data.message, recheck: data.recheck === true, only_if_posted: data.only_if_posted === true }, item);
+    // incident_url: der Link des Vorfalls, auch wenn er schon gelöscht ist (dann hat die Nachricht kein Embed mehr)
+    return updates.post({
+      channel_id: data.channel_id, message: data.message, recheck: data.recheck === true, only_if_posted: data.only_if_posted === true,
+      incident_url: typeof data.incident_url === 'string' ? data.incident_url : '',
+    }, item);
   }
 
   // status.edit: nur das Embed – pingt nie neu

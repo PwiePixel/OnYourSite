@@ -154,6 +154,11 @@ test('hello report: valid reports are stored with reported_at, unknown features 
   assert.deepEqual(ok.report.gateway, { ready: true, ping_ms: 42 });
   assert.equal(ok.report.channels[1].missing[0], 'SendMessages');
   assert.ok(!ok.json.includes('\\u'), 'stored without \\u escapes');
+  assert.equal('everyone_can_view' in ok.report.channels[0], false, 'an older bot: who can see a channel stays unknown');
+  // Ab dem neuen Bot: ob jeder auf dem Server den Kanal sieht
+  const seen = validateReport(report({ channels: [{ id: ID(10), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: false }] }), known);
+  assert.ok(seen.ok && seen.report.channels[0].everyone_can_view === false);
+  assert.equal(validateReport(report({ channels: [{ id: ID(10), name: 'alerts', type: 'text', parent_id: '', can_post: true, missing: [], everyone_can_view: 'no' }] }), known).ok, false);
   // Namen wie jeder Text von außen: ohne Steuerzeichen, höchstens 100 Zeichen
   const named = validateReport(report({ guild: { id: ID(1), name: 'A\u0000B' + 'x'.repeat(200) } }), known);
   assert.ok(named.ok && named.report.guild.name.length <= 100 && !named.report.guild.name.includes('\u0000'));

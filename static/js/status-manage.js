@@ -712,10 +712,15 @@
     $('p.hint', card).textContent = line;
     var choices = [['', 'Off']].concat(b.choices.filter(function (c) { return c.canPost; }).map(function (c) { return [c.id, '#' + c.name]; }));
     var form = h('<div class="field-row cols-2"><div><label class="lbl">Public incident posts</label><select class="field" data-bot="status">' + options(choices, b.statusChannel) + '</select><p class="hint">Read-only for members, e.g. #status.</p></div>' +
-      '<div><label class="lbl">Team alerts</label><select class="field" data-bot="alerts">' + options(choices, b.alertsChannel) + '</select><p class="hint">Only the team should see it, e.g. #alerts.</p></div></div>');
+      '<div><label class="lbl">Team alerts</label><select class="field" data-bot="alerts">' + options(choices, b.saved ? b.alertsChannel : ((b.suggested && b.suggested.alerts) || '')) + '</select><p class="hint">Only the team should see it, e.g. #alerts.</p></div></div>');
     card.appendChild(form);
+    if (b.alertsNote) {
+      var note = h('<p class="hint"></p>');
+      note.textContent = 'Team alerts are off: ' + b.alertsNote;
+      card.appendChild(note);
+    }
     card.appendChild(h('<div class="flex items-center gap-3 flex-wrap"><button type="button" class="btn-secondary" data-stm="save-bot"' + (b.supported ? '' : ' disabled') + '><i class="bx bx-save"></i> Save channels</button>' +
-      (b.saved ? '' : '<span class="hint">Using the channels the bot suggests.</span>') + '</div>'));
+      (b.saved ? '' : '<span class="hint">Suggested by the bot – team alerts start once you save the channels.</span>') + '</div>'));
     return card;
   }
 

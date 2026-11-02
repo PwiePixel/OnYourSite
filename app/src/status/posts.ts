@@ -16,7 +16,7 @@ import { report, type BotReport } from '../discord/botReport.js';
 import { mdPlain } from '../updates/markdown.js';
 import { incidentPath } from './links.js';
 import { loadIncidents, isFinal, STATUS_LABEL, type Incident } from './incidents.js';
-import { pageFromRow, statusPageUrl, type StatusPageRow } from './model.js';
+import { pageFromRow, slugTaken, statusPageUrl, systemStatusPage, type StatusPageRow } from './model.js';
 import { statusPageSettings } from './settings.js';
 
 export const STATUS_FEATURE = 'status.v1';
@@ -40,8 +40,9 @@ export interface BotChannels {
   reportedAt: number | null;
   version: string;
   statusChannel: string; // #status für Beiträge zu Vorfällen ('' = aus)
-  alertsChannel: string; // #alerts für Meldungen ans Team ('' = aus)
-  saved: boolean; // vom Admin gewählt (sonst die Vorschläge aus dem Bericht)
+  alertsChannel: string; // #alerts für Meldungen ans Team ('' = aus) – nur ein vom Admin gespeicherter, privater Kanal
+  alertsNote: string; // warum der gespeicherte Kanal nicht benutzt wird ('' = kein Problem)
+  saved: boolean; // vom Admin gewählt (sonst für #status die Vorschläge aus dem Bericht)
   report: BotReport | null;
 }
 
@@ -49,6 +50,19 @@ export interface BotChannels {
 // eigenen Beitrag)
 export function postableChannel(rep: BotReport | null, id: string): boolean {
   return !!rep && id !== '' && rep.channels.some((c) => c.id === id && c.can_post && c.type !== 'forum');
+}
+
+// Ein Kanal, den nicht jeder auf dem Server sieht – laut Bericht des Bots (ein älterer Bot meldet das nicht: dann nie)
+export function privateChannel(rep: BotReport | null, id: string): boolean {
+  return !!rep && id !== '' && rep.channels.some((c) => c.id === id && c.everyone_can_view === false);
+}
+
+// Warum ein Kanal nicht für Meldungen ans Team taugt ('' = er taugt)
+export function alertsChannelProblem(rep: BotReport | null, id: string): string {
+  if (id === '' || privateChannel(rep, id)) return '';
+  const c = rep?.channels.find((x) => x.id === id);
+  if (c && typeof c.everyone_can_view !== 'boolean') return 'The bot doesn’t report yet who can see a channel – update it with discord-bot/install.sh --update.';
+  return 'Everyone on the server can see that channel – team alerts need a private one.';
 }
 
 // Welche Kanäle gelten: gewählte (saved) oder die Vorschläge des Bots – nur, solange der Bot dort posten darf
@@ -61,14 +75,23 @@ export async function botChannels(db: Db, settingsRaw: string | null): Promise<B
     const id = bot.saved ? stored : stored || suggested || '';
     return postableChannel(rep, id) ? id : '';
   };
+  const statusChannel = pick(bot.status_channel_id, rep?.status_channel_id);
+  // Meldungen ans Team nur in einen Kanal, den ein Admin gespeichert hat – der Vorschlag des Bots ist nur die
+  // Vorauswahl im Editor (ein schon vorhandenes #alerts kann öffentlich sein). Nie in den öffentlichen Kanal #status.
+  let alertsChannel = bot.saved && postableChannel(rep, bot.alerts_channel_id) ? bot.alerts_channel_id : '';
+  if (alertsChannel !== '' && (alertsChannel === statusChannel || alertsChannel === rep?.status_channel_id)) alertsChannel = '';
+  // Nur ein Kanal, den nicht alle sehen – auch wenn er erst nach dem Speichern öffentlich wurde
+  const alertsNote = alertsChannelProblem(rep, alertsChannel);
+  if (alertsNote !== '') alertsChannel = '';
   return {
     installed,
     supported: !!rep && rep.features.includes(STATUS_FEATURE),
     ready: rep?.gateway ? rep.gateway.ready : null,
     reportedAt: rep ? Number(rep.reported_at) || null : null,
     version: rep ? String(rep.version) : '',
-    statusChannel: pick(bot.status_channel_id, rep?.status_channel_id),
-    alertsChannel: pick(bot.alerts_channel_id, rep?.alerts_channel_id),
+    statusChannel,
+    alertsChannel,
+    alertsNote,
     saved: bot.saved,
     report: rep,
   };
@@ -105,11 +128,19 @@ export function incidentEmbed(page: StatusPageRow, inc: Incident): Record<string
   return embed;
 }
 
-async function embedOf(db: Db, incidentId: number): Promise<Record<string, unknown> | null> {
+async function embedOf(db: Db, incidentId: number): Promise<{ embed: Record<string, unknown>; page: StatusPageRow } | null> {
   const inc = (await loadIncidents(db, 'id = ?', [incidentId]))[0];
   if (!inc) return null;
   const row = await db.one('SELECT id, user_id, is_system, slug, title, description, theme, settings, is_published, is_blocked, blocked_reason, review_note, reviewed_at, rev, created_at FROM status_pages WHERE id = ?', [inc.pageId]);
-  return row ? incidentEmbed(pageFromRow(row), inc) : null;
+  if (!row) return null;
+  const page = pageFromRow(row);
+  return { embed: incidentEmbed(page, inc), page };
+}
+
+// Neue Beiträge im öffentlichen Kanal #status nur, solange OnYourSites Seite erreichbar ist: online, nicht gesperrt und
+// ihre Adresse gehört keiner Profil- oder Code-Seite (sonst führte der Link im Beitrag auf diese fremde Seite)
+export async function pagePostable(db: Db, page: StatusPageRow): Promise<boolean> {
+  return page.isSystem && page.published && !page.blocked && !(await slugTaken(db, page.slug));
 }
 
 // ---------------------------------------------------------------- Zeilen und Aufträge
@@ -160,17 +191,19 @@ async function queueEdit(db: Db, row: PostRow): Promise<void> {
 // - post: noch kein Beitrag im Kanal #status → einen anlegen (nur OnYourSites Seite, nur mit Bot status.v1).
 export async function syncIncidentPosts(db: Db, page: StatusPageRow, incidentId: number, opts: { post?: boolean } = {}): Promise<void> {
   const rows = (await db.q('SELECT * FROM status_incident_posts WHERE incident_id = ? ORDER BY id FOR UPDATE', [incidentId])).map(postFrom);
+  // Neu posten nur auf Wunsch und solange die Seite erreichbar ist (offline bleibt der Vorfall auf der Seite)
+  const fresh = !!opts.post && (await pagePostable(db, page));
   for (const row of rows) {
     if (row.state === 'queued') {
       if (!row.dirty) await setPost(db, row.id, { dirty: 1 });
     } else if (row.state === 'posted') {
       await queueEdit(db, row);
-    } else if (row.state === 'failed' && row.messageId === null && opts.post) {
+    } else if (row.state === 'failed' && row.messageId === null && fresh) {
       await setPost(db, row.id, { state: 'queued', dirty: 0, error: null });
       await queuePost(db, row, incidentId);
     }
   }
-  if (!opts.post || !page.isSystem) return;
+  if (!fresh) return;
   const ch = await botChannels(db, page.settings);
   if (!ch.supported || ch.statusChannel === '') return;
   const target = 'bot:' + ch.statusChannel;
@@ -226,9 +259,23 @@ async function preparePost(db: Db, job: OutboxJob): Promise<Prepared> {
       return { send: false, reason: 'cancelled' };
     }
   }
-  const embed = await embedOf(db, row.incidentId);
-  if (!embed && row.state !== 'removing') return { send: false, reason: 'skipped' };
-  const data: Record<string, unknown> = { channel_id: row.channelId, message: { embeds: embed ? [embed] : [] }, incident_url: embed ? String(embed.url) : '' };
+  const found = await embedOf(db, row.incidentId);
+  if (!found && row.state !== 'removing') return { send: false, reason: 'skipped' };
+  // Inzwischen offline (oder die Adresse gehört einer anderen Seite): nicht posten. Eine Nachfrage (recheck) läuft
+  // weiter – der Bot hat vielleicht schon gepostet.
+  if (found && row.state === 'queued' && job.claimed_at === null && !(await pagePostable(db, found.page))) {
+    await setPost(db, row.id, { state: 'failed', error: 'Not posted: the status page was offline.', dirty: 0 });
+    return { send: false, reason: 'skipped' };
+  }
+  const embed = found ? found.embed : null;
+  // Vorfall schon gelöscht: der Link, unter dem der Bot seinen Beitrag wiederfindet (Beiträge gibt es nur zu
+  // OnYourSites Seite) – ohne ihn bliebe ein schon geposteter Beitrag für immer in #status
+  let incidentUrl = embed ? String(embed.url) : '';
+  if (!embed) {
+    const sys = await systemStatusPage(db);
+    if (sys) incidentUrl = statusPageUrl(sys.slug, incidentPath(row.incidentId));
+  }
+  const data: Record<string, unknown> = { channel_id: row.channelId, message: { embeds: embed ? [embed] : [] }, incident_url: incidentUrl };
   if (job.claimed_at !== null) data.recheck = true;
   if (row.state === 'removing') data.only_if_posted = true;
   return { send: true, data };
@@ -237,9 +284,9 @@ async function preparePost(db: Db, job: OutboxJob): Promise<Prepared> {
 async function prepareEdit(db: Db, job: OutboxJob): Promise<Prepared> {
   const row = await lockPost(db, Number(job.data?.post_id ?? 0));
   if (!row || row.state !== 'posted' || row.messageId === null) return { send: false, reason: 'skipped' };
-  const embed = await embedOf(db, row.incidentId);
-  if (!embed) return { send: false, reason: 'skipped' };
-  return { send: true, data: { channel_id: row.channelId, message_id: row.messageId, message: { embeds: [embed] } } };
+  const found = await embedOf(db, row.incidentId);
+  if (!found) return { send: false, reason: 'skipped' };
+  return { send: true, data: { channel_id: row.channelId, message_id: row.messageId, message: { embeds: [found.embed] } } };
 }
 
 // Ergebnis eines Auftrags (in der Transaktion von /done; die Zeile ist schon gesperrt)

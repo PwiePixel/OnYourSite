@@ -14,7 +14,7 @@ const me = { id: ID(999) };
 function chan(id, name, type, o = {}) {
   return {
     id, name, type, parentId: o.parentId || null, rawPosition: o.position || 0, archived: Boolean(o.archived),
-    permissionsFor: () => o.perms || perms(...ALL),
+    permissionsFor: (who) => (who && who.id === GUILD ? (o.everyone || perms('ViewChannel')) : (o.perms || perms(...ALL))),
     isThread: () => [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(type),
   };
 }
@@ -56,7 +56,7 @@ test('report: text, announcement and forum channels with the bot’s permissions
   assert.equal(r.updates_channel_id, ID(10));
   assert.deepEqual(r.channels.map((c) => c.name), ['updates', 'general', 'changelog'], 'no voice channel, no ticket channels, not the suggestion forum');
   const [updates, general, changelog] = r.channels;
-  assert.deepEqual(updates, { id: ID(10), name: 'updates', type: 'announcement', parent_id: ID(1), can_post: true, can_mention_everyone: true, missing: [] });
+  assert.deepEqual(updates, { id: ID(10), name: 'updates', type: 'announcement', parent_id: ID(1), can_post: true, can_mention_everyone: true, missing: [], everyone_can_view: true });
   assert.deepEqual([general.can_post, general.missing], [false, ['SendMessages', 'EmbedLinks']]);
   assert.deepEqual([changelog.type, changelog.can_post, changelog.can_mention_everyone, changelog.missing], ['forum', true, false, ['ManageThreads']]);
   assert.deepEqual(r.categories, [{ id: ID(1), name: 'OnYourSite' }]);
@@ -127,4 +127,16 @@ test('gateway: ready from discord.js, the ping rounded; before the first heartbe
   assert.deepEqual(gatewayOf({ isReady: () => true, ws: { ping: 41.6 } }), { ready: true, ping_ms: 42 });
   assert.deepEqual(gatewayOf({ isReady: () => false, ws: { ping: -1 } }), { ready: false, ping_ms: 0 });
   assert.deepEqual(gatewayOf(null), { ready: false, ping_ms: 0 });
+});
+
+test('report: whether everyone on the server can see a channel – without the @everyone role a channel counts as visible', () => {
+  const channels = [
+    chan(ID(20), 'status', ChannelType.GuildAnnouncement, { position: 1 }),
+    chan(ID(21), 'alerts', ChannelType.GuildText, { position: 2, everyone: perms() }),
+  ];
+  const everyone = [{ id: GUILD, name: '@everyone', managed: false, mentionable: true, position: 0 }];
+  const r = buildReport(guild(channels, everyone), me, cfg, ['status.v1']);
+  assert.deepEqual(r.channels.map((c) => [c.name, c.everyone_can_view]), [['status', true], ['alerts', false]]);
+  const unknown = buildReport(guild(channels), me, cfg, ['status.v1']);
+  assert.deepEqual(unknown.channels.map((c) => c.everyone_can_view), [true, true]);
 });

@@ -50,10 +50,10 @@ function botReport(features: string[], extra: Record<string, unknown> = {}): str
     guild: { id: CH(1), name: 'OnYourSite', community: true }, updates_channel_id: '',
     status_channel_id: CH(20), alerts_channel_id: CH(21), categories: [],
     channels: [
-      { id: CH(20), name: 'status', type: 'announcement', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] },
-      { id: CH(21), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] },
-      { id: CH(22), name: 'locked', type: 'text', parent_id: '', can_post: false, can_mention_everyone: false, missing: ['SendMessages'] },
-      { id: CH(23), name: 'ideas', type: 'forum', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] },
+      { id: CH(20), name: 'status', type: 'announcement', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: true },
+      { id: CH(21), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: false },
+      { id: CH(22), name: 'locked', type: 'text', parent_id: '', can_post: false, can_mention_everyone: false, missing: ['SendMessages'], everyone_can_view: true },
+      { id: CH(23), name: 'ideas', type: 'forum', parent_id: '', can_post: true, can_mention_everyone: false, missing: [], everyone_can_view: true },
     ],
     threads: [], roles: [], truncated: false, ...extra,
   });
@@ -263,7 +263,8 @@ test('alerts: admins on or off and the events; bot channels only from the bot’
   ctx = await get('status-alerts');
   assert.equal(body(ctx).bot.supported, true);
   assert.equal(body(ctx).bot.statusChannel, CH(20), 'the bot’s suggestion while nothing is saved');
-  assert.equal(body(ctx).bot.alertsChannel, CH(21));
+  assert.equal(body(ctx).bot.alertsChannel, '', 'team alerts only to a channel an admin saved – the suggestion is a pre-selection');
+  assert.equal(body(ctx).bot.suggested.alerts, CH(21));
   assert.deepEqual(body(ctx).bot.choices.map((c: { id: string }) => c.id), [CH(20), CH(21), CH(22)], 'no forum in the list');
   for (const [s, a] of [[CH(22), CH(21)], [CH(23), CH(21)], [CH(20), CH(99)], ['<script>', CH(21)]]) {
     ctx = await post('status-bot-channels', { status_channel_id: s, alerts_channel_id: a });
@@ -271,6 +272,18 @@ test('alerts: admins on or off and the events; bot channels only from the bot’
   }
   ctx = await post('status-bot-channels', { status_channel_id: CH(20), alerts_channel_id: CH(20) });
   assert.equal(body(ctx).error, 'Public incident posts and team alerts need two different channels.');
+  ctx = await post('status-bot-channels', { status_channel_id: '', alerts_channel_id: CH(20) });
+  assert.equal(body(ctx).error, 'Team alerts can’t go to the public #status channel – choose a private channel.');
+  // Ein #alerts, das alle sehen (z. B. ein schon vorhandener Kanal) – oder ein Bot, der das noch nicht meldet: abgelehnt
+  const general = { id: CH(24), name: 'alerts', type: 'text', parent_id: '', can_post: true, can_mention_everyone: false, missing: [] };
+  for (const [seen, error] of [[true, 'Everyone on the server can see that channel – team alerts need a private one.'],
+    [undefined, 'The bot doesn’t report yet who can see a channel – update it with discord-bot/install.sh --update.']] as const) {
+    const rep = JSON.parse(botReport(['updates.v1', 'status.v1'])) as { channels: unknown[] };
+    await setReport(JSON.stringify({ ...rep, channels: [...rep.channels, { ...general, ...(seen === undefined ? {} : { everyone_can_view: seen }) }] }));
+    ctx = await post('status-bot-channels', { status_channel_id: CH(20), alerts_channel_id: CH(24) });
+    assert.equal(body(ctx).error, error);
+  }
+  await setReport(botReport(['updates.v1', 'status.v1']));
   ctx = await post('status-bot-channels', { status_channel_id: CH(20), alerts_channel_id: '' });
   assert.equal(body(ctx).ok, true);
   assert.equal(body(ctx).bot.alertsChannel, '', 'saved as off – the suggestion no longer counts');

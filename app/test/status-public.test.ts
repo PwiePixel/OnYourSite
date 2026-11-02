@@ -201,3 +201,91 @@ test('without the database: the last view with a red notice and no-store; withou
   }
   assert.equal((await get('/')).statusCode, 200);
 });
+
+test('an unknown incident or a history page past the end: 404 without building the whole page', async () => {
+  resetStatusRoutesForTests();
+  // Ohne status_daily scheitert jeder Aufbau der Seite – die billige Prüfung davor braucht die Tabelle nicht
+  await sql('RENAME TABLE `DB`.status_daily TO `DB`.status_daily_off');
+  try {
+    for (const url of ['/incidents/999999', '/incidents/' + (incident + 1), '/history?page=9', '/history?page=99999']) {
+      const res = await get(url);
+      assert.equal(res.statusCode, 404, url);
+      assert.ok(res.body.includes('Page not found'), url);
+    }
+  } finally {
+    await sql('RENAME TABLE `DB`.status_daily_off TO `DB`.status_daily');
+  }
+  assert.equal((await get('/incidents/' + incident)).statusCode, 200);
+  assert.equal((await get('/history')).statusCode, 200);
+});
+
+test('“Show uptime” off: no uptime figure on the page, in the bars or in summary.json', async () => {
+  resetStatusRoutesForTests();
+  // Ein geprüfter Bestandteil mit Tageswerten (manuelle zeigen keine Balken)
+  await sql(`INSERT INTO \`DB\`.status_monitors (page_id, user_id, type, name, is_public, target, config, interval_s, changed_at, created_at, updated_at)
+    VALUES (?, NULL, 'http', 'Checked API', 1, 'https://example.com/', '{}', 300, 0, NOW(), NOW())`, [pageId]);
+  const checked = Number((await sql('SELECT MAX(id) AS id FROM `DB`.status_monitors'))[0].id);
+  const day = new Date().toISOString().slice(0, 10);
+  await sql('INSERT INTO `DB`.status_daily (monitor_id, day, covered_s, down_s, degraded_s, maint_s) VALUES (?, ?, 3600, 36, 0, 0)', [checked, day]);
+  try {
+    await bump();
+    let res = await get('/');
+    assert.match(res.body, /% uptime/, 'shown by default');
+    await sql("UPDATE `DB`.status_pages SET settings = JSON_SET(COALESCE(settings, '{}'), '$.show_uptime', false) WHERE id = ?", [pageId]);
+    await bump();
+    res = await get('/');
+    assert.equal(res.statusCode, 200);
+    assert.ok(res.body.includes('Checked API'));
+    assert.doesNotMatch(res.body, /% uptime/);
+    const j = JSON.parse((await get('/summary.json')).body) as { components: Array<{ uptime_90d: number | null }> };
+    assert.ok(j.components.length > 0);
+    assert.ok(j.components.every((c) => c.uptime_90d === null));
+  } finally {
+    await sql("UPDATE `DB`.status_pages SET settings = JSON_REMOVE(settings, '$.show_uptime') WHERE id = ?", [pageId]);
+    await sql('DELETE FROM `DB`.status_daily WHERE monitor_id = ?', [checked]);
+    await sql('DELETE FROM `DB`.status_monitors WHERE id = ?', [checked]);
+    await bump();
+  }
+});
+
+test('without the database: never the view of a preview or of a page that went offline since', async () => {
+  const dbDown = async (fn: () => Promise<void>) => {
+    await closePool();
+    setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: t.name, host: '127.0.0.1', port: '1' }, uploads_dir: t.uploads });
+    try {
+      await fn();
+    } finally {
+      await closePool();
+      setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: t.name }, uploads_dir: t.uploads });
+    }
+  };
+  resetStatusRoutesForTests();
+  await sql('UPDATE `DB`.status_pages SET is_published = 0 WHERE id = ?', [pageId]);
+  await bump();
+  try {
+    // Nur die Vorschau wurde gebaut (offline)
+    const token = statusPreviewToken({ id: pageId, slug: 'status' });
+    assert.equal((await get('/?preview=' + encodeURIComponent(token))).statusCode, 200);
+    await dbDown(async () => {
+      const res = await get('/');
+      assert.ok(!res.body.includes('Shop “API”'), 'not the preview of the offline page');
+      assert.ok(!(await get('/summary.json')).body.includes('Shop “API”'));
+    });
+    // Online gebaut, dann offline genommen: die gemerkte Ansicht gilt nicht mehr
+    await sql('UPDATE `DB`.status_pages SET is_published = 1 WHERE id = ?', [pageId]);
+    await bump();
+    resetStatusRoutesForTests();
+    assert.equal((await get('/')).statusCode, 200);
+    await sql('UPDATE `DB`.status_pages SET is_published = 0 WHERE id = ?', [pageId]);
+    await bump();
+    assert.equal((await get('/')).statusCode, 404);
+    await dbDown(async () => {
+      assert.ok(!(await get('/')).body.includes('Shop “API”'), 'not the view from before it went offline');
+    });
+  } finally {
+    await sql('UPDATE `DB`.status_pages SET is_published = 1 WHERE id = ?', [pageId]);
+    await bump();
+    resetStatusRoutesForTests();
+  }
+  assert.equal((await get('/')).statusCode, 200);
+});

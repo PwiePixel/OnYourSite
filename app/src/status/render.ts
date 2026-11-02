@@ -170,7 +170,7 @@ function incidentCard(view: PageView, inc: IncidentView): string {
   return o;
 }
 
-function componentRow(c: ComponentView): string {
+function componentRow(c: ComponentView, showUptime: boolean): string {
   let o = `      <div class="st-comp${c.stale ? ' st-stale' : ''}" data-id="${c.id}">\n`;
   o += `        <div class="st-comp-head"><span class="st-comp-name">${e(c.name)}</span>`;
   if (c.description) o += `<span class="st-help" title="${e(c.description)}">?</span>`;
@@ -180,7 +180,8 @@ function componentRow(c: ComponentView): string {
     for (const b of c.bars) o += `<i class="st-bar ${b.color}" role="img" title="${e(b.label)}" aria-label="${e(b.label)}"></i>`;
     o += '</div>\n';
     o += '        <div class="st-legend"><span><span class="st-wide">90 days ago</span><span class="st-narrow">30 days ago</span></span>';
-    o += `<span>${c.uptime === null ? '—' : e(c.uptime.toFixed(2)) + '% uptime'}</span><span>Today</span></div>\n`;
+    if (showUptime) o += `<span>${c.uptime === null ? '—' : e(c.uptime.toFixed(2)) + '% uptime'}</span>`;
+    o += '<span>Today</span></div>\n';
   }
   if (c.spark.length && c.spark.some((v) => v > 0)) o += '        ' + sparkline(c) + '\n';
   o += '      </div>\n';
@@ -209,13 +210,13 @@ function groups(view: PageView): string {
   for (const g of order) {
     const list = byGroup.get(g)!;
     if (g === '') {
-      for (const c of list) o += componentRow(c);
+      for (const c of list) o += componentRow(c, view.settings.show_uptime);
       continue;
     }
     const worst = list.reduce<ComponentStatus>((acc, c) => (c.status === 'major' || (c.status === 'partial' && acc !== 'major') || (c.status === 'degraded' && !['major', 'partial'].includes(acc)) ? c.status : acc), 'operational');
     const open = !(view.page.isSystem && g === 'Infrastructure' && worst === 'operational');
     o += `      <details class="st-group"${open ? ' open' : ''}><summary><span>${e(g)}</span>${pill(worst)}</summary>\n`;
-    for (const c of list) o += componentRow(c);
+    for (const c of list) o += componentRow(c, view.settings.show_uptime);
     o += '      </details>\n';
   }
   return o;
