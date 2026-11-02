@@ -18,7 +18,7 @@ export interface CodeSettings {
 export const CODE_SETTINGS_KEY = 'code_pages';
 
 export const CODE_SETTINGS_DEFAULTS: Readonly<CodeSettings> = Object.freeze({
-  max_on_pages: 0, max_files: 30, max_file_kb: 256, max_total_kb: 2048, paused: false,
+  max_on_pages: 1, max_files: 30, max_file_kb: 256, max_total_kb: 2048, paused: false,
 });
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));

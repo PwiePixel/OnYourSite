@@ -149,6 +149,38 @@ export async function codeApiState(ctx: Ctx, user: Row, selectedId: number | nul
   };
 }
 
+// Übersicht der Code-Seiten für den Start des Editors (OYS_EDITOR.code, CS-6): Seitenwechsler und Dialoge ohne Anfrage.
+// Nur Zeilen dieses Kontos; Dateien werden nicht gelesen.
+export async function codeSummary(user: Row): Promise<Record<string, unknown>> {
+  const uid = intval(user.id);
+  const settings = await codeSettings();
+  const sites = await codeSites(uid);
+  const pages = await q('SELECT id, slug, code_site_id FROM pages WHERE user_id = ?', [uid]);
+  const slotFor = (site: Row): Row | null => pages.find((p) => intval(p.code_site_id) === intval(site.id)) ?? null;
+  const morePrice = await shopPrice('code_more', uid);
+  const list = sites.filter((s) => phpTruthy(s.slug) || slotFor(s)).map((s) => {
+    const slot = slotFor(s);
+    const slug = phpTruthy(s.slug) ? phpStr(s.slug) : phpStr(slot?.slug ?? '');
+    return {
+      id: intval(s.id), kind: phpTruthy(s.slug) ? 'own' : 'page', slug, url: codeUrl(slug), title: phpStr(s.title),
+      online: phpTruthy(s.is_published), blocked: phpTruthy(s.is_blocked), slot: slot ? intval(slot.id) : null,
+    };
+  });
+  return {
+    unlocked: await has(uid, 'code_page'),
+    more: { unlocked: morePrice === 0 || (await has(uid, 'code_more')), cost: morePrice },
+    cost: await shopPrice('code_page', uid),
+    terms: phpTruthy(user.code_terms_at),
+    banned: phpTruthy(user.code_banned_at) ? { reason: phpStr(user.code_ban_reason ?? '') } : null,
+    paused: settings.paused,
+    own: list.filter((s) => s.kind === 'own').length,
+    onPages: pages.filter((p) => p.code_site_id !== null && p.code_site_id !== undefined).length,
+    maxOnPages: settings.max_on_pages,
+    total: sites.length,
+    sites: list,
+  };
+}
+
 // Änderung unter der Sperre: busy (200) oder Konto weg (409 reload) beenden die Anfrage; eine Ablehnung ebenso.
 // slug: die verlangte Adresse – für die Meldung, wenn ein anderes Konto sie gleichzeitig belegt (doppelter Schlüssel
 // in pages/code_sites statt AddressTakenError)

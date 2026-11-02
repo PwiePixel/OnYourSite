@@ -90,7 +90,7 @@ test('code_pages settings: defaults, clamps, broken values', () => {
   assert.deepEqual(codeSettingsFrom(null, 3), CODE_SETTINGS_DEFAULTS);
   assert.deepEqual(codeSettingsFrom('{broken', 3), CODE_SETTINGS_DEFAULTS);
   assert.deepEqual(codeSettingsFrom('[1,2]', 3), CODE_SETTINGS_DEFAULTS);
-  assert.equal(CODE_SETTINGS_DEFAULTS.max_on_pages, 0);
+  assert.equal(CODE_SETTINGS_DEFAULTS.max_on_pages, 1);
   const s = codeSettingsFrom({ max_on_pages: 9, max_files: 0, max_file_kb: 4096, max_total_kb: 300, paused: 'true' }, 3);
   assert.deepEqual(s, { max_on_pages: 3, max_files: 1, max_file_kb: 1024, max_total_kb: 1024, paused: false });
   // max_on_pages höchstens max_pages
