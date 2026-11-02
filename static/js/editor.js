@@ -678,8 +678,7 @@
       case 'add-block': openAddBlockModal(); break;
       case 'quick-add': quickAdd(); break;
       case 'share': openShareModal(); break;
-      case 'honeycombs': openHoneycombs(); break;
-      case 'open-code': closeModal(); switchTab('code'); break;
+      case 'honeycombs': openShop(el && el.dataset ? el.dataset.feature : ''); break;
     }
   }
 
@@ -1061,7 +1060,7 @@
   // ================================================================
   // Tabs
   // ================================================================
-  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', status: 'Status', settings: 'Settings' };
+  var TAB_TITLES = { content: 'Content', design: 'Design', stats: 'Stats', messages: 'Messages', code: 'Code page', status: 'Status', honeycombs: 'Honeycombs', settings: 'Settings' };
   function switchTab(name) {
     // Den Bereich „Status“ gibt es nur für Admins: ohne seinen Container bleibt alles beim Inhalt
     if (!TAB_TITLES[name] || !$('#tab-' + name)) name = 'content';
@@ -1077,7 +1076,7 @@
     document.body.classList.toggle('code-mode', name === 'code');
     // Statusseite: ohne Vorschau des Profils und ohne den Speichern-Knopf (der Bereich speichert jede Änderung selbst)
     document.body.classList.toggle('status-mode', name === 'status');
-    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status';
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status' || name === 'honeycombs';
     if (wasCode !== (name === 'code') || wasStatus !== (name === 'status')) fitPhone();
     paintSave(name === 'code' ? code.state : pageSaveState);
     if (name === 'code') loadCode();
@@ -1086,9 +1085,10 @@
       $('#pvLiveLabel').textContent = 'Live preview';
       preview.refreshIfStale();
     }
-    // Nachrichten und Termine gehören zum Konto: auch ohne Seite
+    // Nachrichten und Termine gehören zum Konto: auch ohne Seite (ebenso die Honigwaben)
     if (name === 'messages') loadMessages();
     if (name === 'status') loadStatus();
+    if (name === 'honeycombs') loadShop();
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
@@ -2264,7 +2264,7 @@
   }
 
   // ================================================================
-  // Honigwaben: Kontostand oben, Fenster mit „So verdienst du mehr“ und Verlauf
+  // Honigwaben: Kontostand oben – der Knopf öffnet den Bereich „Honeycombs“
   // ================================================================
   var hc = E.honeycombs || { balance: 0, earned: [], history: [], rules: {} };
   function setBalance(n, pop) {
@@ -2273,41 +2273,328 @@
     if (pop) { var b = $('#hcBtn'); b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
   }
 
-  function hcBody() {
-    var r = hc.rules || {};
-    var rules = [
-      { icon: 'bx-calendar-check', title: 'Be active', text: 'Open your editor – once a day', amount: r.daily, done: hc.today, doneText: 'Collected today – come back tomorrow' },
-      { icon: 'bx-user-check', title: 'Complete your profile', text: 'A profile picture, a bio and at least 3 links', amount: r.profile, done: hc.profile, doneText: 'Done – thanks!' },
-      { icon: 'bx-trending-up', title: 'Get visitors', text: 'For every ' + fmtNum(r.views_step) + ' views of your pages – one reward a day (' + hc.viewRewards + ' of ' + hc.maxViewRewards + ' collected)', amount: r.views, done: hc.viewRewards >= hc.maxViewRewards, doneText: 'All ' + hc.maxViewRewards + ' rewards collected' },
-      { icon: 'bx-gift', title: 'Gifts from the team', text: 'For great pages, events and helping others', amount: null }
-    ].filter(function (x) { return x.amount === null || x.amount > 0; });
-    var html = '<div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(hc.balance) + '</b><small>honeycombs</small></div></div>' +
-      '<h4 class="hc-h">How to earn them</h4><div class="hc-rules">' + rules.map(function (x) {
-        return '<div class="hc-rule' + (x.done ? ' done' : '') + '"><span class="ri"><i class="bx ' + (x.done ? 'bx-check' : x.icon) + '"></i></span>' +
-          '<span class="min-w-0"><b>' + esc(x.title) + '</b><small>' + esc(x.done ? x.doneText : x.text) + '</small></span>' +
-          (x.amount ? '<span class="amt">+' + fmtNum(x.amount) + '</span>' : '') + '</div>';
-      }).join('') + '</div>' +
-      '<h4 class="hc-h">What you can unlock</h4>' +
-      '<div class="hc-rule"><span class="ri"><i class="bx bx-code-alt"></i></span><span class="min-w-0"><b>Your own code page</b><small>Host a website you build yourself with HTML, CSS and JavaScript</small></span>' +
-        '<button type="button" class="btn-secondary" data-action="open-code">' + (hc.codeUnlocked ? 'Open' : fmtNum(r.code_page) + ' <i class="bx bx-hive hc-icon"></i>') + '</button></div>' +
-      '<h4 class="hc-h">History</h4>';
-    if (!hc.history || !hc.history.length) return html + '<p class="hint">Nothing yet – your first honeycombs are on their way.</p>';
-    return html + '<div>' + hc.history.map(function (x) {
+  // ================================================================
+  // Tab: Honeycombs – Shop, eigene Freischaltungen, Verdienen und Verlauf (Stand vom Server: /dashboard/api/shop)
+  // ================================================================
+  // st: Stand vom Server · sel: gewählte Option je Funktion · focus: Ziel nach dem Laden (Funktion, earn, history)
+  var shop = { st: null, loading: false, focus: '', sel: {}, hist: null, next: null, histLoading: false };
+  var BX_ICON = /^bx[sl]?-[a-z0-9-]+$/;
+  function bxIcon(name, fallback) { return BX_ICON.test(name || '') ? name : fallback; }
+  function lcFirst(s) { return s.charAt(0).toLowerCase() + s.slice(1); }
+
+  // Bereich öffnen und zu einer Karte (Funktion), „earn“ oder „history“ springen – auch aus anderen Bereichen
+  // (Pill oben, /dashboard#honeycombs/<ziel>, „Get Premium“)
+  function openShop(target) {
+    closeDropdowns();
+    shop.focus = /^[a-z0-9_-]{1,40}$/.test(target || '') ? target : '';
+    if (activeTab !== 'honeycombs') switchTab('honeycombs');
+    else if (shop.st && !shop.loading) shopFocus();
+  }
+
+  // Bei jedem Öffnen neu laden (Preise und Angebote ändern sich); der alte Stand bleibt sichtbar, bis der neue da ist
+  function loadShop() {
+    var root = $('#tab-honeycombs');
+    if (!root || shop.loading) return;
+    shop.loading = true;
+    if (!shop.st) root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading…</div>';
+    var hist = apiGet('hc-history');
+    apiGet('shop').then(function (res) {
+      return hist.then(function (h) {
+        shop.loading = false;
+        if (!res || !res.ok || !res.shop) {
+          shop.st = null;
+          shop.focus = '';
+          root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your honeycombs – please reload.</div>';
+          return;
+        }
+        shop.st = res.shop;
+        if (h && h.ok) { shop.hist = h.items; shop.next = h.next; }
+        setBalance(res.shop.balance);
+        if (activeTab !== 'honeycombs') return;
+        renderShop();
+        shopFocus();
+      });
+    });
+  }
+
+  function shopFocus() {
+    var t = shop.focus;
+    shop.focus = '';
+    if (!t) return;
+    var el = t === 'earn' ? $('#shopEarn') : t === 'history' ? $('#shopHistory') : $('#shop-' + t);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (el.classList.contains('shop-card')) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+  }
+
+  function shopCard(feature) {
+    var list = shop.st ? shop.st.features : [];
+    for (var i = 0; i < list.length; i++) if (list[i].feature === feature) return list[i];
+    return null;
+  }
+  // Gewählte Option einer Karte: die zuletzt gewählte, sonst die erste, die dieses Konto kaufen kann
+  function shopSel(c) {
+    var o = null;
+    c.options.forEach(function (x) { if (x.item === shop.sel[c.feature]) o = x; });
+    if (!o) o = c.options.filter(function (x) { return !x.note; })[0] || c.options[0];
+    shop.sel[c.feature] = o.item;
+    return o;
+  }
+
+  function shopBanner(kind, icon, text) {
+    return '<div class="shop-banner ' + kind + '"><i class="bx ' + icon + '"></i><span>' + esc(text) + '</span></div>';
+  }
+
+  function renderShop() {
+    var st = shop.st, root = $('#tab-honeycombs'), html = '';
+    if (st.readOnly) html += shopBanner('info', 'bx-mask', 'Admin mode – you can look around, but buying is turned off. Use the admin area to give honeycombs or unlocks.');
+    if (st.frozen) {
+      html += shopBanner('warn', 'bx-pause-circle', 'Your honeycombs are on hold' + (st.frozenReason ? ': ' + st.frozenReason.replace(/[.\s]+$/, '') : '') +
+        '. Earning and buying are paused – your unlocks keep working.');
+    }
+    html += '<div class="panel shop-wallet"><div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.balance) + '</b><small>honeycombs</small></div></div>' +
+      '<div class="shop-wallet-actions"><button type="button" class="btn-ghost" data-shop-go="earn"><i class="bx bx-trending-up"></i> How to earn</button>' +
+      '<button type="button" class="btn-ghost" data-shop-go="history"><i class="bx bx-history"></i> History</button></div></div>';
+    html += '<h2 class="section-title mt-8">Unlock</h2>' + (st.features.length
+      ? '<div class="shop-grid">' + st.features.map(shopCardHtml).join('') + '</div>'
+      : '<div class="panel empty-state"><i class="bx bx-store-alt"></i>Nothing to unlock right now – check back soon.</div>');
+    html += '<h2 class="section-title mt-8">Your unlocks</h2>' + (st.owned.length
+      ? '<div class="panel"><div class="hc-rules">' + st.owned.map(ownedHtml).join('') + '</div></div>'
+      : '<div class="panel"><p class="hint m-0">Nothing unlocked yet. Pick something above.</p></div>');
+    html += '<h2 class="section-title mt-8" id="shopEarn">Earn honeycombs</h2><div class="hc-rules">' + st.earn.rules.map(earnHtml).join('') + '</div>';
+    html += '<h2 class="section-title mt-8" id="shopHistory">History</h2><div class="panel" id="shopHist">' + histHtml() + '</div>';
+    root.innerHTML = html;
+  }
+
+  function shopCardHtml(c) {
+    var o = shopSel(c);
+    var html = '<div class="panel shop-card" id="shop-' + esc(c.feature) + '" data-feature="' + esc(c.feature) + '">' +
+      '<div class="shop-card-head"><span class="code-mini-ico"><i class="bx ' + esc(bxIcon(c.icon, 'bx-hive')) + '"></i></span>' +
+      '<div class="min-w-0"><h3>' + esc(c.title) + '</h3><p>' + esc(c.description) + '</p></div></div>';
+    if (c.perks.length) html += '<ul class="shop-perks">' + c.perks.map(function (p) { return '<li><i class="bx bx-check"></i><span>' + esc(p) + '</span></li>'; }).join('') + '</ul>';
+    if (c.options.length > 1) {
+      html += '<div class="chips">' + c.options.map(function (x) {
+        return '<button type="button" class="chip' + (x.item === o.item ? ' on' : '') + '" data-shop-opt="' + esc(x.item) + '">' + esc(x.label) + '</button>';
+      }).join('') + '</div>';
+    }
+    return html + shopPriceHtml(o) + '<div class="shop-foot">' + shopActionHtml(c, o) + '</div></div>';
+  }
+
+  function shopPriceHtml(o) {
+    var html = '<div class="shop-price"><i class="bx bx-hive hc-icon"></i><b>' + (o.price === 0 ? 'Free' : fmtNum(o.price)) + '</b>' +
+      (o.offer && o.listPrice > o.price ? '<s>' + fmtNum(o.listPrice) + '</s>' : '') + '</div>';
+    var badges = '';
+    if (o.offer) {
+      badges += '<span class="bdg hc"><i class="bx bx-purchase-tag"></i> ' + esc(o.offer.label) + ' · ' +
+        (o.offer.percentOff ? '−' + o.offer.percentOff + ' % · ' : '') + 'ends ' + esc(fmtDate(o.offer.endsAt)) + '</span>';
+    }
+    if (o.availableUntil) badges += '<span class="bdg amber"><i class="bx bx-time-five"></i> Limited · until ' + esc(fmtDate(o.availableUntil)) + '</span>';
+    return html + (badges ? '<div class="shop-badges">' + badges + '</div>' : '');
+  }
+
+  function shopNote(text, icon) {
+    return text ? '<p class="shop-note"><i class="bx ' + (icon || 'bx-lock-alt') + '"></i><span>' + esc(text) + '</span></p>' : '';
+  }
+
+  // Knopf oder Grund unter dem Preis (der Server prüft beim Kauf trotzdem alles noch einmal)
+  function shopActionHtml(c, o) {
+    var st = shop.st;
+    if (c.state === 'owned') {
+      return '<span class="bdg green"><i class="bx bx-check"></i> Owned</span>' +
+        (c.href && c.href.indexOf('#honeycombs') !== 0 ? '<button type="button" class="btn-secondary" data-shop-open="' + esc(c.feature) + '">Open</button>' : '') +
+        shopNote(c.note, 'bx-check-circle');
+    }
+    if (c.state === 'included') return '<span class="bdg green"><i class="bx bx-check"></i> Included</span>' + shopNote(c.note, 'bx-check-circle');
+    if (c.state === 'max' || c.state === 'locked') return shopNote(c.note);
+    if (o.note) return shopNote(o.note);
+    var packs = c.stack > 1 && c.lotsActive ? '<span class="bdg">' + c.lotsActive + ' of ' + c.stack + ' packs</span>' : '';
+    if (!o.affordable) {
+      return packs + '<button type="button" class="btn-primary" disabled><i class="bx bx-lock-alt"></i> ' + fmtNum(o.price - st.balance) + ' more needed</button>' +
+        '<button type="button" class="shop-link" data-shop-go="earn">How to earn honeycombs</button>';
+    }
+    var off = st.readOnly ? 'Buying is turned off in admin mode.' : st.frozen ? 'Your honeycombs are on hold.' : '';
+    return packs + '<button type="button" class="btn-primary" data-shop-buy="' + esc(c.feature) + '"' + (off ? ' disabled title="' + esc(off) + '"' : '') + '>' +
+      '<i class="bx bx-lock-open-alt"></i> ' + esc(buyLabel(c, o.price)) + '</button>';
+  }
+  function buyLabel(c, price) {
+    if (price === 0) return 'Get it free';
+    return (c.kind === 'timed' && c.activeUntil && c.stack === 1 ? 'Extend for ' : 'Buy for ') + fmtNum(price);
+  }
+
+  function ownedHtml(u) {
+    var status, cls = '', btn = '', c = shopCard(u.feature);
+    if (u.active && u.permanent) {
+      status = u.kind === 'count' || u.kind === 'consumable' ? 'You have ' + fmtNum(u.quantity) : 'Unlocked for good';
+    } else if (u.active) {
+      status = (c && c.stack > 1 ? 'Pack ' + (u.lot + 1) + ' · until ' : 'Active until ') + fmtDate(u.expiresAt, true);
+      if (u.endsInDays !== null && u.endsInDays <= 3) {
+        status = u.endsInDays <= 0 ? 'Ends today' : 'Ends in ' + plural(u.endsInDays, 'day', 'days');
+        cls = ' soon';
+      }
+    } else {
+      status = 'Ended on ' + fmtDate(u.expiresAt) + ' – paused, your content is kept';
+      cls = ' ended';
+      if (c) btn = '<button type="button" class="btn-secondary" data-shop-renew="' + esc(u.feature) + '">Renew</button>';
+    }
+    if (u.source === 'admin') status += ' · from the team';
+    return '<div class="hc-rule' + cls + '"><span class="ri"><i class="bx ' + esc(bxIcon(u.icon, 'bx-hive')) + '"></i></span>' +
+      '<span class="min-w-0"><b>' + esc(u.title) + '</b><small>' + esc(status) + '</small></span>' + btn + '</div>';
+  }
+
+  function earnHtml(r) {
+    var p = r.progress && r.progress.goal > 0 ? r.progress : null;
+    var text = r.done ? r.doneText : r.text + (p ? ' (' + fmtNum(p.value) + ' of ' + fmtNum(p.goal) + ' collected)' : '');
+    return '<div class="hc-rule' + (r.done ? ' done' : '') + '"><span class="ri"><i class="bx ' + esc(r.done ? 'bx-check' : bxIcon(r.icon, 'bx-hive')) + '"></i></span>' +
+      '<div class="min-w-0 flex-1"><b>' + esc(r.title) + '</b><small>' + esc(text) + '</small>' +
+      (p && !r.done ? '<div class="hc-bar mt-2"><span style="width:' + Math.min(100, Math.round(p.value / p.goal * 100)) + '%"></span></div>' : '') + '</div>' +
+      (r.amount ? '<span class="amt">+' + fmtNum(r.amount) + '</span>' : '') + '</div>';
+  }
+
+  function histHtml() {
+    if (!shop.hist || !shop.hist.length) return '<p class="hint m-0">Nothing yet – your first honeycombs are on their way.</p>';
+    return shop.hist.map(function (x) {
       var cls = x.amount > 0 ? 'plus' : x.amount < 0 ? 'minus' : 'zero';
       return '<div class="hc-hist-row"><span class="min-w-0">' + esc(x.text) + '<small>' + esc(fmtDate(x.at, true)) + '</small></span>' +
         '<span class="amt ' + cls + '">' + (x.amount > 0 ? '+' + fmtNum(x.amount) : x.amount < 0 ? '−' + fmtNum(-x.amount) : 'free') + '</span></div>';
-    }).join('') + '</div>';
+    }).join('') + (shop.next ? '<button type="button" class="btn-ghost w-full justify-center mt-2" data-shop-more>Show more</button>' : '');
   }
 
-  function openHoneycombs() {
-    closeDropdowns();
-    openModal('Your honeycombs', '<div id="hcModal">' + hcBody() + '</div>');
-    api('honeycombs').then(function (res) {
-      if (!res || !res.ok) return;
-      hc = res.honeycombs;
-      setBalance(hc.balance);
-      var box = $('#hcModal');
-      if (box) box.innerHTML = hcBody();
+  function moreHistory(btn) {
+    if (shop.histLoading || !shop.next) return;
+    shop.histLoading = true;
+    btn.disabled = true;
+    apiGet('hc-history?before=' + encodeURIComponent(shop.next)).then(function (h) {
+      shop.histLoading = false;
+      if (!h || !h.ok) { btn.disabled = false; toast((h && h.error) || 'Couldn’t load more – please try again.', 'err'); return; }
+      shop.hist = (shop.hist || []).concat(h.items);
+      shop.next = h.next;
+      var box = $('#shopHist');
+      if (box) box.innerHTML = histHtml();
+    });
+  }
+
+  // Regeln zum Ankreuzen im Kaufdialog (Funktionen mit needsTerms)
+  function shopTermsHtml(feature, checked) {
+    var text = feature === 'code_page'
+      ? 'I’ve read the <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener">rules for code pages</a>. My page won’t sell anything or make money – it’s only there to inform or to promote something.'
+      : 'I’ve read and accept the <a href="/terms" target="_blank" rel="noopener">rules</a> for this.';
+    return '<label class="code-terms"><input type="checkbox" name="terms"' + (checked ? ' checked' : '') + '><span>' + text + '</span></label>';
+  }
+
+  // Ende eines Zeitraums für den Text im Dialog (der Server rechnet beim Kauf genau so: ab dem laufenden Ende, sonst ab jetzt)
+  function periodEnd(c, o, mode) {
+    var from = new Date();
+    if (c.activeUntil && (c.stack === 1 || mode === 'extend')) {
+      var p = String(c.activeUntil).split(/\D/), until = new Date(+p[0], p[1] - 1, +p[2], +p[3] || 0, +p[4] || 0);
+      if (until > from) from = until;
+    }
+    from.setDate(from.getDate() + (o.days || 0));
+    return from.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function shopDialogTitle(c, o) {
+    if (c.kind === 'permanent') return /^more /i.test(c.title) ? 'Unlock ' + lcFirst(c.title) + '?' : 'Unlock your ' + lcFirst(c.title) + '?';
+    if (c.kind === 'timed') return c.title + ' for ' + o.label + '?';
+    return 'Get ' + c.title + ' (' + o.label + ')?';
+  }
+
+  // Kaufdialog: Kennung beim Öffnen (Doppelklick und erneutes Senden buchen einmal), der gezeigte Preis geht mit.
+  // Neuer Preis vom Server: der Dialog bleibt offen, zeigt ihn und kauft mit derselben Kennung zum neuen Preis.
+  function openPurchase(feature) {
+    var st = shop.st, c = shopCard(feature);
+    if (!st || !c || st.readOnly || st.frozen) return;
+    var o = shopSel(c), rid = purchaseId(), price = o.price, terms = false;
+    var mode = c.stack > 1 ? (c.lotsActive < c.stack ? 'stack' : 'extend') : '';
+    function content(body) {
+      var left = st.balance - price, line;
+      if (c.kind === 'permanent') line = 'You unlock it once and keep it for good.';
+      else if (c.kind === 'timed') line = c.title + ' runs until ' + periodEnd(c, o, mode) + '.';
+      else line = 'You get ' + o.label + '.';
+      var html = '<div class="hc-big mb-4"><i class="bx bx-hive"></i><div><b>' + fmtNum(price) + '</b><small>honeycombs · you have ' + fmtNum(st.balance) + '</small></div></div>' +
+        '<p class="text-sm text-gray-400">' + esc(line) + ' ' + esc(left >= 0 ? 'Afterwards you have ' + fmtNum(left) + ' honeycombs left.' : 'You need ' + fmtNum(-left) + ' more honeycombs.') + '</p>';
+      if (c.perks.length) html += '<ul class="shop-perks mt-3">' + c.perks.map(function (p) { return '<li><i class="bx bx-check"></i><span>' + esc(p) + '</span></li>'; }).join('') + '</ul>';
+      if (c.stack > 1) {
+        html += '<div class="shop-mode mt-4">' +
+          '<label class="code-terms"><input type="radio" name="mode" value="stack"' + (mode === 'stack' ? ' checked' : '') + (c.lotsActive >= c.stack ? ' disabled' : '') + '><span>Add a pack</span></label>' +
+          '<label class="code-terms"><input type="radio" name="mode" value="extend"' + (mode === 'extend' ? ' checked' : '') + (c.lotsActive ? '' : ' disabled') + '><span>Extend the pack that ends first</span></label></div>';
+      }
+      if (c.needsTerms) html += '<div class="mt-4">' + shopTermsHtml(c.feature, terms) + '</div>';
+      body.innerHTML = html;
+    }
+    UI.confirm({
+      title: shopDialogTitle(c, o),
+      tone: 'hc',
+      icon: 'bx-hive',
+      ok: buyLabel(c, price),
+      content: content,
+      canConfirm: function (v) { return (!c.needsTerms || v.terms === true) && st.balance >= price; },
+      fallbackFocus: function () { return $('#shop-' + c.feature + ' [data-shop-buy]') || $('#mainNav [data-tab="honeycombs"]'); },
+      onConfirm: function (v, ctl) {
+        terms = v.terms === true;
+        if (v.mode === 'stack' || v.mode === 'extend') mode = v.mode;
+        return api('shop-buy', { item: o.item, request_id: rid, expected_price: price, terms: terms, mode: mode || undefined }).then(function (res) {
+          if (res && res.code === 'price_changed' && typeof res.price === 'number') {
+            var was = price;
+            price = res.price;
+            ctl.update({ ok: buyLabel(c, price), content: content });
+            return 'The price changed – this now costs ' + fmtNum(price) + ' honeycombs (it was ' + fmtNum(was) + ').';
+          }
+          if (!res || !res.ok) return (res && res.error) || 'Something went wrong. Please try again.';
+          afterPurchase(res, c);
+        });
+      }
+    });
+  }
+
+  // Nach dem Kauf: neuer Stand, Kontostand oben, Verlauf neu; den Code-Tab beim nächsten Öffnen frisch laden (ohne
+  // ungespeicherte Dateien zu verwerfen – die gibt es nur, wenn schon eine Code-Seite besteht)
+  function afterPurchase(res, c) {
+    shop.st = res.shop;
+    setBalance(res.shop.balance, true);
+    if (c.feature === 'code_page') hc.codeUnlocked = true;
+    if (code.st) {
+      if (!code.st.site) { code.st = null; $('#tab-code').innerHTML = ''; } else code.st.balance = res.shop.balance;
+    }
+    if (activeTab === 'honeycombs') renderShop();
+    apiGet('hc-history').then(function (h) {
+      if (!h || !h.ok) return;
+      shop.hist = h.items;
+      shop.next = h.next;
+      var box = $('#shopHist');
+      if (box) box.innerHTML = histHtml();
+    });
+  }
+
+  function renewFeature(feature) {
+    var c = shopCard(feature);
+    if (!c) return;
+    var o = shopSel(c);
+    if (c.state === 'buy' && !o.note && o.affordable && !shop.st.readOnly && !shop.st.frozen) { openPurchase(feature); return; }
+    shop.focus = feature;
+    shopFocus();
+  }
+
+  var shopRoot = $('#tab-honeycombs');
+  if (shopRoot) {
+    shopRoot.addEventListener('click', function (ev) {
+      var t = ev.target, el;
+      if ((el = t.closest('[data-shop-opt]'))) {
+        var card = el.closest('.shop-card'), c = card && shopCard(card.dataset.feature);
+        if (!c) return;
+        shop.sel[c.feature] = el.dataset.shopOpt;
+        card.replaceWith(h(shopCardHtml(c)));
+        var again = $('#shop-' + c.feature + ' [data-shop-opt="' + el.dataset.shopOpt + '"]');
+        if (again) again.focus();
+        return;
+      }
+      if ((el = t.closest('[data-shop-buy]'))) { openPurchase(el.dataset.shopBuy); return; }
+      if ((el = t.closest('[data-shop-renew]'))) { renewFeature(el.dataset.shopRenew); return; }
+      if ((el = t.closest('[data-shop-go]'))) { shop.focus = el.dataset.shopGo; shopFocus(); return; }
+      if ((el = t.closest('[data-shop-open]'))) {
+        var oc = shopCard(el.dataset.shopOpen);
+        if (oc && oc.href) deepLink(oc.href);
+        return;
+      }
+      if ((el = t.closest('[data-shop-more]'))) moreHistory(el);
     });
   }
 
@@ -2430,7 +2717,7 @@
         '<div class="hc-bar"><span style="width:' + pct + '%"></span></div>' +
         '<button type="button" class="btn-primary w-full justify-center mt-4" data-code="unlock"' + (enough ? '' : ' disabled') + '><i class="bx bx-lock-open-alt"></i> ' +
           (enough ? 'Unlock for ' + fmtNum(st.cost) + ' honeycombs' : fmtNum(st.cost - st.balance) + ' more honeycombs needed') + '</button>' +
-        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>' +
+        '<button type="button" class="btn-ghost w-full justify-center mt-2" data-action="honeycombs" data-feature="earn"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>' +
       '</div>' +
       '<p class="hint mt-6">Code pages are for personal, informational and promotional pages – no shops and no selling. <a href="' + esc(E.codeTerms) + '" target="_blank" rel="noopener" class="text-brand-400 hover:text-white">Rules for code pages</a></p>' +
     '</div>';
@@ -3120,12 +3407,12 @@
     messages: function () { switchTab('messages'); },
     code: function () { switchTab('code'); },
     settings: function () { if (state.page) switchTab('settings'); },
-    honeycombs: function () { openHoneycombs(); },
+    honeycombs: function (arg) { openShop(arg); },
     // status/system: OnYourSites eigene Statusseite (Admin → Status verlinkt hierher); ohne den Bereich nichts
     status: function () { if ($('#tab-status')) switchTab('status'); }
   };
   // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
-  var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' };
+  var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings', shop: 'honeycombs' };
   function deepLink(hash) {
     var m = /^#?([a-z]+)(?:\/([a-z0-9_-]+))?$/.exec(hash || '');
     if (!m) return false;
@@ -3367,7 +3654,7 @@
   }
   // Beim Öffnen verdiente Honigwaben (notices vom Server): gelbe Hinweise, 700 ms versetzt, nichts geht verloren
   if (E.notices && E.notices.length) {
-    UI.notices(E.notices, { label: 'History', link: '/dashboard#honeycombs' });
+    UI.notices(E.notices, { label: 'History', link: '/dashboard#honeycombs/history' });
     setBalance(hc.balance, true);
   }
 
@@ -3410,9 +3697,10 @@
   }
   draft.start();
   startBell();
-  // Ziele, die kein Tab sind (z. B. #honeycombs), öffnen beim Laden ebenso
+  // Ziele, die kein Tab sind, öffnen beim Laden ebenso – und Honeycombs auch mit Ziel (#honeycombs/premium, ohne Seite)
   var startTarget = startHash.slice(1).split('/')[0];
-  if (startTarget && !TAB_TITLES[OLD_TARGETS[startTarget] || startTarget]) deepLink(startHash);
+  startTarget = OLD_TARGETS[startTarget] || startTarget;
+  if (startTarget && (!TAB_TITLES[startTarget] || startTarget === 'honeycombs')) deepLink(startHash);
 
   // ui.js fehlt (blockiert oder nicht geladen): Hinweis statt eines halb funktionierenden Editors
   function editorUnavailable() {

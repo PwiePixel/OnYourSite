@@ -22,6 +22,7 @@ import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, u
 import { entries, isArr, jsonDecode, own, values, type PhpArr } from '../content/util.js';
 import { hcForEditor } from '../honeycombs/honeycombs.js';
 import { REQUEST_ID, adminMode, buy } from '../honeycombs/shop.js';
+import { isShopAction, shopApi } from '../honeycombs/editorApi.js';
 import { phpFloatString } from '../community/json.js';
 import {
   CODE_MAX_FILES, codeChangeAddress, codeCreate, codeDeleteRows, codeEditorState, codeFileCount, codeSave, codeSite, codeSiteById, codeSiteOfUser, codeUnlocked,
@@ -159,6 +160,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   if (action.startsWith('code')) await codeApi(ctx, user, action, isPost, input);
   // Statusseiten (status*): gehören zum Konto bzw. zu OnYourSites eigener Seite, nie zu einer Profilseite
   if (action === 'status' || action.startsWith('status-')) await statusEditorApi(ctx, user, action, isPost, input);
+  // Bereich „Honeycombs“ (shop, shop-*, hc-*): Shop, Kaufen, Verlauf – ebenfalls ohne Profilseite
+  if (isShopAction(action)) await shopApi(ctx, user, action, isPost, input);
 
   // Hochladen gehört zum Konto, nicht zu einer Seite (auch Bilder für die Code-Seite)
   if (action === 'upload' && isPost) {

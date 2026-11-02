@@ -53,11 +53,12 @@ test('honeycomb notices are yellow: .ui-toast.hc in ui.css; the old .toast rules
   assert.doesNotMatch(css, /(^|\n)\.toasts? |\.toast\./);
 });
 
-test('editor.js: the code page unlock and the honeycomb window use the yellow classes', () => {
+test('editor.js: the code page unlock and the Honeycombs tab use the yellow classes', () => {
   assert.ok(js.includes(`'<span class="bdg hc"><i class="bx bx-hive"></i> Unlock with honeycombs</span>'`));
   assert.ok(js.includes(`fmtNum(st.cost) + ' <i class="bx bx-hive hc-icon"></i></b></div>'`));
-  assert.ok(js.includes(`data-action="honeycombs"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>`));
-  assert.ok(js.includes(`fmtNum(r.code_page) + ' <i class="bx bx-hive hc-icon"></i>'`));
+  assert.ok(js.includes(`data-action="honeycombs" data-feature="earn"><i class="bx bx-hive hc-icon"></i> How to earn honeycombs</button>`));
+  // Preis auf den Karten des Bereichs „Honeycombs“
+  assert.ok(js.includes(`'<div class="shop-price"><i class="bx bx-hive hc-icon"></i><b>'`));
   // Jedes Honigwaben-Symbol ist gelb: über .hc-icon, .bdg.hc, .hc-big, .hc-pill oder den Hinweis .ui-toast.hc (ui.css)
   for (const m of js.matchAll(/bx-hive[^'"]*/g)) assert.ok(/hc-icon|^bx-hive$/.test(m[0]), m[0]);
   assert.ok(!js.includes('bdg brand"><i class="bx bx-hive'));

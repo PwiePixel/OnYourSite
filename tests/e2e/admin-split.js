@@ -121,7 +121,11 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     const heads = await p.locator('#tab-honeycombs thead th').allInnerTexts();
     ok(!hcText.includes('miacode') && !hcText.includes('Unlock for free') && !heads.some((h) => /code page/i.test(h))
       && await p.locator('#tab-honeycombs [name=code_action], #tab-honeycombs [value^=code_]').count() === 0, '#honeycombs shows no code list and no code page column');
-    ok(hcText.includes('Give honeycombs') && hcText.includes('Balances'), 'Honeycombs keeps its cards');
+    ok(hcText.includes('Latest activity') && hcText.includes('In circulation'), 'Honeycombs opens with its overview');
+    // Vergeben und Kontostände stehen im Unterbereich „Users“
+    await Promise.all([p.waitForNavigation(), p.click('#hcTabs a[href="/admin?hc_tab=users#honeycombs"]')]);
+    const usersText = await p.locator('#tab-honeycombs').innerText();
+    ok(await p.locator('#tab-honeycombs').isVisible() && usersText.includes('Give honeycombs') && usersText.includes('Balances'), 'Honeycombs keeps its cards under Users');
     await shot(p, 'admin-honeycombs');
 
     // Code pages
@@ -163,17 +167,16 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     const visibleRows = await p.locator('#codeAccessRows tr:visible').count();
     ok(visibleRows === 1 && (await p.locator('#codeAccessRows tr:visible').innerText()).includes('mia@test.de'), 'Access search filters the rows');
 
-    // Preis: Link zu den Honigwaben-Regeln
-    await p.click('#tab-code-pages a[href="#honeycombs"]');
-    await p.waitForTimeout(100);
-    ok(await p.locator('#tab-honeycombs').isVisible() && await p.locator('#hcRule-code_page').isVisible(), 'Prices link opens Honeycombs with the price field');
+    // Preis: Link zu „Catalogue & prices“ im Bereich Honeycombs
+    await Promise.all([p.waitForNavigation(), p.click('#tab-code-pages a[href="/admin?hc_tab=catalogue#honeycombs"]')]);
+    ok(await p.locator('#tab-honeycombs').isVisible() && await p.locator('#tab-honeycombs form[data-item="code_page"] [name=price]').isVisible(), 'Prices link opens Honeycombs with the price field');
 
     // Altes Lesezeichen
     await p.goto(BASE + '/admin#honeycombs', { waitUntil: 'networkidle' });
     ok(await p.locator('#tab-honeycombs').isVisible() && !(await p.locator('#tab-honeycombs').innerText()).includes('tomcode'), 'Old bookmark /admin#honeycombs opens Honeycombs');
 
     // Altes Formular aus einem Tab von vor dem Update
-    const csrf = await p.locator('#tab-honeycombs input[name=csrf]').first().inputValue();
+    const csrf = await p.locator('input[name=csrf]').first().inputValue();
     const tomId = sql("SELECT id FROM code_sites WHERE slug = 'tomcode'");
     await Promise.all([p.waitForNavigation(), p.evaluate(([token, id]) => {
       const f = document.createElement('form');

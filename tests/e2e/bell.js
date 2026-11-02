@@ -156,14 +156,12 @@ async function onTop(page, loc) {
       await sleep(400);
       ok(await toasts(page).count() === 0, 'the open list replaces the bell’s toasts');
       ok(await onTop(page, page.locator(`#bellMenu [data-bell-item="${ids[4]}"]`)), 'the list is on top of the editor');
-      // Ein Eintrag aus der Liste: das Honigwaben-Ziel öffnet das Fenster, nur dieser Eintrag wird gelesen
+      // Ein Eintrag aus der Liste: das Honigwaben-Ziel öffnet den Bereich „Honeycombs“, nur dieser Eintrag wird gelesen
       await page.click(`#bellMenu [data-bell-item="${ids[0]}"]`);
-      await page.waitForSelector('#hcModal');
+      await page.waitForSelector('#tab-honeycombs:not(.hidden) .shop-wallet');
       await sleep(300);
       ok(isRead(ids[0]) && !isRead(ids[1]), 'only the clicked item is read');
       ok(await page.isHidden('#bellMenu') && await page.getAttribute('#bellBtn', 'aria-expanded') === 'false', 'the list closed');
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('#modal', { state: 'hidden' });
       // Zweiter Tab desselben Browsers: der zuletzt gezeigte Eintrag ist gespeichert – keine Hinweise noch einmal
       const second = await newPage(ctx);
       const p2 = nextPoll(second.page);

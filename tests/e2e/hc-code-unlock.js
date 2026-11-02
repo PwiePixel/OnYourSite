@@ -128,7 +128,7 @@ async function openUnlock(p) {
     await p.click('#codeUnlockGo');
     await p.locator('#tab-code #codeSlug').waitFor();
     ok(!(await p.locator('#codeUnlockGo').isVisible()), 'The dialog closes after the purchase');
-    ok((await p.locator('#toasts').innerText()).includes('Code page unlocked – 120 honeycombs spent.'), 'Toast with the amount spent');
+    ok((await p.locator('.ui-toasts').innerText()).includes('Code page unlocked – 120 honeycombs spent.'), 'Toast with the amount spent');
     ok((await p.locator('#hcBalance').innerText()).trim() === '30', 'The balance pill shows the new balance (' + (await p.locator('#hcBalance').innerText()) + ')');
     ok(unlocks() === 1 && sql("SELECT CONCAT(amount, '|', ref) FROM honeycomb_ledger WHERE user_id = 7 AND reason = 'unlock'") === '-120|code_page', 'One unlock booked: −120');
     ok(sql("SELECT CONCAT(via, '|', price, '|', list_price) FROM hc_purchases WHERE user_id = 7") === 'code|120|120', 'One purchase via the code tab');

@@ -111,17 +111,18 @@ const clean = () => {
     const logo = p.locator('aside.app-rail i.bx-hive').first();
     ok(await style(logo, 'color') === BRAND, 'The rail logo keeps the brand colour (' + await style(logo, 'color') + ')');
 
-    // Fenster „Your honeycombs“
+    // Bereich „Honeycombs“ (öffnet über den Kontostand oben)
     await p.click('#hcBtn');
-    await p.locator('#hcModal .hc-big').waitFor();
-    ok(await style(p.locator('#hcModal .hc-big > i'), 'color') === YELLOW, '.hc-big icon is yellow');
-    const openRule = p.locator('#hcModal .hc-rule:not(.done) .ri').first();
+    await p.locator('#tab-honeycombs .hc-big').waitFor();
+    ok(await style(p.locator('#tab-honeycombs .hc-big > i'), 'color') === YELLOW, '.hc-big icon is yellow');
+    const openRule = p.locator('#tab-honeycombs .hc-rule:not(.done) .ri').first();
     ok(await style(openRule, 'color') === YELLOW, '.hc-rule icon is yellow');
-    ok(await style(p.locator('#hcModal .hc-rule .amt').first(), 'color') === YELLOW, '.hc-rule amount is yellow');
-    ok(await style(p.locator('#hcModal .hc-rule.done .ri').first(), 'color') === 'rgb(74, 222, 128)', 'Done rules stay green');
-    ok(await style(p.locator('#hcModal [data-action=open-code] i.bx-hive'), 'color') === YELLOW, 'Price icon of the code page is yellow');
-    await shot(p, 'hc-modal');
-    await p.click('#hcModal [data-action=open-code]');
+    ok(await style(p.locator('#tab-honeycombs .hc-rule .amt').first(), 'color') === YELLOW, '.hc-rule amount is yellow');
+    ok(await style(p.locator('#tab-honeycombs .hc-rule.done .ri').first(), 'color') === 'rgb(74, 222, 128)', 'Done rules stay green');
+    ok(await style(p.locator('#shop-code_page .shop-price i.bx-hive'), 'color') === YELLOW, 'Price icon of the code page is yellow');
+    ok(await style(p.locator('#mainNav [data-tab=honeycombs] i.bx-hive'), 'color') === YELLOW, 'The rail icon of the Honeycombs tab is yellow');
+    await shot(p, 'hc-tab');
+    await p.click('#mainNav [data-tab=code]');
 
     // Code-Seite freischalten (gesperrt)
     await p.locator('#tab-code .code-hero').waitFor();
@@ -150,7 +151,11 @@ const clean = () => {
     ok(await style(nav, 'color') === YELLOW && (await style(nav, 'borderTopColor')).startsWith('rgba(234, 179, 8'), 'Active honeycombs tab is yellow');
     const hcIcons = a.locator('#tab-honeycombs i.bx-hive');
     const colors = await hcIcons.evaluateAll((els) => els.map((el) => getComputedStyle(el).color));
-    ok(colors.length >= 2 && colors.every((c) => c === YELLOW), 'Every honeycomb icon in the Honeycombs section is yellow (' + colors.length + ')');
+    ok(colors.length >= 1 && colors.every((c) => c === YELLOW), 'Every honeycomb icon in the overview of the Honeycombs section is yellow (' + colors.length + ')');
+    // Unterbereich „Users“: Kopf von „Give honeycombs“ und das Symbol bei jedem Kontostand
+    await a.goto(BASE + '/admin?hc_tab=users#honeycombs', { waitUntil: 'networkidle' });
+    const userColors = await hcIcons.evaluateAll((els) => els.map((el) => getComputedStyle(el).color));
+    ok(userColors.length >= 2 && userColors.every((c) => c === YELLOW), 'Every honeycomb icon under Users is yellow (' + userColors.length + ')');
     await shot(a, 'hc-admin');
     await a.click('#nav-code-pages');
     await a.waitForTimeout(400);

@@ -1,7 +1,7 @@
 // HTTP: code-unlock nach dem Vertrag der Kauf-Routen (409 reload ohne Anfrage-ID, 400, 403 im Admin-Modus ohne jede
 // Schreibung, geänderter Preis, Erfolg mit Hinweis, Wiederholung, schon freigeschaltet, Regeln im Kauf, Ratenlimit,
-// Methode, CSRF, Login) und der Preis aus dem Katalog im Code-Tab, im alten Honigwaben-Fenster, in den Bedingungen
-// und im Admin (das bisherige Preisfeld schreibt jetzt den Katalog, mit Protokoll).
+// Methode, CSRF, Login) und der Preis aus dem Katalog im Code-Tab, im Stand der Honigwaben, in den Bedingungen
+// und im Admin (gesetzt unter „Catalogue & prices“, mit Protokoll).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -144,20 +144,25 @@ test('the code tab, the old honeycomb window and the terms page show the catalog
   assert.match(String(plain.body), /\(currently 100\)/);
 });
 
-test('admin: the code page price field now sets the catalogue price (with an audit row), and both admin sections show it', async () => {
+test('admin: the code page price is set in “Catalogue & prices” (with an audit row), and the code pages section and the code tab show it', async () => {
   const sid = await loginSession(3);
-  const post = { csrf: CSRF, hc_action: 'settings', daily: '5', profile: '20', views: '10', views_step: '100', code_page: '150' };
+  const id = Number((await sql("SELECT id FROM `DB`.hc_items WHERE item_key = 'code_page'"))[0].id);
+  const post = { csrf: CSRF, hc_action: 'item_save', item_id: String(id), price: '150', is_active: '1', position: '0', min_account_days: '0', min_active_days: '0' };
   const ctx = await runRequest(makeTestCtx({ method: 'POST', url: '/admin', cookies: { PHPSESSID: sid }, post }), appRoutes);
   assert.equal(ctx.status, 302);
+  assert.equal(ctx.header('Location'), '/admin?hc_tab=catalogue#honeycombs');
   assert.equal(Number((await sql("SELECT price FROM `DB`.hc_items WHERE item_key = 'code_page'"))[0].price), 150);
   const audit = (await sql("SELECT admin_id, action, user_id, target, details FROM `DB`.hc_audit WHERE action = 'item_save'")).map((r) => ({ ...r }));
-  assert.deepEqual(audit, [{ admin_id: 3, action: 'item_save', user_id: null, target: 'code_page', details: '{"old":100,"new":150}' }]);
+  assert.deepEqual(audit, [{ admin_id: 3, action: 'item_save', user_id: null, target: 'code_page', details: '{"price":150,"price_was":100}' }]);
   // Gleicher Preis noch einmal: kein zweiter Eintrag
   await runRequest(makeTestCtx({ method: 'POST', url: '/admin', cookies: { PHPSESSID: await loginSession(3) }, post }), appRoutes);
   assert.equal((await sql("SELECT COUNT(*) AS n FROM `DB`.hc_audit WHERE action = 'item_save'"))[0].n, 1);
-  const view = await runRequest(makeTestCtx({ url: '/admin', cookies: { PHPSESSID: await loginSession(3) } }), appRoutes);
+  // Das alte Preisfeld im Formular der Regeln ändert den Preis nicht mehr
+  await runRequest(makeTestCtx({ method: 'POST', url: '/admin', cookies: { PHPSESSID: await loginSession(3) }, post: { csrf: CSRF, hc_action: 'settings', daily: '5', code_page: '999' } }), appRoutes);
+  assert.equal(Number((await sql("SELECT price FROM `DB`.hc_items WHERE item_key = 'code_page'"))[0].price), 150);
+  const view = await runRequest(makeTestCtx({ url: '/admin?hc_tab=catalogue', cookies: { PHPSESSID: await loginSession(3) } }), appRoutes);
   const html = String(view.body);
-  assert.match(html, /name="code_page" min="0" max="100000" step="1" value="150"/);
+  assert.match(html, /data-item="code_page"[\s\S]*?name="price" required min="0" max="1000000" step="1" value="150"/);
   assert.match(html, /id="codePrice">150 <i class='bx bx-hive text-yellow-400'><\/i>/);
   assert.equal(jsonBody(await api('code', { userId: 7, method: 'GET' })).cost, 150);
 });

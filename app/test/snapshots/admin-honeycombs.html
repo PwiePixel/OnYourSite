@@ -1,71 +1,44 @@
             <!-- ===================== Honigwaben ===================== -->
             <div id="tab-honeycombs" class="admin-tab-content max-w-5xl mx-auto space-y-8 hidden">
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
-                        <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
-                            <i class='bx bx-hive text-2xl text-yellow-400'></i>
-                            <h2 class="text-base font-semibold text-white">Give honeycombs</h2>
+                <nav class="flex flex-wrap gap-1.5" aria-label="Honeycombs" id="hcTabs">
+                    <a href="/admin?hc_tab=overview#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-bar-chart-alt-2'></i> Overview</a>
+                    <a href="/admin?hc_tab=catalogue#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-purchase-tag'></i> Catalogue &amp; prices <span class="text-gray-500">3</span></a>
+                    <a href="/admin?hc_tab=offers#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-gift'></i> Offers <span class="text-gray-500">0</span></a>
+                    <a href="/admin?hc_tab=rules#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-slider-alt'></i> Earning rules</a>
+                    <a href="/admin?hc_tab=users#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !bg-white/10 !text-white" aria-current="page"><i class='bx bx-group'></i> Users</a>
+                </nav>
+                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
+                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
+                        <i class='bx bx-hive text-2xl text-yellow-400'></i>
+                        <h2 class="text-base font-semibold text-white">Give honeycombs</h2>
+                    </div>
+                    <form action="/admin" method="POST" class="space-y-4" id="hcGrantForm">
+                        <input type="hidden" name="csrf" value="CSRFTOKEN">                        <input type="hidden" name="hc_action" value="grant">
+                        <input type="hidden" name="grant_ref" value="REF">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcUser">User</label>
+                            <select id="hcUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
+                                <option value="">Choose a user …</option>
+                                <option value="10">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de (0)</option>
+                                <option value="7">lea@test.de · lea@test.de (5)</option>
+                                <option value="6">tom@test.de · tom@test.de (0)</option>
+                                <option value="5">Mia Müller · mia@test.de (50)</option>
+                                <option value="3">Pixel Admin · admin@test.de (500)</option>
+                            </select>
                         </div>
-                        <form action="/admin" method="POST" class="space-y-4" id="hcGrantForm">
-                            <input type="hidden" name="csrf" value="CSRFTOKEN">                            <input type="hidden" name="hc_action" value="grant">
-                            <input type="hidden" name="grant_ref" value="REF">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div>
-                                <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcUser">User</label>
-                                <select id="hcUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
-                                    <option value="">Choose a user …</option>
-                                                                        <option value="10">O&#039;Brien &lt;b&gt;&amp; “Co” · Quote@Test.de (0)</option>
-                                                                        <option value="7">lea@test.de · lea@test.de (5)</option>
-                                                                        <option value="6">tom@test.de · tom@test.de (0)</option>
-                                                                        <option value="5">Mia Müller · mia@test.de (50)</option>
-                                                                        <option value="3">Pixel Admin · admin@test.de (500)</option>
-                                                                    </select>
+                                <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcAmount">Amount</label>
+                                <input id="hcAmount" type="number" name="amount" required min="-100000" max="100000" step="1" placeholder="50" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
                             </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcAmount">Amount</label>
-                                    <input id="hcAmount" type="number" name="amount" required min="-100000" max="100000" step="1" placeholder="50" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
-                                </div>
-                                <div class="sm:col-span-2">
-                                    <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcNote">Note <span class="text-gray-500 font-normal">(the user sees it)</span></label>
-                                    <input id="hcNote" type="text" name="note" maxlength="150" placeholder="e.g. Thanks for your feedback!" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
-                                </div>
+                            <div class="sm:col-span-2">
+                                <label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcNote">Note <span class="text-gray-500 font-normal">(the user sees it)</span></label>
+                                <input id="hcNote" type="text" name="note" maxlength="150" placeholder="e.g. Thanks for your feedback!" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
                             </div>
-                            <p class="text-xs text-gray-500">A negative amount takes honeycombs away (e.g. −20). The balance can’t go below 0.</p>
-                            <button type="submit" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2"><i class='bx bx-gift'></i> Send</button>
-                        </form>
-                    </div>
-
-                    <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
-                        <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
-                            <i class='bx bx-slider-alt text-2xl text-brand-400'></i>
-                            <h2 class="text-base font-semibold text-white">How users earn them</h2>
                         </div>
-                        <form action="/admin" method="POST" class="space-y-3">
-                            <input type="hidden" name="csrf" value="CSRFTOKEN">                            <input type="hidden" name="hc_action" value="settings">
-                                                        <div class="flex items-center gap-3">
-                                <label class="flex-1 min-w-0" for="hcRule-daily"><span class="block text-sm text-white">Active day</span><span class="block text-xs text-gray-500">For opening the editor (once a day)</span></label>
-                                <input id="hcRule-daily" type="number" name="daily" min="0" max="100000" step="1" value="5" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !w-28 text-right">
-                            </div>
-                                                        <div class="flex items-center gap-3">
-                                <label class="flex-1 min-w-0" for="hcRule-profile"><span class="block text-sm text-white">Complete profile</span><span class="block text-xs text-gray-500">Once: profile picture, bio and at least 3 links</span></label>
-                                <input id="hcRule-profile" type="number" name="profile" min="0" max="100000" step="1" value="20" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !w-28 text-right">
-                            </div>
-                                                        <div class="flex items-center gap-3">
-                                <label class="flex-1 min-w-0" for="hcRule-views"><span class="block text-sm text-white">Visitors</span><span class="block text-xs text-gray-500">Per step of page views (one step a day, up to 20 times)</span></label>
-                                <input id="hcRule-views" type="number" name="views" min="0" max="100000" step="1" value="10" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !w-28 text-right">
-                            </div>
-                                                        <div class="flex items-center gap-3">
-                                <label class="flex-1 min-w-0" for="hcRule-views_step"><span class="block text-sm text-white">Views per step</span><span class="block text-xs text-gray-500">How many page views make one step</span></label>
-                                <input id="hcRule-views_step" type="number" name="views_step" min="1" max="100000" step="1" value="100" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !w-28 text-right">
-                            </div>
-                                                        <div class="flex items-center gap-3">
-                                <label class="flex-1 min-w-0" for="hcRule-code_page"><span class="block text-sm text-white">Price: code page</span><span class="block text-xs text-gray-500">What unlocking the code page costs</span></label>
-                                <input id="hcRule-code_page" type="number" name="code_page" min="0" max="100000" step="1" value="100" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !w-28 text-right">
-                            </div>
-                                                        <p class="text-xs text-gray-500 pt-1">0 switches a reward off. Changes count from now on – nobody loses honeycombs they already have.</p>
-                            <button type="submit" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2"><i class='bx bx-save'></i> Save</button>
-                        </form>
-                    </div>
+                        <p class="text-xs text-gray-500">A negative amount takes honeycombs away (e.g. −20). The balance can’t go below 0.</p>
+                        <button type="submit" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2"><i class='bx bx-gift'></i> Send</button>
+                    </form>
                 </div>
 
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
@@ -79,84 +52,55 @@
                                 <tr><th class="px-5 py-3 font-medium">User</th><th class="px-4 py-3 font-medium text-right">Balance</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Earned</th><th class="px-4 py-3 font-medium text-right hidden sm:table-cell">Spent</th><th class="px-5 py-3"></th></tr>
                             </thead>
                             <tbody class="divide-y divide-bordercolor" id="hcRows">
-                                                                <tr data-search="pixel admin admin@test.de pixel">
+                                <tr data-search="pixel admin admin@test.de pixel">
                                     <td class="px-5 py-3"><span class="text-white">Pixel Admin</span><span class="block text-xs text-gray-500 break-all">admin@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">500 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">500</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="3"><i class='bx bx-gift'></i> Give</button></td>
                                 </tr>
-                                                                <tr data-search="mia müller mia@test.de mia">
+                                <tr data-search="mia müller mia@test.de mia">
                                     <td class="px-5 py-3"><span class="text-white">Mia Müller</span><span class="block text-xs text-gray-500 break-all">mia@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">50 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">150</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">100</td>
                                     <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="5"><i class='bx bx-gift'></i> Give</button></td>
                                 </tr>
-                                                                <tr data-search="lea@test.de lea@test.de lea">
+                                <tr data-search="lea@test.de lea@test.de lea">
                                     <td class="px-5 py-3"><span class="text-white">lea@test.de</span><span class="block text-xs text-gray-500 break-all">lea@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">5 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">5</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="7"><i class='bx bx-gift'></i> Give</button></td>
                                 </tr>
-                                                                <tr data-search="o&#039;brien &lt;b&gt;&amp; “co” quote@test.de quote">
+                                <tr data-search="o&#039;brien &lt;b&gt;&amp; “co” quote@test.de quote">
                                     <td class="px-5 py-3"><span class="text-white">O&#039;Brien &lt;b&gt;&amp; “Co”</span><span class="block text-xs text-gray-500 break-all">Quote@Test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">0 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="10"><i class='bx bx-gift'></i> Give</button></td>
                                 </tr>
-                                                                <tr data-search="tom@test.de tom@test.de tom">
+                                <tr data-search="tom@test.de tom@test.de tom">
                                     <td class="px-5 py-3"><span class="text-white">tom@test.de</span><span class="block text-xs text-gray-500 break-all">tom@test.de</span></td>
                                     <td class="px-4 py-3 text-right font-bold text-white whitespace-nowrap">0 <i class='bx bx-hive text-yellow-400'></i></td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-4 py-3 text-right text-gray-400 hidden sm:table-cell">0</td>
                                     <td class="px-5 py-3 text-right"><button type="button" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors" data-hc-give="6"><i class='bx bx-gift'></i> Give</button></td>
                                 </tr>
-                                                            </tbody>
+                            </tbody>
                         </table>
                     </div>
                 </div>
-
-                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
-                    <div class="flex items-center gap-3 mb-4 border-b border-bordercolor pb-4">
-                        <i class='bx bx-history text-2xl text-brand-400'></i>
-                        <h2 class="text-base font-semibold text-white">Latest activity</h2>
-                    </div>
-                                        <ul class="divide-y divide-bordercolor text-sm">
-                                                <li class="py-2.5 flex items-center justify-between gap-3">
-                            <span class="min-w-0"><span class="text-white">lea@test.de</span> <span class="text-gray-400">– Active on OnYourSite</span><span class="block text-xs text-gray-500">Oct 5, 2026 07:00</span></span>
-                            <span class="shrink-0 font-bold text-emerald-400">+5</span>
-                        </li>
-                                                <li class="py-2.5 flex items-center justify-between gap-3">
-                            <span class="min-w-0"><span class="text-white">Pixel Admin</span> <span class="text-gray-400">– Start</span><span class="block text-xs text-gray-500">Oct 4, 2026 08:15</span></span>
-                            <span class="shrink-0 font-bold text-emerald-400">+500</span>
-                        </li>
-                                                <li class="py-2.5 flex items-center justify-between gap-3">
-                            <span class="min-w-0"><span class="text-white">tom@test.de</span> <span class="text-gray-400">– Unlocked your code page</span><span class="block text-xs text-gray-500">Oct 3, 2026 11:00</span></span>
-                            <span class="shrink-0 font-bold text-gray-500">free</span>
-                        </li>
-                                                <li class="py-2.5 flex items-center justify-between gap-3">
-                            <span class="min-w-0"><span class="text-white">Mia Müller</span> <span class="text-gray-400">– Unlocked your code page</span><span class="block text-xs text-gray-500">Oct 2, 2026 09:30</span></span>
-                            <span class="shrink-0 font-bold text-red-400">−100</span>
-                        </li>
-                                                <li class="py-2.5 flex items-center justify-between gap-3">
-                            <span class="min-w-0"><span class="text-white">Mia Müller</span> <span class="text-gray-400">– Welcome</span><span class="block text-xs text-gray-500">Oct 2, 2026 09:00</span></span>
-                            <span class="shrink-0 font-bold text-emerald-400">+150</span>
-                        </li>
-                                            </ul>
-                                    </div>
+                <script>
+                    // „Give“ in der Liste wählt den Nutzer oben aus; Suche filtert die Liste
+                    document.querySelectorAll('[data-hc-give]').forEach(b => b.addEventListener('click', () => {
+                        document.getElementById('hcUser').value = b.dataset.hcGive;
+                        document.getElementById('hcGrantForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        setTimeout(() => document.getElementById('hcAmount').focus(), 300);
+                    }));
+                    document.getElementById('hcFilter').addEventListener('input', e => {
+                        const q = e.target.value.trim().toLowerCase();
+                        document.querySelectorAll('#hcRows tr').forEach(tr => { tr.hidden = q !== '' && !tr.dataset.search.includes(q); });
+                    });
+                </script>
             </div>
-            <script>
-                // „Give“ in der Liste wählt den Nutzer oben aus; Suche filtert die Liste
-                document.querySelectorAll('[data-hc-give]').forEach(b => b.addEventListener('click', () => {
-                    document.getElementById('hcUser').value = b.dataset.hcGive;
-                    document.getElementById('hcGrantForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    setTimeout(() => document.getElementById('hcAmount').focus(), 300);
-                }));
-                document.getElementById('hcFilter').addEventListener('input', e => {
-                    const q = e.target.value.trim().toLowerCase();
-                    document.querySelectorAll('#hcRows tr').forEach(tr => { tr.hidden = q !== '' && !tr.dataset.search.includes(q); });
-                });
-            </script>

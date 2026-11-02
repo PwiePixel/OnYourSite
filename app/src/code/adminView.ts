@@ -97,8 +97,8 @@ ${join(allUsers.map((u) => html`                                    <option valu
                                 <span class="flex-1 min-w-0"><span class="block text-sm text-white">Unlock code pages</span><span class="block text-xs text-gray-500">Paid once – the user keeps it for good</span></span>
                                 <span class="text-sm font-bold text-white whitespace-nowrap" id="codePrice">${priceHtml(price)}</span>
                             </div>
-                            <p class="text-xs text-gray-500 pt-1">Prices are set together with the other honeycomb rules.</p>
-                            <a href="#honeycombs" class="text-sm text-gray-400 hover:text-white inline-flex items-center gap-1 py-2">Change prices in Honeycombs <i class='bx bx-right-arrow-alt'></i></a>
+                            <p class="text-xs text-gray-500 pt-1">Prices and offers are set in Honeycombs under “Catalogue &amp; prices”.</p>
+                            <a href="/admin?hc_tab=catalogue#honeycombs" class="text-sm text-gray-400 hover:text-white inline-flex items-center gap-1 py-2">Change prices in Honeycombs <i class='bx bx-right-arrow-alt'></i></a>
                         </div>
                     </div>
                 </div>

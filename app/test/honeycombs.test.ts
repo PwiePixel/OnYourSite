@@ -175,10 +175,8 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
   const g = (o: Record<string, unknown>) => ({ hc_action: 'grant', ...o });
   const ops: Op[] = [
     ['admin', {}, 3], ['admin', { hc_action: 'nope' }, 3], ['admin', { hc_action: ['settings'] }, 3], ['admin', { hc_action: 'Settings' }, 3], ['admin', { hc_action: '' }, 3],
-    ['admin', { hc_action: 'settings', daily: '3', profile: '15', views: '8', views_step: '50', code_page: '250' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: '1e400', views_step: '0', code_page: '-1', profile: '1e5', views: '100001' }, 3], ['settings'],
-    ['admin', { hc_action: 'settings', daily: ['5'], profile: '', views: 'abc', views_step: ' 7 ', code_page: '0x10' }, 3], ['settings'],
+    // hc_action=settings vergleicht hc-admin.http.test.ts: seit „Catalogue & prices“ steht der Preis nur im Katalog,
+    // und das Formular lässt Schlüssel, die es nicht schickt (spätere Schritte), stehen – PHP schrieb alle fünf neu
     ['admin', g({ user_id: '0', amount: '5' }), 3], ['admin', g({ user_id: 'abc', amount: '5' }), 3], ['admin', g({ user_id: '999', amount: '5' }), 3],
     ['admin', g({ amount: '5' }), 3], ['admin', g({ user_id: '1e400', amount: '5' }), 3],
     ['admin', g({ user_id: '5', amount: '0' }), 3], ['admin', g({ user_id: '5', amount: '100001' }), 3], ['admin', g({ user_id: '5', amount: '-100001' }), 3],
@@ -228,7 +226,6 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
     ['balance', 5], ['balance', 6], ['balance', 9], ['history', 5, 30], ['history', 8, 5]];
   const php = await same(ops, 'admin');
   assert.deepEqual(php[0], null);
-  assert.deepEqual(php[5], { ok: 'Honeycomb settings saved.' });
   // Nur Node: jede Gutschrift des Teams nennt den Admin (actor_id = die ID aus dem Bezug a<id>-…)
   const [grants] = await admin.query<RowDataPacket[]>(`SELECT ref, actor_id FROM \`${DB.node}\`.honeycomb_ledger WHERE reason = 'admin' AND id > 4 ORDER BY id`);
   assert.ok(grants.length >= 5);
@@ -289,10 +286,10 @@ async function phpView(db: string): Promise<string> {
     child.stdin?.end();
   });
 }
-async function nodeView(db: string): Promise<string> {
+async function nodeView(db: string, tab = ''): Promise<string> {
   await useDb(db);
   try {
-    const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+    const ctx = new Ctx({ method: 'GET', url: '/admin' + (tab ? '?hc_tab=' + tab : ''), headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
     // Sitzung mit festem CSRF-Wert (wie $_SESSION im PHP-Aufruf)
     ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
     const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
@@ -338,11 +335,8 @@ function nodeCodeList(node: string): string {
 }
 // Die Formulare senden jetzt code_action statt hc_action=code_*
 const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(block|unblock)"/g, 'name="code_action" value="$1"');
-// Gelbe Honigwaben-Symbole (honeycomb-shop §5.1): Kopf von „Give honeycombs“ und das Symbol bei jedem Kontostand
-const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text-brand-400'></i>", "<i class='bx bx-hive text-2xl text-yellow-400'></i>")
-  .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
 
-test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
+test('admin view: the grant form and balances keep the fields of PHP, the moved code page list is unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
   // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
   // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
   // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
@@ -362,8 +356,13 @@ test('admin view: Honeycombs identical apart from the moved parts and the yellow
     const php = splitPhpView(viewNorm(await phpView(DB.php)));
     const node = viewNorm(await nodeView(DB.node));
     assert.ok(php.honeycombs.length > 1000, label);
-    // Eigene Dialoge (custom-dialogs): Node ohne data-confirm/_confirmed/data-error-*, PHP ohne confirm()
-    assert.equal(withoutDialogs(node), withoutNativeConfirms(yellowIcons(php.honeycombs)), label);
+    // Seit HC-5 hat der Bereich Honeycombs eigene Unterbereiche (hc-admin.http.test.ts); „Give honeycombs“ und die
+    // Kontostände stehen unter „Users“ mit denselben Feldern wie in PHP
+    const users = viewNorm(await nodeView(DB.node, 'users'));
+    for (const part of ['name="hc_action" value="grant"', 'name="grant_ref" value="REF"', 'id="hcUser" name="user_id"', 'id="hcAmount" type="number" name="amount" required min="-100000" max="100000"',
+      'id="hcNote" type="text" name="note" maxlength="150"', 'id="hcFilter"', 'id="hcRows"']) {
+      assert.ok(users.includes(part) && php.honeycombs.includes(part), label + ': ' + part);
+    }
     assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
     assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
     assert.equal(withoutDialogs(nodeCodeList(await nodeCodeView(DB.node))), withoutNativeConfirms(asCodeAction(php.codeList)), label);

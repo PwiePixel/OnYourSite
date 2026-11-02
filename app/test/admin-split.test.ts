@@ -92,10 +92,10 @@ async function sessionFor(userId: number): Promise<{ id: string; csrf: string }>
 }
 
 // /admin als Admin (id 3): POST mit CSRF-Feld (außer withCsrf = false) oder GET; Sitzung danach speichern
-async function request(form: PhpArray | null, withCsrf = true): Promise<Ctx> {
+async function request(form: PhpArray | null, withCsrf = true, query = ''): Promise<Ctx> {
   const s = await sessionFor(3);
   const ctx = form === null
-    ? makeTestCtx({ url: '/admin', cookies: { PHPSESSID: s.id } })
+    ? makeTestCtx({ url: '/admin' + query, cookies: { PHPSESSID: s.id } })
     : makeTestCtx({ method: 'POST', url: '/admin', cookies: { PHPSESSID: s.id }, post: withCsrf ? { csrf: s.csrf, ...form } : form });
   await Session.start(ctx);
   const user = (await one('SELECT * FROM users WHERE id = 3'))!;
@@ -133,9 +133,13 @@ test('old forms: hc_action=code_* becomes the matching code_action, every other 
 test('approved snapshots of the Honeycombs and Code pages sections', async () => {
   const ctx = new Ctx({ method: 'GET', url: '/admin', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
   ctx.session = { get: (k: string) => (k === 'csrf' ? 'CSRFTOKEN' : undefined), set: () => undefined } as unknown as Ctx['session'];
+  // Honeycombs: der Unterbereich „Users“ (vergeben, Kontostände) – die Übersicht zählt die letzten 30 Tage und hängt
+  // damit vom Datum ab (hc-admin.http.test.ts prüft sie)
+  const usersCtx = new Ctx({ method: 'GET', url: '/admin?hc_tab=users', headers: { host: 'oys.test:8080' }, peer: '127.0.0.1' });
+  usersCtx.session = ctx.session;
   const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
   const views = {
-    'admin-honeycombs.html': (await adminHoneycombsView(ctx, users)).replace(/name="grant_ref" value="[0-9a-f]{16}"/, 'name="grant_ref" value="REF"'),
+    'admin-honeycombs.html': (await adminHoneycombsView(usersCtx, users)).replace(/name="grant_ref" value="[0-9a-f]{16}"/, 'name="grant_ref" value="REF"'),
     'admin-code-pages.html': await adminCodePagesView(ctx, users),
   };
   for (const [name, htmlOut] of Object.entries(views)) {
@@ -159,7 +163,7 @@ test('approved snapshots of the Honeycombs and Code pages sections', async () =>
   assert.match(code, /<span class="text-gray-500 text-sm font-normal">3<\/span><\/h2>\n {24}<input type="search" id="codeAccessFilter"/);
   // Preis aus den Honigwaben-Regeln, Link dorthin
   assert.match(code, /id="codePrice">100 <i class='bx bx-hive/);
-  assert.ok(code.includes('<a href="#honeycombs"'));
+  assert.ok(code.includes('<a href="/admin?hc_tab=catalogue#honeycombs"'));
 });
 
 test('GET /admin: two nav entries and two sections; nothing about code pages is left in Honeycombs', async () => {
@@ -179,8 +183,14 @@ test('GET /admin: two nav entries and two sections; nothing about code pages is 
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.ok(order.every((i) => i > 0));
   const hc = section(page, 'honeycombs');
-  assert.doesNotMatch(hc, /code_action|hc_action" value="code_|bx-code-alt|miacode|Code page|Unlock for free/);
-  assert.ok(hc.includes('Give honeycombs') && hc.includes('How users earn them') && hc.includes('Balances') && hc.includes('Latest activity'));
+  assert.doesNotMatch(hc, /code_action|hc_action" value="code_|bx-code-alt|miacode|Unlock for free/);
+  // Unterbereiche (HC-5): ohne hc_tab die Übersicht mit den letzten Buchungen; vergeben und Kontostände unter „Users“,
+  // die Regeln unter „Earning rules“
+  assert.ok(hc.includes('Latest activity') && hc.includes('In circulation') && !hc.includes('Give honeycombs'));
+  const usersTab = section(String((await request(null, true, '?hc_tab=users')).body), 'honeycombs');
+  assert.doesNotMatch(usersTab, /code_action|hc_action" value="code_|bx-code-alt|miacode|Code page|Unlock for free/);
+  assert.ok(usersTab.includes('Give honeycombs') && usersTab.includes('Balances'));
+  assert.ok(section(String((await request(null, true, '?hc_tab=rules')).body), 'honeycombs').includes('How users earn them'));
   const code = section(page, 'code-pages');
   assert.ok(code.includes('Give code access') && code.includes('Prices') && code.includes('Access') && code.includes('Rules for code pages'));
   assert.equal(code.match(/name="code_action" value="block"/g)?.length, 2);
@@ -235,7 +245,7 @@ test('old forms (hc_action=code_*) still work and land on #code-pages; the honey
   assert.equal(ctx.session!.data.admin_success, 'Code page unlocked for O\'Brien <b>& “Co”.');
 
   ctx = await request({ hc_action: 'settings', daily: '7' });
-  assert.equal(ctx.header('Location'), '/admin#honeycombs');
+  assert.equal(ctx.header('Location'), '/admin?hc_tab=rules#honeycombs');
   assert.equal(ctx.session!.data.admin_success, 'Honeycomb settings saved.');
   ctx = await request({ hc_action: 'nope' });
   assert.equal(ctx.header('Location'), '/admin#honeycombs');

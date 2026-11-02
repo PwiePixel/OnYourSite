@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ROOT_DIR } from '../src/config.js';
 
-const SCRIPTS = ['admin-split.js', 'hc-yellow.js', 'e2e-dialogs.js', 'hc-code-unlock.js', 'editor-dialogs.js', 'profile-dialogs.js', 'bell.js'];
+const SCRIPTS = ['admin-split.js', 'hc-yellow.js', 'e2e-dialogs.js', 'hc-code-unlock.js', 'editor-dialogs.js', 'profile-dialogs.js', 'bell.js', 'hc-buy.js', 'hc-mobile.js', 'hc-offer.js'];
 const tmp = mkdtempSync(join(tmpdir(), 'oys-e2e-guard-'));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 

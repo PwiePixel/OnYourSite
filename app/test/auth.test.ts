@@ -10,7 +10,7 @@ import { registerView } from '../src/app/views/register.js';
 import { challengeView } from '../src/app/views/challenge.js';
 import { imprintView } from '../src/app/views/imprint.js';
 import { ADDRESS_HOLD_PARAGRAPH, SUGGESTIONS_PARAGRAPH, privacyView } from '../src/app/views/privacy.js';
-import { termsView } from '../src/app/views/terms.js';
+import { HONEYCOMBS_SECTION, termsView } from '../src/app/views/terms.js';
 import { registerOld } from '../src/app/auth.js';
 import { passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
 import { date } from '../src/php.js';
@@ -94,10 +94,13 @@ test('static pages match the PHP views byte for byte', { skip: PHP_SKIP }, () =>
     const res = php(`$r = []; foreach ($in as $v) { ob_start(); include '${phpFile('views')}/' . $v; $r[] = ob_get_clean(); } return $r;`, views.map(([v]) => v)) as string[];
     // Um Mitternacht kann sich das Datum zwischen PHP und Node ändern: dann noch einmal
     if (date('Y-m-d') !== day && attempt < 2) continue;
-    // Datenschutz: neu sind nur die Absätze über reservierte Adressen und die Vorschlagsseite – ohne sie wie in PHP
+    // Datenschutz: neu sind nur die Absätze über reservierte Adressen und die Vorschlagsseite – ohne sie wie in PHP.
+    // Bedingungen: neu ist nur Abschnitt 10 „Honeycombs and Premium“ (die Änderungen der Bedingungen rücken auf 11).
     views.forEach(([name, fn], i) => {
-      const node = withoutDialogs(fn());
-      assert.equal(name === 'privacy.php' ? node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '') : node, res[i], name);
+      let node = withoutDialogs(fn());
+      if (name === 'privacy.php') node = node.replace(ADDRESS_HOLD_PARAGRAPH, '').replace(SUGGESTIONS_PARAGRAPH, '');
+      if (name === 'terms.php') node = node.replace(HONEYCOMBS_SECTION, '').replace('11. Modifications to Terms', '10. Modifications to Terms');
+      assert.equal(node, res[i], name);
     });
     break;
   }

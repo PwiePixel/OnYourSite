@@ -11,7 +11,8 @@ import { PhpNumber, jsonInt, jsonIsNumeric, phpInt, phpJsonDecode, poolDb } from
 import { BUSY, HC_BUSY_TEXT, balanceIn, credit, lockedAccount, withAccount } from './ledger.js';
 import { grantUnlock, has } from './entitlements.js';
 import { feature } from './features.js';
-import { setItemPrice, shopPrice } from './catalogue.js';
+import { shopPrice } from './catalogue.js';
+import { adminShopHandle } from './admin.js';
 import { reconcileNow } from './reconcile.js';
 
 export interface HcSettings {
@@ -243,16 +244,11 @@ export async function hcForEditor(userId: number, earned: HcEarned[] = [], sql: 
 // ---------------------------------------------------------------
 
 // oys_admin_hc_handle(): $post wie $_POST, adminId = angemeldeter Admin. null = keine bekannte Aktion.
-// Sperren, Entsperren und Freischalten der Code-Seiten gehören zum eigenen Bereich (code/admin.ts).
+// Sperren, Entsperren und Freischalten der Code-Seiten gehören zum eigenen Bereich (code/admin.ts). Regeln, Katalog
+// und Angebote (Unterbereiche des Shops) erledigt admin.ts; die Preise stehen nur noch im Katalog.
 export async function adminHcHandle(post: PhpArray, adminId: number): Promise<AdminResult> {
   const action = field(post, 'hc_action');
   switch (action) {
-    case 'settings':
-      await hcSaveSettings(post);
-      // Der Preis der Code-Seite steht im Katalog (bis Admin → Katalog & Preise kommt, bleibt das Feld hier)
-      await setItemPrice(adminId, 'code_page', (await hcSettings()).code_page);
-      return { ok: 'Honeycomb settings saved.' };
-
     case 'grant': {
       const userId = phpInt(post.user_id ?? 0);
       const amount = phpInt(post.amount ?? 0);
@@ -274,5 +270,5 @@ export async function adminHcHandle(post: PhpArray, adminId: number): Promise<Ad
       return { ok: (amount > 0 ? '+' : '−') + Math.abs(amount) + ' honeycombs for ' + name + '. New balance: ' + (await hcBalance(userId)) + '.' };
     }
   }
-  return null;
+  return adminShopHandle(post, adminId);
 }

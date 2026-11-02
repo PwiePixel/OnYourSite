@@ -592,20 +592,19 @@ const sessionId = async (ctx) => ((await ctx.cookies()).find((c) => c.name === '
       await page.locator('.ui-toast.info', { hasText: /^Back online\.$/ }).waitFor();
       await sleep(400);
       ok(await off.count() === 0, 'offline note closed when back online');
-      // Ziel im Editor beim Laden: das Honigwaben-Fenster, eine Ebene mit Escape und Fokus zurück
+      // Ziel im Editor beim Laden: der Bereich „Honeycombs“; ein Fenster des Editors ist eine Ebene mit Escape und Fokus zurück
       await page.goto('about:blank');
       await page.goto(B + '/dashboard?page=' + P1 + '#honeycombs');
-      await page.waitForSelector('#hcModal');
-      ok(await page.getAttribute('#modalBox', 'role') === 'dialog' && await page.textContent('#modalTitle') === 'Your honeycombs', 'the honeycomb window opens from #honeycombs');
+      await page.waitForSelector('#tab-honeycombs:not(.hidden) .shop-wallet');
+      ok(await page.textContent('#pageTitle') === 'Honeycombs', 'the Honeycombs tab opens from #honeycombs');
+      await page.click('#shareBtn');
+      await page.waitForSelector('#modal:not(.hidden) #shareUrl');
+      ok(await page.getAttribute('#modalBox', 'role') === 'dialog', 'the share window is a dialog');
       ok(await page.evaluate(() => document.querySelector('main').closest('[inert]') !== null), 'the editor behind is inert');
       await page.keyboard.press('Escape');
       await sleep(150);
       ok(await page.isHidden('#modal'), 'Escape closes it');
-      await page.click('#hcBtn');
-      await page.waitForSelector('#hcModal');
-      await page.keyboard.press('Escape');
-      await sleep(150);
-      ok(await page.evaluate(() => document.activeElement.id) === 'hcBtn', 'focus back on the pill');
+      ok(await page.evaluate(() => document.activeElement.id) === 'shareBtn', 'focus back on the button that opened it');
       // Eigene Links: andere Seite über die Wache, eigene Tabs ohne Neuladen, fremde Ziele nie
       const opened = await page.evaluate(() => [OYSUI.openLink('/dashboard#stats'), OYSUI.openLink('//evil.example/'), OYSUI.openLink('javascript:alert(1)')]);
       await sleep(300);

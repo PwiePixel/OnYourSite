@@ -14,6 +14,7 @@ import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
+import { hcBackUrl } from '../honeycombs/admin.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
 import { adminCodePagesView } from '../code/adminView.js';
 import { adminStatusView } from '../status/adminView.js';
@@ -69,7 +70,8 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     if (legacy) await codeAction(ctx, session, legacy);
     const result = await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
-    ctx.redirect('/admin#honeycombs');
+    // Zurück zum Unterbereich der Aktion (z. B. /admin?hc_tab=offers#honeycombs)
+    ctx.redirect(hcBackUrl(post));
   }
 
   // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
