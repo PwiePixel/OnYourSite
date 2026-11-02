@@ -3388,7 +3388,7 @@
     UI.prompt({
       title: 'Remove ' + d.display + '?',
       text: 'Your page goes back to its OnYourSite address right away. Links and QR codes that use ' + d.display + ' stop working. Afterwards, delete the CNAME and TXT records at your domain provider.',
-      match: d.hostname, normalize: 'host', matchLabel: 'Type ' + d.display + ' to confirm', tone: 'danger', ok: 'Remove domain',
+      match: d.hostname, normalize: 'host', matchLabel: d.display, tone: 'danger', ok: 'Remove domain',
       fallbackFocus: function () { return $('#domainSection [data-dom="remove"]'); }
     }).then(function (typed) {
       if (typed === null || typed === undefined) return;

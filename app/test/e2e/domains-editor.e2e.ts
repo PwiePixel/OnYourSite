@@ -109,6 +109,8 @@ test('with Premium: connect, check, team text as text, remove', async () => {
   await dialog.waitFor();
   const ok = dialog.getByRole('button', { name: 'Remove domain' });
   assert.equal(await ok.isDisabled(), true);
+  // Die Beschriftung nennt die Domain einmal („Type … to confirm“, nicht doppelt)
+  assert.equal((await dialog.locator('.ui-label').textContent())?.trim(), `Type ${HOST} to confirm`);
   await dialog.locator('input').fill(HOST);
   await ok.click();
   await page.getByText('Domain removed.').waitFor();

@@ -15,6 +15,7 @@ import { SlotBusyError, withSlotLock } from '../code/slots.js';
 import { cnameTarget, domainsAvailable } from './config.js';
 import { displayHostname, looksLikeApex, normalizeHostname, recordHosts, relativeName, guessZone, TXT_PREFIX } from './hostname.js';
 import { createDomain, domainForTarget, logEvent, removeDomain, transition, type DomainRow } from './store.js';
+import { domainTarget } from './targets.js';
 import { domainSettings, workerState, type DomainSettings } from './settings.js';
 import { ownershipToken } from './tokens.js';
 import { decodeExtraRecords } from './records.js';
@@ -22,6 +23,7 @@ import { domainsCapacity } from './lifecycle.js';
 import { Doh, dohFromConfig, txtView, type TxtView } from './worker/dns.js';
 import { NOTICE_TITLES, domainLink, noticeText } from './notify.js';
 import { notify } from '../notify/notify.js';
+import { pausePoint } from '../honeycombs/ledger.js';
 
 export const DOMAIN_ACTIONS: ReadonlySet<string> = new Set(['domain', 'domain-add', 'domain-check', 'domain-remove', 'domain-settings']);
 export const isDomainAction = (action: string): boolean => DOMAIN_ACTIONS.has(action);
@@ -230,7 +232,20 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
       ctx.json({ ok: false, error: 'To confirm, please type the domain.' }, 400);
     }
     const view = await domainView(row, { settings: s });
-    await transaction((_c, db) => removeDomain(db, intval(row.id), 'user'));
+    await pausePoint('domain-remove', { uid, pageId });
+    // Unter der Sperre der Seite (Reihenfolge pages → custom_domains wie überall) muss die gelesene Zeile noch zu
+    // dieser Seite und diesem Konto gehören. Hat inzwischen ein anderes Konto die Domain mit seinem TXT-Nachweis
+    // übernommen, ist sie dessen Domain – removeDomain() allein würde ihr zum neuen Ziel folgen und sie entfernen.
+    const removed = await transaction(async (_c, db) => {
+      if (!(await db.one('SELECT id FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [pageId, uid]))) return false;
+      await pausePoint('domain-remove-locked', { uid, pageId });
+      const still = await db.one("SELECT id FROM custom_domains WHERE id = ? AND target_type = 'page' AND target_id = ? AND user_id = ? FOR UPDATE",
+        [row.id, pageId, uid]);
+      if (!still) return false;
+      await removeDomain(db, intval(row.id), 'user');
+      return true;
+    });
+    if (!removed) ctx.json(NO_DOMAIN, 404);
     ctx.json({ ok: true, records: view.records });
   }
 
@@ -310,13 +325,24 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
   }
 
   // 10. Eine Transaktion unter der Platz-Sperre des Kontos
+  await pausePoint('domain-add', { uid, pageId });
   let outcome: AddOutcome;
   try {
     outcome = await withSlotLock(uid, async (db): Promise<AddOutcome> => {
       const p = await db.one('SELECT * FROM pages WHERE id = ? AND user_id = ? FOR UPDATE', [pageId, uid]);
       if (!p) return { status: 409, body: { ok: false, error: 'Please reload the editor.', reload: true } };
       if (!isShownLinkPage(p)) return { status: 409, body: LINK_ONLY };
-      if (await db.one("SELECT id FROM custom_domains WHERE target_type = 'page' AND target_id = ? FOR UPDATE", [pageId])) {
+      // Übernahme: die Seite des anderen Kontos vor jeder Domain-Zeile sperren (Reihenfolge pages → custom_domains wie
+      // in removeDomain(), transition() und beim Domain-Dienst). Sonst hielte die Übernahme die Domain-Zeile und wartete
+      // auf dessen Seite, während dessen „Remove“ die Seite hält und auf die Zeile wartet – eine Verklemmung, die einer
+      // der beiden Anfragen als Fehler zurückkommt. Ist die Zeile inzwischen woanders, scheitert unten der Vergleich.
+      if (claimVersion !== null && existing) await domainTarget(existing.target_type)?.lock(db, intval(existing.target_id));
+      const onPage = (await db.one("SELECT * FROM custom_domains WHERE target_type = 'page' AND target_id = ? FOR UPDATE", [pageId])) as DomainRow | null;
+      if (onPage) {
+        // Doppelklick oder Wiederholung: dieselbe Domain steht schon auf dieser Seite (Entwurf 2.8: die bestehende Zeile)
+        if (onPage.hostname === ascii && intval(onPage.user_id) === uid) {
+          return { status: 200, body: { ok: true, domain: await domainView(onPage, { settings: s, db }) } };
+        }
         return { status: 409, body: { ok: false, error: 'This page already has a domain. Remove it first.' } };
       }
       if (!staff) {
@@ -342,15 +368,23 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
       const now = date('Y-m-d H:i:s');
       const fast = date('Y-m-d H:i:s', time() + FAST_MINUTES * 60);
       const loser = intval(cur.user_id);
+      // Die Einrichtungsfrist (pending_days, gezählt ab cf_created_at) beginnt für das neue Konto jetzt: mit dem
+      // Zeitpunkt des alten Kontos liefe sie bei einer lange live gewesenen Domain sofort ab, und der Dienst würde den
+      // Hostnamen gleich nach dem Nachweis löschen (setup_timeout)
+      const hostKept = cur.cf_id !== null && cur.cf_id !== undefined && cur.cf_id !== '';
       const ok = await transition(cur, {
         state: 'verifying',
         set: { target_type: 'page', target_id: pageId, user_id: uid, is_apex: apex ? 1 : 0, verified_at: null, problem: '', problem_detail: '',
-          next_check_at: now, fast_until: fast, manual_at: now, notice_state: 0, notice_at: null },
+          next_check_at: now, fast_until: fast, manual_at: now, notice_state: 0, notice_at: null, ...(hostKept ? { cf_created_at: now } : {}) },
         log: { event: 'transferred', detail: 'claimed by account #' + uid },
       }, db);
       if (!ok) return { status: 409, body: TRY_AGAIN };
-      // Das bisherige Konto erfährt es über die Glocke (in derselben Transaktion)
-      await notify(loser, 'domain_removed', NOTICE_TITLES.domain_removed, noticeText.removed(cur, null, 'transferred'), domainLink(cur), { db });
+      // Das bisherige Konto erfährt es über die Glocke und per Mail (Entwurf 4.11: domain_removed wird gemailt; der
+      // Domain-Dienst verschickt die Zeile im Verlauf) – in derselben Transaktion. Die Mail-Zeile trägt keine
+      // domain_id: die Domain gehört jetzt zur Seite des neuen Kontos, und der Knopf der Mail führte sonst dorthin.
+      const lost = noticeText.removed(cur, null, 'transferred');
+      await notify(loser, 'domain_removed', NOTICE_TITLES.domain_removed, lost, domainLink(cur), { db });
+      await logEvent(db, { id: null, hostname: cur.hostname, user_id: loser }, 'domain_removed', lost, { mail: true });
       const fresh = (await db.one('SELECT * FROM custom_domains WHERE id = ?', [cur.id])) as DomainRow;
       return { status: 200, body: { ok: true, transferred: true, domain: await domainView(fresh, { settings: s, db }) } };
     });

@@ -75,9 +75,12 @@ export async function reconcileUser(uid: number): Promise<void> {
       if (free <= 0) break;
       free--;
       const hasHost = row.cf_id !== null && row.cf_id !== '';
+      // Mit Hostnamen beginnt die Einrichtungsfrist (pending_days, gezählt ab cf_created_at) jetzt neu – sonst wäre sie
+      // bei einer lange live gewesenen Domain sofort abgelaufen und der Dienst löschte den Hostnamen (setup_timeout)
       await transaction((_c, tx) => transition(row, {
         state: hasHost ? 'pending' : 'verifying',
-        set: { problem: '', problem_detail: '', fail_count: 0, fail_since: null, next_check_at: nowStr(now), fast_until: hasHost ? nowStr(now + 900) : null },
+        set: { problem: '', problem_detail: '', fail_count: 0, fail_since: null, next_check_at: nowStr(now), fast_until: hasHost ? nowStr(now + 900) : null,
+          ...(hasHost ? { cf_created_at: nowStr(now) } : {}) },
         log: { event: 'resumed', detail: hasHost ? 'Premium is back – reconnecting.' : 'Premium is back – checking the records.' },
       }, tx));
     }
