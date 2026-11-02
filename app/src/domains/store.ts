@@ -14,7 +14,9 @@ export type DomainState = (typeof DOMAIN_STATES)[number];
 export const SERVING_STATES: ReadonlySet<string> = new Set(['pending', 'active', 'broken', 'suspended']);
 
 export const LOG_EVENTS = ['added', 'txt_ok', 'waiting', 'cf_created', 'cf_adopted', 'cf_deleted', 'active', 'broken', 'recovered',
-  'suspended', 'resumed', 'failed', 'blocked', 'unblocked', 'removed', 'transferred', 'redirect', 'check', 'api_error'] as const;
+  'suspended', 'resumed', 'failed', 'blocked', 'unblocked', 'removed', 'transferred', 'redirect', 'check', 'api_error',
+  // Hinweise an den Besitzer (Glocke, mit mail = 1 auch per Mail) und Meldungen an die Admins (PD-3)
+  'domain_live', 'domain_problem', 'domain_back', 'domain_paused', 'domain_removed', 'alert'] as const;
 export type LogEvent = (typeof LOG_EVENTS)[number];
 
 // Zeile aus custom_domains (Zahlen als Zahl, Zeiten als 'Y-m-d H:i:s' wie überall)

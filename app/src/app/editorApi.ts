@@ -14,6 +14,8 @@ import {
   userPages,
 } from '../content/pages.js';
 import { renderPage } from '../content/render.js';
+import { CSS_WARNING, brandingFor, cssTouchesBranding, footerHidden } from '../content/branding.js';
+import { isPremiumRow } from '../honeycombs/premium.js';
 import { stats } from '../content/stats.js';
 import { layoutKey, themeKey } from '../content/themes.js';
 import { UPLOAD_QUOTA_MB, UPLOAD_QUOTA_PREMIUM_MB, handleUpload, sweepUploads, uploadKinds, userUploadFiles } from '../content/uploads.js';
@@ -30,7 +32,7 @@ import {
 } from '../code/slots.js';
 import { beforePageRemoved } from '../domains/index.js';
 import { claimAddress, isTakenError, releaseAddress } from '../content/addresses.js';
-import { currentPage, hasPremium } from './context.js';
+import { currentPage, isStaff } from './context.js';
 import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
 import { statusEditorApi } from '../status/editorApi.js';
@@ -103,7 +105,10 @@ export function previewBlockId(b: PhpArr, key: string): string {
 
 export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
-  const premium = hasPremium(ctx, user);
+  // Team: Speicher, Seitenzahl und Adress-Wartezeit; Premium des Kontos (echter Stand aus der Datenbank): Branding
+  const staff = isStaff(ctx, user);
+  const premium = isPremiumRow(user);
+  const canEditBranding = premium || staff;
   const session = ctx.session!;
 
   const action = ctx.path.slice('/dashboard/api/'.length);
@@ -166,7 +171,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       ctx.json({ ok: false, error: 'Too many uploads in a short time – please wait a moment.' });
     }
     // Speicherplatz begrenzen (vorher nie gespeicherte Uploads aufräumen)
-    const quotaMb = premium ? UPLOAD_QUOTA_PREMIUM_MB : UPLOAD_QUOTA_MB;
+    const quotaMb = staff ? UPLOAD_QUOTA_PREMIUM_MB : UPLOAD_QUOTA_MB;
     let usedBytes = 0;
     for (const size of (await sweepUploads(userId, userUploadFiles(userId))).values()) usedBytes += size;
     // Feld file[…]: in PHP sind size und error Arrays – (int) davon ist 1, oys_handle_upload() meldet Fehler 1
@@ -294,8 +299,10 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         theme: themeKey(get('theme') ?? page.theme),
         layout: layoutKey(get('layout') ?? page.layout),
         // json_encode() ohne Optionen (renderPage liest die Einstellungen wieder daraus)
-        settings: phpJson(settingsNormalize(get('settings') ?? [], userId, premium, pageSettings(page))),
+        settings: phpJson(settingsNormalize(get('settings') ?? [], userId, canEditBranding, pageSettings(page))),
       };
+      // Die Vorschau zeigt, was Besucher sehen werden: der Schalter wirkt nur mit Premium (oder Bestandsschutz)
+      const branding = brandingFor(pageSettings(draft), premium);
       const blocks: Array<Record<string, unknown>> = [];
       const blocksIn = inp('blocks') ?? null;
       for (const [i, b] of sliceEntries(isArr(blocksIn) ? blocksIn : [], 150)) {
@@ -318,6 +325,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         mode: 'preview',
         entrance: (inp('entrance') ?? '') === 'show' ? 'show' : 'skip',
         host: ctx.host,
+        branding,
       }));
     }
     case 'save': {
@@ -327,18 +335,25 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       }
       let result;
       try {
-        result = await savePage(page, input, userId, premium);
+        result = await savePage(page, input, userId, canEditBranding);
       } catch (err) {
         console.error('Saving failed: ' + (err instanceof Error ? err.message : String(err)));
         ctx.json({ ok: false, error: 'Saving failed. Please try again.' }, 500);
       }
+      // Inzwischen gelöscht (anderer Tab): nichts mehr zu zeigen
+      if (!result.page) ctx.json(PAGE_GONE, 409);
+      const saved = result.page;
+      // Eigenes CSS, das den Hinweis anspricht, während er sichtbar bleibt: Hinweis unter dem Feld (gespeichert ist es)
+      const savedSettings = pageSettings(saved);
+      const cssWarning = !footerHidden(savedSettings, premium) && cssTouchesBranding(savedSettings.custom_css);
       ctx.json({
         ok: true,
-        page: pageForEditor(result.page as Row),
+        page: pageForEditor(saved, premium),
         blocks: result.blocks.map(blockForEditor),
         // Reihenfolge der Schlüssel wie in PHP (savePage liefert sie schon so)
         idmap: result.idmap,
         warnings: result.warnings,
+        ...(cssWarning ? { cssWarning: CSS_WARNING } : {}),
       });
     }
     case 'address': {
@@ -347,7 +362,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       const mode = (inp('mode') ?? 'subdomain') === 'path' ? 'path' : 'subdomain';
       if (slug !== page.slug) {
         const daysLeft = addressDaysLeft(page.slug_changed_at);
-        if (daysLeft > 0 && !premium) ctx.json({ ok: false, error: addressDaysText(daysLeft) });
+        if (daysLeft > 0 && !staff) ctx.json({ ok: false, error: addressDaysText(daysLeft) });
         const problem = await slugProblem(slug, intval(page.id), null, { userId });
         if (problem !== null) ctx.json({ ok: false, error: problem });
         // Neue Adresse belegen, alte für den Besitzer reservieren – zusammen mit der Seite (Sperren: pages → Adressen).
@@ -361,7 +376,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
             if (!cur) return { body: PAGE_GONE, status: 409 };
             if (phpStr(cur.slug) !== phpStr(page.slug)) {
               // Inzwischen geändert: dann gilt die Sperrfrist dieser Änderung (wie bei zwei Änderungen nacheinander)
-              const left = premium ? 0 : addressDaysLeft(cur.slug_changed_at);
+              const left = staff ? 0 : addressDaysLeft(cur.slug_changed_at);
               if (left > 0) return { body: { ok: false, error: addressDaysText(left) }, status: 200 };
               if (phpStr(cur.slug) === slug) return null;
             }
@@ -384,7 +399,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       await syncUsername(userId);
       const saved = await loadPage(intval(page.id));
       if (!saved) ctx.json(PAGE_GONE, 409);
-      ctx.json({ ok: true, page: pageForEditor(saved) });
+      ctx.json({ ok: true, page: pageForEditor(saved, premium) });
     }
     case 'stats': {
       let range = intval(ctx.get.range ?? 7);

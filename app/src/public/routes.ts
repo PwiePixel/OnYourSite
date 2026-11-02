@@ -12,9 +12,11 @@ import { botApi } from '../community/api.js';
 import { blockIsClickable, bookingIsInternal, calendarKey, scheduleActive } from '../content/blocks.js';
 import { demoPage } from '../content/demo.js';
 import { contactCheck, storeMessage } from '../content/messages.js';
-import { blockFromRow, calendarAccess, isShownLinkPage, loadBlocks, loadPage, loadPageBySlug, type Block } from '../content/pages.js';
+import { blockFromRow, calendarAccess, isShownLinkPage, loadBlocks, loadPage, loadPageBySlug, pageSettings, type Block } from '../content/pages.js';
 import { renderPage, renderSimple } from '../content/render.js';
+import { DEFAULT_FAVICON, faviconUrl, pageBranding } from '../content/branding.js';
 import { ogServe } from '../content/share.js';
+import { iconServe } from '../content/icon.js';
 import { brands, uiIcon } from '../content/social.js';
 import { recordClick, recordView, requestFromOwnSite } from '../content/stats.js';
 import { layouts } from '../content/themes.js';
@@ -85,7 +87,7 @@ export function wantsJson(ctx: Ctx): boolean {
 }
 
 // oys_render_gate(): Zwischenseite für geschützte Links ohne JavaScript
-export function renderGate(page: Row, block: Block, kind: 'age' | 'password', error: string | null = null): string {
+export function renderGate(page: Row, block: Block, kind: 'age' | 'password', error: string | null = null, favicon: string = DEFAULT_FAVICON): string {
   const t = own(block.data, 'title') ?? '';
   const title = phpTruthy(t) ? t : 'Link';
   const back = '<a class="oys-back" href="' + e(pageUrl(page as unknown as PageLike)) + '">' + uiIcon('left') + ' Back to '
@@ -104,7 +106,7 @@ export function renderGate(page: Row, block: Block, kind: 'age' | 'password', er
       + '<label class="oys-field"><span>Password</span><input type="password" name="pw" required autofocus data-error-required="Please enter the password."></label>'
       + '<button class="oys-contact-send" type="submit">' + uiIcon('lock') + '<span>Unlock</span></button></form>';
   }
-  return renderSimple(page, 'Protected link', body);
+  return renderSimple(page, 'Protected link', body, favicon);
 }
 
 // Kopfzeile als Text (Node fasst doppelte zusammen, Arrays nur bei Set-Cookie)
@@ -199,16 +201,18 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
     if (target === '') ctx.redirect(pageUrl(pageLike));
     ctx.header('Cache-Control', 'no-store');
 
+    // Favicon wie auf der Seite (mit Premium das Profilbild)
+    const icon = async (): Promise<string> => faviconUrl(page, (await pageBranding(page, pageSettings(page))).fullyUnbranded);
     if (block.protection === 'age') {
-      if (method !== 'POST' || (own(ctx.post, 'age') ?? '') !== 'yes') ctx.send(renderGate(page, block, 'age'));
+      if (method !== 'POST' || (own(ctx.post, 'age') ?? '') !== 'yes') ctx.send(renderGate(page, block, 'age', null, await icon()));
     } else {
-      if (method !== 'POST') ctx.send(renderGate(page, block, 'password'));
+      if (method !== 'POST') ctx.send(renderGate(page, block, 'password', null, await icon()));
       if (!(await attemptsAllowed(ctx, 'pw:' + block.id, 10, 200, 900))) {
-        ctx.send(renderGate(page, block, 'password', 'Too many attempts. Please wait a few minutes.'));
+        ctx.send(renderGate(page, block, 'password', 'Too many attempts. Please wait a few minutes.', await icon()));
       }
       if (!(await passwordVerify(ctx.p('pw'), phpStr(block.password_hash)))) {
         await attemptFailed(ctx, 'pw:' + block.id, 900);
-        ctx.send(renderGate(page, block, 'password', 'Wrong password.'));
+        ctx.send(renderGate(page, block, 'password', 'Wrong password.', await icon()));
       }
     }
     if (!isBot(ctx.userAgent())) await recordClick(intval(page.id), block.id);
@@ -236,6 +240,11 @@ export async function publicRoutes(ctx: Ctx): Promise<void> {
   // --- Vorschaubild für geteilte Links (Discord, WhatsApp, X …) ---
   if ((m = /^\/_\/og\/(\d+)-([0-9a-f]{12})\.png(?=\n?$)/.exec(path))) {
     return ogServe(ctx, intval(m[1]), m[2]);
+  }
+
+  // --- Favicon aus dem Profilbild (Premium) ---
+  if ((m = /^\/_\/icon\/(\d+)-([0-9a-f]{12})\.png(?=\n?$)/.exec(path))) {
+    return iconServe(ctx, intval(m[1]), m[2]);
   }
 
   // --- Demo-Seiten für die Startseite ---
@@ -293,7 +302,9 @@ export async function servePage(ctx: Ctx, page: Row, sub: string): Promise<void>
   let notice: string | null = null;
   const sent = own(ctx.get, 'sent');
   if (sent !== undefined && ctypeDigit(phpStr(sent))) notice = 'sent:' + phpStr(sent);
-  ctx.send(renderPage(page, await loadBlocks(intval(page.id)), { mode: 'public', host: ctx.host, notice }));
+  // Branding: der Schalter wirkt nur mit Premium des Besitzers (eine Abfrage, nur wenn er an ist)
+  const branding = await pageBranding(page, pageSettings(page));
+  ctx.send(renderPage(page, await loadBlocks(intval(page.id)), { mode: 'public', host: ctx.host, notice, branding }));
 }
 
 // Abfrage weitergeben, wie sie kam (?a=1&b=2), nur wenn es eine gibt

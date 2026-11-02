@@ -12,7 +12,7 @@ import type { Ctx } from '../web/ctx.js';
 import { transaction, withConnection, type Db, type Row } from '../db.js';
 import { config } from '../config.js';
 import { intval } from '../php.js';
-import { hasPremium } from '../app/context.js';
+import { isStaff } from '../app/context.js';
 
 // Erfolgreiche Änderungen an den Plätzen: höchstens 20 je Stunde und Konto (abgelehnte Versuche zählen nicht)
 export const SLOT_RATE_MAX = 20;
@@ -75,7 +75,7 @@ export interface PageAllowance {
 // Seitenplätze eines Kontos: max_pages für alle (Q1 = b: Premium ändert daran nichts), unbegrenzt nur für das Team
 // (Admins und Admins im Nutzer-Modus). Innerhalb der Sperre mit db und der gesperrten Zeile aufrufen.
 export async function pageAllowance(ctx: Ctx, user: Row, _db?: Db): Promise<PageAllowance> {
-  return { max: intval(config('max_pages', 3)), unlimited: hasPremium(ctx, user) };
+  return { max: intval(config('max_pages', 3)), unlimited: isStaff(ctx, user) };
 }
 
 // „You can create up to N pages.“ (Text wie bisher)

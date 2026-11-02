@@ -185,6 +185,13 @@ test('old profiles are taken over, and a second run changes nothing', async () =
   await nodeEnsure(DBS.nodeLegacy);
   assert.equal(await version(DBS.nodeLegacy), String(SCHEMA_VERSION));
   await legacySamples(DBS.nodeLegacy);
+  // Bestandsschutz (V_BRANDING_LEGACY, Q9): genau die Seite, die den Hinweis ausblendete, behält das – keiner der alten
+  // Besitzer ist Admin oder hat Premium
+  const flags = ((await dump(DBS.nodeLegacy, 'pages')) as Array<Record<string, unknown>>).map((p) => {
+    const s = JSON.parse(String(p.settings)) as Record<string, unknown>;
+    return [p.slug, s.hide_branding === true, s.branding_legacy === true];
+  });
+  assert.deepEqual(flags.filter(([, hides, kept]) => hides || kept), [['pixel', true, true]]);
   const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.nodeLegacy, t)));
   await nodeEnsure(DBS.nodeLegacy);
   assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.nodeLegacy, t))), before);
@@ -213,21 +220,39 @@ function sameData(after: unknown[][], before: unknown[][]): unknown[][] {
 test('Node upgrades a database PHP has migrated, and a second run changes nothing', { skip: PHP_SKIP }, async () => {
   const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)));
   // Spalten, die spätere Schritte anfügen (z. B. pages.custom_domain), sind bei bestehenden Zeilen leer; alle bisherigen
-  // Werte bleiben, wie sie waren
-  const known = async (): Promise<unknown[][]> => (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
-    (rows as Array<Record<string, unknown>>).map((row, j) => {
-      const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
-      for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
-      return Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
-    }));
+  // Werte bleiben, wie sie waren. Einzige gewollte Datenänderung: V_BRANDING_LEGACY merkt Seiten, die den Hinweis ohne
+  // Premium ausblenden (Bestandsschutz Q9) – an settings wird "branding_legacy":true angehängt, der Rest bleibt Zeichen
+  // für Zeichen gleich. Die Liste der so markierten Seiten wird mitgeschrieben und unten geprüft.
+  const LEGACY_MARK = ',"branding_legacy":true}';
+  let marked: number[] = [];
+  const known = async (): Promise<unknown[][]> => {
+    marked = [];
+    return (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
+      (rows as Array<Record<string, unknown>>).map((row, j) => {
+        const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
+        for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
+        const out = Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
+        if (DATA_TABLES[i] === 'pages' && typeof out.settings === 'string' && out.settings.endsWith(LEGACY_MARK)) {
+          marked.push(Number(out.id));
+          out.settings = out.settings.slice(0, -LEGACY_MARK.length) + '}';
+        }
+        return out;
+      }));
+  };
+  // Seiten, die den Hinweis vorher ausblendeten (keiner der alten Besitzer ist Admin oder hat Premium)
+  const hiding = (before[DATA_TABLES.indexOf('pages')] as Array<Record<string, unknown>>)
+    .filter((r) => (JSON.parse(String(r.settings)) as { hide_branding?: unknown }).hide_branding === true).map((r) => Number(r.id));
+  assert.ok(hiding.length > 0, 'the fixture has a page that hides the note');
   await nodeEnsure(DBS.phpLegacy);
   assert.equal(await version(DBS.phpLegacy), String(SCHEMA_VERSION));
   assert.ok((await tables(DBS.phpLegacy)).includes('oys_sessions'));
   assert.deepEqual(await known(), before);
+  assert.deepEqual(marked, hiding, 'exactly the pages that hide the note keep hiding it');
   // PHP kommt mit der höheren Version zurecht (nichts wird erneut ausgeführt)
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.phpLegacy);
   assert.deepEqual(await known(), before);
+  assert.deepEqual(marked, hiding);
 });
 
 test('the feature steps give a database PHP installed the same tables as a fresh Node install', { skip: PHP_SKIP }, async () => {

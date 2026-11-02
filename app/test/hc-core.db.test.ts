@@ -456,23 +456,26 @@ async function bootstrap(userId: number, impersonatedBy?: number): Promise<Recor
   return JSON.parse(m[1]) as Record<string, unknown>;
 }
 
-test('the editor bootstrap: premium stays a boolean, plus the real premiumUntil and premiumForever', async () => {
-  // Mia: zeitlich begrenzt (aus dem Premium-Test)
+test('the editor bootstrap: premium is the real status (PD-1), staff separately, plus premiumUntil and premiumForever', async () => {
+  // Mia: zeitlich begrenzt (aus dem Premium-Test) – E.premium ist ihr echter Stand, sie ist nicht im Team
   let e = await bootstrap(5);
-  assert.equal(e.premium, false);
+  assert.equal(e.premium, true);
+  assert.equal(e.staff, false);
   assert.equal(e.premiumUntil, (await one('SELECT premium_until FROM users WHERE id = 5'))?.premium_until);
   assert.equal(e.premiumForever, false);
-  // Hinter „premium“ und „pagesUnlimited“ (Seitenplätze) – die älteren Schlüssel behalten ihre Reihenfolge
+  // Hinter „premium“, „pagesUnlimited“ (Seitenplätze) und „staff“ – die älteren Schlüssel behalten ihre Reihenfolge
   const keys = Object.keys(e);
-  assert.deepEqual(keys.slice(keys.indexOf('premium'), keys.indexOf('premium') + 4), ['premium', 'pagesUnlimited', 'premiumUntil', 'premiumForever']);
-  // Admin: immer Premium
+  assert.deepEqual(keys.slice(keys.indexOf('premium'), keys.indexOf('premium') + 5), ['premium', 'pagesUnlimited', 'staff', 'premiumUntil', 'premiumForever']);
+  // Admin: immer Premium und Team
   e = await bootstrap(3);
   assert.equal(e.premium, true);
+  assert.equal(e.staff, true);
   assert.equal(e.premiumUntil, null);
   assert.equal(e.premiumForever, true);
-  // Admin im Nutzer-Modus bei Tom: E.premium wie bisher (Team), der echte Stand ist der von Tom
+  // Admin im Nutzer-Modus bei Tom: Team (Seiten, Wartezeit), aber Premium ist der echte Stand von Tom
   e = await bootstrap(6, 3);
-  assert.equal(e.premium, true);
+  assert.equal(e.premium, false);
+  assert.equal(e.staff, true);
   assert.equal(e.premiumUntil, null);
   assert.equal(e.premiumForever, false);
 });

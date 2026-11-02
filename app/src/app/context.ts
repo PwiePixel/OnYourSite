@@ -1,4 +1,4 @@
-// Angemeldeter Nutzer, Premium, Hinweise und aktuelle Profilseite (lib/routes_app.php, oben)
+// Angemeldeter Nutzer, Team, Hinweise und aktuelle Profilseite (lib/routes_app.php, oben)
 import type { Ctx } from '../web/ctx.js';
 import { one, type Row } from '../db.js';
 import { intval, phpEmpty, phpTruthy } from '../php.js';
@@ -11,8 +11,9 @@ export async function currentUser(ctx: Ctx): Promise<Row | null> {
   return one('SELECT * FROM users WHERE id = ?', [intval(id)]);
 }
 
-// oys_has_premium(): Admins und Admins im Nutzer-Modus
-export function hasPremium(ctx: Ctx, user: Row): boolean {
+// Das Team (früher oys_has_premium()): Admins und Admins im Nutzer-Modus. Gilt für Seitenzahl, Speicher und die
+// Wartezeit für Adressen – Premium (honeycombs/premium.ts) ändert daran nichts (Q1 = b).
+export function isStaff(ctx: Ctx, user: Row): boolean {
   const original = ctx.session?.get('original_admin_id');
   return phpTruthy(user.is_admin) || (original !== undefined && original !== null);
 }

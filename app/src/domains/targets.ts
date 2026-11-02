@@ -43,7 +43,8 @@ export const CUSTOM_HOST_ENDPOINTS: Readonly<Record<string, readonly EndpointRul
     { method: 'ANY', path: /^\/_\/go\/(\d+)$/, owns: { block: 1 } },
     { method: 'POST', path: /^\/_\/contact$/, owns: { block: 'b' } },
     { method: 'GET', path: /^\/_\/og\/(\d+)-[0-9a-f]{12}\.png$/, owns: { page: 1 } },
-    // PD-1b ergänzt hier /_/icon/{id}-{hash}.png (Favicon aus dem Profilbild)
+    // Favicon aus dem Profilbild (Premium, content/icon.ts)
+    { method: 'GET', path: /^\/_\/icon\/(\d+)-[0-9a-f]{12}\.png$/, owns: { page: 1 } },
   ],
 });
 

@@ -242,15 +242,20 @@ test('/_/ endpoints on a custom domain take only ids of this page', async () => 
   // Vorschaubild: der Hash enthält die Domain, das Bild einer anderen Seite gibt es hier nicht
   const mia = (await loadPage(2))!;
   assert.equal(mia.custom_domain, HOST);
-  const hash = ogHash(mia);
+  const hash = ogHash(mia, false);
   const og = await req('GET', `/_/og/2-${hash}.png`, HOST);
   assert.equal(og.statusCode, 200);
   assert.equal(og.headers['content-type'], 'image/png');
   const old = await req('GET', '/_/og/2-000000000000.png', HOST);
   assert.equal(old.statusCode, 302);
   assert.equal(old.headers.location, `/_/og/2-${hash}.png`);
-  neutral(await req('GET', `/_/og/3-${ogHash((await loadPage(3))!)}.png`, HOST), 'card of another page');
+  neutral(await req('GET', `/_/og/3-${ogHash((await loadPage(3))!, false)}.png`, HOST), 'card of another page');
   assert.ok((await req('GET', '/', HOST)).body.includes(`${ORIGIN}/_/og/2-${hash}.png`));
+  // Favicon aus dem Profilbild: nur für die Seite dieser Domain (ohne Premium führt es zum Favicon von OnYourSite)
+  const fav = await req('GET', '/_/icon/2-000000000000.png', HOST);
+  assert.equal(fav.statusCode, 302);
+  assert.equal(fav.headers.location, '/static/images/favicon.png');
+  neutral(await req('GET', '/_/icon/3-000000000000.png', HOST), 'favicon of another page');
 });
 
 test('pending and broken domains still show the page, with the OnYourSite address as canonical; paused ones forward', async () => {
@@ -390,7 +395,7 @@ test('without the setup an unknown host gets today’s 404 and costs no database
 test('without the setup a domain that is still live is no primary address: the page stays on its OnYourSite addresses', async () => {
   await setState('active', { redirect: 1 });
   assert.equal((await loadPage(2))!.custom_domain, HOST);
-  const plainHash = ogHash({ ...(await loadPage(2))!, custom_domain: null });
+  const plainHash = ogHash({ ...(await loadPage(2))!, custom_domain: null }, false);
   // z. B. config.json nach einer Wiederherstellung ohne die Werte von --domains: der Router beantwortet die Domain
   // dann nicht – ein Verweis dorthin machte die Seite unerreichbar
   setConfigForTests({ ...cfg, cloudflare: {} });
@@ -406,7 +411,7 @@ test('without the setup a domain that is still live is no primary address: the p
     const api = JSON.parse((await req('GET', '/api.php?user=mia', 'oys.test:8080')).body);
     assert.equal(api.data.profile.url, 'http://mia.oys.test:8080');
     assert.deepEqual(Object.keys(api.data.profile.urls), ['subdomain', 'path']);
-    assert.equal(ogHash((await loadPage(2))!), plainHash);
+    assert.equal(ogHash((await loadPage(2))!, false), plainHash);
   } finally {
     setConfigForTests(cfg);
   }

@@ -78,17 +78,17 @@ test('booking blocks: the page’s own domain counts as its address only when it
 test('the preview card hash stays the same without a domain and changes with one', () => {
   withConfig({});
   const page = { id: 2, slug: 'mia', address_mode: 'subdomain', title: 'Mia', subtitle: 'Design', bio: 'Hi', avatar: 'avatar_5_1_ab.webp', theme: 'aurora', settings: '{"accent":"#ff0055"}' };
-  const plain = ogHash(page);
+  const plain = ogHash(page, false);
   assert.match(plain, /^[0-9a-f]{12}$/);
   // Festgehaltene Werte (vor dieser Änderung berechnet): bereits geteilte Karten behalten ihre Adresse
   assert.equal(plain, 'cd6001bd20f1');
-  assert.equal(ogHash({ ...page, custom_domain: null }), plain);
-  assert.equal(ogHash({ ...page, custom_domain: '' }), plain);
+  assert.equal(ogHash({ ...page, custom_domain: null }, false), plain);
+  assert.equal(ogHash({ ...page, custom_domain: '' }, false), plain);
   // Ohne Einrichtung zählt eine gespeicherte Domain nicht (die Karte zeigt dann die OnYourSite-Adresse)
-  assert.equal(ogHash({ ...page, custom_domain: 'links.example.com' }), plain);
+  assert.equal(ogHash({ ...page, custom_domain: 'links.example.com' }, false), plain);
   withConfig(SETUP);
-  assert.equal(ogHash(page), plain);
-  const withDomain = ogHash({ ...page, custom_domain: 'links.example.com' });
+  assert.equal(ogHash(page, false), plain);
+  const withDomain = ogHash({ ...page, custom_domain: 'links.example.com' }, false);
   assert.notEqual(withDomain, plain);
-  assert.notEqual(ogHash({ ...page, custom_domain: 'www.example.com' }), withDomain);
+  assert.notEqual(ogHash({ ...page, custom_domain: 'www.example.com' }, false), withDomain);
 });

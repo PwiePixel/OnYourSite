@@ -16,6 +16,7 @@ import { isFile, uploadReadPath, uploadsDir } from './storage.js';
 import { isShownLinkPage, loadPage, pageSettings } from './pages.js';
 import { DEFAULT_THEME, themeKey, themes } from './themes.js';
 import { basename, own } from './util.js';
+import { pageBranding } from './branding.js';
 
 // /\s+/u von PCRE (Unicode-Leerraum, aber nicht U+FEFF)
 const U_SPACES = new RegExp('[' + PCRE_WS + ']+', 'gu');
@@ -42,13 +43,15 @@ export function ogFont(bold: boolean): string {
 }
 
 // oys_og_hash(): Kennung des Bildes – ändert sich, sobald sich etwas Sichtbares ändert; dann laden Discord & Co. es neu.
-// Muss genau wie in PHP sein, sonst gelten bereits geteilte Adressen und gespeicherte Bilder nicht mehr.
-export function ogHash(page: Record<string, unknown>): string {
+// Muss genau wie in PHP sein, sonst gelten bereits geteilte Adressen und gespeicherte Bilder nicht mehr. markHidden ist
+// das wirksame Branding (content/branding.ts: Schalter UND Premium des Besitzers oder Bestandsschutz) – an der Stelle,
+// an der PHP den gespeicherten Schalter einsetzt. Bleibt der Wert gleich, bleibt auch die Kennung gleich.
+export function ogHash(page: Record<string, unknown>, markHidden: boolean): string {
   const s = pageSettings(page);
   const parts = [
     'og-1', intval(page.id ?? 0), page.slug ?? '', page.address_mode ?? '', page.title ?? '',
     page.subtitle ?? '', phpStr(page.bio ?? ''), phpStr(page.avatar ?? ''),
-    themeKey(page.theme ?? DEFAULT_THEME), own(s, 'accent'), phpTruthy(own(s, 'hide_branding')) ? 1 : 0, baseAuthority(),
+    themeKey(page.theme ?? DEFAULT_THEME), own(s, 'accent'), markHidden ? 1 : 0, baseAuthority(),
   ];
   // Live-Domain (Premium) als letzter Teil: die Karte zeigt sie als Adresse. Ohne Domain bleibt der Wert wie bisher.
   const domain = liveDomain(page as unknown as PageLike);
@@ -56,9 +59,9 @@ export function ogHash(page: Record<string, unknown>): string {
   return createHash('sha1').update(parts.map(phpStr).join('\n'), 'utf8').digest('hex').slice(0, 12);
 }
 
-// oys_og_url()
-export function ogUrl(page: Record<string, unknown>): string {
-  return pageOrigin(page as unknown as PageLike) + '/_/og/' + intval(page.id) + '-' + ogHash(page) + '.png';
+// oys_og_url() – markHidden wie bei ogHash()
+export function ogUrl(page: Record<string, unknown>, markHidden: boolean): string {
+  return pageOrigin(page as unknown as PageLike) + '/_/og/' + intval(page.id) + '-' + ogHash(page, markHidden) + '.png';
 }
 
 // ---------------------------------------------------------------- Vorschaubild zeichnen und ausliefern
@@ -73,7 +76,9 @@ export async function ogServe(ctx: Ctx, id: number, hash: string): Promise<void>
     ctx.status = 404;
     ctx.halt();
   }
-  const current = ogHash(page);
+  // Das Zeichen „OnYourSite“ folgt dem wirksamen Branding (Premium des Besitzers wird nachgeschlagen)
+  const markHidden = (await pageBranding(page, pageSettings(page))).footerHidden;
+  const current = ogHash(page, markHidden);
   if (!safeEqual(current, hash)) {
     // Alte Adresse (Seite wurde geändert): zum aktuellen Bild weiterleiten, nichts neu erzeugen
     ctx.header('Cache-Control', 'public, max-age=300');
@@ -83,7 +88,7 @@ export async function ogServe(ctx: Ctx, id: number, hash: string): Promise<void>
   const file = dir + '/' + id + '-' + current + '.png';
   let png: Buffer;
   if (!isFile(file)) {
-    png = await ogRender(page);
+    png = await ogRender(page, markHidden);
     // Fehler beim Speichern bleiben still (wie @mkdir/@unlink/@file_put_contents) – das Bild wird trotzdem geliefert
     try {
       mkdirSync(dir, { recursive: true, mode: 0o755 });
@@ -132,8 +137,9 @@ export async function ogServe(ctx: Ctx, id: number, hash: string): Promise<void>
   ctx.send(png);
 }
 
-// oys_og_render(): Hintergrund in den Farben des Designs, Profilbild, Name, Untertitel und Adresse; PNG 1200×630
-export async function ogRender(pageIn: object): Promise<Buffer> {
+// oys_og_render(): Hintergrund in den Farben des Designs, Profilbild, Name, Untertitel und Adresse; PNG 1200×630.
+// markHidden: ohne das Zeichen „OnYourSite“ unten rechts (wirksames Branding, siehe ogHash)
+export async function ogRender(pageIn: object, markHidden: boolean): Promise<Buffer> {
   const page = pageIn as Record<string, unknown>;
   const W = OG_WIDTH;
   const H = OG_HEIGHT;
@@ -205,7 +211,7 @@ export async function ogRender(pageIn: object): Promise<Buffer> {
   y += 30;
   im.text(30, x, y + 30, cAccent, ogFont(true), ogFit(address, ogFont(true), 30, maxW));
 
-  if (!phpTruthy(s.hide_branding)) {
+  if (!markHidden) {
     const mark = 'OnYourSite';
     const w = ogWidth(mark, ogFont(true), 24);
     im.text(24, W - w - 48, H - 42, cMuted, ogFont(true), mark);

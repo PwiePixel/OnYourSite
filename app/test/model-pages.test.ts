@@ -12,6 +12,7 @@ import { ogHash, ogUrl } from '../src/content/share.js';
 import { jsonDecode, type PhpArr } from '../src/content/util.js';
 import { runPhp, PHP_EACH, nodeEach, diffs, jsonText, rng, O, Raw, enc, jsFloats } from './modelHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
+import { storedHidden } from './support/brandingParity.js';
 
 after(() => closePool());
 
@@ -186,7 +187,9 @@ test('blocks for the editor match PHP for test-database rows and odd rows', { sk
   for (const { id } of await q('SELECT id FROM pages ORDER BY id')) {
     const page = (await q('SELECT * FROM pages WHERE id = ?', [id as number]))[0];
     const blocks = await loadBlocks(id as number);
-    nodeDb.push(enc([pageForEditor(page), blocks.map(blockForEditor), blocks, pageFiles(page, blocks), ogHash(page), ogUrl(page), (await userPages(page.user_id as number)).map((x) => x.id)]));
+    // Branding wie in PHP: der gespeicherte Schalter (Premium-Besitzer = wirksam wie gespeichert)
+    nodeDb.push(enc([pageForEditor(page, true), blocks.map(blockForEditor), blocks, pageFiles(page, blocks), ogHash(page, storedHidden(page)), ogUrl(page, storedHidden(page)),
+      (await userPages(page.user_id as number)).map((x) => x.id)]));
   }
   assert.ok(phpDb.length >= 4);
   assert.deepEqual(nodeDb, phpDb);
@@ -208,8 +211,8 @@ test('pages for the editor, page files and preview image addresses match PHP for
   const node = nodeEach(jsonDecode(text) as unknown[], (c) => {
     const { page, blocks } = c as { page: Record<string, unknown>; blocks: Array<{ data: unknown }> };
     const full = ['slug', 'title', 'subtitle', 'theme', 'layout', 'address_mode'].every((k) => page[k] !== undefined && page[k] !== null) && ['bio', 'avatar', 'bg_image'].every((k) => Object.hasOwn(page, k));
-    return [full ? pageForEditor(page) : null, pageFiles(page, blocks.map((b) => ({ data: b.data !== null && typeof b.data === 'object' ? b.data : [] }) as Block)),
-      ogHash(page), page.id !== undefined && page.id !== null ? ogUrl(page) : null];
+    return [full ? pageForEditor(page, true) : null, pageFiles(page, blocks.map((b) => ({ data: b.data !== null && typeof b.data === 'object' ? b.data : [] }) as Block)),
+      ogHash(page, storedHidden(page)), page.id !== undefined && page.id !== null ? ogUrl(page, storedHidden(page)) : null];
   });
   assert.deepEqual(diffs(cases.map((c) => jsonText(c)), node, php), []);
   const phpPages = php.map((x) => JSON.parse(x) as unknown[]);

@@ -11,17 +11,19 @@ import { DEFAULT_THEME, fontChoices, layouts, themes } from '../content/themes.j
 import { brands, bxIcons } from '../content/social.js';
 import { uploadLimitMb } from '../content/uploads.js';
 import { hcEarn, hcForEditor } from '../honeycombs/honeycombs.js';
-import { premiumState } from '../honeycombs/premium.js';
+import { isPremiumRow, premiumState } from '../honeycombs/premium.js';
 import { BOOTSTRAP_NOTICES_MAX, notices } from '../notify/types.js';
 import { bellMarkup } from '../views/partials/ui.js';
-import { currentPage, flash, hasPremium } from './context.js';
+import { currentPage, flash, isStaff } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
 import { statusAdmin } from '../status/editorApi.js';
 
 export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
-  const premium = hasPremium(ctx, user);
+  // Team (Admins, auch im Nutzer-Modus): keine Wartezeit für Adressen. Premium: der echte Stand des Kontos.
+  const staff = isStaff(ctx, user);
+  const premium = isPremiumRow(user);
 
   // Klassische Formulare: E-Mail und Passwort ändern
   if (ctx.method === 'POST') {
@@ -76,13 +78,13 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
 
   // views/dashboard.php: Daten für static/js/editor.js (Reihenfolge der Schlüssel wie in PHP)
   let slugDaysLeft = 0;
-  if (page && phpTruthy(page.slug_changed_at) && !premium) {
+  if (page && phpTruthy(page.slug_changed_at) && !staff) {
     const changed = strtotime(phpStr(page.slug_changed_at));
     slugDaysLeft = Math.max(0, 30 - intval(Math.floor((time() - (changed === false ? 0 : changed)) / 86400)));
   }
   const editorData = {
     csrf: await csrfToken(ctx),
-    page: page ? pageForEditor(page) : null,
+    page: page ? pageForEditor(page, premium) : null,
     blocks: blocks.map(blockForEditor),
     pages: pages.map((p) => ({
       id: intval(p.id),
@@ -94,6 +96,7 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     maxPages: allowance.max,
     premium,
     pagesUnlimited: allowance.unlimited,
+    staff,
     premiumUntil: premiumNow.until,
     premiumForever: premiumNow.forever,
     themes: themes(),

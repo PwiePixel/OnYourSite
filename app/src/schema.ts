@@ -21,6 +21,9 @@ import { legacyPostRow } from './discord/legacy.js';
 import { botSecret } from './community/community.js';
 import { baseAuthority } from './helpers.js';
 import { notify } from './notify/notify.js';
+import { cssHides } from './content/brandingCss.js';
+import { isArr, jsonDecode, own } from './content/util.js';
+import { configString } from './config.js';
 
 // Stand der portierten Seite (Release 3.0 migriert genau bis hier)
 export const V_PAGES = 1; // Profilseiten + Übernahme der alten Profile
@@ -38,6 +41,7 @@ export const V_SHOP_CORE = 11; // Honigwaben: Konten, Berechtigungen, Premium-St
 export const V_SHOP_CATALOGUE = 12; // Honigwaben: Katalog mit Preisen, Angebote, Käufe
 export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge des Bots mit ref und Pausen, Einstellungen v2
 export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
+export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -76,6 +80,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SHOP_CATALOGUE, name: 'shopCatalogue', run: shopCatalogue },
   { version: V_DISCORD_DELIVERY, name: 'discordDelivery', run: discordDelivery },
   { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
+  { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1169,6 +1174,41 @@ async function shopCatalogue(conn: PoolConnection): Promise<void> {
         KEY idx_offer (offer_id, user_id),
         KEY idx_time (created_at)
     ) ${OPTS}`);
+}
+
+// V_BRANDING_LEGACY (braucht V_PAGES und V_SHOP_CORE: users.premium_until): Bestandsschutz (Q9). Wer „Made with
+// OnYourSite“ heute ohne Premium ausblendet – mit dem alten Schalter oder mit eigenem CSS, das ihn ausblendet –, behält
+// das: hide_branding und branding_legacy, bis der Besitzer den Schalter ausschaltet. Seiten von Admins und von
+// Besitzern mit Premium bleiben, wie sie sind (endet deren Premium, kommt der Hinweis zurück). Nur Daten, kein DDL.
+// Gelesen mit dem JSON-Decoder von PHP, geschrieben wie beim Speichern; jede Seite einzeln per Compare-and-set (eine
+// Seite, die gerade jemand speichert, wird neu gelesen).
+async function brandingLegacy(conn: PoolConnection): Promise<void> {
+  const now = date('Y-m-d H:i:s');
+  const base = strtolower(configString('base_domain', '')).split(':')[0];
+  let after = 0;
+  for (;;) {
+    const batch = await rows(conn, `SELECT p.id FROM pages p JOIN users u ON u.id = p.user_id
+        WHERE p.id > ? AND u.is_admin = 0 AND (u.premium_until IS NULL OR u.premium_until <= ?) ORDER BY p.id LIMIT 500`, [after, now]);
+    if (!batch.length) break;
+    for (const { id } of batch) {
+      after = intval(id);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await rows(conn, 'SELECT settings FROM pages WHERE id = ?', [after]);
+        if (!r.length) break;
+        const raw = phpStr(r[0].settings ?? '');
+        const settings = jsonDecode(raw);
+        // Nur Objekte haben Schlüssel (eine leere Liste [] hat nichts auszublenden)
+        if (!isArr(settings) || Array.isArray(settings) || phpTruthy(own(settings, 'branding_legacy'))) break;
+        const stored = phpTruthy(own(settings, 'hide_branding'));
+        if (!stored && !cssHides(cleanCss(phpStr(own(settings, 'custom_css') ?? '')), base)) break;
+        const s = settings as Record<string, unknown>;
+        if (!stored) s.hide_branding = true;
+        s.branding_legacy = true;
+        const res = await run(conn, 'UPDATE pages SET settings = ? WHERE id = ? AND BINARY settings = ?', [phpJson(s, { unescapedUnicode: true }), after, raw]);
+        if (res.affectedRows > 0) break;
+      }
+    }
+  }
 }
 
 type Seed = [string | null, string, string, string, string];
