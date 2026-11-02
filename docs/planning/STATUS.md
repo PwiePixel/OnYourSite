@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 12:10 (UTC+1).
+Last update: 2026-11-02 12:36 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -56,40 +56,55 @@ review get one shared security review at the end.
 | 35 | ST-3 | Notifier and OnYourSite's own status page (+ bot 0.3.0) | Built |
 | 17, 19, 26 | PD-1, PD-3, PD-1b | Premium flags and branding; domain worker; wider branding and code-page badge | Built |
 | 22, 30 | HC-4, HC-5 | Editor "Honeycombs" tab; shop admin I | Built |
+| 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built |
+| 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built |
+| 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
-- Premium and domains: PD-4 (domain in the editor), PD-5, PD-6.
-- Shop: HC-6a, HC-8, then HC-7a/7b, HC-6b, HC-9.
-- Status pages: ST-4 (status pages for users), ST-5, ST-7.
-- Code pages: CS-4, CS-5, CS-6 (code slots in the editor, live).
+- Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
+- Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
+- Status pages: ST-4 (status pages for users – all its dependencies are in now), ST-5, ST-7.
+- Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
-10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy – new
-steps take the next free number when they are merged.
+10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
+records – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
 1. **PR #15 is merged** (squash) and `main` is merged into `feature/new-features`. Deploy `main` with
    `sudo bash server/install.sh --update` (see `server/README.md`); PR #14 is next.
-2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 927 tests pass
+2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 971 tests pass
    (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
-   - Shop: HC-6a (shop admin II: users, unlock grants, refunds), HC-8, HC-7a (time-limited lifecycle – switches on
-     Premium and timed options), HC-6b, HC-9, HC-7b.
-   - Premium and domains: PD-4 (custom domain in the editor – needs HC-4), PD-5 (domains admin), PD-6 (installer:
-     Cloudflare for SaaS, systemd unit for the domain worker).
-   - Code pages: CS-4 (editor API), CS-5 (moderation), CS-6 (code slots in the editor, live).
-   - Status pages: ST-4 (status pages for users – needs HC-6a), then ST-5, ST-7.
+   - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
+   - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
+     worker).
+   - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
+   - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Follow-ups found during the work:**
    - The browser flows (`tests/e2e/*.js`, `app/test/e2e/*.e2e.ts`) are not part of `npm test`; the tsconfig does not
      type-check the test files.
    - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
    - The native-dialog check also matches regular-expression literals and comments.
-   - Extra DNS records for root domains (ownership TXT, DCV) have no storage yet – PD-4 adds it.
+   - CS-4: saving still uses the fixed size limits (take them from the `code_pages` settings in `codeWrite`, with the
+     "page already over a lowered limit" rule); the terms page doesn't show the limits and both prices yet; nobody is
+     told when a refund takes code pages offline (needs notifications with `ref`, CS-5); the editor bootstrap still
+     lacks `pages[].code` and the code summary (CS-6).
+   - HC-6a: "Give honeycombs" doesn't ask before a negative amount yet; the free unlock in *Admin → Code pages*
+     (`app/src/code/admin.ts`) still books through `hcAdd` – switch it to `grantFeature`. Not in HC-6a: bulk grants,
+     the History tab with Reverse, freeze/unfreeze (HC-6b) and codes (HC-9).
+   - PD-4: the worker stores only problem codes, so the editor can't show "Found: …" values; the server's
+     `fastUntil` has no time zone (the editor counts 15 minutes itself); decide whether an admin working as a user may
+     change domains (today they can); browser flows still missing: claiming another account's domain, the root-domain
+     choice, a live domain with the forwarding switch, the paused view, polling stops; the "Checks are delayed" line has
+     no test.
 
 Work in progress lives on branches of the current workspace and is pushed when it is merged into
 `feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
-requests into `feature/new-features` (for example #16, the weekly report's best link).
+requests into `feature/new-features` (for example #16, the weekly report's best link). #18 (per-checkout names in
+three tests) was already contained in `feature/new-features`; its branch is merged with it and changes nothing any
+more – merge or close it.
