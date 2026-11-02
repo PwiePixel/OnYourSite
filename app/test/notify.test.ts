@@ -150,6 +150,25 @@ test('notify({db}) belongs to the caller’s transaction: rolled back means no r
   assert.equal((await rowsOf(5)).length, 1);
 });
 
+test('a data step writes its notices with notify(…, { db: conn }) on the step’s own connection', async () => {
+  // Wie ein Schritt in ensureSchema(): nur die rohe Verbindung (PoolConnection), eine eigene Transaktion darauf
+  await clear(6);
+  await clear(3);
+  const step = (finish: 'commit' | 'rollback') => withConnection(async (_db, conn) => {
+    await conn.beginTransaction();
+    await notify(6, 'system', 'Your page address changed', 'Please update your links.', '/dashboard', { db: conn });
+    assert.equal(await notifyAdmins('team', 'A step needs a look', '', '/admin', { db: conn }), 1);
+    await (finish === 'commit' ? conn.commit() : conn.rollback());
+  });
+  await step('rollback');
+  assert.equal((await rowsOf(6)).length, 0);
+  assert.equal((await rowsOf(3)).length, 0);
+  await step('commit');
+  const rows = await rowsOf(6);
+  assert.deepEqual(rows.map((r) => [r.type, r.title, r.body, r.link]), [['system', 'Your page address changed', 'Please update your links.', '/dashboard']]);
+  assert.equal((await rowsOf(3)).length, 1);
+});
+
 test('notifyAdmins() writes one row per admin and returns the count', async () => {
   await t.admin.query(`UPDATE \`${t.name}\`.users SET is_admin = 1 WHERE id = 7`);
   try {

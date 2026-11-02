@@ -78,17 +78,10 @@ export async function schemaAtLeast(version: number): Promise<boolean> {
   return withConnection(async (_db, conn) => (await schemaVersion(conn)) >= version);
 }
 
-// Schritte, die eine Datenbank auf diesem Stand noch braucht (rein, ohne Datenbank)
+// Schritte, die eine Datenbank auf diesem Stand noch braucht (rein, ohne Datenbank; Tests und Fehlersuche).
+// Ob install.sh --update sichert, hängt davon nicht ab: Es sichert vor jedem Update (ROADMAP §2.4).
 export function stepsAfter(version: number, upTo: number = SCHEMA_VERSION): Array<{ version: number; name: string }> {
   return STEPS.filter((s) => s.version > version && s.version <= upTo).map((s) => ({ version: s.version, name: s.name }));
-}
-
-// Für `cli.js migrate --pending` (install.sh --update sichert vorher, wenn etwas aussteht): aktueller Stand der
-// Datenbank, Zielversion dieses Codes und die offenen Schritte. current > target heißt: die Datenbank ist neuer als
-// der Code (nichts zu tun, aber auffällig).
-export async function pendingSteps(): Promise<{ current: number; target: number; steps: Array<{ version: number; name: string }> }> {
-  const current = await withConnection(async (_db, conn) => schemaVersion(conn));
-  return { current, target: SCHEMA_VERSION, steps: stepsAfter(current) };
 }
 
 // Einmal je Prozess: beim Start und – falls die Datenbank da nicht erreichbar war – mit der nächsten Anfrage

@@ -1,12 +1,12 @@
 // Schritte des Schemas: Hilfen für wiederholbare Schritte (jede zweimal), ensureSchema({ upTo }) für Ausgangsstände
-// von Tests, die offenen Schritte für `cli.js migrate --pending` und der rein lesende Stand für Hintergrunddienste.
+// von Tests und der rein lesende Stand für Hintergrunddienste.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RowDataPacket } from 'mysql2/promise';
 import { withConnection } from '../src/db.js';
 import {
   SCHEMA_VERSION, V_CODE_PAGES, V_PAGES, V_SESSIONS, V_UPDATES, addColumn, addIndex, columnIsNotNull, dropIndex, ensureSchema, hasIndex,
-  hasTable, pendingSteps, schemaAtLeast, stepsAfter,
+  hasTable, schemaAtLeast, stepsAfter,
 } from '../src/schema.js';
 import { testDatabase, type TestDb } from './coreHarness.js';
 
@@ -36,11 +36,8 @@ test('steps are listed in order with names, and the highest one is the schema ve
   assert.ok(all.every((s) => /^[a-z][A-Za-z0-9]*$/.test(s.name)));
 });
 
-test('an empty database: everything is pending, upTo stops at a step, a second run continues from there', async () => {
-  const fresh = await pendingSteps();
-  assert.equal(fresh.current, 0);
-  assert.equal(fresh.target, SCHEMA_VERSION);
-  assert.deepEqual(fresh.steps, stepsAfter(0));
+test('an empty database: upTo stops at a step, a second run continues from there', async () => {
+  assert.deepEqual(await tables(), []);
   assert.equal(await schemaAtLeast(V_PAGES), false);
 
   await ensureSchema({ upTo: V_UPDATES });
@@ -48,7 +45,6 @@ test('an empty database: everything is pending, upTo stops at a step, a second r
   const mid = await tables();
   assert.ok(mid.includes('updates') && mid.includes('pages'));
   assert.ok(!mid.includes('code_sites') && !mid.includes('oys_sessions'));
-  assert.deepEqual((await pendingSteps()).steps.map((s) => s.version), stepsAfter(V_UPDATES).map((s) => s.version));
   assert.equal(await schemaAtLeast(V_UPDATES), true);
   assert.equal(await schemaAtLeast(V_CODE_PAGES), false);
 
@@ -58,7 +54,6 @@ test('an empty database: everything is pending, upTo stops at a step, a second r
   await ensureSchema({ upTo: SCHEMA_VERSION + 100 });
   assert.equal(await version(), String(SCHEMA_VERSION));
   assert.ok((await tables()).includes('oys_sessions'));
-  assert.deepEqual(await pendingSteps(), { current: SCHEMA_VERSION, target: SCHEMA_VERSION, steps: [] });
   assert.equal(await schemaAtLeast(SCHEMA_VERSION), true);
 
   // Noch einmal: nichts passiert (die Seeds der Updates bleiben einmalig)
@@ -68,10 +63,10 @@ test('an empty database: everything is pending, upTo stops at a step, a second r
   assert.equal(again.n, seeds.n);
 });
 
-test('a database that is newer than the code has nothing pending', async () => {
+test('a database that is newer than the code stays as it is', async () => {
   await t.admin.query(`REPLACE INTO \`${t.name}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)`, [String(SCHEMA_VERSION + 3)]);
   try {
-    assert.deepEqual(await pendingSteps(), { current: SCHEMA_VERSION + 3, target: SCHEMA_VERSION, steps: [] });
+    assert.equal(await schemaAtLeast(SCHEMA_VERSION + 3), true);
     await ensureSchema();
     assert.equal(await version(), String(SCHEMA_VERSION + 3));
   } finally {
