@@ -4,9 +4,10 @@
 import type { Ctx } from '../web/ctx.js';
 import { Session } from '../web/session.js';
 import { csrfCheck } from '../web/security.js';
-import { value, type Param } from '../db.js';
+import { one, value, type Param } from '../db.js';
 import { intval, phpTruthy } from '../php.js';
 import { refuseUnconfirmed } from '../admin/confirm.js';
+import { isAdminSession } from './context.js';
 
 // isset($_SESSION[…])
 const isSet = (v: unknown): boolean => v !== undefined && v !== null;
@@ -17,17 +18,19 @@ export async function adminImpersonate(ctx: Ctx): Promise<void> {
   if (!isSet(session.get('user_id'))) ctx.redirect('/login');
   if (ctx.method !== 'POST' || !csrfCheck(ctx, ctx.post.csrf ?? null)) ctx.redirect('/admin');
 
-  // Admin ist, wer ursprünglich angemeldet war (auch mitten im Nutzer-Modus)
-  const adminId = session.get('original_admin_id') ?? session.get('user_id');
-  if (!phpTruthy(await value('SELECT is_admin FROM users WHERE id = ?', [adminId as Param]))) ctx.redirect('/dashboard');
+  // „Log in as“ ist ein Admin-Recht und gilt nur in der eigenen Sitzung eines Admins (Entscheidung R1): wer schon als
+  // ein anderes Konto arbeitet, wechselt nicht weiter (auch nicht aus einem älteren Tab des Admin-Bereichs) – erst
+  // „Back to admin panel“
+  const current = await one('SELECT id, is_admin FROM users WHERE id = ?', [session.get('user_id') as Param]);
+  if (!current || !isAdminSession(ctx, current)) ctx.redirect('/dashboard');
   // Ohne bestätigten Dialog (ui.js fehlt) wird niemand gewechselt
   refuseUnconfirmed(ctx, session, '/admin');
 
   const targetUserId = intval(ctx.post.id ?? 0);
   const exists = await value('SELECT id FROM users WHERE id = ?', [targetUserId]);
   if (targetUserId > 0 && phpTruthy(exists)) {
-    // Originale Admin-ID merken, damit es zurückgeht (beim Wechsel von Nutzer zu Nutzer bleibt die erste)
-    if (!isSet(session.get('original_admin_id'))) session.set('original_admin_id', intval(session.get('user_id')));
+    // Admin-ID merken, damit es zurückgeht (hier immer die eigene Sitzung des Admins, siehe oben)
+    session.set('original_admin_id', intval(session.get('user_id')));
     session.regenerate();
     session.set('user_id', targetUserId);
     session.delete('page_id');

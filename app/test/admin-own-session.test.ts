@@ -8,7 +8,9 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { makeTestCtx, type Ctx } from '../src/web/ctx.js';
 import { appRoutes } from '../src/app/dispatch.js';
 import { adminImpersonate, adminReturn } from '../src/app/impersonate.js';
+import { setAuthMailerForTests } from '../src/app/auth.js';
 import { ensureSchema } from '../src/schema.js';
+import { passwordHash } from '../src/crypto.js';
 import type { PhpArray } from '../src/php.js';
 import { CSRF, jsonBody, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 
@@ -17,6 +19,9 @@ const OLD = '2026-01-01 10:00:00';
 const ADMIN_A = 3;
 const ADMIN_B = 4;
 const USER = 5;
+// Konto mit echtem Passwort für die Anmeldung über /login (Passwort erst zur Laufzeit zusammengesetzt)
+const LEA = 6;
+const LEA_PASSWORD = ['lea', 'test', 'login'].join('-');
 
 async function sql(query: string, params: unknown[] = []): Promise<RowDataPacket[]> {
   const [r] = await t.admin.query<RowDataPacket[]>(query.replace(/`DB`/g, '`' + t.name + '`'), params);
@@ -57,6 +62,8 @@ before(async () => {
   await sql(user, [ADMIN_A, 'a@test.de', 'Admin A', 1, OLD]);
   await sql(user, [ADMIN_B, 'b@test.de', 'Admin B', 1, OLD]);
   await sql(user, [USER, 'mia@test.de', 'Mia', 0, OLD]);
+  await sql('INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, ?, ?, 0, ?)',
+    [LEA, 'lea@test.de', await passwordHash(LEA_PASSWORD), 'Lea', OLD]);
 });
 
 after(async () => {
@@ -141,4 +148,78 @@ test('“Log in as” works for an admin account, and “Back to admin panel” 
   ctx = await get('/admin', sid);
   assert.equal(ctx.status, 200);
   assert.ok(String(ctx.body).includes('Welcome back! You are no longer impersonating a user.'));
+});
+
+// „Log in as“ ist selbst ein Admin-Recht: im Nutzer-Modus antwortet es wie für einen normalen Nutzer – kein Wechsel zu
+// einem dritten Konto (etwa aus einem älteren Tab des Admin-Bereichs), erst „Back to admin panel“
+test('while working as another account, “Log in as” answers as for a normal user and switches to no third account', async () => {
+  for (const as of [ADMIN_B, USER]) {
+    const ctx = await runRequest(makeTestCtx({ method: 'POST', url: '/admin_impersonate.php', cookies: { PHPSESSID: await loginSession(as, { impersonatedBy: ADMIN_A }) },
+      post: { csrf: CSRF, id: String(LEA), _confirmed: '1' } }), adminImpersonate);
+    assert.equal(ctx.header('Location'), '/dashboard', 'as account #' + as);
+    assert.equal(ctx.session!.data.user_id, as, 'still account #' + as);
+    assert.equal(ctx.session!.data.original_admin_id, ADMIN_A);
+    assert.equal(ctx.session!.data.success, undefined);
+  }
+  // In der eigenen Sitzung des Admins geht es wie bisher
+  const ctx = await runRequest(makeTestCtx({ method: 'POST', url: '/admin_impersonate.php', cookies: { PHPSESSID: await loginSession(ADMIN_A) },
+    post: { csrf: CSRF, id: String(LEA), _confirmed: '1' } }), adminImpersonate);
+  assert.equal(ctx.session!.data.user_id, LEA);
+  assert.equal(ctx.session!.data.original_admin_id, ADMIN_A);
+});
+
+// Wer sich im selben Browser über /login bei einem Konto anmeldet, arbeitet in dessen eigener Sitzung: die Markierung
+// des Nutzer-Modus bleibt nicht hängen – sonst führte „Back to admin panel“ in das Konto des Admins, und Admin-Aktionen
+// stünden unter seinem Namen
+test('logging in through /login during “Log in as” starts the account’s own session without the admin’s marker', async () => {
+  let ctx = await post('/login', await loginSession(USER, { impersonatedBy: ADMIN_A }), { email: 'lea@test.de', password: LEA_PASSWORD });
+  assert.equal(ctx.header('Location'), '/dashboard');
+  assert.equal(ctx.session!.data.user_id, LEA);
+  assert.equal(ctx.session!.data.original_admin_id, undefined, 'no impersonation marker in Lea’s own session');
+  const sid = ctx.session!.id;
+  // Kein Weg „zurück“ in das Konto des Admins
+  ctx = await runRequest(makeTestCtx({ method: 'POST', url: '/admin_return.php', cookies: { PHPSESSID: sid }, post: { csrf: CSRF } }), adminReturn);
+  assert.equal(ctx.header('Location'), '/dashboard');
+  assert.equal(ctx.session!.data.user_id, LEA);
+  // Und kein „Log in as“ mit den Rechten des Admins
+  ctx = await runRequest(makeTestCtx({ method: 'POST', url: '/admin_impersonate.php', cookies: { PHPSESSID: sid },
+    post: { csrf: CSRF, id: String(USER), _confirmed: '1' } }), adminImpersonate);
+  assert.equal(ctx.header('Location'), '/dashboard');
+  assert.equal(ctx.session!.data.user_id, LEA);
+  // Ebenso ein neues Konto über /register (ohne Mail)
+  setAuthMailerForTests(null);
+  try {
+    ctx = await post('/register', await loginSession(USER, { impersonatedBy: ADMIN_A }), { fullname: 'Ben', email: 'ben@test.de', password: LEA_PASSWORD, subdomain: 'ben-r1' });
+    assert.equal(ctx.header('Location'), '/dashboard');
+    assert.notEqual(ctx.session!.data.user_id, USER);
+    assert.equal(ctx.session!.data.original_admin_id, undefined, 'no impersonation marker in the new account’s session');
+  } finally {
+    setAuthMailerForTests(undefined);
+  }
+});
+
+// Die übrigen Formulare des Admin-Bereichs (Konten, Uploads als ZIP, Newsletter, Community, Code-Seiten): im Nutzer-Modus
+// ebenso wie für einen normalen Nutzer – zurück in den Editor, kein ZIP, nichts geändert
+test('while working as another account, the account, uploads ZIP, newsletter, community and code page forms of /admin are refused too', async () => {
+  const usersBefore = await sql('SELECT id, is_admin, password FROM `DB`.users ORDER BY id');
+  const forms: PhpArray[] = [
+    { storage_action: 'zip', _confirmed: '1' },
+    { toggle_admin_id: String(USER), _confirmed: '1' },
+    { delete_user_id: String(USER), _confirmed: '1' },
+    { reset_password_id: String(USER), new_password: LEA_PASSWORD, _confirmed: '1' },
+    { send_newsletter: '1', subject: 'Hello', message: 'Hi', _confirmed: '1' },
+    { community_action: 'suggestions_page', suggestions: 'on', _confirmed: '1' },
+    { code_action: 'unlock', item: 'code_page', user_id: String(USER), _confirmed: '1' },
+  ];
+  for (const sid of [await loginSession(ADMIN_B, { impersonatedBy: ADMIN_A }), await loginSession(LEA, { impersonatedBy: ADMIN_A })]) {
+    for (const form of forms) {
+      const ctx = await post('/admin', sid, form);
+      assert.equal(ctx.status, 302, JSON.stringify(form));
+      assert.equal(ctx.header('Location'), '/dashboard', JSON.stringify(form));
+      assert.equal(ctx.header('Content-Type')?.includes('zip') ?? false, false);
+      assert.equal(ctx.session!.data.admin_success, undefined, JSON.stringify(form));
+      assert.equal(ctx.session!.data.admin_error, undefined, JSON.stringify(form));
+    }
+  }
+  assert.deepEqual(await sql('SELECT id, is_admin, password FROM `DB`.users ORDER BY id'), usersBefore, 'no account changed or deleted');
 });
