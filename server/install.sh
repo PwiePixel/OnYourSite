@@ -56,6 +56,8 @@ TUNNEL_UNIT=/etc/systemd/system/onyoursite-tunnel.service
 WEB_UNIT=$UNITS/onyoursite-web.service
 # Die Apache-Datei vor einem Update – schlägt die Prüfung nach dem Umschalten fehl, kommt sie zurück
 PREVIOUS_SITE=$CONF_DIR/onyoursite.conf.previous
+# So lange (Sekunden) darf die Webseite nach einem Start brauchen, bis sie antwortet
+WEB_WAIT=60
 NODE=""
 NODE_BIN=""
 
@@ -635,13 +637,14 @@ WantedBy=multi-user.target
 EOF2
 }
 
-# Antwortet die Webseite auf 127.0.0.1? Höchstens 60 Sekunden (alle 0,2 Sekunden gefragt). Stürzt der Dienst dabei ab
-# (systemd startet ihn neu und zählt mit), ist sofort Schluss – sonst wartete ein Update eine Minute auf eine Version,
-# die nie antwortet, und die Seite bliebe so lange weg.
+# Antwortet die Webseite auf 127.0.0.1? Höchstens WEB_WAIT Sekunden (60, nach der Uhr – eine Version, die Verbindungen
+# annimmt, aber nicht antwortet, hält sonst jeden Versuch 5 Sekunden auf), alle 0,2 Sekunden gefragt. Stürzt der Dienst
+# dabei ab (systemd startet ihn neu und zählt mit), ist sofort Schluss – sonst wartete ein Update auf eine Version, die
+# nie antwortet, und die Seite bliebe so lange weg.
 wait_web() {
-  local i code r0 r
+  local code r0 r end=$((SECONDS + ${WEB_WAIT:-60}))
   r0=$(systemctl show -p NRestarts --value onyoursite-web 2>/dev/null || true)
-  for i in $(seq 1 300); do
+  while [ "$SECONDS" -lt "$end" ]; do
     code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $DOMAIN" "http://127.0.0.1:$PORT/" 2>/dev/null || true)
     if [ "$code" = 200 ]; then return 0; fi
     r=$(systemctl show -p NRestarts --value onyoursite-web 2>/dev/null || true)
@@ -671,6 +674,30 @@ fix_permissions() {
 # PHP (Version 2.x): läuft die Seite hier noch damit? Apache gibt dann .php-Dateien an PHP-FPM.
 php_live() {
   [ -f "$SITE_CONF" ] && grep -qE 'proxy:unix:[^|]*php[^|]*fpm' "$SITE_CONF"
+}
+
+# Code-Ordner für Apache sperren: Apache-Prozesse, die beim Umzug noch die Einstellung der PHP-Version haben, lesen diese
+# .htaccess bei jeder Anfrage und geben danach nichts mehr aus dem Code-Ordner aus (die Webseite selbst läuft über
+# Node.js). Bleibt danach liegen. Eine vorhandene fremde .htaccess (Code ohne git kopiert) kommt beim Zurückgehen wieder.
+DENY_MARK="# OnYourSite – written by server/install.sh: nothing in this folder is served directly"
+deny_code_folder() {
+  if [ -f "$CODE/.htaccess" ] && ! grep -qxF "$DENY_MARK" "$CODE/.htaccess"; then
+    install -d -m 750 -o root -g "$WEB" "$DATA_DIR" "$DATA_DIR/next"
+    cp -p "$CODE/.htaccess" "$DATA_DIR/next/htaccess.previous"
+  fi
+  printf '%s\n' "$DENY_MARK" "# The website runs on Node.js (service onyoursite-web); Apache passes every request on to it." \
+    "Require all denied" > "$CODE/.htaccess.new"
+  chmod 644 "$CODE/.htaccess.new"
+  mv -f "$CODE/.htaccess.new" "$CODE/.htaccess"
+}
+# Nur beim Zurückgehen (revert_release über on_exit)
+# shellcheck disable=SC2317
+undeny_code_folder() {
+  if [ -f "$DATA_DIR/next/htaccess.previous" ]; then
+    mv -f "$DATA_DIR/next/htaccess.previous" "$CODE/.htaccess"
+  elif [ -f "$CODE/.htaccess" ] && grep -qxF "$DENY_MARK" "$CODE/.htaccess"; then
+    rm -f "$CODE/.htaccess"
+  fi
 }
 
 # Braucht auf diesem Server noch etwas anderes PHP? Andere Apache-Seiten oder -Einstellungen mit PHP (PHP-FPM, mod_php,
@@ -795,6 +822,13 @@ step_website() {
     bash "$CODE/server/backup.sh" before-update || fail "The backup didn’t work – the database wasn’t changed."
   fi
   app_cli "$CODE" "$CODE/config.json" migrate | sed 's/^/  /' || fail "The database couldn’t be prepared – see above."
+  # Eingespielte Datenbank: liest der Schlüssel aus den alten Einstellungen ihre verschlüsselten Werte? (nur lesend –
+  # eine config.php von einem anderen Server fiele sonst erst auf, wenn Nachrichten und Discord-IDs unlesbar sind)
+  if [ "$DB_IMPORTED" = 1 ] && ! app_cli "$CODE" "$CODE/config.json" check --crypto | sed 's/^/  /'; then
+    warn "The key (aes_key) in the old $(basename "${IMP_CONFIG:-config.php}") doesn’t read the encrypted data of the imported database."
+    warn "Is it from the same server as the database dump? The website runs, but these values stay unreadable until"
+    warn "the right file is imported: ${SUDO_HINT}bash $CODE/server/install.sh"
+  fi
   PORT=$(web_port)
   if write_web_unit; then restart=1; fi
   systemctl daemon-reload
@@ -1939,7 +1973,7 @@ get_code() {
 # Eine Installation mit der PHP-Version (2.x) zieht dabei auf Node.js um: die PHP-Seite läuft bis zum Umschalten weiter.
 
 GIT=()
-NEW="" BRANCH_NOW="" OLD_BRANCH="" OLD_REL="" PHP_REL="" STAGE="" NEW_CFG="" IN_PLACE=0 MIGRATE=0 BACKUP_DIR="" SWITCH_STATE="" CHECKED_OUT=0
+NEW="" BRANCH_NOW="" OLD_BRANCH="" OLD_REL="" PHP_REL="" STAGE="" NEW_CFG="" IN_PLACE=0 MIGRATE=0 BACKUP_DIR="" SWITCH_STATE="" CHECKED_OUT=0 APACHE_SWITCHED=0
 UPDATED=0
 
 # Der Stand mit der PHP-Version vor dem letzten Wechsel (git pull bzw. checkout des alten Installers)
@@ -2065,7 +2099,9 @@ preflight() {
   [ -n "$DB_PASS" ] || fail "$(basename "$(cfg_file)") has no password for the database $DB_NAME – run the installer without --update. Nothing was changed."
   db_as_site -e 'SELECT 1' >/dev/null || fail "The database can’t be reached with the settings in $(basename "$(cfg_file)") – nothing was changed."
   # Platz für die Sicherung (die Uploads ganz, wenn es noch keine gibt) und die neue Version (etwa 1 GB)
-  uploads_kb=$(du -sk "$UPLOADS" 2>/dev/null | cut -f1)
+  # du endet mit einem Fehler, wenn der Ordner fehlt oder eine Datei beim Zählen verschwindet (die Seite räumt auf) –
+  # dann zählt, was es gezählt hat (set -e mit pipefail beendete sonst das Skript ohne Meldung)
+  uploads_kb=$( { du -sk "$UPLOADS" 2>/dev/null || true; } | cut -f1)
   need=$((1024 * 1024))
   if [ ! -d "$BACKUPS/latest/uploads" ]; then need=$((need + ${uploads_kb:-0})); fi
   install -d -m 700 "$BACKUPS"
@@ -2104,14 +2140,14 @@ take_backup() {
 
 # Die neue Version einmal zur Probe starten: aus dem Bereitstellungsordner, als www-data, auf einem freien Port
 stage_check() {
-  local port log pid code="" i
+  local port log pid code="" end=$((SECONDS + ${WEB_WAIT:-60}))
   port=$("$NODE" -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port)); s.close(); });')
   log=$(mktemp)
   setpriv --reuid="$WEB" --regid="$WEB" --init-groups -- env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     HOME=/nonexistent NODE_ENV=production OYS_CONFIG="$NEW_CFG" HOST=127.0.0.1 PORT="$port" TMPDIR="$DATA_DIR/tmp" \
     "$NODE" "$STAGE/app/dist/server.js" >"$log" 2>&1 &
   pid=$!
-  for i in $(seq 1 300); do
+  while [ "$SECONDS" -lt "$end" ]; do
     code=$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $DOMAIN" "http://127.0.0.1:$port/" 2>/dev/null || true)
     if [ "$code" = 200 ] || ! kill -0 "$pid" 2>/dev/null; then break; fi
     sleep 0.2
@@ -2200,7 +2236,7 @@ switch_release() {
   install -m 600 "$SITE_CONF" "$PREVIOUS_SITE"
   if [ -f "$WEB_UNIT" ]; then cp -p "$WEB_UNIT" "$STAGE/web.service.old"; fi
   if [ -f "$CODE/config.json" ]; then cp -p "$CODE/config.json" "$STAGE/config.json.old"; fi
-  rm -rf "/etc/systemd/system/onyoursite-web.service.d"
+  rm -rf "$WEB_UNIT.d"
   SWITCH_STATE=prepared
   SWITCH_SINCE=$(date +%s)
   if [ "$MIGRATE" = 1 ]; then
@@ -2210,9 +2246,9 @@ switch_release() {
     SWITCH_STATE=build
     PORT=$(web_port "$NEW_CFG")
     write_web_unit "$NEW_CFG" || true
-    install -d -m 755 /etc/systemd/system/onyoursite-web.service.d
+    install -d -m 755 "$WEB_UNIT.d"
     printf '%s\n' "# OnYourSite – written by server/install.sh: settings of the new version until the switch" \
-      "[Service]" "Environment=OYS_CONFIG=$NEW_CFG" > /etc/systemd/system/onyoursite-web.service.d/next.conf
+      "[Service]" "Environment=OYS_CONFIG=$NEW_CFG" > "$WEB_UNIT.d/next.conf"
     systemctl daemon-reload
     systemctl enable onyoursite-web >/dev/null 2>&1
     systemctl restart onyoursite-web
@@ -2222,17 +2258,22 @@ switch_release() {
     write_apache || true
     SWITCH_STATE=vhost
     apache_check || fail "The Apache configuration for the new version has an error (see above)."
-    # 3. Umschalten: Code-Ordner auf die neue Version, Apache neu laden – ab dann antwortet Node.js
+    # 3. Umschalten: erst Apache neu laden – ab dann antwortet Node.js (es läuft schon, noch im Code-Ordner der
+    #    PHP-Version), und PHP-Anfragen, die gerade laufen, finden ihre Dateien noch –, dann den Code-Ordner tauschen
     t0=$(date +%s%N)
+    APACHE_SWITCHED=1
+    systemctl reload apache2
+    t1=$(date +%s%N)
     # Ab hier gehört beim Zurückgehen der vorige Stand wieder in den Code-Ordner (auch nach einem halben checkout)
     if [ "$IN_PLACE" != 1 ]; then CHECKED_OUT=1; checkout_release "$NEW"; fi
     SWITCH_STATE=code
-    systemctl reload apache2
-    SWITCH_STATE=apache
-    t1=$(date +%s%N)
-    # Die Einstellungen an ihren Platz – Node hat sie schon geladen, der nächste Start liest sie dort
+    # Apache-Prozesse mit der PHP-Einstellung arbeiten Anfragen von vor dem Neuladen noch zu Ende (auch eine langsam
+    # gesendete) und gäben dabei jede Datei im Code-Ordner aus – auch config.json. Diese Sperre lesen sie bei jeder
+    # Anfrage; sie steht dort, bevor config.json kommt.
+    deny_code_folder
     mv -f "$NEW_CFG" "$CODE/config.json"
-    rm -rf /etc/systemd/system/onyoursite-web.service.d
+    SWITCH_STATE=apache
+    rm -rf "$WEB_UNIT.d"
     systemctl daemon-reload
   else
     t0=$(date +%s%N)
@@ -2254,6 +2295,7 @@ switch_release() {
     if write_apache; then
       SWITCH_STATE=vhost
       apache_check || fail "The Apache configuration for the new version has an error (see above)."
+      APACHE_SWITCHED=1
       systemctl reload apache2
     fi
     SWITCH_STATE=apache
@@ -2277,6 +2319,9 @@ revert_release() {
   local d log
   echo
   warn "The new version didn’t pass – going back to the previous one …"
+  # Mit PHP zuerst die Einstellungen weg: die Dateien der PHP-Version kommen gleich zurück, und ihre .htaccess liefert
+  # vorhandene Dateien aus (Apache-Prozesse von vor dem Umschalten können noch Anfragen bearbeiten)
+  if [ "$MIGRATE" = 1 ]; then rm -f "$CODE/config.json"; fi
   if [ "$IN_PLACE" != 1 ]; then
     if [ "$CHECKED_OUT" = 1 ] && [ -n "$OLD_REL" ]; then checkout_release "$OLD_REL" "$OLD_BRANCH"; fi
     # Die neue Version nur beiseite legen (Umbenennen – sofort): gelöscht wird sie erst mit dem Bereitstellungsordner,
@@ -2293,16 +2338,16 @@ revert_release() {
     fi
   fi
   if [ "$MIGRATE" = 1 ]; then
-    rm -f "$CODE/config.json"
+    undeny_code_folder
   elif [ -f "$STAGE/config.json.old" ]; then
     mv -f "$STAGE/config.json.old" "$CODE/config.json"
   fi
   if [ -f "$PREVIOUS_SITE" ] && ! cmp -s "$PREVIOUS_SITE" "$SITE_CONF"; then
     install -m 644 "$PREVIOUS_SITE" "$SITE_CONF"
-    if [ "$SWITCH_STATE" = apache ]; then systemctl reload apache2; fi
+    if [ "$APACHE_SWITCHED" = 1 ]; then systemctl reload apache2; fi
   fi
   rm -f "$PREVIOUS_SITE"
-  rm -rf /etc/systemd/system/onyoursite-web.service.d
+  rm -rf "$WEB_UNIT.d"
   if [ "$MIGRATE" = 1 ]; then
     systemctl disable --now onyoursite-web >/dev/null 2>&1
     echo
@@ -2368,6 +2413,10 @@ update_site() {
   stage_release
   step_packages
   preflight
+  # Jedes Update beginnt mit einer Sicherung – auch ohne neue Version (Einstellungen, Dienst, Apache, Bot und Tunnel
+  # werden trotzdem neu geschrieben)
+  if [ "$MIGRATE" = 1 ]; then label='before-node'; else label='before-update'; fi
+  take_backup "$label"
 
   # Nichts Neues? Dann nur Einstellungen, Dienst und Apache auf den Stand bringen
   if [ "$MIGRATE" = 0 ] && [ -n "$NEW" ] && [ "$NEW" = "$OLD_REL" ] && build_current "$CODE/app"; then
@@ -2380,9 +2429,6 @@ update_site() {
       return 0
     fi
   fi
-
-  if [ "$MIGRATE" = 1 ]; then label='before-node'; else label='before-update'; fi
-  take_backup "$label"
 
   bold "Building the new version"
   write_config_json "$NEW_CFG" "$(cfg_file)"

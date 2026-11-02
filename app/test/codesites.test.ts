@@ -12,11 +12,9 @@ import { CODE_MAX_FILES, CODE_MAX_FILE_BYTES, CODE_MAX_TOTAL_BYTES, CODE_SANDBOX
 import { codeAddBadge, codeNotice } from '../src/code/serve.js';
 import { pathExtension } from '../src/honeycombs/util.js';
 import { Ctx } from '../src/web/ctx.js';
-import { BASE, PHP_BOOT, adminConnection, codeCounters, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
+import { PHP_BOOT, adminConnection, codeCounters, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
 
-// Namen aus der Datenbank dieses Arbeitsordners: andere Arbeitsordner auf demselben Server stören sich so nicht
-const SOURCE = String((BASE.db as ConfigData).name);
-const DB = { php: SOURCE + '_hcu_code_php', node: SOURCE + '_hcu_code_node' };
+const DB = { php: testDbName('hcu_code_php'), node: testDbName('hcu_code_node') };
 let admin: Connection;
 
 // Reine Funktion mit JSON-Ein- und Ausgabe in PHP aufrufen

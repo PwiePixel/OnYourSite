@@ -3,7 +3,7 @@
 // App, nie die OnYourSite-404 – alles andere bekommt die neutrale Seite „Not connected“. Weiterleitungsziele kommen nur
 // aus der Datenbank (Hostname der Zeile, Adresse der Seite), nie aus der Anfrage.
 import type { Ctx } from '../web/ctx.js';
-import { decodePath, serveStatic } from '../web/static.js';
+import { apachePath, serveStatic } from '../web/static.js';
 import { ensureSchemaOnce } from '../schema.js';
 import { one } from '../db.js';
 import { customOrigin } from '../helpers.js';
@@ -25,7 +25,8 @@ export async function hostRoute(ctx: Ctx, isAppPath: (path: string) => boolean):
   const path = ctx.path;
   // 1. Statische Dateien (Designs, Schriften, Skripte) und robots.txt wie auf jeder Adresse – ohne Datenbank.
   // Uploads erst nach dem Blick in die Datenbank (nur die des Besitzers); geprüft wird der dekodierte Pfad.
-  const decoded = path.startsWith('/static/') ? decodePath(path) : null;
+  const clean = path.startsWith('/static/') ? apachePath(path) : null;
+  const decoded = clean !== null && 'path' in clean ? clean.path : null;
   const upload = decoded !== null && decoded.startsWith('/static/uploads/') ? decoded.slice('/static/uploads/'.length) : null;
   if (path === '/robots.txt' || (path.startsWith('/static/') && upload === null)) {
     if (await serveStatic(ctx)) ctx.halt();

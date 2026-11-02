@@ -1,6 +1,6 @@
 // HTML sicher zusammensetzen: html`…${wert}…` maskiert jeden eingesetzten Wert wie e() in PHP
 // (htmlspecialchars mit ENT_QUOTES). Fertiges HTML (andere Vorlagen, raw()) wird unverändert eingesetzt.
-import { phpStr } from './php.js';
+import { hasRawBytes, phpBytes, phpStr, phpUtf8Substitute } from './php.js';
 
 export class SafeHtml {
   constructor(public readonly value: string) {}
@@ -12,9 +12,11 @@ export class SafeHtml {
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
 
 // e(): wie htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') – bereits fertiges HTML (SafeHtml)
-// wird wie ein Text behandelt und also auch maskiert, genau wie e() in PHP
+// wird wie ein Text behandelt und also auch maskiert, genau wie e() in PHP. Rohe Bytes (ungültiges UTF-8 aus dem
+// Formular) werden wie bei ENT_SUBSTITUTE zu U+FFFD
 export function e(value: unknown): string {
-  const s = value instanceof SafeHtml ? value.value : phpStr(value);
+  let s = value instanceof SafeHtml ? value.value : phpStr(value);
+  if (hasRawBytes(s)) s = phpUtf8Substitute(phpBytes(s));
   return s.replace(/[&<>"']/g, (c) => ESC[c]);
 }
 
@@ -42,8 +44,10 @@ export function join(parts: Part[], separator = ''): SafeHtml {
   return new SafeHtml(parts.map(render).join(separator));
 }
 
-// htmlspecialchars($v, ENT_XML1 | ENT_QUOTES): für XML (Atom-Feed) – ' wird zu &apos;
+// htmlspecialchars($v, ENT_XML1 | ENT_QUOTES): für XML (Atom-Feed) – ' wird zu &apos;. Ohne ENT_SUBSTITUTE gibt PHP
+// für ungültiges UTF-8 (rohe Bytes) einen leeren Text zurück
 export function xmlEscape(value: unknown): string {
+  if (hasRawBytes(phpStr(value))) return '';
   return phpStr(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c] as string);
 }
 

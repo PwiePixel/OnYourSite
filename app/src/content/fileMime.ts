@@ -634,8 +634,26 @@ function textMagic(t: string): string | null {
   if (/^(Path:|Xref:|Article )/.test(t)) return 'message/news';
   const c = t.slice(0, 8192);
   if (/^#include/m.test(c) || /^#[\t\n\v\f\r ]*pragma/m.test(c) || (/^#[\t\n\v\f\r ]*(if|ifn)def/m.test(c) && /^#[\t\n\v\f\r ]*(endif$|define)/m.test(c))
-    || /^struct[\t\n\v\f\r ]+/m.test(c) || /^union[\t\n\v\f\r ]+/m.test(c) || /^[\t\n\v\f\r ]*extern[\t\n\v\f\r ]+/m.test(c)) return 'text/x-c';
+    || /^struct[\t\n\v\f\r ]+/m.test(c) || /^union[\t\n\v\f\r ]+/m.test(c) || externLine(c)) return 'text/x-c';
   return null;
+}
+
+// /^[\t\n\v\f\r ]*extern[\t\n\v\f\r ]+/m ohne Rückverfolgung: Weil der Leerraum auch Zeilenumbrüche enthält, lief V8 von
+// jedem Zeilenanfang einer langen Leerraum-Folge bis zu ihrem Ende (8 KB Zeilenumbrüche: über 100 ms je Upload, quadratisch).
+// „extern“ beginnt nach dem ganzen Leerraum davor – also genügt es, von jedem Vorkommen rückwärts über Leerraum einen
+// Zeilenanfang zu suchen (Textanfang oder nach \n, \r, U+2028, U+2029 wie ^ mit /m in JavaScript).
+export function externLine(c: string): boolean {
+  const space = (x: number): boolean => x === 0x20 || (x >= 0x09 && x <= 0x0d);
+  for (let w = c.indexOf('extern'); w >= 0; w = c.indexOf('extern', w + 1)) {
+    if (!space(c.charCodeAt(w + 6))) continue;
+    for (let p = w; ; p--) {
+      if (p === 0) return true;
+      const prev = c.charCodeAt(p - 1);
+      if (prev === 0x0a || prev === 0x0d || prev === 0x2028 || prev === 0x2029) return true;
+      if (!space(prev)) break;
+    }
+  }
+  return false;
 }
 
 function nulTrimmed(b: Buffer): Buffer {

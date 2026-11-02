@@ -169,7 +169,14 @@ test('uploads on a custom domain: only files of the domain’s owner', async () 
   for (const path of ['/static/uploads/' + files.foreign, '/static/%75ploads/' + files.foreign, '/static/uploads/avatar_5_x/../' + files.foreign,
     '/static/uploads/avatar_5_x%2f..%2f' + files.foreign, '/static/uploads/avatar_5_1700000000_missing.webp', '/static/uploads/og/2-abcdefabcdef.png',
     '/static/uploads/', '/static/uploads/x.php']) {
-    neutral(await req('GET', path, HOST), path);
+    const res = await req('GET', path, HOST);
+    // Kodierte Schrägstriche, Ordner und gesperrte Endungen beantwortet schon die Apache-Schicht des Routers (wie Apache
+    // auf dem Server) mit 403/404 – nie mit der Datei
+    if (path.includes('%2f') || path.endsWith('/') || path.endsWith('.php')) {
+      assert.ok([403, 404].includes(res.statusCode ?? 0), `${path}: ${res.statusCode}`);
+      continue;
+    }
+    neutral(res, path);
   }
   // Auf der Hauptdomain unverändert öffentlich
   assert.equal((await req('GET', '/static/uploads/' + files.foreign, 'oys.test:8080')).statusCode, 200);
@@ -357,12 +364,15 @@ test('without the setup an unknown host gets today’s 404 and costs no database
   const res = await req('GET', '/', 'nothing.example.net');
   assert.equal(res.statusCode, 404);
   assert.ok(res.body.includes('Page not found') && res.body.includes('OnYourSite'), 'today’s 404 page');
+  assert.equal(acquired, 0, 'an unknown host costs no query');
+  // Die eigenen Adressen prüfen vor jeder Seite, ob die Datenbank erreichbar ist (wie db.php) – mehr nicht
   assert.equal((await req('GET', '/_/domain-check', 'oys.test:8080')).statusCode, 404);
-  assert.equal(acquired, 0);
+  assert.ok(acquired <= 1, `main host: ${acquired} connections`);
 
   setConfigForTests(cfg);
   await closePool();
   clearUnknownHostsForTests();
+  acquired = 0;
   watch();
   neutral(await req('GET', '/', 'nothing.example.net'), 'unknown host');
   assert.equal(acquired, 1);

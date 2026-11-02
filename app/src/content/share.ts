@@ -10,7 +10,7 @@ import { baseAuthority, initials, liveDomain, pageOrigin, pageUrl, type PageLike
 import { intval, phpLtrim, phpRtrim, phpStr, phpTrim, phpTruthy, rawurlencode } from '../php.js';
 import type { Ctx } from '../web/ctx.js';
 import { GdImage, trueColorAlpha } from './gdImage.js';
-import { gdTextWidth, loadFont } from './ogFont.js';
+import { gdPrefixWidths, gdTextWidth, loadFont } from './ogFont.js';
 import { idx, phpRound, strArg } from './phpValues.js';
 import { isFile, uploadReadPath, uploadsDir } from './storage.js';
 import { isShownLinkPage, loadPage, pageSettings } from './pages.js';
@@ -492,10 +492,18 @@ export function ogWrap(s: string, font: string, size: number, maxW: number, maxL
   return lines.length ? lines : [''];
 }
 
-// oys_og_fit(): kürzen (Zeichen für Zeichen) und … anhängen, bis es passt
+// oys_og_fit(): kürzen (Zeichen für Zeichen) und … anhängen, bis es passt. Jeder Versuch misst den ganzen Rest neu –
+// für 1000 Zeichen (erste Zeile der Bio) eine halbe Sekunde. Ohne & und Nullbyte (der Normalfall) stehen alle Breiten
+// nach einem Durchlauf fest (gdPrefixWidths, dieselben Werte); gesucht wird wie vorher von hinten.
 export function ogFit(s: string, font: string, size: number, maxW: number): string {
   if (ogWidth(s, font, size) <= maxW) return s;
   const chars = Array.from(s);
+  if (!s.includes('&') && !s.includes('\0')) {
+    const widths = gdPrefixWidths(loadFont(font), s, '…', size);
+    let k = chars.length;
+    while (k > 1 && widths[k] > maxW) k--;
+    return phpRtrim(chars.slice(0, k).join('')) + '…';
+  }
   while (chars.length > 1 && ogWidth(chars.join('') + '…', font, size) > maxW) chars.pop();
   return phpRtrim(chars.join('')) + '…';
 }

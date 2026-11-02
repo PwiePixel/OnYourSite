@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { phpMultipart } from '../src/web/multipart.js';
 import { readBody } from '../src/server.js';
 import { makeTestCtx } from '../src/web/ctx.js';
-import type { PhpArray, PhpValue } from '../src/php.js';
+import { phpBytes, phpUtf8Substitute, type PhpArray, type PhpValue } from '../src/php.js';
 
 const UPLOAD_MAX = 16 * 1024 * 1024;
 const DUMP = `<?php
@@ -73,6 +73,13 @@ async function startPhp(): Promise<number> {
   }
 }
 
+// $_POST behält ungültiges UTF-8 als rohe Bytes; die PHP-Ausgabe ersetzt sie mit JSON_INVALID_UTF8_SUBSTITUTE
+// (Regeln von get_next_char()) – genauso umsetzen, dann vergleicht der Test die Bytes
+function substitute(v: PhpValue): PhpValue {
+  const t = (s: string): string => phpUtf8Substitute(phpBytes(s));
+  return typeof v === 'string' ? t(v) : Object.fromEntries(Object.entries(v).map(([k, x]) => [t(k), substitute(x)]));
+}
+
 // Gleiche Form wie die PHP-Ausgabe: alle Werte Text, tmp_name als MD5 des Inhalts, Schlüssel sortiert
 function canon(v: unknown): unknown {
   if (typeof v !== 'object' || v === null) return v;
@@ -89,7 +96,7 @@ function nodeResult(type: string, body: Buffer): unknown {
     if (entry.tmp_name !== undefined) entry.tmp_name = md5(entry.tmp_name);
     Object.defineProperty(files, k, { value: entry, enumerable: true, configurable: true, writable: true });
   }
-  return canon({ files, post: form?.post ?? {}, input: form ? 0 : body.length });
+  return canon({ files, post: substitute(form?.post ?? {}), input: form ? 0 : body.length });
 }
 
 // Unterschiedliche Stellen (Pfad: PHP ≠ Node) für eine lesbare Meldung
@@ -211,6 +218,8 @@ const FIXED: Array<[string, string, string]> = [
   ['after a cancelled file, boundary text on a piece start', TYPE, field('MAX_FILE_SIZE', '1') + file('file', 'q'.repeat(12000) + `\n--${B}x` + 'w'.repeat(5000) + `--${B}`) + field('b') + end],
   ['after a cancelled file, boundary text mid-line', TYPE, field('MAX_FILE_SIZE', '1') + file('file', 'q'.repeat(7000) + `--${B}\r\n` + 'w'.repeat(100)) + field('b') + end],
   ['after a too large file the rest is skipped by lines', TYPE, field('MAX_FILE_SIZE', '10') + file('file', ('line\r\n'.repeat(3000)) + `--${B}\r\nContent-Disposition: form-data; name="inner"\r\n\r\nx`) + field('b') + end],
+  // Bytes, die kein gültiges UTF-8 sind: PHP behält sie in Namen und Werten
+  ['invalid UTF-8 in fields', TYPE, field('name', 'Mia\xff') + field('pw', '\xe2\x82\xed\xa0\x80x\xc0\xaf') + field('n\xfe', '\xc3\xa4') + field('ok', 'ä') + end],
 ];
 
 test('multipart bodies are read like PHP (rfc1867): fixed cases', async () => {

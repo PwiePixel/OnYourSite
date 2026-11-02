@@ -12,8 +12,9 @@ import { strtotime, time } from '../src/php.js';
 import { ensureSchema, SCHEMA_VERSION, V_SESSIONS } from '../src/schema.js';
 
 const BASE = loadConfig();
-// Namen aus der Datenbank dieses Arbeitsordners: andere Arbeitsordner auf demselben Server stören sich so nicht
-const SOURCE = String((BASE.db as ConfigData).name);
+// Eigene Namen je Arbeitsordner (abgeleitet von der Datenbank der Einstellungen) – feste Namen kollidierten bei
+// gleichzeitigen Läufen
+const SOURCE = configString('db.name', 'oys_test');
 const DBS = { phpFresh: SOURCE + '_schema_pf', nodeFresh: SOURCE + '_schema_nf', phpLegacy: SOURCE + '_schema_pl', nodeLegacy: SOURCE + '_schema_nl' };
 let admin: Connection;
 let started = 0;

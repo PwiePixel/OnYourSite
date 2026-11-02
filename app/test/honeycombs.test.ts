@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
 import { ROOT_DIR } from '../src/config.js';
+import { sha256Hex } from '../src/crypto.js';
 import { closePool, q } from '../src/db.js';
 import { date, time } from '../src/php.js';
 import { HC_BUSY, hcDefaults, hcDescribe, hcLocked, hcSettingsFrom, hcSpend } from '../src/honeycombs/honeycombs.js';
@@ -15,13 +16,12 @@ import { phpInt, phpJsonDecode } from '../src/honeycombs/util.js';
 import { adminHoneycombsView } from '../src/honeycombs/adminView.js';
 import { adminCodePagesView, kb } from '../src/code/adminView.js';
 import { Ctx } from '../src/web/ctx.js';
-import { BASE, PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, useDb, type Op } from './hcHarness.js';
-import type { ConfigData } from '../src/config.js';
+import { PHP_BOOT, adminConnection, dump, freshDb, nodeRun, normalize, phpRun, restoreDb, testDbName, useDb, type Op } from './hcHarness.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 
-// Eigene Datenbanken je Arbeitskopie (abgeleitet vom Namen aus der Konfiguration), damit parallele Läufe sich nicht stören
-const SOURCE = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
-const DB = { php: SOURCE + '_hcphp', node: SOURCE + '_hcnode' };
+const DB = { php: testDbName('hcu_hc_php'), node: testDbName('hcu_hc_node') };
+// Nutzernummern für die Sperr-Prüfung: aus dem Namen der Datenbank (900000–999998), je Arbeitsordner verschieden
+const lockUser = 900000 + (parseInt(sha256Hex(DB.node).slice(0, 8), 16) % 49999) * 2;
 let admin: Connection;
 
 function fixture(): Array<[string, unknown[]]> {
@@ -233,34 +233,38 @@ test('admin handler: every action incl. invalid input', async () => {
 });
 
 test('locked: busy message after 10 s, and parallel spends never overdraw', async () => {
+  // Die Sperren (oys_hc_<Nutzer>) gelten für den ganzen Datenbankserver: Nutzernummern je Arbeitsordner, damit
+  // gleichzeitige Läufe in anderen Arbeitsordnern nicht dieselbe Sperre halten
+  const busy = lockUser;
+  const buyer = lockUser + 1;
   // Fremde Sperre halten: PHP und Node warten je 10 Sekunden und melden dann, dass es gerade nicht geht
   const holder = await adminConnection();
   try {
-    await holder.query("SELECT GET_LOCK('oys_hc_99999', 30)");
+    await holder.query('SELECT GET_LOCK(?, 30)', ['oys_hc_' + busy]);
     const php = new Promise<string>((resolve, reject) => {
-      const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_hc_spend($pdo, 99999, 0, 'busy'), JSON_UNESCAPED_UNICODE);`],
+      const child = execFile('php', ['-r', `${PHP_BOOT} echo json_encode(oys_hc_spend($pdo, ${busy}, 0, 'busy'), JSON_UNESCAPED_UNICODE);`],
         { env: { ...process.env, OYS_TEST_DB: DB.php }, cwd: ROOT_DIR }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out))));
       child.stdin?.end();
     });
     await useDb(DB.node);
-    const node = hcSpend(99999, 0, 'busy');
+    const node = hcSpend(busy, 0, 'busy');
     const [a, b] = await Promise.all([php, node]);
     assert.equal(a, HC_BUSY);
     assert.equal(b, HC_BUSY);
   } finally {
-    await holder.query("SELECT RELEASE_LOCK('oys_hc_99999')");
+    await holder.query('SELECT RELEASE_LOCK(?)', ['oys_hc_' + busy]);
     await holder.end();
   }
   // Zwei gleichzeitige Käufe mit Geld für nur einen: genau einer klappt, die Sperre ist danach frei
-  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (99998, 100, 'admin', 'p', '', NOW())`);
-  const results = await Promise.all([hcSpend(99998, 60, 'x'), hcSpend(99998, 60, 'y'), hcSpend(99998, 60, 'z')]);
+  await admin.query(`INSERT INTO \`${DB.node}\`.honeycomb_ledger (user_id, amount, reason, ref, note, created_at) VALUES (?, 100, 'admin', 'p', '', NOW())`, [buyer]);
+  const results = await Promise.all([hcSpend(buyer, 60, 'x'), hcSpend(buyer, 60, 'y'), hcSpend(buyer, 60, 'z')]);
   assert.equal(results.filter((r) => r === null).length, 1);
   assert.deepEqual(results.filter((r) => r !== null), ['You need 60 honeycombs – you have 40.', 'You need 60 honeycombs – you have 40.']);
-  const [free] = await admin.query<RowDataPacket[]>("SELECT IS_FREE_LOCK('oys_hc_99998') AS f");
+  const [free] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
   assert.equal(Number(free[0].f), 1);
   // Fehler in fn: Sperre wird trotzdem gelöst
-  await assert.rejects(hcLocked(99998, async () => { throw new Error('boom'); }));
-  const [free2] = await admin.query<RowDataPacket[]>("SELECT IS_FREE_LOCK('oys_hc_99998') AS f");
+  await assert.rejects(hcLocked(buyer, async () => { throw new Error('boom'); }));
+  const [free2] = await admin.query<RowDataPacket[]>('SELECT IS_FREE_LOCK(?) AS f', ['oys_hc_' + buyer]);
   assert.equal(Number(free2[0].f), 1);
   await restoreDb();
 });
@@ -346,7 +350,11 @@ const yellowIcons = (s: string) => s.replace("<i class='bx bx-hive text-2xl text
   .replace(/<i class='bx bx-hive text-brand-400'><\/i><\/td>/g, "<i class='bx bx-hive text-yellow-400'></i></td>");
 
 test('admin view: Honeycombs identical apart from the moved parts and the yellow icons, the moved list unchanged (with data, after changes, and empty)', async () => {
-  for (const [label, prep] of [['current data', ''], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
+  // Die Code-Seiten stehen nach updated_at DESC (ohne zweites Sortierfeld, wie in PHP). Die Admin-Aktionen oben setzen
+  // drei Seiten in derselben Sekunde auf „jetzt“ – bei Gleichstand wählt MariaDB die Reihenfolge selbst, in beiden
+  // Datenbanken womöglich verschieden. Darum vorher eindeutige Zeiten (gleicher Tag, angezeigt wird nur das Datum).
+  const unambiguous = 'UPDATE code_sites SET updated_at = DATE(updated_at) + INTERVAL id SECOND WHERE updated_at IS NOT NULL';
+  for (const [label, prep] of [['current data', unambiguous], ['blocked with reason 0', "UPDATE code_sites SET is_blocked = 1, blocked_reason = '0' WHERE id = 3"],
     ['ledger only', 'DELETE FROM code_sites'], ['empty', 'DELETE FROM honeycomb_ledger']] as const) {
     if (prep) for (const db of Object.values(DB)) await admin.query(`USE \`${db}\``).then(() => admin.query(prep));
     const php = splitPhpView(viewNorm(await phpView(DB.php)));

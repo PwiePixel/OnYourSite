@@ -3,20 +3,29 @@
 // ---------- PHP primitives ----------
 import crypto from 'node:crypto'; import net from 'node:net';
 import { PCRE_CYRILLIC_HAN, PCRE_LETTER } from './pcre14.js';
+import { phpFloatToString, hasRawBytes } from '../php.js';
 export const PCRE_WS = '\\t\\n\\v\\f\\r \\x85\\xA0\\u1680\\u180E\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000';
-export const phpTrim = (s) => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+// trim(): als Schleife – /^[…]+|[…]+$/g lief von jeder Stelle einer langen Leerraum-Folge im Text bis zu ihrem Ende
+// (quadratisch: 16 000 Leerzeichen 0,6 s, ein großes Formularfeld Minuten)
+const TRIM = ' \t\n\r\0\x0B';
+export const phpTrim = (s) => { let a = 0, b = s.length; while (a < b && TRIM.includes(s[a])) a++; while (b > a && TRIM.includes(s[b - 1])) b--; return s.slice(a, b); };
 export const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
-export const mbSubstr = (s, start, len) => Array.from(s).slice(start, start + len).join('');
+// mb_substr() auf Code-Punkten: nur bis zum Ende des Stücks zählen (Array.from über ein 20-MB-Feld: eine Sekunde, 400 MB)
+const nextCp = (s, i) => { const c = s.charCodeAt(i); if (c >= 0xd800 && c <= 0xdbff) { const d = s.charCodeAt(i + 1); if (d >= 0xdc00 && d <= 0xdfff) return i + 2; } return i + 1; };
+export const mbSubstr = (s, start, len) => {
+  if (!Number.isInteger(start) || !Number.isInteger(len) || start < 0 || len < 0) return Array.from(s).slice(start, start + len).join('');
+  let a = 0; for (let n = 0; n < start && a < s.length; n++) a = nextCp(s, a);
+  let b = a; for (let n = 0; n < len && b < s.length; n++) b = nextCp(s, b);
+  return s.slice(a, b);
+};
 export const phpTruthy = (v) => !(v === false || v === null || v === undefined || v === 0 || v === '' || v === '0' ||
   (Array.isArray(v) && v.length === 0) || (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length === 0));
 export function phpString(v) {
   if (v === null || v === undefined || v === false) return ''; if (v === true) return '1';
   if (typeof v === 'number') {
     if (Number.isInteger(v) && Math.abs(v) < 1e15) return Object.is(v, -0) ? '-0' : String(v);
-    let s = v.toPrecision(14);
-    if (s.includes('e')) { let [m, ex] = s.split('e'); m = m.includes('.') ? m.replace(/0+$/, '').replace(/\.$/, '.0') : m + '.0';
-      return m + 'E' + (ex[0] === '-' ? '-' : '+') + ex.replace(/^[+-]/, ''); }
-    return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+    // Kommazahlen exakt wie PHP (1.0E-5, Rundung zur geraden Ziffer, INF statt Infinity) – Fassung des Kerns
+    return phpFloatToString(v);
   }
   return Array.isArray(v) || typeof v === 'object' ? 'Array' : String(v);
 }
@@ -81,12 +90,16 @@ export function oysClientKey(remoteAddr, cfg, now = new Date()) {
 const isScalar = (v) => ['string', 'number', 'boolean'].includes(typeof v);
 export function oysCleanText(value, max = 255, multiline = false) {
   let v = isScalar(value) ? phpString(value) : '';
+  // Ungültiges UTF-8 (rohe Bytes aus dem Formular): preg_replace() mit /u liefert null, übrig bleibt ''
+  if (hasRawBytes(v)) return '';
   v = multiline ? v.replace(/\r\n/g, '\n').replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]+|[\u202A-\u202E\u2066-\u2069]+/g, '')
                 : v.replace(/[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]+/g, '');
   v = phpTrim(v); if (multiline) v = v.replace(/\n{3,}/g, '\n\n'); return mbSubstr(v, 0, max);
 }
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 export function oysCleanUrl(value, allowRelative = false) {
+  // Ungültiges UTF-8 (rohe Bytes): preg_replace() mit /u liefert null, daraus wird am Ende ''
+  if (isScalar(value) && hasRawBytes(phpString(value))) return '';
   let url = phpTrim(isScalar(value) ? phpString(value) : '').replace(new RegExp(`[${PCRE_WS}]+`, 'gu'), '');
   if (url === '') return '';
   if (allowRelative && /^\/[^/]/.test(url)) return mbSubstr(url, 0, 500);
@@ -100,7 +113,9 @@ export function oysCleanUrl(value, allowRelative = false) {
   }
   return mbSubstr(url, 0, 1000);
 }
-export const oysPrettyUrl = (u) => /^mailto:/i.test(u) ? u.slice(7) : /^tel:/i.test(u) ? u.slice(4) : u.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/+$/, '');
+// rtrim($u, '/') als Schleife (/\/+$/ lief von jedem / einer langen Folge bis zu ihrem Ende)
+const rtrimSlashes = (u) => { let b = u.length; while (b > 0 && u[b - 1] === '/') b--; return u.slice(0, b); };
+export const oysPrettyUrl = (u) => /^mailto:/i.test(u) ? u.slice(7) : /^tel:/i.test(u) ? u.slice(4) : rtrimSlashes(u.replace(/^https?:\/\/(www\.)?/i, ''));
 export const oysNormalizeSlug = (s) => asciiLower(phpTrim(phpString(s))).replace(/[^a-z0-9-]/g, '');
 export function oysInitials(name) {
   const t = phpTrim(name);

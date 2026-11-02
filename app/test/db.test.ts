@@ -70,22 +70,25 @@ test('every query runs in the site time zone, also after the zone changes', asyn
   assert.equal(await value('SELECT @@session.time_zone'), tzOffset('Europe/Berlin'));
 });
 
+// Sperren gelten für den ganzen Datenbankserver: Namen je Arbeitsordner (aus der Datenbank der Einstellungen)
+const LOCK = String((BASE.db as ConfigData).name ?? 'oys_test') + '_lock';
+
 test('named locks: a busy lock fails or runs as asked', async () => {
   let inner: unknown = null;
   // Die zweite Verbindung ist hier gewollt – der strenge Schalter (OYS_DB_STRICT) gilt für diesen Test nicht
   const strict = process.env.OYS_DB_STRICT;
   delete process.env.OYS_DB_STRICT;
   try {
-    await withNamedLock('oys_test_lock', 1, async () => {
+    await withNamedLock(LOCK, 1, async () => {
       // Eine zweite Verbindung (bewusst außerhalb des Abschnitts) bekommt dieselbe Sperre nicht
-      await outsidePinned(() => assert.rejects(withNamedLock('oys_test_lock', 0, async () => 'never', 'fail'), LockBusyError));
-      inner = await outsidePinned(() => withNamedLock('oys_test_lock', 0, async () => 'ran anyway', 'run'));
+      await outsidePinned(() => assert.rejects(withNamedLock(LOCK, 0, async () => 'never', 'fail'), LockBusyError));
+      inner = await outsidePinned(() => withNamedLock(LOCK, 0, async () => 'ran anyway', 'run'));
     });
   } finally {
     if (strict !== undefined) process.env.OYS_DB_STRICT = strict;
   }
   assert.equal(inner, 'ran anyway');
-  assert.equal(await withNamedLock('oys_test_lock', 1, async () => 'free again', 'fail'), 'free again');
+  assert.equal(await withNamedLock(LOCK, 1, async () => 'free again', 'fail'), 'free again');
 });
 
 test('queries inside a locked section reuse its connection – no deadlock when the pool is full', async () => {
@@ -93,7 +96,7 @@ test('queries inside a locked section reuse its connection – no deadlock when 
   await closePool();
   try {
     // 6 Abschnitte gleichzeitig bei nur 2 Verbindungen; jeder fragt innen über die Pool-Funktionen ab
-    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`oys_test_dl_${i}`, 5, async () => {
+    const runs = Array.from({ length: 6 }, (_, i) => withNamedLock(`${LOCK}_${i}`, 5, async () => {
       const own = await value('SELECT CONNECTION_ID()');
       const again = await q('SELECT CONNECTION_ID() AS id');
       assert.equal(again[0].id, own, 'inner query runs on the section\'s connection');

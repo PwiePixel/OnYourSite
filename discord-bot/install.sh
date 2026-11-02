@@ -319,12 +319,17 @@ else
   umask 022
   info "Saved to $ENV_FILE (readable only by root)."
   if [ -n "$NEW_SECRET" ]; then
+    # Der Befehl liest das Geheimnis von der Eingabe: auf der Befehlszeile stünde es in der Prozessliste, im Verlauf der
+    # Shell und im Protokoll von sudo
     echo
-    info "Give the website the same secret – on the website’s server, run:"
+    info "Give the website the same secret. On the website’s server, run this command, paste the secret and press Enter:"
     echo
-    echo "      sudo OYS_VALUE='$NEW_SECRET' node /var/www/onyoursite/app/scripts/config.mjs set bot_secret"
-    echo "      sudo systemctl restart onyoursite-web"
+    echo "      sudo node /var/www/onyoursite/app/scripts/config.mjs set bot_secret --stdin"
     echo
+    info "The secret:"
+    echo "      $NEW_SECRET"
+    echo
+    info "Then restart the website: sudo systemctl restart onyoursite-web"
     read -rp "  Press Enter once the website has it … " _ || true
   fi
 fi
