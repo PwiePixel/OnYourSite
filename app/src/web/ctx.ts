@@ -1,9 +1,11 @@
 // Eine Anfrage mit allem, was PHP-Code über $_GET, $_POST, $_FILES, $_COOKIE und $_SERVER gesehen hat, und die
 // Antwort mit den Regeln von header(): gleicher Name ersetzt, Standard-Typ text/html; charset=UTF-8.
 import type { IncomingHttpHeaders } from 'node:http';
+import { isIP } from 'node:net';
 import type { Readable } from 'node:stream';
-import { parseStr, type PhpArray, field, strtolower } from '../php.js';
+import { parseStr, type PhpArray, field, strtolower, phpTrim } from '../php.js';
 import { phpParseUrl } from '../compat/core.js';
+import { configString } from '../config.js';
 import type { Session } from './session.js';
 
 // exit; in PHP: beendet die Bearbeitung, die Antwort wird so gesendet, wie sie bis dahin aufgebaut ist
@@ -219,14 +221,38 @@ export function parseCookies(header: string): Record<string, string> {
   return out;
 }
 
-// REMOTE_ADDR wie mit mod_remoteip: CF-Connecting-IP nur, wenn die Anfrage vom eigenen cloudflared kommt
+// REMOTE_ADDR, wie PHP die Adresse des Besuchers gesehen hat.
+// Mit client_ip_header (setzt der Installer: "x-oys-client-ip") kommt sie nur aus diesem Kopf und nur über localhost:
+// Apache setzt ihn nach mod_remoteip auf REMOTE_ADDR und ersetzt dabei jeden Wert, den ein Besucher mitschickt.
+// CF-Connecting-IP zählt dann nie – hinter Apache kommt jede Anfrage von 127.0.0.1, und bei einer Installation ohne
+// Tunnel könnte sonst jeder Besucher eine Adresse vorgeben und so die Bremsen (Anmeldung, Kontakt, Spam) umgehen.
+// Ohne den Schlüssel (Entwicklung, Tests) wie mod_remoteip: CF-Connecting-IP nur von einem cloudflared auf localhost.
 function clientIp(peer: string, headers: IncomingHttpHeaders): string {
   let ip = peer || '';
   if (ip.startsWith('::ffff:') && /^::ffff:\d+\.\d+\.\d+\.\d+$/.test(ip)) ip = ip.slice(7);
-  if (ip === '127.0.0.1' || ip === '::1') {
+  const local = ip === '127.0.0.1' || ip === '::1';
+  const trusted = trustedHeader();
+  if (trusted !== '') {
+    if (!local) return ip;
+    // Genau eine gültige Adresse (zwei gleichnamige Köpfe fügt Node mit „, “ zusammen – das ist dann keine)
+    const raw = headers[trusted];
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    return isIP(value) ? value : ip;
+  }
+  if (local) {
     const cf = headers['cf-connecting-ip'];
     const v = Array.isArray(cf) ? cf[0] : cf;
     if (v && /^[0-9a-fA-F:.]+$/.test(v.trim())) return v.trim();
   }
   return ip;
+}
+
+// Name des Kopfs mit der Besucher-Adresse (klein geschrieben wie in Node); leer = nicht eingestellt
+function trustedHeader(): string {
+  try {
+    return strtolower(phpTrim(configString('client_ip_header', '')));
+  } catch {
+    // ohne Einstellungen (nur in Werkzeugen und Tests ohne config.json)
+    return '';
+  }
 }

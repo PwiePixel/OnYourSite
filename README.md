@@ -29,28 +29,28 @@ Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` – in P
 
 Everything you already had stays: the built-in booking calendar (`/kalender`), file download (PDF/vcf), SEO settings, custom CSS, “Hide branding” (premium), Discord ID, and the admin panel with “Log in as user” and newsletter.
 
-## Your own server (without Plesk)
+## Your own server
 
-One command – `curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash` (as root without `sudo`; a minimal Debian may need `apt install -y curl` first) – sets up a fresh Ubuntu or Debian server with everything OnYourSite needs. It fetches it all by itself: the code from GitHub, Apache with PHP-FPM (the same `.htaccess`), MariaDB with its own database, user and password, `config.php`, a Cloudflare Tunnel (creates it, points the domain, `www` and every subdomain to it and removes old records and tunnels – the server then needs no open web ports), a Let’s Encrypt certificate for the domain and every subdomain that renews itself, a firewall, fail2ban and automatic security updates, the weekly report, a nightly backup, your admin account and – if you like – the Discord bot. `--reset` starts from scratch; data of an old server can be moved too. Updates later: `sudo bash /var/www/onyoursite/server/install.sh --update`. Step by step: [server/README.md](server/README.md).
+One command – `curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/install.sh | sudo bash` (as root without `sudo`; a minimal Debian may need `apt install -y curl` first) – sets up a fresh Ubuntu or Debian server with everything OnYourSite needs. It fetches it all by itself: the code from GitHub, Node.js 22 for the website (a locked-down system service) with Apache in front of it for HTTPS, MariaDB with its own database, user and password, `config.json`, a Cloudflare Tunnel (creates it, points the domain, `www` and every subdomain to it and removes old records and tunnels – the server then needs no open web ports), a Let’s Encrypt certificate for the domain and every subdomain that renews itself, a firewall, fail2ban and automatic security updates, the weekly report, a nightly backup, your admin account and – if you like – the Discord bot. The server doesn’t need PHP. `--reset` starts from scratch; data of an old server can be moved too. Step by step: [server/README.md](server/README.md).
 
-## Updating an existing installation (Plesk)
+Requirements: Node.js 22, MariaDB (or MySQL), wildcard DNS and a wildcard certificate for `*.on-your.site` – the installer takes care of all of it. 1 GB of RAM is enough, 2 GB are recommended.
 
-1. **Back up** your database and files.
-2. Upload the new files or deploy them via Git. The uploaded images and `email/smtp.json` aren’t in the repo and stay unchanged on the server – see [Uploads & backups](#uploads--backups) to keep the uploads completely out of the code folder.
-3. **Create `config.php`:** copy `config.example.php` and fill it in
-   - `db`: the values from your old `db.php`
-   - `aes_key`: **exactly** the old value from `security.php` (`AES_256_KEY`) – otherwise Discord IDs and booking requests can no longer be read
-   - `app_secret`: generate a new random value, e.g. `php -r "echo bin2hex(random_bytes(32));"`
-4. Open the home page once. On the first request, OnYourSite creates the new tables and automatically migrates all existing profiles (links incl. click counts, theme, booking button, file, “About me” text). **Old tables are not deleted.**
-5. Set up the weekly report: Plesk → *Scheduled Tasks* → *Run a PHP script* → `cron/weekly_report.php`, schedule Mondays at 8:00 (`0 8 * * 1`).
+## Updating
 
-Requirements: PHP 7.4 or newer (8.x recommended) with PDO MySQL, OpenSSL, mbstring, fileinfo and GD (with WebP), cURL recommended for Discord; wildcard DNS and wildcard SSL for `*.on-your.site` as before.
+```bash
+sudo bash /var/www/onyoursite/server/install.sh --update
+```
 
-Uploads: photos are already resized in the browser, so they fit under small server limits too. For music in the “Entrance with music” (up to 15 MB), set `upload_max_filesize` and `post_max_size` to at least `16M` in Plesk under *PHP Settings*. Each account has 200 MB of storage (premium/admin: 1 GB); files that were uploaded but never saved are removed automatically after two days.
+A backup comes first; then the new version is built and checked next to the running one, and only then the website switches over (a restart of a few seconds). If the new version doesn’t work, the previous one comes back by itself. Details and how to restore a backup: [server/README.md](server/README.md#update).
+
+**Coming from 2.x (PHP):** since 3.0, OnYourSite runs on Node.js – PHP isn’t used any more.
+
+- **On a server set up with `server/install.sh`**, the same command moves it: the PHP website keeps running until the Node.js version is built and checked with the data of the server, `config.php` becomes `config.json` (same keys, read without PHP), and afterwards PHP is turned off and can be removed. Everyone has to log in once more – passwords, pages and everything else stay. Details: [Moving from 2.x (PHP) to 3.0 (Node.js)](server/README.md#moving-from-2x-php-to-30-nodejs).
+- **On Plesk or other PHP hosting**, 3.0 can’t run as before. Set up your own server with the installer and move your data: `config.php` (above all `aes_key` – without it, encrypted data can’t be read), the database dump, the uploads ZIP (*Admin → Storage & backups*) and `email/smtp.json` – see [Moving data from an old server](server/README.md#moving-data-from-an-old-server-optional).
+
+Uploads: photos are already resized in the browser. Music for the “Entrance with music” can be up to 15 MB (uploads up to 16 MB). Each account has 200 MB of storage (premium/admin: 1 GB); files that were uploaded but never saved are removed automatically after two days.
 
 The built-in booking calendar (`/kalender`) is only reachable if the page has a visible booking block that points to it – if that block is protected, the calendar only opens after the password has been entered.
-
-Tests: `php tests/unit.php` (command line only) checks scheduling, embeds, addresses, the spam filter, URL validation, the update formatting, Discord links, file names of code pages and uploads, and the honeycomb texts. It only reads – nothing in the database is changed.
 
 ## Uploads & backups
 
