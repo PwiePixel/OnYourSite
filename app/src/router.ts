@@ -12,6 +12,7 @@ import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
 import { dbReachable } from './db.js';
+import { statusHealth, statusHeartbeat } from './status/endpoints.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -59,6 +60,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   }
   // Vorhandene Dateien (bisher Apache)
   if (await serveStatic(ctx)) ctx.halt();
+  // Statusseiten: Gesundheit der Seite – antwortet auch ohne Datenbank (503 als JSON), daher vor dem Schema
+  if (ctx.path === '/_/health') return statusHealth(ctx);
   // lib/bootstrap.php: Datenbank und Schema (meist schon beim Start erledigt). Wie db.php bei jeder Anfrage: ohne
   // Datenbank die 503-Seite, auch für Seiten, die sonst keine Abfrage bräuchten
   // Nur für die eigenen Adressen: ein fremder Host (eigene Domains nicht eingerichtet) bekommt die 404-Seite ohne jede
@@ -79,6 +82,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // 1. Öffentliche Endpunkte ohne Cookies (auf jeder Adresse gleich)
   if (path.startsWith('/_/')) {
     ctx.header('X-Robots-Tag', 'noindex');
+    // Statusseiten: Heartbeats (Token in der Adresse)
+    if (path.startsWith('/_/hb/')) return statusHeartbeat(ctx);
     return publicRoutes(ctx);
   }
   // Alte Klick-Zählung

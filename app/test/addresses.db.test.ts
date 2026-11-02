@@ -414,7 +414,8 @@ test('sites:repair adds missing rows, holds orphaned ones, keeps status rows and
   await q("INSERT INTO site_addresses (slug, kind, ref_id, user_id, claimed_at, released_at, hold_until) VALUES ('held-for-tom', 'held', NULL, 6, ?, ?, ?), ('own-hold', 'held', NULL, 5, ?, ?, ?)",
     [ago(100), ago(2), date('Y-m-d H:i:s', time() + 86400 * 28), ago(100), ago(2), date('Y-m-d H:i:s', time() + 86400 * 28)]);
   await q("INSERT INTO pages (user_id, slug, title, created_at) VALUES (5, 'held-for-tom', 'x', NOW()), (5, 'own-hold', 'x', NOW())");
-  await q("INSERT INTO site_addresses (slug, kind, ref_id, user_id, claimed_at) VALUES ('status', 'status', 1, NULL, ?), ('tom-status', 'status', 2, 6, ?)", [ago(30), ago(30)]);
+  // „status“ hat der Schritt der Statusseiten schon für OnYourSites eigene Seite belegt – hier mit festem Datum
+  await q("REPLACE INTO site_addresses (slug, kind, ref_id, user_id, claimed_at) VALUES ('status', 'status', 1, NULL, ?), ('tom-status', 'status', 2, 6, ?)", [ago(30), ago(30)]);
   await q("INSERT INTO pages (user_id, slug, title, created_at) VALUES (5, 'tom-status', 'x', NOW())");
 
   const first = io();
@@ -491,7 +492,9 @@ test('sites:release ends a hold after showing it, only with a confirmation', asy
 
 test('repairAddresses runs in one transaction and leaves a consistent list behind', async () => {
   const report = await transaction((_c, db) => repairAddresses(db));
-  assert.deepEqual(report.added, []);
+  // OnYourSites eigene Statusseite (Schritt V_STATUS_TABLES) kann ein früherer Test aus der Liste genommen haben –
+  // die Reparatur trägt sie wieder ein; hier zählen nur Link- und Code-Seiten
+  assert.deepEqual(report.added.filter((x) => !String(x).startsWith('status page')), []);
   assert.deepEqual(report.held, []);
   // Jede Link- und Code-Seite hat genau ihre Zeile
   const missing = await q(`SELECT p.slug FROM pages p LEFT JOIN site_addresses a ON a.slug = p.slug AND a.kind = 'page' AND a.ref_id = p.id WHERE a.slug IS NULL

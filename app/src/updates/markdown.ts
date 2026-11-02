@@ -144,8 +144,17 @@ function plainLinks(text: string): string | null {
   return out + text.slice(last);
 }
 
+// Optionen für Texte von Nutzern (Statusseiten): base = Adresse der Seite, gegen die eigene Pfade (/…, #…) aufgelöst
+// werden (statt gegen /updates der Hauptseite); ugc = fremde Links mit rel="nofollow ugc noopener noreferrer" und dem
+// Host in Klammern hinter dem Linktext, damit ein Text wie „Login“ nicht verschleiert, wohin er führt. Ohne Optionen
+// bleibt die Ausgabe Byte für Byte die von PHP (Updates, Roadmap, Feed).
+export interface MarkdownOptions {
+  base?: string;
+  ugc?: boolean;
+}
+
 // oys_markdown(): zeilenweise, ohne Zeilenumbrüche zwischen den Elementen
-export function markdown(md: string): string {
+export function markdown(md: string, opts: MarkdownOptions = {}): string {
   const lines = md.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   let html = '';
   let para: string[] = [];
@@ -154,7 +163,7 @@ export function markdown(md: string): string {
   let code: string[] = [];
   const flushPara = (): void => {
     if (para.length) {
-      html += '<p>' + para.map(mdInline).join('<br>') + '</p>';
+      html += '<p>' + para.map((l) => mdInline(l, opts)).join('<br>') + '</p>';
       para = [];
     }
   };
@@ -192,7 +201,7 @@ export function markdown(md: string): string {
       flushPara();
       closeList();
       const tag = m[1].length === 3 ? 'h5' : 'h4';
-      html += '<' + tag + '>' + mdInline(m[2]) + '</' + tag + '>';
+      html += '<' + tag + '>' + mdInline(m[2], opts) + '</' + tag + '>';
       continue;
     }
     m = LIST.exec(line);
@@ -205,14 +214,14 @@ export function markdown(md: string): string {
         html += '<' + want + '>';
         list = want;
       }
-      html += '<li>' + mdInline(m[2]) + '</li>';
+      html += '<li>' + mdInline(m[2], opts) + '</li>';
       continue;
     }
     m = QUOTE.exec(line);
     if (m) {
       flushPara();
       closeList();
-      html += '<blockquote>' + mdInline(m[1]) + '</blockquote>';
+      html += '<blockquote>' + mdInline(m[1], opts) + '</blockquote>';
       continue;
     }
     closeList();
@@ -225,7 +234,7 @@ export function markdown(md: string): string {
 }
 
 // oys_md_inline(): Code und Links zuerst beiseitelegen, den Rest maskieren, dann nur bekannte Muster in Tags verwandeln
-export function mdInline(input: string): string {
+export function mdInline(input: string, opts: MarkdownOptions = {}): string {
   let text = input.replace(/[\x01\x02]/g, '');
   const keep: string[] = [];
   const stash = (h: string): string => {
@@ -235,14 +244,15 @@ export function mdInline(input: string): string {
   text = text.replace(CODE_SPAN, (_m, c: string) => stash('<code>' + e(c) + '</code>'));
   // Adressen dürfen ausgeglichene Klammern enthalten, z. B. …/wiki/Foo_(bar)
   text = fromBytes(toBytes(text).replace(LINK_BYTES, (m0: string, label: string, url: string) => {
-    const link = mdLink(fromBytes(url), mdEmphasis(e(fromBytes(label))));
+    const link = mdLink(fromBytes(url), mdEmphasis(e(fromBytes(label))), opts);
     return link === '' ? m0 : stash(link);
   }));
   // Nackte Adressen: Satzzeichen und Markdown-Zeichen am Ende gehören nicht dazu. Ist eine zu lang für PCRE, liefert
   // PHP hier null – die ganze Zeile wird leer (auch Code und Links, die schon beiseitegelegt waren).
   if (urlStackExhausted(text)) return '';
+  // Der Linktext einer nackten Adresse ist die Adresse selbst – der Host steht also schon da
   text = text.replace(BARE_URL, (m0: string) =>
-    stash('<a href="' + e(m0) + '" target="_blank" rel="noopener noreferrer">' + e(prettyUrl(m0)) + '</a>'));
+    stash('<a href="' + e(m0) + '" target="_blank" rel="' + relOf(opts) + '">' + e(prettyUrl(m0)) + '</a>'));
   text = mdEmphasis(e(text));
   // Platzhalter einsetzen (auch verschachtelte, z. B. Code in einem Link)
   for (let i = 0; i < 3 && text.includes('\x01'); i++) {
@@ -252,12 +262,40 @@ export function mdInline(input: string): string {
 }
 
 // oys_md_link(): eigene Pfade (/…, #…) werden zu vollen Adressen, weil der Text auch im Feed steht
-export function mdLink(url: string, labelHtml: string): string {
+export function mdLink(url: string, labelHtml: string, opts: MarkdownOptions = {}): string {
   if (/^\/(?![/\\])/.test(url) || (url !== '' && url[0] === '#')) {
+    if (opts.base !== undefined) return '<a href="' + e(onBase(opts.base, url)) + '">' + labelHtml + '</a>';
     return '<a href="' + e(mainUrl(url[0] === '#' ? '/updates' + url : url)) + '">' + labelHtml + '</a>';
   }
   const clean = cleanUrl(url);
-  return clean === '' ? '' : '<a href="' + e(clean) + '" target="_blank" rel="noopener noreferrer">' + labelHtml + '</a>';
+  if (clean === '') return '';
+  return '<a href="' + e(clean) + '" target="_blank" rel="' + relOf(opts) + '">' + labelHtml + '</a>' + (opts.ugc ? hostNote(clean) : '');
+}
+
+// Fremde Links: rel wie bisher, bei Texten von Nutzern zusätzlich nofollow ugc
+const relOf = (opts: MarkdownOptions): string => (opts.ugc ? 'nofollow ugc noopener noreferrer' : 'noopener noreferrer');
+
+// Eigener Pfad auf der Seite von base: /x → Ursprung von base + /x, #x → base (ohne #…) + #x
+function onBase(base: string, url: string): string {
+  if (url[0] === '#') return base.replace(/#.*$/s, '') + url;
+  const origin = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i.exec(base);
+  return (origin ? origin[0] : base.replace(/\/+$/, '')) + url;
+}
+
+// „ (host)“ hinter dem Linktext: Host einer Web-Adresse in ASCII (Punycode zeigt verwechselbare Zeichen), bei mailto:
+// die Domain der Adresse; tel: und Unlesbares bekommen keinen Hinweis
+function hostNote(clean: string): string {
+  let host = '';
+  if (/^mailto:/i.test(clean)) {
+    host = /@([^?&#]+)/.exec(clean)?.[1] ?? '';
+  } else if (/^https?:/i.test(clean)) {
+    try {
+      host = new URL(clean).hostname;
+    } catch {
+      host = '';
+    }
+  }
+  return host === '' ? '' : ' <span class="md-host">(' + e(host) + ')</span>';
 }
 
 // oys_md_emphasis(): der Reihe nach **, ~~, *, _ (falsch verschachtelte Paare bleiben wie in PHP)

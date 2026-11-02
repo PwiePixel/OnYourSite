@@ -173,6 +173,17 @@ test('old profiles are taken over exactly like PHP does it', async () => {
   assert.deepEqual(tomBlocks.map((b) => b.type), ['booking', 'file', 'link', 'heading', 'text']);
 });
 
+// Daten nach der Migration: vorhandene Spalten unverändert; Spalten, die ein späterer Schritt anlegt (z. B.
+// users.status_terms_at), sind leer – sonst hätte der Schritt Daten geändert
+function sameData(after: unknown[][], before: unknown[][]): unknown[][] {
+  return after.map((rows, t) => rows.map((row, i) => {
+    const ref = (before[t][i] ?? {}) as Record<string, unknown>;
+    const r = row as Record<string, unknown>;
+    for (const k of Object.keys(r)) if (!(k in ref)) assert.equal(r[k], null, `new column ${k} is empty`);
+    return Object.fromEntries(Object.keys(ref).map((k) => [k, r[k]]));
+  }));
+}
+
 test('Node upgrades a database PHP has migrated, and a second run changes nothing', async () => {
   const before = await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)));
   // Spalten, die spätere Schritte anfügen (z. B. pages.custom_domain), sind bei bestehenden Zeilen leer; alle bisherigen

@@ -16,6 +16,7 @@ import { adminHcHandle } from '../honeycombs/honeycombs.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
 import { adminCodePagesView } from '../code/adminView.js';
+import { adminStatusView } from '../status/adminView.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
 import { resetPassword, toggleAdmin } from './users.js';
@@ -230,6 +231,7 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     communityHtml: await adminCommunityView(ctx),
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
     codePagesHtml: await adminCodePagesView(ctx, allUsers),
+    statusHtml: await adminStatusView(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };
 }

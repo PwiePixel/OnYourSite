@@ -11,6 +11,7 @@ import { parseStr, phpText, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
+import { recordWebStart } from './status/endpoints.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
 const POST_MAX = 20 * 1024 * 1024;
@@ -187,6 +188,8 @@ if (isMain) {
     const host = process.env.HOST || '127.0.0.1';
     await app.listen({ port, host });
     console.log(`OnYourSite is listening on http://${host}:${port}`);
+    // Statusseiten: Start merken (Heartbeat-Fristen beginnen danach neu); ohne Datenbank egal
+    await recordWebStart().catch(() => undefined);
   } catch (err) {
     if (err instanceof ConfigMissingError) console.error(err.message);
     else console.error(err);

@@ -92,7 +92,9 @@ export const isForbiddenSubdomain = (s: string): boolean => forbidden(s);
 
 const RESERVED = ['login', 'logout', 'register', 'dashboard', 'admin', 'challenge', 'imprint', 'privacy', 'terms', 'api', 'static', 'track-click', 'kalender',
   'cron', 'lib', 'email', 'install', 'phpmailer', 'robots', 'sitemap', 'favicon', 'index', 'config', 'go', 'demo', 'impressum', 'datenschutz', 'agb', 'updates',
-  'roadmap', 'changelog', 'news', 'feed'];
+  'roadmap', 'changelog', 'news', 'feed',
+  // Statusseiten: status.<domain> ist OnYourSites eigene Statusseite, health.<domain> das Ziel der eigenen Prüfung
+  'status', 'health'];
 export const reservedPaths = (): string[] => RESERVED;
 
 // Wer fragt (slugProblem): userId darf seine eigenen reservierten Adressen wieder nehmen, exceptStatusId ist die eigene
