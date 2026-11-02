@@ -46,3 +46,12 @@ saved settings have no usable target). DP-1 must make this impossible and test i
 webhook mode; only the fields of the visible mode are submitted; a channel ID alone is never "saved"; every message
 names exactly what is missing for the selected mode; saving checks the target with Discord and shows Discord's own
 error; the installed bot is offered without retyping the token.
+
+## Owner answers from the reviews (2026-11-02)
+
+| # | Question | Answer | What it means |
+|---|---|---|---|
+| R1 | An admin uses "Log in as" on another *admin* account | **"Only the admin, as before"** | The admin panel (`/admin`, `/admin/api/…`) and the site-wide admin parts of the editor (the Status tab for OnYourSite's own status page) only work in the admin's own session. While anyone works as another account through "Log in as", they act as that account – even when it is an admin – and admin actions are never recorded under someone else. "Log in as" itself stays available for every account. |
+| R2 | A custom domain an admin blocked | **It can't be added again** | Removing a blocked domain in the editor only detaches it from the page; the hostname stays blocked for every account (adding, claiming with a TXT record and takeover are refused) until an admin releases it (PD-5). This settles designs/premium-domains.md §5.2 vs §2.8 in favour of §2.8. |
+| R3 | `code_more` refund while it costs nothing | **Yes, as built** | After a refund or removal of `code_more`, the code pages above the free allowance go offline only while `code_more` costs something; at price 0 it is free for everyone and nothing goes offline (CS-E13). |
+| R4 | Confirmation for honeycomb gifts | **Yes, as built** | "Give honeycombs" asks through the site's dialog before every deduction and before gifts above 1,000 honeycombs (`GRANT_ASK_ABOVE`), and the server refuses those without the confirmation. |
