@@ -1,7 +1,8 @@
 // Wochenbericht: lib/report.php und cron/weekly_report.php gegen src/app/report.ts und src/cli/weekly-report.ts.
 // 1. Daten, HTML und die Werte für die Mail – auf einer Kopie der Testdatenbank mit erzeugten Zahlen (Trend mit halben
 //    Prozenten, Titel mit HTML, Plattformen, gelöschte Blöcke …). PHP bekommt einen Ersatz für sendCustomEmail(), der
-//    die Argumente aufzeichnet (die Mail selbst prüft mail.test.ts für jede Vorlage).
+//    die Argumente aufzeichnet (die Mail selbst prüft mail.test.ts für jede Vorlage). Gleichstände beim besten Link
+//    löst seed() auf – bei einem Gleichstand legt sich nur Node fest (eigener Test).
 // 2. Der Lauf über alle Nutzer (oys_run_weekly_reports) samt weekly_report_sent_at.
 // 3. Der Befehl selbst: PHP aus einer Kopie des Codes (eigene config.php) und Node, beide über einen kleinen SMTP-Server
 //    mit STARTTLS – verglichen werden Ausgabe, Rückgabewert, Datenbank und die zugestellten Mails.
@@ -120,6 +121,21 @@ async function seed(): Promise<void> {
     const { insertId } = await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, 0, 1, ?, NOW())', [pageId, type, data]);
     await exec("INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, '', CURDATE() - INTERVAL 2 DAY, ?, 99)", [insertId, pageId]);
   }
+  // Kein Gleichstand beim besten Link: lib/report.php sortiert nur nach den Klicks, unter gleich oft geklickten Links
+  // liefert MariaDB dann irgendeinen (je nach Ausführungsplan – auch im PHP- und im Node-Lauf verschieden). Node nimmt
+  // bewusst den ersten nach block_id und item; dieser Link bekommt hier einen Klick mehr (gestern), damit PHP und Node
+  // denselben nennen und alle Vergleiche exakt bleiben. Den Gleichstand selbst prüft ein eigener Test (nur Node).
+  const groups = await q<{ page_id: number; block_id: number; item: string; clicks: string }>(`SELECT page_id, block_id, item, SUM(clicks) AS clicks
+    FROM block_clicks_daily WHERE day BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE() - INTERVAL 1 DAY
+    GROUP BY page_id, block_id, item ORDER BY page_id, clicks DESC, block_id, item`);
+  for (const [n, best] of groups.entries()) {
+    if (n > 0 && groups[n - 1].page_id === best.page_id) continue; // nur der beste Link jeder Seite
+    const next = groups[n + 1];
+    if (next?.page_id === best.page_id && Number(best.clicks) > 0 && Number(next.clicks) === Number(best.clicks)) {
+      await exec('INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, ?, CURDATE() - INTERVAL 1 DAY, ?, 1) ON DUPLICATE KEY UPDATE clicks = clicks + 1',
+        [best.block_id, best.item, best.page_id]);
+    }
+  }
 }
 
 // PHP mit lib/report.php und einem Ersatz für sendCustomEmail() (zeichnet auf; Adressen mit „fail“ schlagen fehl)
@@ -168,6 +184,36 @@ test('report data and HTML match PHP for every generated user', async () => {
   for (const s of ['No links were clicked this week.', '🏆 Best link', '(1 click)', ' clicks)', '+13%', '-13%', '-50%', '+0%', 'Instagram', 'Book a meeting', '<strong style=\\"color:#ffffff;\\">Link</strong>', '&lt;b&gt;Shop&lt;/b&gt;']) {
     assert.ok(all.includes(s), 'covers ' + s);
   }
+});
+
+// Gleichstand beim besten Link – nur Node (PHP überlässt die Wahl MariaDB): Es gewinnt der Block mit der kleinsten ID,
+// innerhalb eines Social-Blocks die Plattform nach dem Alphabet, auch wenn der andere Link seine Klicks früher bekam.
+// Eigener Nutzer ohne Wochenbericht: Die Läufe über alle Nutzer (2. und 3.) schicken ihm nichts.
+test('a tie for the best link goes to the first block, then to the first platform', async () => {
+  const userId = 3200;
+  await exec("INSERT INTO users (id, email, password, full_name, username, weekly_report) VALUES (?, 'tie@example.org', 'x', 'Tie', 'tie', 0)", [userId]);
+  const page = async (position: number): Promise<number> => (await exec("INSERT INTO pages (user_id, slug, position, title, subtitle, bio, theme, layout, address_mode, settings, created_at, updated_at) VALUES (?, ?, ?, 'Tie', '', '', 'deep-dark', 'buttons', 'subdomain', '{}', NOW(), NOW())",
+    [userId, 'tie-' + position, position])).insertId;
+  const block = async (pageId: number, type: string, data: string): Promise<number> =>
+    (await exec('INSERT INTO page_blocks (page_id, type, position, is_visible, data, created_at) VALUES (?, ?, 0, 1, ?, NOW())', [pageId, type, data])).insertId;
+  const click = (pageId: number, blockId: number, item: string, daysAgo: number, clicks: number) =>
+    exec('INSERT INTO block_clicks_daily (block_id, item, day, page_id, clicks) VALUES (?, ?, CURDATE() - INTERVAL ? DAY, ?, ?)', [blockId, item, daysAgo, pageId, clicks]);
+  // Zwei Links mit je 7 Klicks …
+  const links = await page(0);
+  const older = await block(links, 'link', '{"title":"Older"}');
+  const newer = await block(links, 'link', '{"title":"Newer"}');
+  await click(links, newer, '', 7, 7);
+  await click(links, older, '', 2, 4);
+  await click(links, older, '', 1, 3);
+  // … und zwei Plattformen eines Social-Blocks mit je 5 Klicks, dazu ein späterer Block mit ebenso vielen
+  const socials = await page(1);
+  const icons = await block(socials, 'socials', '{}');
+  const later = await block(socials, 'link', '{"title":"Later"}');
+  await click(socials, later, '', 6, 5);
+  await click(socials, icons, 'youtube', 5, 5);
+  await click(socials, icons, 'instagram', 3, 5);
+  const report = await weeklyReportData(userId);
+  assert.deepEqual(report.pages.map((p) => p.best), [{ title: 'Older', clicks: 7 }, { title: 'Instagram', clicks: 5 }]);
 });
 
 test('the mail gets the same values, subject and order of placeholders as in PHP', async () => {

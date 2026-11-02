@@ -73,9 +73,13 @@ async function weekNumbers(pageId: number, from: string, to: string): Promise<{ 
   return { views: intval(row?.views), clicks: intval(row?.clicks) };
 }
 
-// oys_week_best_link(): der meistgeklickte Block (bzw. die Plattform eines Social-Icons) der Woche
+// oys_week_best_link(): der meistgeklickte Block (bzw. die Plattform eines Social-Icons) der Woche.
+// Bewusst anders als lib/report.php: Bei gleich vielen Klicks entscheiden block_id und dann item. PHP sortiert nur nach
+// clicks – unter gleichauf liegenden Links darf MariaDB dann irgendeinen liefern (je nach Ausführungsplan), und derselbe
+// Bericht nannte mal den einen, mal den anderen Link. So gewinnt immer der Block mit der kleinsten ID, innerhalb eines
+// Social-Blocks die Plattform nach dem Alphabet.
 async function weekBestLink(pageId: number, from: string, to: string): Promise<BestLink | null> {
-  const row = await one('SELECT block_id, item, SUM(clicks) AS clicks FROM block_clicks_daily WHERE page_id = ? AND day BETWEEN ? AND ? GROUP BY block_id, item ORDER BY clicks DESC LIMIT 1', [pageId, from, to]);
+  const row = await one('SELECT block_id, item, SUM(clicks) AS clicks FROM block_clicks_daily WHERE page_id = ? AND day BETWEEN ? AND ? GROUP BY block_id, item ORDER BY clicks DESC, block_id, item LIMIT 1', [pageId, from, to]);
   if (!row || intval(row.clicks) === 0) return null;
   const block = await one('SELECT * FROM page_blocks WHERE id = ?', [row.block_id as Param]);
   if (!block) return null;
