@@ -19,6 +19,8 @@ export interface UploadedFile {
   data: Buffer;
   // UPLOAD_ERR_*: 0 = OK, 1 = zu groß, 4 = keine Datei
   error: number;
+  // Feld name[…]: in PHP ein Array von Dateien statt einer Datei
+  multiple?: boolean;
 }
 
 export class Ctx {
