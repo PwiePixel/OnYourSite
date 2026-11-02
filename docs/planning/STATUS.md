@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 15:45 (UTC+1).
+Last update: 2026-11-02 16:35 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -61,32 +61,34 @@ continue" below.
 | 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built and reviewed |
 | 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
+| 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
+| 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-- Status pages: ST-4 (status pages for users – all its dependencies are in now), ST-5, ST-7.
-- Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
+- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
+- Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records, 17 domain blocks – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
 1. **PR #15 and PR #14 are merged** (squash commits `2e6f6de` and `66207f6`). Deploy `main` with
    `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
 2. **New work starts from `main`**: one branch per roadmap item, merged as one squash commit after the tests pass
-   (never push to `main` directly). On `main` 1012 tests pass (1022 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
+   (never push to `main` directly). On `main` 1012 tests pass (1035 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
    `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
-   - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
-   - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
+   - Code pages: CS-5 (moderation), the rest of CS-6.
+   - Status pages: the rest of ST-4, then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
@@ -129,6 +131,17 @@ records, 17 domain blocks – new steps take the next free number when they are 
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
      sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
      status addresses; edits of messages already posted still go out while the page is offline.
+   - CS-6 (core built; owner decisions R5–R7): still open – in the Code tab "Where it lives", "Show the link page
+     again" and "Download files" in the dialogs; rows for code pages and "Turn into a code page" in Settings → Your
+     pages; the "Code page" card in the Create-a-new-page dialog; the state where every slot shows a code page (design
+     U13) and the preview pane without a link page; a browser test for moving the own-address code page onto a slot;
+     `tests/e2e/editor-dialogs.js` should clear the address registry in its reset so it can run twice on one database.
+   - ST-4 (first part built): still open – changing a status page's address (90-day redirect, cooldown), the brand
+     rule for page titles, the owner's alert settings (mail and bell are written by the core but not verified end to
+     end), the paused-module behaviour, incidents on user pages (the API exists, untested), subscribers, a test for
+     concurrent component adds, the remaining browser flows of the design, and the admin's switch between OnYourSite's
+     page and their own. `app/test/e2e/status-system.e2e.ts` test 1 (the incident isn't shown resolved after
+     "Resolve") fails on the base too.
    - R1: while an admin works as another admin account, that account's bell can still show team notifications that
      link to `/admin` (they lead back to the editor – a dead end, not a way into admin rights); `editorData.user.admin`
      in the editor bootstrap still reflects `is_admin` (nothing reads it yet – switch it to `isAdminSession` before
