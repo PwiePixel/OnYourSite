@@ -18,6 +18,13 @@ export function isStaff(ctx: Ctx, user: Row): boolean {
   return phpTruthy(user.is_admin) || (original !== undefined && original !== null);
 }
 
+// Admin-Rechte (Admin-Bereich, /admin/api/…) nur in der eigenen Sitzung eines Admins (Entscheidung R1): wer über
+// „Log in as“ als ein anderes Konto arbeitet, ist dieses Konto – auch wenn es selbst Admin ist
+export function isAdminSession(ctx: Ctx, user: Row): boolean {
+  const original = ctx.session?.get('original_admin_id');
+  return phpTruthy(user.is_admin) && (original === undefined || original === null);
+}
+
 // oys_flash(): Hinweis für die nächste Seite ('error' oder 'success')
 export function flash(ctx: Ctx, type: string, message: string): void {
   ctx.session?.set(type, message);
