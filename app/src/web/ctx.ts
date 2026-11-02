@@ -120,10 +120,19 @@ export class Ctx {
     throw new Halt();
   }
 
-  // oys_redirect(): Location mit den UTF-8-Bytes, Status, leerer Inhalt
+  // oys_redirect(): Location mit den UTF-8-Bytes, Status, leerer Inhalt. Wie header(): Leerraum am Ende fällt weg; mit
+  // CR, LF oder NUL setzt PHP weder Header noch Status (nur eine Warnung). Andere Steuerzeichen sendet PHP roh – Node
+  // lehnt sie im Header ab (500), darum als %XX, so wie der Browser sie beim Folgen ohnehin kodiert.
   redirect(url: string, code = 302): never {
-    this.status = code;
-    this.header('Location', Buffer.from(url, 'utf8').toString('latin1'));
+    // rtrim() mit den Zeichen von isspace() wie in sapi_header_op()
+    let end = url.length;
+    while (end > 0 && ' \t\n\v\f\r'.includes(url[end - 1])) end--;
+    const value = url.slice(0, end);
+    if (!/[\r\n\0]/.test(value)) {
+      this.status = code;
+      this.header('Location', Buffer.from(value, 'utf8').toString('latin1')
+        .replace(/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')));
+    }
     this.body = '';
     this.halt();
   }

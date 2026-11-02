@@ -64,7 +64,8 @@ export async function buildServer() {
       const ctx = new Ctx({ method: req.method, url: rawUrl, headers: req.headers, peer: req.socket.remoteAddress || '' });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       ctx.rawBody = body;
-      if (ctx.method !== 'GET' && ctx.method !== 'HEAD' && body.length <= POST_MAX) {
+      // $_POST/$_FILES füllt PHP nur bei POST (PUT, PATCH, DELETE: leer, nur php://input hat den Inhalt)
+      if (ctx.method === 'POST' && body.length <= POST_MAX) {
         await readBody(ctx, String(req.headers['content-type'] ?? ''), body);
       }
       try {
@@ -91,8 +92,9 @@ export async function buildServer() {
         if (name.toLowerCase() === 'set-cookie') reply.header('set-cookie', ([] as string[]).concat((reply.getHeader('set-cookie') as string[] | string | undefined) ?? [], value));
         else reply.header(name, value);
       }
-      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher)
-      if (ctx.status === 304) {
+      // 304 ohne Inhalt und ohne „Content-Length: 0“ (wie Apache; RFC 9110: sonst falsche Länge im Zwischenspeicher).
+      // 204 ebenso – ohne Inhalt behält Fastify den Content-Type, den PHP auch hier mitsendet (/_/v, /_/c)
+      if (ctx.status === 304 || ctx.status === 204) {
         if (ctx.body instanceof Readable) ctx.body.destroy();
         return reply.send();
       }
