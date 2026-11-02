@@ -100,7 +100,7 @@ export function renderGate(page: Row, block: Block, kind: 'age' | 'password', er
     body = '<form class="oys-card oys-contact" method="post" action="/_/go/' + intval(block.id) + '">' + back
       + '<h1>Protected link</h1><p>“' + e(title) + '” is password protected.</p>'
       + (phpTruthy(error) ? '<div class="oys-alert err">' + e(error) + '</div>' : '')
-      + '<label class="oys-field"><span>Password</span><input type="password" name="pw" required autofocus></label>'
+      + '<label class="oys-field"><span>Password</span><input type="password" name="pw" required autofocus data-error-required="Please enter the password."></label>'
       + '<button class="oys-contact-send" type="submit">' + uiIcon('lock') + '<span>Unlock</span></button></form>';
   }
   return renderSimple(page, 'Protected link', body);

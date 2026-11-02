@@ -667,14 +667,15 @@
   function draftNote() { return !!G && srcs.some(function (s) { return !!s.keepsDraft; }); }
   function sessionDialog(kind, data) {
     if (sess.open || findToast(function (x) { return x.o.id === 'oys-session'; })) return;
-    var drafts = draftNote(), c;
+    // drafts: eine Seite mit Entwürfen (der Editor) · kept: es gibt Ungespeichertes, und es liegt als Entwurf im Browser
+    var drafts = draftNote(), kept = drafts && isDirty() && draftsKept(), c;
     if (kind === 'login') {
       c = { title: 'You’re logged out', ok: 'Log in', note: 'You’re logged out.',
-        text: 'Log in again to continue.' + (drafts ? ' Your unsaved changes are kept in this browser and offered again after you log in.' : ''),
+        text: 'Log in again to continue.' + (kept ? ' Your unsaved changes are kept in this browser and offered again after you log in.' : ''),
         go: function () { go('/login', true, false); } };
     } else if (kind === 'expired') {
       c = { title: 'Your session has expired', ok: 'Reload', note: 'Your session has expired.',
-        text: drafts ? 'Reload the editor to continue. Your unsaved changes are kept in this browser.' : 'Reload the page to continue.',
+        text: drafts ? 'Reload the editor to continue.' + (kept ? ' Your unsaved changes are kept in this browser.' : '') : 'Reload the page to continue.',
         go: function () { go(null, true, true); } };
     } else {
       var t = data && typeof data.error === 'string' && data.error ? data.error : 'This page was changed elsewhere. Reload it to continue.';

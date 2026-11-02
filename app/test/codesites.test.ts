@@ -57,16 +57,27 @@ after(async () => {
   await closePool();
 });
 
+// Das Startskript neuer Code-Seiten schreibt den Gruß in die Seite statt alert() (custom-dialogs CD-4): im Vergleich
+// mit PHP steht dafür das Skript von PHP, alles andere bleibt Byte für Byte gleich
+const NODE_STARTER_SCRIPT = codeStarterFiles('')['script.js'];
+const PHP_STARTER_SCRIPT = "document.getElementById('hello').addEventListener('click', () => {\n  alert('Hello from your own website!');\n});\n";
+function asPhpStarter(v: unknown): unknown {
+  if (typeof v === 'string') return v === NODE_STARTER_SCRIPT ? PHP_STARTER_SCRIPT : v;
+  if (Array.isArray(v)) return v.map(asPhpStarter);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, asPhpStarter(x)]));
+  return v;
+}
+
 async function same(ops: Op[], label: string): Promise<unknown[]> {
   const p = await phpRun(DB.php, ops);
-  const n = await nodeRun(DB.node, ops);
+  const n = (await nodeRun(DB.node, ops)).map(asPhpStarter);
   if (process.env.HC_DEBUG) ops.forEach((op, i) => console.log(label, i, JSON.stringify(op).slice(0, 90), '→', JSON.stringify(normalize(p[i])).slice(0, 160)));
   // Zähler der Code-Seiten (file_count, bytes) führt nur Node – in zurückgegebenen Zeilen zählen sie nicht mit
   const noCounters = (v: unknown): unknown => JSON.parse(JSON.stringify(v ?? null, (k, x) => (k === 'file_count' || k === 'bytes' ? undefined : x)));
   const diffs = ops.map((op, i) => ({ i, op: JSON.stringify(op).slice(0, 200), php: normalize(noCounters(p[i])), node: normalize(noCounters(n[i])) }))
     .filter((d) => JSON.stringify(d.php) !== JSON.stringify(d.node));
   assert.deepEqual(diffs, [], `${label}: results differ`);
-  assert.deepEqual(await dump(admin, DB.node), await dump(admin, DB.php), `${label}: tables differ`);
+  assert.deepEqual(asPhpStarter(await dump(admin, DB.node)), await dump(admin, DB.php), `${label}: tables differ`);
   // Node führt die Zähler für Dateien und Größe mit (die Fixture legt Dateien direkt an: nur Seiten, die Node schrieb)
   assert.deepEqual((await codeCounters(admin, DB.node)).filter((r) => Number((r as { id: number }).id) > 2), [], `${label}: counters`);
   return p;
@@ -125,7 +136,14 @@ test('constants match PHP', () => {
 
 test('starter files, badge and notice are byte-identical', () => {
   const titles = ['', 'My site', '<b>"Bold" & \'quoted\'</b>', 'Grüße – 🐝 “Co”', '0', 'x'.repeat(130), '&amp;', ' '];
-  assert.deepEqual(titles.map(codeStarterFiles), php('return array_map("oys_code_starter_files", $in);', titles));
+  // Startseite und Stil wie in PHP; das Skript schreibt den Gruß in die Seite statt alert() (custom-dialogs CD-4)
+  const withoutScript = (f: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'script.js'));
+  assert.deepEqual(titles.map((t) => withoutScript(codeStarterFiles(t))),
+    (php('return array_map("oys_code_starter_files", $in);', titles) as Array<Record<string, string>>).map(withoutScript));
+  for (const t of titles) assert.deepEqual(Object.keys(codeStarterFiles(t)), ['index.html', 'style.css', 'script.js']);
+  const script = codeStarterFiles('My site')['script.js'];
+  assert.doesNotMatch(script, /\b(alert|confirm|prompt)\s*\(/);
+  assert.ok(script.includes("note.textContent = 'Hello from your own website!';") && script.includes("document.getElementById('hello')"));
   const html = ['', 'no body', '</body>', '<html><body>x</body></html>', '</BODY>', '</Body>', '</body >', '</body', 'a</body>b</body>c', '</body></BODY>tail',
     'İİİ</body>', 'ẞ</BODY>ß', '🐝</body>🐝', '<!-- </body> --></body>', '</bodyx>', '</BoDy>\n', 'x'.repeat(10000) + '</body>'];
   assert.deepEqual(html.map((h) => codeAddBadge(h, {})), php('return array_map(function ($h) { return oys_code_add_badge($h, []); }, $in);', html));

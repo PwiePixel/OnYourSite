@@ -25,6 +25,7 @@ import { emailTemplates, ensureEmailDir, saveSmtp, sendNewsletter, smtpConfig } 
 import { adminView, CutOffPage, type AdminViewData } from './views/admin.js';
 import { adminStorageData, adminStorageView } from './views/storage.js';
 import { adminBackUrl, refuseUnconfirmed } from './confirm.js';
+import { bellMarkup } from '../views/partials/ui.js';
 
 export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   const session = await Session.start(ctx);
@@ -232,6 +233,7 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
     codePagesHtml: await adminCodePagesView(ctx, allUsers),
     statusHtml: await adminStatusView(ctx),
+    bellHtml: await bellMarkup(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };
 }

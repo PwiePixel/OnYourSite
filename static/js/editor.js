@@ -1,7 +1,12 @@
 /* OnYourSite – Editor
-   Zustand im Browser, Live-Vorschau über den echten Seiten-Renderer (1:1 wie die öffentliche Seite). */
+   Zustand im Browser, Live-Vorschau über den echten Seiten-Renderer (1:1 wie die öffentliche Seite).
+   Dialoge, Hinweise und die Wache gegen das Verlassen kommen aus static/js/ui.js (window.OYSUI, Vertrag ui.d.ts). */
 (function () {
   'use strict';
+
+  // Ohne die Dialog-Bibliothek wird nicht bearbeitet: ein Hinweis in der Seite statt halber Funktionen
+  var UI = window.OYSUI;
+  if (!UI) { editorUnavailable(); return; }
 
   var E = window.OYS_EDITOR || {};
   var state = {
@@ -16,6 +21,8 @@
   var openBlocks = {};
   var extrasTab = {};
   var activeTab = 'content';
+  // Umbenennungen beim Speichern (alte ID → neue ID): Dialoge suchen ihren Block danach wieder über die ID
+  var renamed = {};
 
   // ================================================================
   // Helfer
@@ -52,30 +59,44 @@
   }
   function uploadUrl(f) { return f ? '/static/uploads/' + encodeURIComponent(f) : ''; }
 
-  function toast(msg, type) {
-    var icon = type === 'err' ? 'bx-error-circle' : type === 'info' ? 'bx-info-circle' : type === 'hc' ? 'bx-hive' : 'bx-check-circle';
-    var el = h('<div class="toast ' + (type || 'ok') + '"><i class="bx ' + icon + '"></i><span>' + esc(msg) + '</span></div>');
-    $('#toasts').appendChild(el);
-    setTimeout(function () { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 300); }, type === 'err' ? 5200 : 3000);
+  // Hinweise zeichnet ui.js (Warteschlange, Schließen, Live-Region) – die Aufrufe im Editor bleiben, wie sie sind
+  function toast(msg, type) { return UI.toast(msg, type); }
+
+  // Eine Anfrage für alles (JSON, Formular mit Datei, HTML der Vorschau): CSRF-Kopf, Antwort über UI.handle()
+  // (Sitzungsdialog bei 401/419/409 mit reload, notices), ohne Verbindung ein Fehlertext statt einer Ausnahme.
+  // o.json: Daten (POST als JSON) · o.form: FormData (POST) · o.text: HTML erwartet (Fehler kommen trotzdem als JSON)
+  function request(url, o) {
+    o = o || {};
+    var opts = { credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } };
+    if (o.json !== undefined) {
+      opts.method = 'POST';
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(o.json);
+    } else if (o.form) {
+      opts.method = 'POST';
+      opts.body = o.form;
+    }
+    return fetch(url, opts).then(function (r) {
+      var isJson = /application\/json/i.test(r.headers.get('Content-Type') || '');
+      if (o.text && !isJson) return r.text();
+      return r.json().catch(function () { return null; }).then(function (data) {
+        if (!data || typeof data !== 'object') data = { ok: false, error: 'Unexpected response from the server.' };
+        return UI.handle(r.status, data);
+      });
+    }, function () {
+      return o.text ? '' : { ok: false, error: o.offline || 'No connection to the server.' };
+    });
   }
 
   function api(action, body, asText) {
-    var opts = { credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } };
-    var url = '/dashboard/api/' + action;
+    var url = '/dashboard/api/' + action, json;
     if (body !== undefined) {
-      opts.method = 'POST';
-      opts.headers['Content-Type'] = 'application/json';
       if (state.page && body && typeof body === 'object' && !body.page && body.page_id === undefined) body.page_id = state.page.id;
-      opts.body = JSON.stringify(body);
+      json = body;
     } else if (state.page) {
       url += (url.indexOf('?') === -1 ? '?' : '&') + 'page=' + state.page.id;
     }
-    return fetch(url, opts).then(function (r) {
-      if (asText) return r.text();
-      return r.json().catch(function () { return { ok: false, error: 'Unexpected response from the server.' }; });
-    }).catch(function () {
-      return asText ? '' : { ok: false, error: 'No connection to the server.' };
-    });
+    return request(url, { json: json, text: !!asText });
   }
   function apiGet(action) { return api(action); }
 
@@ -118,9 +139,7 @@
     fd.append('kind', kind);
     fd.append('file', file);
     if (state.page) fd.append('page_id', state.page.id);
-    return fetch('/dashboard/api/upload', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-CSRF-Token': E.csrf } })
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, error: 'Upload failed (connection error).' }; });
+    return request('/dashboard/api/upload', { form: fd, offline: 'Upload failed (connection error).' });
   }
 
   function pickFile(accept, multiple) {
@@ -313,6 +332,7 @@
     dirty = true;
     version++;
     setSaveState('dirty');
+    draft.later();
     if (!opts || opts.preview !== false) preview.schedule(opts && opts.fast ? 120 : 380);
     if (activeTab === 'design') refreshMinisSoon();
   }
@@ -378,6 +398,8 @@
       }
       var map = res.idmap || {};
       Object.keys(map).forEach(function (oldId) {
+        // Für Dialoge, die während des Speicherns offen waren: neue Blöcke heißen jetzt anders
+        renamed[oldId] = map[oldId];
         if (openBlocks[oldId]) { openBlocks[map[oldId]] = true; delete openBlocks[oldId]; }
         if (extrasTab[oldId]) { extrasTab[map[oldId]] = extrasTab[oldId]; delete extrasTab[oldId]; }
       });
@@ -395,6 +417,7 @@
         setSaveState('dirty');
       }
       state.blocks.forEach(function (b) { if (b.password) { b.password = ''; b.has_password = true; } });
+      draft.pageSaved(res.page, res.blocks);
       updatePageInfo();
       renderBlocks();
       preview.refresh();
@@ -405,13 +428,20 @@
 
   $('#saveBtn').addEventListener('click', save);
 
-  var leaving = false; // nach „Trotzdem wechseln?“ nicht ein zweites Mal fragen
-  window.addEventListener('beforeunload', function (ev) {
-    if (!leaving && (dirty || codeUnsaved())) { ev.preventDefault(); ev.returnValue = ''; }
+  // Wache gegen das Verlassen mit ungespeicherten Änderungen (Links, Formulare, Seitenwechsel im Code). Ungespeichertes
+  // liegt als Entwurf im Browser – dann fragt der Browser beim Schließen des Tabs nicht mehr (D19), nur wenn das
+  // Sichern scheitert. „Leave without saving“ löscht den Entwurf.
+  var guard = window.OYSUI.guard({
+    isDirty: function () { return dirty || codeUnsaved(); },
+    onDiscard: function () { draft.discard(); },
+    keepsDraft: function () { return draft.flush(); }
   });
+
   document.addEventListener('keydown', function (ev) {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); save(); }
-    if (ev.key === 'Escape') { closeModal(); closeDropdowns(); }
+    // Strg+S speichert nie die Seite des Browsers; unter einem offenen Dialog wird nicht gespeichert
+    if ((ev.ctrlKey || ev.metaKey) && ev.key && ev.key.toLowerCase() === 's') { ev.preventDefault(); if (!UI.isOpen()) save(); return; }
+    // Escape schließt Fenster über ui.js (oberste Ebene); hier nur die Menüs
+    if (ev.key === 'Escape' && !UI.isOpen()) closeDropdowns();
   });
 
   // ================================================================
@@ -440,8 +470,9 @@
       body.entrance = opts.entrance ? 'show' : 'skip';
       api('preview', body, true).then(function (html) {
         if (id !== seq || !html) return;
-        if (html.charAt(0) === '{') {
-          try { var err = JSON.parse(html); toast(err.error || 'Preview failed.', 'err'); } catch (e) { /* egal */ }
+        // Fehler kommen als JSON (über UI.handle(): bei abgelaufener Sitzung der Dialog statt vieler Hinweise)
+        if (typeof html !== 'string') {
+          toast(html.error || 'Preview failed.', 'err');
           if (live) live.classList.remove('busy');
           return;
         }
@@ -572,11 +603,27 @@
     }).join('');
   }
 
+  function pageById(id) {
+    for (var i = 0; i < state.pages.length; i++) if (state.pages[i].id === id) return state.pages[i];
+    return null;
+  }
+
+  // Editor neu laden – auch wenn das Ziel nur im Anker von der aktuellen Adresse abweicht (das lädt sonst nicht neu)
+  function reloadTo(url) {
+    var u = new URL(url, location.href);
+    if (u.pathname !== location.pathname || u.search !== location.search) return guard.navigate(u.href, { force: true });
+    if (history.replaceState) history.replaceState(null, '', u.hash || location.pathname + location.search);
+    return guard.reload({ force: true });
+  }
+
   function goToPage(id) {
     if (state.page && id === state.page.id) return;
-    if ((dirty || codeUnsaved()) && !confirm('You have unsaved changes. Switch pages anyway?')) return;
-    leaving = true;
-    location.href = '/dashboard?page=' + id + location.hash;
+    guard.confirm({ title: 'Switch pages?', text: 'You have unsaved changes. They’re lost if you switch now.', ok: 'Switch without saving', cancel: 'Stay', tone: 'danger' })
+      .then(function (ok) {
+        // Nach dem Dialog: das Ziel gibt es noch und es ist nicht die aktuelle Seite
+        if (!ok || !pageById(id) || (state.page && id === state.page.id)) return;
+        guard.navigate('/dashboard?page=' + id + location.hash, { force: true });
+      });
   }
 
   function renderPageMenu() {
@@ -598,7 +645,11 @@
     $('#pageMenu').innerHTML = html;
   }
 
-  function closeDropdowns() { $$('.dropdown').forEach(function (d) { d.classList.add('hidden'); }); }
+  // Alle Menüs zu; die Glocke über bell.js, damit aria-expanded stimmt und der Fokus nicht in einer versteckten Liste bleibt
+  function closeDropdowns() {
+    if (bell) bell.close();
+    $$('.dropdown').forEach(function (d) { d.classList.add('hidden'); });
+  }
 
   document.addEventListener('click', function (ev) {
     var t = ev.target;
@@ -609,13 +660,8 @@
       if (wasHidden) { renderPageMenu(); menu.classList.remove('hidden'); }
       return;
     }
-    if (t.closest('#bellBtn')) {
-      var bm = $('#bellMenu');
-      var hid = bm.classList.contains('hidden');
-      closeDropdowns();
-      if (hid) { bm.classList.remove('hidden'); loadNotifications(true); }
-      return;
-    }
+    // Die Glocke (bell.js) öffnet und schließt ihre Liste selbst
+    if (t.closest('[data-bell]')) return;
     var pageBtn = t.closest('[data-page]');
     if (pageBtn) { closeDropdowns(); goToPage(Number(pageBtn.dataset.page)); return; }
     var act = t.closest('[data-action]');
@@ -628,62 +674,56 @@
       case 'new-page': closeDropdowns(); openNewPageModal(); break;
       case 'add-block': openAddBlockModal(); break;
       case 'quick-add': quickAdd(); break;
-      case 'notif-read':
-        api('notifications-read', {}).then(function () { loadNotifications(true); });
-        break;
-      case 'open-messages': closeDropdowns(); switchTab('messages'); break;
       case 'share': openShareModal(); break;
       case 'honeycombs': openHoneycombs(); break;
       case 'open-code': closeModal(); switchTab('code'); break;
     }
   }
 
-  // Glocke
-  var lastUnread = -1;
-  function loadNotifications(render) {
-    apiGet('notifications').then(function (res) {
-      if (!res || !res.ok) return;
-      var badge = $('#bellBadge');
-      badge.hidden = !res.unread;
-      badge.textContent = res.unread > 9 ? '9+' : res.unread;
-      if (lastUnread >= 0 && res.unread > lastUnread) {
-        var bell = $('#bellBtn i');
-        bell.classList.remove('bell-ring'); void bell.offsetWidth; bell.classList.add('bell-ring');
-        toast('New notification: ' + (res.items[0] ? res.items[0].title : ''), 'info');
+  // Glocke (static/js/bell.js): fragt selbst ab – jede Minute, sofort beim Zurückkehren in den Tab, auch ohne Seite.
+  // Ihre Ziele öffnen über OYSUI.openLink() die Bereiche hier (DEEP_LINKS); neue Nachrichten laden den offenen Eingang neu.
+  var bell = null;
+  function startBell() {
+    if (!window.OYSBell) return;
+    bell = window.OYSBell.mount($('[data-bell]'), {
+      onOpen: closeDropdowns,
+      onAnswer: function (res) {
+        var nb = $('#navMsgBadge');
+        nb.hidden = !res.messages_unread;
+        nb.textContent = res.messages_unread;
+      },
+      onNew: function (list) {
+        if (activeTab === 'messages' && list.some(function (n) { return n.type === 'message' || n.type === 'booking'; })) loadMessages();
       }
-      lastUnread = res.unread;
-      var nb = $('#navMsgBadge');
-      nb.hidden = !res.messages_unread;
-      nb.textContent = res.messages_unread;
-      if (!render) return;
-      var html = '<div class="dd-head">Notifications' + (res.unread ? '<button type="button" data-action="notif-read">Mark all as read</button>' : '') + '</div>';
-      if (!res.items.length) {
-        html += '<div class="empty-state" style="padding:24px 10px"><i class="bx bx-bell-off"></i>Nothing new yet.</div>';
-      } else {
-        html += '<div class="max-h-96 overflow-y-auto custom-scrollbar">' + res.items.map(function (n) {
-          var ic = n.type === 'booking' ? 'bx-calendar-check' : n.type === 'message' ? 'bx-envelope' : 'bx-bell';
-          return '<button type="button" class="notif w-full text-left' + (n.read ? '' : ' unread') + '" data-action="open-messages"><span class="ni"><i class="bx ' + ic + '"></i></span><span class="min-w-0"><b>' + esc(n.title) + '</b>' + (n.body ? '<p>' + esc(n.body) + '</p>' : '') + '<small>' + esc(n.ago) + '</small></span></button>';
-        }).join('') + '</div>';
-      }
-      $('#bellMenu').innerHTML = html;
     });
   }
+  function refreshBell() { if (bell) bell.poll(); }
 
   // ================================================================
   // Modal
   // ================================================================
+  // Das Fenster des Editors (#modal) ist eine Ebene von ui.js: Fokus bleibt darin, Escape und die Zurück-Geste
+  // schließen es, der Hintergrund ist inert, und beim Schließen kehrt der Fokus zum Auslöser zurück
+  var modalLayer = null;
   function openModal(title, bodyHtml, footHtml, onMount) {
     var box = $('#modalBox');
     shareOpen = null;
     box.classList.remove('wide');
-    box.innerHTML = '<div class="modal-head"><h3>' + esc(title) + '</h3><button type="button" class="icon-btn" data-close><i class="bx bx-x"></i></button></div>' +
+    box.innerHTML = '<div class="modal-head"><h3 id="modalTitle">' + esc(title) + '</h3><button type="button" class="icon-btn" data-close aria-label="Close"><i class="bx bx-x"></i></button></div>' +
       '<div class="modal-body">' + bodyHtml + '</div>' + (footHtml ? '<div class="modal-foot">' + footHtml + '</div>' : '');
     $('#modal').classList.remove('hidden');
+    if (!modalLayer) modalLayer = UI.layer($('#modal'), { labelledBy: 'modalTitle', onEscape: closeModal });
     if (onMount) onMount(box);
     var first = $('input, textarea', box);
     if (first) setTimeout(function () { first.focus(); }, 40);
   }
-  function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; $('#modalBox').classList.remove('wide'); shareOpen = null; }
+  function closeModal() {
+    $('#modal').classList.add('hidden');
+    $('#modalBox').innerHTML = '';
+    $('#modalBox').classList.remove('wide');
+    shareOpen = null;
+    if (modalLayer) { var l = modalLayer; modalLayer = null; l.release(); }
+  }
   $('#modal').addEventListener('click', function (ev) {
     // Beim Zuschneiden endet ein Ziehen manchmal neben dem Fenster – das soll es nicht schließen
     if ((ev.target.id === 'modal' && Date.now() - cropGuard > 400) || ev.target.closest('[data-close]')) closeModal();
@@ -705,13 +745,27 @@
         slug.addEventListener('input', function () { slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, ''); });
         var go = function () {
           var btn = $('#npCreate', box);
-          btn.disabled = true;
-          api('page-create', { slug: slug.value, title: $('#npTitle', box).value, page_id: 0 }).then(function (res) {
-            btn.disabled = false;
-            if (res && res.ok) { dirty = false; location.href = '/dashboard?page=' + res.id; return; }
-            var err = $('#npErr', box);
-            err.textContent = (res && res.error) || 'That didn’t work.';
-            err.classList.remove('hidden');
+          if (btn.disabled) return;
+          // Ungespeichertes gibt es auf der neuen Seite nicht: vorher fragen (eine inzwischen fertige Speicherung → keine Frage)
+          var ask = guard.isDirty()
+            ? UI.confirm({ title: 'Create the page without saving?', text: 'You have unsaved changes on this page. They’re lost if you continue.', ok: 'Create without saving', tone: 'danger' })
+            : Promise.resolve(true);
+          ask.then(function (ok) {
+            if (!ok || !box.contains(btn) || btn.disabled) return;
+            btn.disabled = true;
+            api('page-create', { slug: slug.value, title: $('#npTitle', box).value, page_id: 0 }).then(function (res) {
+              btn.disabled = false;
+              if (res && res.ok) {
+                // Die ungespeicherten Änderungen wurden verworfen: ihr Entwurf geht mit
+                draft.discard();
+                guard.navigate('/dashboard?page=' + res.id, { force: true });
+                return;
+              }
+              var err = $('#npErr', box);
+              if (!err) return;
+              err.textContent = (res && res.error) || 'That didn’t work.';
+              err.classList.remove('hidden');
+            });
           });
         };
         $('#npCreate', box).addEventListener('click', go);
@@ -1025,10 +1079,11 @@
       $('#pvLiveLabel').textContent = 'Live preview';
       preview.refreshIfStale();
     }
+    // Nachrichten und Termine gehören zum Konto: auch ohne Seite
+    if (name === 'messages') loadMessages();
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
-    if (name === 'messages') loadMessages();
     if (name === 'settings') renderSettings();
   }
   $$('#mainNav .nav-btn[data-tab]').forEach(function (b) { b.addEventListener('click', function () { switchTab(b.dataset.tab); }); });
@@ -1143,21 +1198,37 @@
     var url = normalizeUrl(input.value);
     if (!url) { input.focus(); return; }
     var embed = detectEmbed(url);
-    var b;
-    if (embed && /youtube\.com\/watch|youtu\.be\/|twitch\.tv\/(videos|[a-z0-9_]+\/clip)|open\.spotify\.com\/(intl-[a-z-]+\/)?(track|album|playlist|episode|show)/i.test(url) &&
-        confirm('This looks like ' + TYPES[embed].name + '. Embed it right on your page? (Cancel = add it as a normal link)')) {
-      b = newBlock(embed, { url: url, provider: embed });
-    } else {
-      var br = detectBrand(url);
-      var title = br ? brand(br).name : prettyUrl(url).split('/')[0];
-      b = newBlock('link', { url: url, title: title });
-    }
-    state.blocks.push(b);
-    input.value = '';
-    openBlocks[b.id] = true;
-    renderBlocks();
-    markDirty({ fast: true });
-    scrollToBlock(b.id);
+    var canEmbed = embed && /youtube\.com\/watch|youtu\.be\/|twitch\.tv\/(videos|[a-z0-9_]+\/clip)|open\.spotify\.com\/(intl-[a-z-]+\/)?(track|album|playlist|episode|show)/i.test(url);
+    // Zwei Wege statt OK/Abbrechen: ✕ und Escape fügen nichts hinzu, die Adresse bleibt im Feld
+    var ask = canEmbed
+      ? UI.choice({
+        title: 'Embed this ' + TYPES[embed].name + ' link?',
+        text: 'Show it right on your page, or add it as a normal link button.',
+        options: [{ value: 'link', text: 'Add as link' }, { value: 'embed', text: 'Embed it', primary: true }],
+        fallbackFocus: function () { return $('#quickUrl'); }
+      })
+      : Promise.resolve('link');
+    ask.then(function (how) {
+      var field = $('#quickUrl');
+      if (how === null) { if (field) field.focus(); return; }
+      // Nach dem Dialog: es gibt noch eine Seite; der Block kommt in die aktuelle Liste
+      if (!state.page) return;
+      var b;
+      if (how === 'embed') {
+        b = newBlock(embed, { url: url, provider: embed });
+      } else {
+        var br = detectBrand(url);
+        var title = br ? brand(br).name : prettyUrl(url).split('/')[0];
+        b = newBlock('link', { url: url, title: title });
+      }
+      state.blocks.push(b);
+      // Das Feld nur leeren, wenn darin noch dieselbe Adresse steht
+      if (field && normalizeUrl(field.value) === url) field.value = '';
+      openBlocks[b.id] = true;
+      renderBlocks();
+      markDirty({ fast: true });
+      scrollToBlock(b.id);
+    });
   }
 
   function scrollToBlock(id) {
@@ -1573,10 +1644,25 @@
     }
     if (action === 'visible') { b.visible = !b.visible; rerenderBlock(b); markDirty({ fast: true }); return; }
     if (action === 'del') {
-      if (!confirm('Delete this block?')) return;
-      state.blocks = state.blocks.filter(function (x) { return x !== b; });
-      renderBlocks();
-      markDirty({ fast: true });
+      var delId = b.id;
+      UI.confirm({
+        title: 'Delete this block?', text: 'It’s removed from your page when you save.', ok: 'Delete', tone: 'danger',
+        // Der Knopf ist nach dem Löschen weg: Fokus auf den nächsten Block oder „Add block“
+        fallbackFocus: function () { return $('#blockList .blk-head [data-blk="toggle"]') || $('[data-action="add-block"]'); }
+      }).then(function (yes) {
+        if (!yes) return;
+        // Während des Dialogs kann eine Speicherung die Blöcke ersetzt haben: über die ID neu suchen
+        var cur = findBlock(renamed[delId] || delId);
+        if (!cur) return;
+        var idx = state.blocks.indexOf(cur);
+        state.blocks = state.blocks.filter(function (x) { return String(x.id) !== String(cur.id); });
+        renderBlocks();
+        markDirty({ fast: true });
+        // Der Knopf ist mit dem Block verschwunden: Fokus auf den Block an seiner Stelle (sonst „Add block“)
+        var heads = $$('#blockList .blk-head [data-blk="toggle"]');
+        var next = heads[Math.min(idx, heads.length - 1)] || $('[data-action="add-block"]');
+        if (next) next.focus({ preventScroll: true });
+      });
       return;
     }
     if (action === 'dup') {
@@ -2044,20 +2130,27 @@
   // ================================================================
   // Tab: Nachrichten
   // ================================================================
-  function loadMessages() {
+  // refocus: nach dem Löschen – der Knopf verschwand mit der Zeile, der Fokus bleibt in der Liste
+  function loadMessages(refocus) {
     var root = $('#tab-messages');
     if (!root.innerHTML) root.innerHTML = '<div class="empty-state"><i class="bx bx-loader-alt bx-spin"></i>Loading messages…</div>';
     apiGet('messages').then(function (res) {
       if (!res || !res.ok) { root.innerHTML = '<div class="empty-state">Couldn’t load messages.</div>'; return; }
       renderMessages(res);
-      loadNotifications(false);
+      refreshBell();
+      var a = document.activeElement;
+      if (refocus === true && (!a || a === document.body || !a.isConnected)) {
+        var n = $('#tab-messages [data-msg-act], #tab-messages [data-booking-del]') || $('#mainNav [data-tab="messages"]');
+        if (n) n.focus({ preventScroll: true });
+      }
     });
   }
 
   function renderMessages(res) {
     var root = $('#tab-messages');
     var unread = res.messages.filter(function (m) { return !m.read; }).length;
-    var hasContact = state.blocks.some(function (b) { return b.type === 'contact'; });
+    // Ohne Seite gibt es nichts, wohin ein Kontaktformular käme
+    var hasContact = !state.page || state.blocks.some(function (b) { return b.type === 'contact'; });
     root.innerHTML =
       '<h2 class="section-title">Messages <small>' + (unread ? plural(unread, 'unread', 'unread') : 'All read') + '</small></h2>' +
       (!hasContact ? '<div class="panel mb-4 flex flex-wrap items-center gap-3 justify-between"><span class="text-sm text-gray-400"><i class="bx bx-info-circle text-brand-400"></i> Add a <b class="text-white">contact form</b> to your page so visitors can message you.</span><button type="button" class="btn-secondary" id="addContact"><i class="bx bx-plus"></i> Contact form</button></div>' : '') +
@@ -2090,14 +2183,38 @@
       btn.addEventListener('click', function () {
         var id = Number(btn.closest('[data-msg]').dataset.msg);
         var act = btn.dataset.msgAct;
-        if (act === 'delete' && !confirm('Delete this message?')) return;
-        api('message', { id: id, action: act }).then(function () { loadMessages(); });
+        if (act !== 'delete') { api('message', { id: id, action: act }).then(function () { loadMessages(); }); return; }
+        var m = res.messages.filter(function (x) { return x.id === id; })[0] || {};
+        // Löschen läuft im Dialog; der Server löscht nach ID und Konto (mehrfach unschädlich)
+        UI.confirm({
+          title: 'Delete this message?', text: 'The message from ' + (m.name || 'this visitor') + ' is deleted for good.', ok: 'Delete', tone: 'danger',
+          fallbackFocus: function () { return $('#tab-messages [data-msg-act]') || $('#mainNav [data-tab="messages"]'); },
+          onConfirm: function () {
+            return api('message', { id: id, action: 'delete' }).then(function (r) {
+              if (!r || !r.ok) return (r && r.error) || 'Something went wrong. Please try again.';
+              toast('Message deleted.');
+              loadMessages(true);
+            });
+          }
+        });
       });
     });
     $$('[data-booking-del]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        if (!confirm('Delete this booking request?')) return;
-        api('booking-delete', { id: Number(btn.dataset.bookingDel) }).then(function () { loadMessages(); });
+        var id = Number(btn.dataset.bookingDel);
+        var bk = res.bookings.filter(function (x) { return x.id === id; })[0] || {};
+        UI.confirm({
+          title: 'Delete this booking request?', text: [bk.date, bk.time].filter(Boolean).join(' · ') + ' from ' + (bk.name || 'this visitor') + ' is deleted for good.',
+          ok: 'Delete', tone: 'danger',
+          fallbackFocus: function () { return $('#tab-messages [data-booking-del]') || $('#mainNav [data-tab="messages"]'); },
+          onConfirm: function () {
+            return api('booking-delete', { id: id }).then(function (r) {
+              if (!r || !r.ok) return (r && r.error) || 'Something went wrong. Please try again.';
+              toast('Booking request deleted.');
+              loadMessages(true);
+            });
+          }
+        });
       });
     });
   }
@@ -2213,6 +2330,7 @@
       if (!res || !res.ok) { root.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>Couldn’t load your code page – please reload.</div>'; return; }
       setCodeState(res);
       renderCode();
+      draft.offerCode();
     });
   }
 
@@ -2475,6 +2593,7 @@
   function codeChanged() {
     setCodeSaveState(codeUnsaved() ? 'dirty' : '');
     renderCodeFilesSoon();
+    draft.later();
   }
 
   function openCodeFile(p) {
@@ -2524,12 +2643,16 @@
   }
 
   function deleteCodeFile() {
-    var p = code.cur;
-    if (p === 'index.html' || !confirm('Delete ' + p + '? It’s removed from your page when you save.')) return;
-    delete code.files[p];
-    delete code.docs[p];
-    openCodeFile('index.html');
-    codeChanged();
+    var p = code.cur, siteId = code.st && code.st.site ? code.st.site.id : 0;
+    if (p === 'index.html') return;
+    UI.confirm({ title: 'Delete ' + p + '?', text: 'It’s removed from your code page when you save.', ok: 'Delete file', tone: 'danger' }).then(function (yes) {
+      // Nach dem Dialog: dieselbe Code-Seite, die Datei gibt es noch
+      if (!yes || !code.st || !code.st.site || code.st.site.id !== siteId || !has(code.files, p) || p === 'index.html') return;
+      delete code.files[p];
+      delete code.docs[p];
+      if (code.cur === p) openCodeFile('index.html'); else renderCodeFiles();
+      codeChanged();
+    });
   }
 
   function insertCodeImage() {
@@ -2569,6 +2692,7 @@
       setCodeSaveState(codeUnsaved() ? 'dirty' : 'saved');
       renderCodeFiles();
       codePreview(true);
+      draft.codeSaved();
       toast('Saved – your code page is up to date.');
     });
   }
@@ -2604,13 +2728,18 @@
         });
         break;
       case 'address':
-        var slug = $('#codeSlugEdit').value;
+        var slug = $('#codeSlugEdit').value, siteId = code.st.site.id;
         if (slug === code.st.site.slug) return;
-        if (!confirm('Move your code page to ' + slug + '.' + E.baseHost + '? The old address stops working right away.')) return;
-        codeSettings('code-address', { slug: slug }, function (res) {
-          $('#codeSlugEdit').value = res.site.slug;
-          codePreview(true);
-          toast('Your code page is now at ' + prettyUrl(res.site.url) + '.');
+        UI.confirm({ title: 'Move your code page?', text: 'New address: ' + slug + '.' + E.baseHost + '. The old address stops working right away.', ok: 'Move', tone: 'warn' }).then(function (yes) {
+          // Nach dem Dialog: dieselbe Code-Seite, im Feld steht noch die bestätigte Adresse, und sie ist neu
+          var field = $('#codeSlugEdit');
+          if (!yes || !code.st || !code.st.site || code.st.site.id !== siteId || !field || field.value !== slug || slug === code.st.site.slug) return;
+          codeSettings('code-address', { slug: slug }, function (res) {
+            var f = $('#codeSlugEdit');
+            if (f) f.value = res.site.slug;
+            codePreview(true);
+            toast('Your code page is now at ' + prettyUrl(res.site.url) + '.');
+          });
         });
         break;
     }
@@ -2648,10 +2777,12 @@
     var url = codeUrl(), big = $('#bigPreviewFrame');
     if (!url) return;
     big.removeAttribute('srcdoc');
-    big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+    // Ohne allow-modals: Browser-Popups aus dem Code des Nutzers (alert, confirm, prompt) öffnen im Editor keine
+    // Fenster – sie erschienen sonst über on-your.site/dashboard. Auf der Live-Seite dürfen sie (D18).
+    big.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
     big.src = codePreviewSrc();
     $('#bigPreviewUrl').textContent = prettyUrl(url);
-    $('#bigPreview').classList.remove('hidden');
+    openBig();
   }
 
   // ================================================================
@@ -2799,13 +2930,23 @@
     });
     $$('[data-del-page]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var s2 = btn.dataset.slug;
-        var typed = prompt('Delete page “' + s2 + '” with all its blocks, stats and messages?\nType the address to confirm: ' + s2);
-        if (typed === null) return;
-        api('page-delete', { id: Number(btn.dataset.delPage), confirm: typed.trim() }).then(function (res) {
-          if (!res || !res.ok) { toast((res && res.error) || 'Something went wrong.', 'err'); return; }
-          dirty = false;
-          location.href = '/dashboard#settings';
+        var s2 = btn.dataset.slug, delId = Number(btn.dataset.delPage), deleted = false;
+        // Bestätigen durch Tippen der Adresse; der Server prüft sie noch einmal. Fehler bleiben im Dialog.
+        UI.prompt({
+          title: 'Delete page “' + s2 + '”?',
+          text: 'All its blocks, stats and messages are deleted. This can’t be undone.',
+          match: s2, normalize: 'slug', transform: 'slug', ok: 'Delete page', tone: 'danger',
+          fallbackFocus: function () { return $('#settingsDynamic [data-del-page]') || $('#mainNav [data-tab="settings"]'); },
+          onConfirm: function (typed) {
+            return api('page-delete', { id: delId, confirm: typed }).then(function (res) {
+              if (!res || !res.ok) return (res && res.error) || 'Something went wrong. Please try again.';
+              deleted = true;
+              draft.dropPage(delId);
+            });
+          }
+        }).then(function () {
+          // Entwürfe anderer Seiten bleiben und werden nach dem Neuladen angeboten
+          if (deleted) reloadTo('/dashboard#settings');
         });
       });
     });
@@ -2845,14 +2986,26 @@
   // ================================================================
   $('#pvReload').addEventListener('click', function () { if (activeTab === 'code') codePreview(true); else preview.refresh(); });
   $('#pvEntrance').addEventListener('click', function () { preview.refresh({ entrance: true, top: true }); });
+  // Große Ansicht und Handy-Vorschau sind Ebenen von ui.js: Escape und die Zurück-Geste schließen sie
+  var bigLayer = null, mobileLayer = null;
+  function openBig() {
+    $('#bigPreview').classList.remove('hidden');
+    if (!bigLayer) bigLayer = UI.layer($('#bigPreview'), { onEscape: closeBig });
+  }
+  function closeBig() {
+    $('#bigPreview').classList.add('hidden');
+    $('#bigPreviewFrame').srcdoc = '';
+    if (bigLayer) { var l = bigLayer; bigLayer = null; l.release(); }
+  }
   $('#pvBig').addEventListener('click', function () {
     if (activeTab === 'code') { openCodeBig(); return; }
     $('#bigPreviewFrame').removeAttribute('sandbox');
-    $('#bigPreview').classList.remove('hidden');
+    openBig();
     $('#bigPreviewFrame').srcdoc = preview.html();
   });
-  $('#bigPreviewClose').addEventListener('click', function () { $('#bigPreview').classList.add('hidden'); $('#bigPreviewFrame').srcdoc = ''; });
-  $('#bigPreview').addEventListener('click', function (ev) { if (ev.target.id === 'bigPreview') $('#bigPreviewClose').click(); });
+  $('#bigPreviewClose').setAttribute('aria-label', 'Close');
+  $('#bigPreviewClose').addEventListener('click', closeBig);
+  $('#bigPreview').addEventListener('click', function (ev) { if (ev.target.id === 'bigPreview') closeBig(); });
 
   // Auf kleinen Bildschirmen: Vorschau als Vollbild
   var pane = $('#previewPane');
@@ -2860,14 +3013,265 @@
   $('#mobilePreviewBtn').addEventListener('click', function () {
     $('#mobilePreviewHolder').appendChild(pane);
     $('#mobilePreview').classList.remove('hidden');
+    if (!mobileLayer) mobileLayer = UI.layer($('#mobilePreview'), { onEscape: closeMobilePreview });
     setTimeout(function () { fitPhone(); preview.refreshIfStale(); }, 30);
   });
   // Auf dem Handy sitzt „Preview“ in der Leiste unten
   $('#navPreviewBtn').addEventListener('click', function () { $('#mobilePreviewBtn').click(); });
-  $('#mobilePreviewClose').addEventListener('click', function () {
+  function closeMobilePreview() {
     $('#mobilePreview').classList.add('hidden');
     paneHome.appendChild(pane);
+    if (mobileLayer) { var l = mobileLayer; mobileLayer = null; l.release(); }
+  }
+  $('#mobilePreviewClose').setAttribute('aria-label', 'Close');
+  $('#mobilePreviewClose').addEventListener('click', closeMobilePreview);
+
+  // ================================================================
+  // Ziele im Editor (/dashboard#<ziel>[/<argument>]) – aus der Glocke, aus Hinweisen und beim Laden
+  // ================================================================
+  // Weitere Ziele tragen die Funktionen hier ein (z. B. honeycombs/<feature>, settings/domain, status/system)
+  var DEEP_LINKS = {
+    content: function () { switchTab('content'); },
+    design: function () { if (state.page) switchTab('design'); },
+    stats: function () { if (state.page) switchTab('stats'); },
+    messages: function () { switchTab('messages'); },
+    code: function () { switchTab('code'); },
+    settings: function () { if (state.page) switchTab('settings'); },
+    honeycombs: function () { openHoneycombs(); }
+  };
+  // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
+  var OLD_TARGETS = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' };
+  function deepLink(hash) {
+    var m = /^#?([a-z]+)(?:\/([a-z0-9_-]+))?$/.exec(hash || '');
+    if (!m) return false;
+    var target = OLD_TARGETS[m[1]] || m[1];
+    if (!has(DEEP_LINKS, target)) return false;
+    closeDropdowns();
+    DEEP_LINKS[target](m[2] || '');
+    return true;
+  }
+  // Ein Ziel ohne ?page= meint diesen Editor; mit ?page= nur, wenn es die offene Seite ist (sonst neu laden über die Wache)
+  UI.onLink(function (url) {
+    if (url.pathname !== '/dashboard') return false;
+    var pm = /^\?page=(\d+)$/.exec(url.search);
+    if (url.search && !(pm && state.page && Number(pm[1]) === state.page.id)) return false;
+    if (!url.hash) return false;
+    return deepLink(url.hash);
   });
+
+  // ================================================================
+  // Entwürfe: ungespeicherte Arbeit bleibt im Browser (Absturz, geschlossener Tab, abgelaufene Sitzung)
+  // ================================================================
+  // oys.draft.<Konto>.<Seite> = {v: 1, at, base, page} (payload() ohne Passwörter) und oys.draft.<Konto>.code.<Code-Seite>
+  // = {v: 1, at, base, site, files, deleted} (nur geänderte und gelöschte Dateien). base: Prüfsumme des Stands vom
+  // Server, auf dem die Änderungen aufbauen. Nach 7 Tagen weg; nie an den Server geschickt; je Konto getrennt.
+  var draft = (function () {
+    var uid = E.user && /^\d+$/.test(String(E.user.id)) ? String(E.user.id) : '';
+    var PREFIX = 'oys.draft.', MAX_AGE = 7 * 864e5;
+    var timer = null, pageKept = true, codeKept = true, discarded = false, pageGone = false;
+    // Stand vom Server, auf dem die Änderungen der Seite aufbauen (bei der Code-Seite ist das code.saved)
+    var pageBase = '';
+
+    function store() { try { return window.localStorage || null; } catch (e) { return null; } }
+    function get(key) {
+      var s = store();
+      if (!s) return null;
+      try { var v = JSON.parse(s.getItem(key) || 'null'); return v && typeof v === 'object' && v.v === 1 ? v : null; } catch (e) { return null; }
+    }
+    function put(key, value) {
+      var s = store();
+      if (!s) return false;
+      try { s.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
+    }
+    function drop(key) { var s = store(); if (s) { try { s.removeItem(key); } catch (e) { /* egal */ } } }
+    function keys() {
+      var s = store(), out = [];
+      if (!s) return out;
+      try { for (var i = 0; i < s.length; i++) { var k = s.key(i); if (k && k.indexOf(PREFIX) === 0) out.push(k); } } catch (e) { /* egal */ }
+      return out;
+    }
+    function pageKey(id) { return PREFIX + uid + '.' + id; }
+    function codeKey(id) { return PREFIX + uid + '.code.' + id; }
+
+    // Kurze Prüfsumme (FNV-1a, 32 Bit) über den bearbeitbaren Inhalt
+    function hash(s) {
+      var h = 0x811c9dc5;
+      for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return ('0000000' + h.toString(16)).slice(-8);
+    }
+    function contentOf(page, blocks) {
+      return JSON.stringify({
+        page: { title: page.title, subtitle: page.subtitle, bio: page.bio, avatar: page.avatar, bg_image: page.bg_image, theme: page.theme, layout: page.layout, settings: page.settings },
+        blocks: blocks.map(function (b) { return { id: b.id, type: b.type, visible: b.visible, data: b.data, schedule: b.schedule, protection: b.protection, has_password: !!b.has_password, effect: b.effect }; })
+      });
+    }
+    function pageHash(page, blocks) { return hash(contentOf(page, blocks)); }
+    function codeHash(files) {
+      var ks = Object.keys(files || {}).sort(), parts = [];
+      ks.forEach(function (k) { parts.push(k, files[k]); });
+      return hash(JSON.stringify(parts));
+    }
+    function codeSiteId() { return code.st && code.st.site ? code.st.site.id : 0; }
+
+    // Seite: payload() ohne Passwörter (geschützte Links fragen beim Speichern wieder danach).
+    // 'ok' gesichert (oder nichts zu sichern) · 'squeezed' erst nach dem Löschen der Code-Entwürfe · 'fail'
+    function writePage() {
+      if (!state.page || pageGone) return 'ok';
+      if (!dirty) { drop(pageKey(state.page.id)); return 'ok'; }
+      var p = payload();
+      p.blocks.forEach(function (b) { b.password = ''; });
+      var value = { v: 1, at: Date.now(), base: pageBase, page: p };
+      if (put(pageKey(state.page.id), value)) return 'ok';
+      // Speicher voll: zuerst die Code-Entwürfe dieses Kontos opfern, dann aufgeben
+      keys().forEach(function (k) { if (k.indexOf(PREFIX + uid + '.code.') === 0) drop(k); });
+      return put(pageKey(state.page.id), value) ? 'squeezed' : 'fail';
+    }
+    function writeCode() {
+      var id = codeSiteId();
+      if (!id) return true;
+      if (!codeUnsaved()) { drop(codeKey(id)); return true; }
+      var files = {}, deleted = [];
+      Object.keys(code.files).forEach(function (p) { if (code.files[p] !== code.saved[p]) files[p] = code.files[p]; });
+      Object.keys(code.saved).forEach(function (p) { if (!has(code.files, p)) deleted.push(p); });
+      return put(codeKey(id), { v: 1, at: Date.now(), base: codeHash(code.saved), site: id, files: files, deleted: deleted });
+    }
+    function write() {
+      clearTimeout(timer);
+      timer = null;
+      if (!uid || discarded) return;
+      var r = writePage();
+      pageKept = r !== 'fail';
+      codeKept = r === 'ok' ? writeCode() : !codeUnsaved();
+    }
+
+    // Nach jeder Änderung (gebündelt, 800 ms nach der letzten)
+    function later() {
+      if (!uid) return;
+      discarded = false;
+      pageKept = codeKept = false;
+      clearTimeout(timer);
+      timer = setTimeout(write, 800);
+    }
+    // Sofort sichern (Tab wird verlassen oder versteckt). true: alles Ungespeicherte liegt im Browser – dann ist
+    // das Fenster des Browsers beim Schließen nicht nötig (D19)
+    function flush() {
+      if (!uid || discarded) return false;
+      if (timer || !pageKept || !codeKept) write();
+      return pageKept && codeKept;
+    }
+    // „Leave without saving“ und Ähnliches: die Entwürfe dieser Seite und der Code-Seite verwerfen
+    function discard() {
+      clearTimeout(timer);
+      timer = null;
+      discarded = true;
+      if (!uid) return;
+      if (state.page) drop(pageKey(state.page.id));
+      if (codeSiteId()) drop(codeKey(codeSiteId()));
+    }
+    function dropPage(id) {
+      if (!uid) return;
+      drop(pageKey(id));
+      if (state.page && state.page.id === id) pageGone = true;
+    }
+    // Gespeichert: neuer Stand vom Server; was danach noch ungespeichert ist, kommt wieder in den Entwurf
+    function pageSaved(page, blocks) {
+      pageBase = pageHash(page, blocks.map(function (b) { return normBlock(clone(b)); }));
+      if (!uid || !state.page) return;
+      if (!dirty) { drop(pageKey(state.page.id)); pageKept = true; } else later();
+    }
+    function codeSaved() {
+      if (!uid || !codeSiteId()) return;
+      if (!codeUnsaved()) { drop(codeKey(codeSiteId())); codeKept = true; } else later();
+    }
+
+    function when(at) {
+      var d = new Date(at), now = new Date();
+      var hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      return d.toDateString() === now.toDateString() ? hm : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + hm;
+    }
+    // 'restore' · 'discard' · null (✕, Escape: der Entwurf bleibt bis zur nächsten Änderung)
+    function askRestore(at, changedSince) {
+      return UI.choice({
+        title: 'Restore unsaved changes?',
+        text: 'You have changes from ' + when(at) + ' that weren’t saved.' + (changedSince ? ' This page was saved again after that – restoring replaces that version when you save.' : ''),
+        options: [{ value: 'discard', text: 'Discard' }, { value: 'restore', text: 'Restore', primary: true }]
+      });
+    }
+
+    // Beim Laden: alte Entwürfe weg, den der offenen Seite anbieten, andere Seiten als Hinweis mit „Open“
+    function start() {
+      var now = Date.now();
+      keys().forEach(function (k) {
+        var d = get(k);
+        if (!d || typeof d.at !== 'number' || now - d.at > MAX_AGE || d.at > now + 864e5) drop(k);
+      });
+      if (state.page) pageBase = pageHash(state.page, state.blocks);
+      if (!uid) return;
+      var mine = PREFIX + uid + '.';
+      keys().forEach(function (k) {
+        var rest = k.slice(mine.length);
+        if (k.indexOf(mine) !== 0 || !/^\d+$/.test(rest)) return;
+        var id = Number(rest), p = pageById(id);
+        // Entwürfe gelöschter (oder fremder) Seiten verwerfen
+        if (!p) { drop(k); return; }
+        if (state.page && id === state.page.id) return;
+        toast({ id: 'oys-draft-' + id, text: 'Unsaved changes on “' + (p.title || p.slug) + '”.', tone: 'info', duration: 0,
+          action: { label: 'Open', link: '/dashboard?page=' + id } });
+      });
+      if (!state.page) return;
+      var d = get(pageKey(state.page.id));
+      if (!d || !d.page || !d.page.page || !Array.isArray(d.page.blocks)) return;
+      var pageId = state.page.id;
+      askRestore(d.at, d.base !== pageBase).then(function (how) {
+        if (!state.page || state.page.id !== pageId || !how) return;
+        if (how === 'discard') { drop(pageKey(pageId)); return; }
+        applyPage(d.page);
+      });
+    }
+    // Entwurf übernehmen: Inhalt ersetzen, als ungespeichert markieren – gespeichert wird erst mit „Save“
+    function applyPage(p) {
+      var src = p.page || {}, clicks = {};
+      // Klicks der gespeicherten Blöcke weiter anzeigen
+      state.blocks.forEach(function (b) { clicks[b.id] = b.clicks; });
+      ['title', 'subtitle', 'bio', 'avatar', 'bg_image', 'theme', 'layout'].forEach(function (k) { if (typeof src[k] === 'string') state.page[k] = src[k]; });
+      if (src.settings && typeof src.settings === 'object' && !Array.isArray(src.settings)) state.page.settings = Object.assign({}, state.page.settings, src.settings);
+      state.blocks = p.blocks.filter(function (b) { return b && typeof b === 'object' && typeof b.type === 'string'; }).map(function (b) {
+        var nb = normBlock({ id: b.id, type: b.type, visible: b.visible !== false, data: b.data, schedule: b.schedule, protection: b.protection, effect: b.effect, has_password: !!b.has_password, clicks: clicks[b.id] || 0 });
+        var m = /^n(\d+)$/.exec(String(nb.id));
+        if (m) newCounter = Math.max(newCounter, Number(m[1]));
+        return nb;
+      });
+      updatePageInfo();
+      renderInhalte();
+      renderCurrentTab();
+      markDirty({ fast: true });
+      toast('Unsaved changes restored – save to keep them.', 'info');
+    }
+    // Code-Tab geladen: Entwurf der Code-Seite anbieten (nicht, solange sie gesperrt ist)
+    function offerCode() {
+      var id = codeSiteId();
+      if (!uid || !id || code.st.site.blocked) return;
+      var d = get(codeKey(id));
+      if (!d || !d.files || typeof d.files !== 'object' || !Array.isArray(d.deleted)) return;
+      askRestore(d.at, d.base !== codeHash(code.saved)).then(function (how) {
+        if (codeSiteId() !== id || !how) return;
+        if (how === 'discard') { drop(codeKey(id)); return; }
+        Object.keys(d.files).forEach(function (p) { if (typeof d.files[p] === 'string' && codeCheckPath(p).path === p) code.files[p] = d.files[p]; });
+        d.deleted.forEach(function (p) { if (p !== 'index.html') delete code.files[p]; });
+        code.docs = {};
+        if (!has(code.files, code.cur)) code.cur = 'index.html';
+        if (activeTab === 'code') renderCode();
+        codeChanged();
+        toast('Unsaved changes restored – save to keep them.', 'info');
+      });
+    }
+
+    // Tab wird verlassen oder versteckt: sofort sichern
+    window.addEventListener('pagehide', function () { flush(); });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
+
+    return { later: later, flush: flush, discard: discard, dropPage: dropPage, pageSaved: pageSaved, codeSaved: codeSaved, start: start, offerCode: offerCode };
+  })();
 
   // ================================================================
   // Start
@@ -2876,26 +3280,38 @@
     if (window.OYS_FLASH.success) toast(window.OYS_FLASH.success);
     if (window.OYS_FLASH.error) toast(window.OYS_FLASH.error, 'err');
   }
-  (hc.earned || []).forEach(function (x, i) {
-    setTimeout(function () {
-      toast('+' + fmtNum(x.amount) + ' honeycombs ' + x.text, 'hc');
-      if (i === 0) setBalance(hc.balance, true);
-    }, 700 + i * 700);
-  });
+  // Beim Öffnen verdiente Honigwaben (notices vom Server): gelbe Hinweise, 700 ms versetzt, nichts geht verloren
+  if (E.notices && E.notices.length) {
+    UI.notices(E.notices, { label: 'History', link: '/dashboard#honeycombs' });
+    setBalance(hc.balance, true);
+  }
 
+  // Ohne Verbindung: ein Hinweis, der bleibt, bis sie wieder da ist
+  var offlineNote = null;
+  function wentOffline() {
+    if (!offlineNote) offlineNote = UI.toast({ id: 'oys-offline', text: 'You’re offline. Keep this tab open and save again when you’re back online.', tone: 'warn', duration: 0, icon: 'bx-wifi-off' });
+  }
+  window.addEventListener('offline', wentOffline);
+  window.addEventListener('online', function () {
+    if (!offlineNote) return;
+    offlineNote.close();
+    offlineNote = null;
+    UI.toast('Back online.', 'info');
+  });
+  if (navigator.onLine === false) wentOffline();
+
+  // Anker beim Laden (switchTab schreibt ihn gleich um)
+  var startHash = location.hash;
   if (state.page) {
     updatePageInfo();
     setGlow(state.page.theme);
     renderInhalte();
-    var initial = (location.hash || '#content').slice(1);
-    // Alte Adressen (z. B. #nachrichten aus früheren Benachrichtigungen) weiter unterstützen
-    initial = { inhalte: 'content', statistik: 'stats', nachrichten: 'messages', einstellungen: 'settings' }[initial] || initial;
+    var initial = (startHash || '#content').slice(1).split('/')[0];
+    initial = OLD_TARGETS[initial] || initial;
     switchTab(TAB_TITLES[initial] ? initial : 'content');
     fitPhone();
     preview.refresh();
     $('#pvEntrance').hidden = !state.page.settings.entrance.enabled;
-    loadNotifications(false);
-    setInterval(function () { if (!document.hidden) loadNotifications(!$('#bellMenu').classList.contains('hidden')); }, 60000);
   } else {
     $('#saveBtn').disabled = true;
     $('#mobilePreviewBtn').classList.add('hidden');
@@ -2903,6 +3319,32 @@
     $('#viewPageLink').classList.add('hidden');
     $('#shareBtn').classList.add('hidden');
     $('#psLabel').textContent = 'No page yet';
-    if (location.hash === '#code') switchTab('code');
+    if (startHash === '#code') switchTab('code');
+    else if (/^#messages\b/.test(startHash)) switchTab('messages');
+  }
+  draft.start();
+  startBell();
+  // Ziele, die kein Tab sind (z. B. #honeycombs), öffnen beim Laden ebenso
+  var startTarget = startHash.slice(1).split('/')[0];
+  if (startTarget && !TAB_TITLES[OLD_TARGETS[startTarget] || startTarget]) deepLink(startHash);
+
+  // ui.js fehlt (blockiert oder nicht geladen): Hinweis statt eines halb funktionierenden Editors
+  function editorUnavailable() {
+    var main = document.getElementById('editorScroll');
+    if (!main) return;
+    var box = document.createElement('div');
+    box.id = 'editorOff';
+    box.className = 'max-w-lg mx-auto mt-10 bg-card border border-bordercolor rounded-2xl p-8 text-center';
+    box.setAttribute('role', 'alert');
+    box.innerHTML = '<div class="w-14 h-14 mx-auto rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center text-3xl mb-4"><i class="bx bx-error-circle"></i></div>' +
+      '<p class="text-white font-semibold mb-6">The editor couldn’t load completely. Please reload the page.</p>' +
+      '<a class="btn-primary mx-auto justify-center" style="width:max-content"><i class="bx bx-refresh"></i> Reload</a>';
+    // Neu laden = dieselbe Adresse ohne Anker aufrufen
+    box.querySelector('a').href = location.pathname + location.search;
+    main.insertBefore(box, main.firstChild);
+    var nb = document.getElementById('noPageBox');
+    if (nb) nb.hidden = true;
+    var save = document.getElementById('saveBtn');
+    if (save) save.disabled = true;
   }
 })();

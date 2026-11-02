@@ -1,8 +1,12 @@
 /* OnYourSite – Profilseite
    Statistik ohne Cookies, geschützte Links, Einbettungen per Klick, Countdown, Galerie,
-   Kontaktformular, Eingang mit Musik, Partikel und Funken. Keine Abhängigkeiten. */
+   Kontaktformular, Eingang mit Musik, Partikel und Funken. Keine Abhängigkeiten.
+   Dialoge und Meldungen unter Feldern kommen aus ui.js (window.OYSUI, im Design der Seite). Fehlt ui.js (blockiert),
+   bleibt alles wie bisher. */
 (function () {
   'use strict';
+
+  var UI = window.OYSUI || null;
 
   var cfgEl = document.getElementById('oys-config');
   var cfg = {};
@@ -46,17 +50,19 @@
   });
 
   // ---------------------------------------------------------------
-  // Dialog (Passwort / Ab 18)
+  // Dialog (Passwort / Ab 18 / Teilen) – mit ui.js eine Ebene: Fokus bleibt im Dialog, Escape und die Zurück-Geste
+  // schließen ihn, die Seite dahinter scrollt nicht weg. Ohne ui.js wie bisher (eigenes Escape, Fokus zurück).
   // ---------------------------------------------------------------
   var modal = $('#oys-modal');
   var modalBody = modal ? $('.oys-modal-body', modal) : null;
-  var lastFocus = null;
+  var lastFocus = null, modalLayer = null;
 
   function openModal(html) {
     if (!modal) return;
-    lastFocus = document.activeElement;
+    if (!UI) lastFocus = document.activeElement;
     modalBody.innerHTML = html;
     modal.hidden = false;
+    if (UI && !modalLayer) modalLayer = UI.layer(modal, { labelledBy: 'oys-modal-title', onEscape: closeModal });
     var first = $('input, a.oys-btn, button.oys-btn', modalBody);
     if (first) setTimeout(function () { first.focus(); }, 30);
   }
@@ -64,13 +70,14 @@
     if (!modal) return;
     modal.hidden = true;
     modalBody.innerHTML = '';
+    if (modalLayer) { var l = modalLayer; modalLayer = null; l.release(); return; }
     if (lastFocus && lastFocus.focus) lastFocus.focus();
   }
   if (modal) {
     modal.addEventListener('click', function (ev) {
       if (ev.target === modal || ev.target.closest('.oys-modal-close') || ev.target.closest('[data-close]')) closeModal();
     });
-    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !modal.hidden) closeModal(); });
+    if (!UI) document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !modal.hidden) closeModal(); });
   }
 
   // ---------------------------------------------------------------
@@ -125,6 +132,7 @@
 
   var ICON_LOCK = '<svg class="oys-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   var ICON_OPEN = '<svg class="oys-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>';
+  var ICON_CLOSE = '<svg class="oys-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
 
   function openProtected(a) {
     var id = a.dataset.b;
@@ -153,7 +161,7 @@
       '<h2 id="oys-modal-title">Protected link</h2>' +
       '<p>“' + esc(title) + '” is password protected.</p>' + previewNote +
       '<form class="oys-unlock" autocomplete="off">' +
-      '<input type="password" name="pw" placeholder="Password" required maxlength="100" aria-label="Password">' +
+      '<input type="password" name="pw" placeholder="Password" required maxlength="100" aria-label="Password" data-error-required="Please enter the password.">' +
       '<p class="oys-err" hidden></p>' +
       '<button type="submit" class="oys-btn">' + ICON_LOCK + '<span>Unlock</span></button>' +
       '</form>'
@@ -276,8 +284,22 @@
         var lb = document.createElement('div');
         lb.className = 'oys-lightbox';
         lb.innerHTML = '<img src="' + esc(img.currentSrc || img.src) + '" alt="' + esc(img.alt) + '">';
-        lb.addEventListener('click', function () { lb.remove(); });
+        var layer = null;
+        function close() {
+          if (!lb.parentNode) return;
+          lb.remove();
+          if (layer) { var l = layer; layer = null; l.release(); }
+        }
+        lb.addEventListener('click', close);
+        if (UI) {
+          // Großansicht als Dialog: Schließen-Knopf, Escape, Fokus danach zurück auf das Bild
+          lb.setAttribute('role', 'dialog');
+          lb.setAttribute('aria-modal', 'true');
+          lb.setAttribute('aria-label', img.alt || 'Image');
+          lb.insertAdjacentHTML('beforeend', '<button type="button" class="oys-lightbox-close" aria-label="Close">' + ICON_CLOSE + '</button>');
+        }
         document.body.appendChild(lb);
+        if (UI) layer = UI.layer(lb, { onEscape: close, fallbackFocus: function () { img.tabIndex = -1; return img; } });
       });
     });
   });
@@ -295,7 +317,10 @@
         status.textContent = 'Preview: The form only works on your live page.';
         return;
       }
-      if (!form.checkValidity()) {
+      // Mit ui.js: Meldungen unter den einzelnen Feldern (im Design der Seite); ohne: die bisherige Zeile
+      if (UI) {
+        if (!UI.validate(form)) { status.textContent = ''; return; }
+      } else if (!form.checkValidity()) {
         status.classList.add('err');
         status.textContent = 'Please fill in all fields correctly.';
         return;

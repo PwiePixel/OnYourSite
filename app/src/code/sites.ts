@@ -192,13 +192,14 @@ export async function codeChangeAddress(site: Row, slug: string, userId: number)
   }
 }
 
-// oys_code_starter_files(): Startseite, Stil und Skript (Text genau wie in PHP)
+// oys_code_starter_files(): Startseite, Stil und Skript (Startseite und Stil genau wie in PHP). Das Skript schreibt den
+// Gruß in die Seite statt eines Browser-Popups – in der Vorschau des Editors öffnen sich keine (D18).
 export function codeStarterFiles(title: string): Record<string, string> {
   const t = e(title);
   return {
     'index.html': `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>${t}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main class="card">\n    <h1>${t}</h1>\n    <p>This is your own website – edit <code>index.html</code>, <code>style.css</code> and <code>script.js</code> in the editor.</p>\n    <button id="hello">Click me</button>\n  </main>\n  <script src="script.js"></script>\n</body>\n</html>\n`,
     'style.css': '* { box-sizing: border-box; }\nbody {\n  margin: 0;\n  min-height: 100vh;\n  display: grid;\n  place-items: center;\n  font-family: system-ui, sans-serif;\n  background: radial-gradient(circle at 20% 20%, #312e81, #09090b 60%);\n  color: #fafafa;\n}\n.card {\n  max-width: 520px;\n  margin: 24px;\n  padding: 32px;\n  border-radius: 20px;\n  background: rgba(255, 255, 255, .06);\n  border: 1px solid rgba(255, 255, 255, .12);\n}\nbutton {\n  padding: 10px 18px;\n  border: 0;\n  border-radius: 999px;\n  background: #6366f1;\n  color: #fff;\n  font-weight: 600;\n  cursor: pointer;\n}\n',
-    'script.js': "document.getElementById('hello').addEventListener('click', () => {\n  alert('Hello from your own website!');\n});\n",
+    'script.js': "document.getElementById('hello').addEventListener('click', () => {\n  let note = document.getElementById('hello-note');\n  if (!note) {\n    note = document.createElement('p');\n    note.id = 'hello-note';\n    document.querySelector('main').appendChild(note);\n  }\n  note.textContent = 'Hello from your own website!';\n});\n",
   };
 }
 

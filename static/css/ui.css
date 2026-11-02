@@ -91,3 +91,42 @@
 .ui-field-err i { font-size: 14px; flex: none; }
 [aria-invalid="true"], [data-field][data-invalid] { border-color: rgba(239, 68, 68, .6) !important; box-shadow: 0 0 0 1px rgba(239, 68, 68, .35) !important; }
 @media (max-width: 639px) { .ui-input { font-size: 16px; } .ui-foot .ui-btn { flex: 1 1 auto; } }
+
+/* Glocke (bell.js, Markup aus bellMarkup()) – im Editor und im Kopf des Admin-Bereichs; dieselben Werte wie im Editor */
+[data-bell] .bell-badge {
+  position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #ef4444;
+  color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; box-shadow: 0 0 0 2px #000;
+}
+[data-bell] .bell-badge[hidden] { display: none; }
+[data-bell] .bell-ring { animation: ui-bell 1s ease; }
+@keyframes ui-bell { 10%, 30%, 50% { transform: rotate(14deg); } 20%, 40% { transform: rotate(-14deg); } 60% { transform: rotate(0); } }
+[data-bell] .dropdown {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; background: #0f0f11; border: 1px solid #27272a; border-radius: 12px;
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .9); padding: 6px; text-align: left; animation: ui-in .15s ease;
+}
+[data-bell] .dropdown.hidden { display: none; }
+[data-bell] .dd-head {
+  padding: 6px 10px 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: #71717a;
+  display: flex; justify-content: space-between; align-items: center;
+}
+[data-bell] .dd-head button { text-transform: none; letter-spacing: 0; color: #818cf8; font-weight: 500; background: transparent; border: 0; cursor: pointer; }
+[data-bell] .notif { display: flex; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 13px; background: transparent; border: 0; cursor: pointer; color: #d4d4d8; }
+[data-bell] .notif:hover { background: rgba(255, 255, 255, .04); }
+[data-bell] .notif.unread { background: rgba(99, 102, 241, .08); }
+[data-bell] .notif .ni {
+  width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center; background: rgba(99, 102, 241, .15);
+  color: #818cf8; font-size: 16px;
+}
+[data-bell] .notif .ni.tone-ok { background: rgba(16, 185, 129, .15); color: #34d399; }
+[data-bell] .notif .ni.tone-warn { background: rgba(245, 158, 11, .15); color: #fbbf24; }
+[data-bell] .notif .ni.tone-err { background: rgba(239, 68, 68, .15); color: #f87171; }
+[data-bell] .notif .ni.tone-hc { background: var(--hc-soft); color: var(--hc); }
+[data-bell] .notif b { color: #fff; font-weight: 600; display: block; }
+[data-bell] .notif p {
+  color: #a1a1aa; margin: 2px 0 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+[data-bell] .notif small { color: #71717a; font-size: 11px; }
+[data-bell] .empty-state { text-align: center; color: #71717a; font-size: 14px; }
+[data-bell] .empty-state i { font-size: 44px; opacity: .3; display: block; margin-bottom: 8px; }
+@media (max-width: 639px) { [data-bell] #bellMenu { position: fixed; top: 60px; left: 8px; right: 8px; width: auto; max-height: calc(100vh - 160px); overflow-y: auto; } }

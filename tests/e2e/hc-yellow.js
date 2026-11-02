@@ -95,12 +95,13 @@ const clean = () => {
     const p = await login(browser, 'lea@test.de');
     p.on('pageerror', (e) => errors.push(e.message));
     await p.waitForURL(/\/dashboard/);
-    const toastEl = p.locator('#toasts .toast.hc').first();
+    const toastEl = p.locator('.ui-toast.hc').first();
     await toastEl.waitFor({ state: 'visible', timeout: 5000 });
-    ok((await toastEl.innerText()).includes('honeycombs for being active today'), 'Earned reward shows a honeycomb toast');
-    ok(await style(toastEl, 'color') === YELLOW_2, '.toast.hc text is yellow (' + await style(toastEl, 'color') + ')');
-    ok((await style(toastEl, 'borderTopColor')).startsWith('rgba(250, 204, 21'), '.toast.hc border is yellow');
-    ok(await style(toastEl.locator('i.bx-hive'), 'color') === YELLOW_2, '.toast.hc icon is yellow');
+    ok((await toastEl.innerText()).includes('for being active today'), 'Earned reward shows a honeycomb toast');
+    ok(await style(toastEl, 'color') === YELLOW_2, '.ui-toast.hc text is yellow (' + await style(toastEl, 'color') + ')');
+    ok((await style(toastEl, 'borderTopColor')).startsWith('rgba(250, 204, 21'), '.ui-toast.hc border is yellow');
+    ok(await style(toastEl.locator('i.bx-hive').first(), 'color') === YELLOW_2, '.ui-toast.hc icon is yellow');
+    ok(await style(toastEl.locator('.ui-amt'), 'color') === YELLOW, 'the amount badge is yellow');
     await shot(p, 'hc-toast');
 
     const pillIcon = p.locator('#hcBtn i');

@@ -331,7 +331,7 @@ async function createAdmin(io: CliIo): Promise<number> {
   }
 }
 
-// ---------------------------------------------------------------- cert-alert (server/cert-alert.php)
+// ---------------------------------------------------------------- cert-alert – früher server/cert-alert.php
 
 async function certAlert(args: string[], io: CliIo): Promise<number> {
   if (!(await bootstrap(io))) return 0;

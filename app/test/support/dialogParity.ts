@@ -17,6 +17,8 @@ export function withoutDialogs(html: string): string {
     .replace(/ data-confirm(?:-[a-z]+)?="[^"]*"/g, '')
     .replace(/<input type="hidden" name="_confirmed" value="0" autocomplete="off">/g, '')
     .replace(/ data-error-[a-z]+="[^"]*"/g, '')
+    // Kontaktformular: Mindestlänge der Nachricht wie auf dem Server (Meldung unter dem Feld statt nach dem Senden)
+    .replace(/(<textarea name="message" rows="4" maxlength="2000") minlength="5"/g, '$1')
     .replace(/ data-match="[^"]*"/g, '')
     .replace(/ data-field(?=[ >])/g, '');
 }

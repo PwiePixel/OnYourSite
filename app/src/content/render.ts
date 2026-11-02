@@ -753,9 +753,10 @@ function renderContact(b: Rec, ctx: RenderCtx): string {
   }
   html += '<input type="hidden" name="b" value="' + e(blockId) + '"><input type="hidden" name="t" value="' + e(token) + '">';
   html += '<div class="oys-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
-  html += '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Your name"></label>';
-  html += '<label class="oys-field"><span>Email</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="you@example.com"></label>';
-  html += '<label class="oys-field"><span>Message</span><textarea name="message" rows="4" maxlength="2000" required placeholder="Your message…"></textarea></label>';
+  // Meldungen unter den Feldern (ui.js) mit den Worten des Servers (lib/spam.php); die Mindestlänge wie dort
+  html += '<label class="oys-field"><span>Name</span><input type="text" name="name" maxlength="80" required autocomplete="name" placeholder="Your name" data-error-required="Please enter your name."></label>';
+  html += '<label class="oys-field"><span>Email</span><input type="email" name="email" maxlength="190" required autocomplete="email" placeholder="you@example.com" data-error-required="Please enter a valid email address." data-error-type="Please enter a valid email address."></label>';
+  html += '<label class="oys-field"><span>Message</span><textarea name="message" rows="4" maxlength="2000" minlength="5" required placeholder="Your message…" data-error-required="Your message is a bit short." data-error-short="Your message is a bit short."></textarea></label>';
   html += '<button type="submit" class="oys-contact-send">' + uiIcon('send') + '<span>' + e(phpTruthy(own(d, 'button') ?? '') ? own(d, 'button') : 'Send message') + '</span></button>';
   html += '<p class="oys-contact-status' + (sent ? ' ok' : '') + '" role="status" data-success="' + e(success()) + '">'
     + (sent ? e(success()) : '') + '</p>';

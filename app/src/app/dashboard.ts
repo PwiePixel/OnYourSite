@@ -12,6 +12,8 @@ import { brands, bxIcons } from '../content/social.js';
 import { uploadLimitMb } from '../content/uploads.js';
 import { hcEarn, hcForEditor } from '../honeycombs/honeycombs.js';
 import { premiumState } from '../honeycombs/premium.js';
+import { BOOTSTRAP_NOTICES_MAX, notices } from '../notify/types.js';
+import { bellMarkup } from '../views/partials/ui.js';
 import { currentPage, flash, hasPremium } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
@@ -113,7 +115,11 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
       weekly: phpTruthy(userData.weekly_report),
       discord: userData.discord_id ?? '',
       admin: phpTruthy(userData.is_admin),
+      // Für die Schlüssel im Browser (Entwürfe, zuletzt gezeigte Benachrichtigung) – je Konto getrennt
+      id: userId,
     },
+    // Beim Öffnen verdiente Honigwaben als Hinweise (nur, was bei diesem Aufruf verdient wurde; höchstens 12)
+    notices: notices(honeycombs.earned.map((x) => ({ tone: 'hc' as const, text: x.text, amount: x.amount })), BOOTSTRAP_NOTICES_MAX),
   };
   const flashSuccess = ctx.session?.take('success') ?? null;
   const flashError = ctx.session?.take('error') ?? null;
@@ -127,5 +133,6 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     hasPage: page !== null,
     isImpersonating,
     balance: honeycombs.balance,
+    bellHtml: await bellMarkup(ctx),
   }));
 }
