@@ -15,8 +15,9 @@ Last update: 2026-11-02 14:08 (UTC+1).
 | Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | Done |
 | Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | Done |
 
-**Release 3.0 is merged into `main`** (PR #15, squash commit `2e6f6de`). `main` is merged into `feature/new-features`
-(`0a15a2e`, same tree as `feature/node-complete`), so PR #14 shows only the feature changes and merges cleanly.
+**Release 3.0 is merged into `main`** (PR #15, squash commit `2e6f6de`), and the new features followed (PR #14, squash
+commit `66207f6`). `main` holds everything below; the branches `feature/node-complete` and `feature/new-features` are
+done.
 
 Points to settle before or soon after 3.0:
 - Node checks only bcrypt password hashes (`$2y$`, `$2a$`, `$2b$`). Check production before the switch:
@@ -31,10 +32,9 @@ Points to settle before or soon after 3.0:
 - Slow but linear on 20 MB hostile input (follow-ups): `e()`/`xmlEscape` in html.ts, the NUL strip in css.ts, the raw
   e-mail kept in the session after a failed sign-up (cap its length), and the phone check in `cleanUrl` (V8 regex stack).
 
-## New features (PR #14, `feature/new-features`)
+## New features (PR #14, merged into `main`)
 
-Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests and merged into
-`feature/new-features`; "reviewed" = the fixes of an independent review are merged too; "security-reviewed" = covered
+Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests and merged into `main`; "reviewed" = the fixes of an independent review are merged too; "security-reviewed" = covered
 by the shared security review of 2026-11-02 (dialogs, Discord, status page, Premium and domain worker, shop UI):
 every finding was reproduced with a failing test before it was fixed, and what stays open is listed under "How to
 continue" below.
@@ -76,10 +76,11 @@ records – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
-1. **PR #15 is merged** (squash) and `main` is merged into `feature/new-features`. Deploy `main` with
-   `sudo bash server/install.sh --update` (see `server/README.md`); PR #14 is next.
-2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 1012 tests pass
-   (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
+1. **PR #15 and PR #14 are merged** (squash commits `2e6f6de` and `66207f6`). Deploy `main` with
+   `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
+2. **New work starts from `main`**: one branch per roadmap item, merged as one squash commit after the tests pass
+   (never push to `main` directly). On `main` 1012 tests pass (`cd app && npx tsc --noEmit -p . && npm test`; with
+   `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
@@ -87,15 +88,11 @@ records – new steps take the next free number when they are merged.
    - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
    - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
-4. **Owner decisions needed** (found in the reviews; nothing is built for them yet):
-   - An admin who uses "Log in as" on another *admin* account can then use the whole admin panel as that admin
-     (grants, refunds and prices are recorded under the other admin). Options: refuse "Log in as" for admin accounts,
-     or let `/admin` act only for the original admin.
-   - Blocked custom domains: the owner can remove and add again a domain an admin disabled (design §5.2 vs §2.8).
-     Decide before PD-5 (nothing sets `blocked` yet).
-   - Taken as read, please confirm: after a refund of `code_more`, the code pages above the free allowance go offline
-     only while `code_more` costs something (at price 0 it is free for everyone, CS-E13); "Give honeycombs" asks
-     before deductions and before gifts above 1,000 honeycombs (one constant, `GRANT_ASK_ABOVE`).
+4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
+   of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
+   blocked stays blocked for every account until an admin releases it. Both are built on the branch
+   `feature/owner-decisions` (pull request after #14). R3 and R4 confirm what is built (`code_more` at price 0,
+   the confirmation for honeycomb gifts above 1,000).
 5. **Before the 3.x deploy:** `sudo bash server/install.sh --update` also updates the Discord bot to 0.3.1 – it
    reports which channels everyone can see; team alerts of the status page are only sent to a channel an admin saved
    in *Editor → Status → Alerts* that is not public (until then they are skipped, with the reason in the editor).
@@ -139,8 +136,6 @@ records – new steps take the next free number when they are merged.
      exist only in the ledger can't be removed (only during a deploy); the gift form reads `user_id[]` with PHP-style
      casts (pinned by the PHP comparison).
 
-Work in progress lives on branches of the current workspace and is pushed when it is merged into
-`feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
-requests into `feature/new-features` (for example #16, the weekly report's best link). #18 (per-checkout names in
-three tests) was already contained in `feature/new-features`; its branch is merged with it and changes nothing any
-more – merge or close it.
+Work in progress lives on branches of the current workspace and is pushed when it is ready; this file says what is
+already in `main`. Small fixes from other contributors arrive as pull requests into `main` (#16 and #17 were such
+fixes; #18 was already contained in #14).
