@@ -3,13 +3,50 @@
 // ---------- PHP primitives ----------
 import crypto from 'node:crypto'; import net from 'node:net';
 import { PCRE_CYRILLIC_HAN, PCRE_LETTER } from './pcre14.js';
-import { phpFloatToString, hasRawBytes } from '../php.js';
+import { phpFloatToString, hasRawBytes, unitsText } from '../php.js';
 export const PCRE_WS = '\\t\\n\\v\\f\\r \\x85\\xA0\\u1680\\u180E\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000';
 // trim(): als Schleife – /^[…]+|[…]+$/g lief von jeder Stelle einer langen Leerraum-Folge im Text bis zu ihrem Ende
 // (quadratisch: 16 000 Leerzeichen 0,6 s, ein großes Formularfeld Minuten)
 const TRIM = ' \t\n\r\0\x0B';
 export const phpTrim = (s) => { let a = 0, b = s.length; while (a < b && TRIM.includes(s[a])) a++; while (b > a && TRIM.includes(s[b - 1])) b--; return s.slice(a, b); };
-export const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+// Ein Durchgang über die UTF-16-Einheiten statt replace() mit /g: das kostet je Treffer (ein Formularfeld aus 20 MB im
+// Wechsel von Text und Steuer- oder Großbuchstaben brauchte Sekunden; Kontaktformular und Anmeldung lesen ohne Anmeldung).
+// Ohne Treffer (Ausdruck ohne /g) bleibt der Text, wie er ist. Was mit den Einheiten geschieht, sagt kind – je Art eine
+// eigene enge Schleife (eine Funktion je Zeichen wäre deutlich langsamer).
+const LOWER = 0, CTRL_ML = 1, CTRL = 2, WS = 3, TEL = 4, C0 = 5, SLUG = 6;
+// Steuerzeichen (C0, DEL, C1) und Bidi-Steuerzeichen
+const isCtrl = (c) => c <= 0x1f || (c >= 0x7f && c <= 0x9f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
+// Leerraum wie PCRE mit /u (alles in der BMP: als UTF-16-Einheiten dasselbe wie als Codepoints)
+const isWs = (c) => c === 0x20 || (c >= 0x09 && c <= 0x0d) || c === 0x85 || c === 0xa0 || c === 0x1680 || c === 0x180e || (c >= 0x2000 && c <= 0x200a)
+  || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000;
+function mapUnits(s, has, kind) {
+  if (!has.test(s)) return s;
+  const len = s.length;
+  const u = new Uint16Array(len);
+  let n = 0;
+  switch (kind) {
+    // A-Z klein
+    case LOWER: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); u[n++] = c >= 65 && c <= 90 ? c + 32 : c; } break;
+    // Steuerzeichen weg, mehrzeilig außer \n
+    case CTRL_ML: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); if (c === 0x0a || !isCtrl(c)) u[n++] = c; } break;
+    case CTRL: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); if (!isCtrl(c)) u[n++] = c; } break;
+    // Leerraum weg
+    case WS: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); if (!isWs(c)) u[n++] = c; } break;
+    // Telefonnummer: nur Ziffern und +
+    case TEL: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); if ((c >= 0x30 && c <= 0x39) || c === 0x2b) u[n++] = c; } break;
+    // C0-Steuerzeichen und DEL → _
+    case C0: for (let i = 0; i < len; i++) { const c = s.charCodeAt(i); u[n++] = c <= 0x1f || c === 0x7f ? 0x5f : c; } break;
+    // Adresse: a-z, 0-9 und - bleiben, A-Z klein, alles andere weg
+    default: for (let i = 0; i < len; i++) {
+      const c = s.charCodeAt(i);
+      if ((c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 45) u[n++] = c;
+      else if (c >= 65 && c <= 90) u[n++] = c + 32;
+    }
+  }
+  return unitsText(u, n);
+}
+const HAS_UPPER = /[A-Z]/;
+export const asciiLower = (s) => mapUnits(s, HAS_UPPER, LOWER);
 // mb_substr() auf Code-Punkten: nur bis zum Ende des Stücks zählen (Array.from über ein 20-MB-Feld: eine Sekunde, 400 MB)
 const nextCp = (s, i) => { const c = s.charCodeAt(i); if (c >= 0xd800 && c <= 0xdbff) { const d = s.charCodeAt(i + 1); if (d >= 0xdc00 && d <= 0xdfff) return i + 2; } return i + 1; };
 export const mbSubstr = (s, start, len) => {
@@ -88,23 +125,33 @@ export function oysClientKey(remoteAddr, cfg, now = new Date()) {
 
 // ---------- helpers.php ✔ ----------
 const isScalar = (v) => ['string', 'number', 'boolean'].includes(typeof v);
+// oys_clean_text(): Steuerzeichen und Bidi-Steuerzeichen weg; mehrzeilig vorher \r\n → \n und \n bleibt – zusammen
+// dasselbe wie jedes dieser Zeichen weglassen (\r ist auch eines); trim; mehrzeilig höchstens zwei \n hintereinander
+const HAS_CTRL_ML = /[\x00-\x09\x0B-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/, HAS_CTRL = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/;
+const collapseLf = (s) => {
+  if (!s.includes('\n\n\n')) return s;
+  const u = new Uint16Array(s.length); let n = 0, run = 0;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c === 10) { if (++run > 2) continue; } else run = 0; u[n++] = c; }
+  return unitsText(u, n);
+};
 export function oysCleanText(value, max = 255, multiline = false) {
   let v = isScalar(value) ? phpString(value) : '';
   // Ungültiges UTF-8 (rohe Bytes aus dem Formular): preg_replace() mit /u liefert null, übrig bleibt ''
   if (hasRawBytes(v)) return '';
-  v = multiline ? v.replace(/\r\n/g, '\n').replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]+|[\u202A-\u202E\u2066-\u2069]+/g, '')
-                : v.replace(/[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]+/g, '');
-  v = phpTrim(v); if (multiline) v = v.replace(/\n{3,}/g, '\n\n'); return mbSubstr(v, 0, max);
+  v = multiline ? mapUnits(v, HAS_CTRL_ML, CTRL_ML) : mapUnits(v, HAS_CTRL, CTRL);
+  v = phpTrim(v); if (multiline) v = collapseLf(v); return mbSubstr(v, 0, max);
 }
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const HAS_WS = new RegExp(`[${PCRE_WS}]`, 'u');
+const NOT_TEL = /[^0-9+]/;
 export function oysCleanUrl(value, allowRelative = false) {
   // Ungültiges UTF-8 (rohe Bytes): preg_replace() mit /u liefert null, daraus wird am Ende ''
   if (isScalar(value) && hasRawBytes(phpString(value))) return '';
-  let url = phpTrim(isScalar(value) ? phpString(value) : '').replace(new RegExp(`[${PCRE_WS}]+`, 'gu'), '');
+  let url = mapUnits(phpTrim(isScalar(value) ? phpString(value) : ''), HAS_WS, WS);
   if (url === '') return '';
   if (allowRelative && /^\/[^/]/.test(url)) return mbSubstr(url, 0, 500);
   if (!SCHEME.test(url) && /^[^@\t\n\v\f\r \/]+@[^@\t\n\v\f\r \/]+\.[a-z]{2,}\n?$/i.test(url)) url = 'mailto:' + url;
-  if (!SCHEME.test(url) && /^(\+|00)[0-9 ()\/-]{6,}\n?$/.test(url)) url = 'tel:' + url.replace(/[^0-9+]/g, '');
+  if (!SCHEME.test(url) && /^(\+|00)[0-9 ()\/-]{6,}\n?$/.test(url)) url = 'tel:' + mapUnits(url, NOT_TEL, TEL);
   if (!SCHEME.test(url)) url = 'https://' + url.replace(/^\/+/, '');
   const pu = phpParseUrl(url); const scheme = asciiLower(pu === false ? '' : (pu.scheme ?? ''));
   if (!['http', 'https', 'mailto', 'tel'].includes(scheme)) return '';
@@ -116,7 +163,9 @@ export function oysCleanUrl(value, allowRelative = false) {
 // rtrim($u, '/') als Schleife (/\/+$/ lief von jedem / einer langen Folge bis zu ihrem Ende)
 const rtrimSlashes = (u) => { let b = u.length; while (b > 0 && u[b - 1] === '/') b--; return u.slice(0, b); };
 export const oysPrettyUrl = (u) => /^mailto:/i.test(u) ? u.slice(7) : /^tel:/i.test(u) ? u.slice(4) : rtrimSlashes(u.replace(/^https?:\/\/(www\.)?/i, ''));
-export const oysNormalizeSlug = (s) => asciiLower(phpTrim(phpString(s))).replace(/[^a-z0-9-]/g, '');
+// klein schreiben (ASCII), dann alles außer a-z, 0-9 und - weg – in einem Durchgang
+const NOT_SLUG = /[^a-z0-9-]/;
+export const oysNormalizeSlug = (s) => mapUnits(phpTrim(phpString(s)), NOT_SLUG, SLUG);
 export function oysInitials(name) {
   const t = phpTrim(name);
   const parts = (t === '' ? [''] : t.split(new RegExp(`[${PCRE_WS}]+`, 'u'))).filter((p) => /^[\p{L}\p{N}]/u.test(p));
@@ -126,7 +175,9 @@ export const oysIsBot = (ua) => ua === '' || /bot|crawl|spider|slurp|facebookext
 
 // ---------- PHP parse_url (php_url_parse_ex2), byte-exact ✔ ----------
 const isAlpha = (c) => /[A-Za-z]/.test(c), isDigit = (c) => c >= '0' && c <= '9';
-const ctrl = (s) => s.replace(/[\x00-\x1F\x7F]/g, '_');
+// Steuerzeichen → _
+const HAS_C0 = /[\x00-\x1F\x7F]/;
+const ctrl = (s) => mapUnits(s, HAS_C0, C0);
 function strcspn(str, s, ue, chars) { let e = ue; for (const ch of chars) { const p = str.indexOf(ch, s); if (p !== -1 && p < e) e = p; } return e; }
 function strtolPort(buf) { const m = /^[\t\n\v\f\r ]*([+-]?)(\d+)/.exec(buf); return m ? (m[1] === '-' ? -1 : 1) * parseInt(m[2], 10) : null; }
 export function phpParseUrl(input) { // returns false or {scheme,host,port,user,pass,path,query,fragment}
