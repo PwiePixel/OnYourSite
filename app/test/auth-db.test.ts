@@ -3,9 +3,8 @@
 // Fehler darin ist kein Datenbankfehler: die Anfrage endet wie in PHP mit 500, das Konto ist dann schon angelegt.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, configString, loadConfig, setConfigForTests } from '../src/config.js';
+import { configString, loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, q } from '../src/db.js';
 import { makeTestCtx, isHalt, type Ctx } from '../src/web/ctx.js';
 import { register, setAuthMailerForTests } from '../src/app/auth.js';
@@ -61,7 +60,6 @@ async function signUp(post: PhpArray, ip: string): Promise<Ctx> {
 
 // Eindeutige Namen: die Testdatenbank ist eine Kopie des aktuellen Stands (dort kann es max-page schon geben)
 const RUN = String(Date.now() % 1e8);
-const e = (s: string): string => execFileSync('php', ['-r', `require '${ROOT_DIR}/lib/helpers.php'; echo e(stream_get_contents(STDIN));`], { input: s }).toString();
 
 test('register sends the welcome mail with escaped values and ignores its result', async () => {
   const calls: unknown[][] = [];
@@ -70,7 +68,8 @@ test('register sends the welcome mail with escaped values and ignores its result
   const ctx = await call(await signUp({ fullname, email: ` Max${RUN}@Example.COM `, password: 'secret123', subdomain: `Max-${RUN}` }, '10.1.2.3'));
   assert.equal(ctx.header('Location'), '/dashboard', String(ctx.session?.data.error));
   assert.equal(ctx.status, 302);
-  assert.deepEqual(calls, [[`max${RUN}@example.com`, 'register', { full_name: e(`<b>Zoë</b> & "Co" 'x'`), subdomain: `max-${RUN}` }]]);
+  // e() der PHP-Version: htmlspecialchars mit ENT_QUOTES (' als &#039;)
+  assert.deepEqual(calls, [[`max${RUN}@example.com`, 'register', { full_name: '&lt;b&gt;Zoë&lt;/b&gt; &amp; &quot;Co&quot; &#039;x&#039;', subdomain: `max-${RUN}` }]]);
   // Reihenfolge der Platzhalter wie im PHP-Array: erst full_name, dann subdomain
   assert.deepEqual(Object.keys(calls[0][2] as object), ['full_name', 'subdomain']);
   // Angemeldet als das neue Konto mit der neuen Seite

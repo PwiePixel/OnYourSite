@@ -2,6 +2,7 @@
 // denselben TCP-Lauscher. Verglichen werden die rohen Anfragen (Inhalt Byte für Byte, alle Kopfzeilen außer
 // „Connection“, die Node wegen agent: false mitschickt) und die Ergebnisse – auch bei kaputten Antworten, abgebrochenen
 // Verbindungen und Zeitüberschreitungen (die Millisekunden in den Fehlertexten von curl unterscheiden sich naturgemäß).
+// Die Vergleiche brauchen die PHP-Version (support/phpRef.ts); ohne sie prüft ein eigener Test die Node-Seite allein.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
@@ -10,8 +11,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ROOT_DIR } from '../src/config.js';
 import { discordRequest } from '../src/updates/discord.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 // Antworten des Lauschers je Pfad (/r/<name>); null = nie antworten, 'close' = ohne Antwort schließen,
 // { partial } = nur den Anfang schicken und dann warten
@@ -95,14 +96,14 @@ after(async () => {
 // PHP mit lib/updates.php, ohne Proxy-Variablen (curl würde sie nutzen, Node nicht); läuft asynchron, damit der
 // Lauscher im selben Prozess antworten kann
 function php(method: string, url: string, payload: unknown, headers: string[]): Promise<unknown> {
-  const code = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
-    require '${ROOT_DIR}/security.php'; require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/updates.php';
+  const code = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
+    require '${phpFile('security.php')}'; require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/updates.php')}';
     $in = json_decode(stream_get_contents(STDIN), true);
     echo json_encode(oys_discord_request($in[0], $in[1], $in[2], $in[3]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`;
   const env = { ...process.env };
   for (const k of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']) delete env[k];
   return new Promise((resolve, reject) => {
-    const child = spawn('php', ['-d', 'display_errors=stderr', '-r', code], { cwd: ROOT_DIR, env });
+    const child = spawn('php', ['-d', 'display_errors=stderr', '-r', code], { cwd: phpRoot(), env });
     let out = '';
     let err = '';
     child.stdout.on('data', (c) => (out += c));
@@ -122,7 +123,24 @@ function raw(text: string): { line: string; headers: string[]; body: string } {
   return { line, headers: headers.filter((h) => !/^connection:/i.test(h)).sort(), body: text.slice(end + 4) };
 }
 
-test('Discord requests leave the server byte for byte like curl in PHP', async () => {
+test('Discord requests carry JSON, the bot header and the user agent; answers and failures are read', async () => {
+  captured.length = 0;
+  const ok = await discordRequest('POST', base + '/r/ok', { embeds: [{ title: 'Äpfel & "q"' }] }, ['Authorization: Bot test']);
+  assert.deepEqual([ok.status, ok.data?.id], [200, '1300000000000000001']);
+  const sent = raw(captured[0]);
+  assert.equal(sent.line, 'POST /r/ok HTTP/1.1');
+  assert.ok(sent.headers.includes('Content-Type: application/json') && sent.headers.includes('Authorization: Bot test'), sent.headers.join('\n'));
+  assert.ok(sent.headers.some((h) => h.startsWith('User-Agent: DiscordBot (https://')), sent.headers.join('\n'));
+  // Mitschnitt als latin1: der Inhalt geht als UTF-8 ohne \u-Escapes hinaus
+  assert.equal(sent.body, Buffer.from('{"embeds":[{"title":"Äpfel & \\"q\\""}]}').toString('latin1'));
+  const missing = await discordRequest('DELETE', base + '/r/chunked', null, []);
+  assert.deepEqual([missing.status, missing.code], [404, 10008]);
+  const refused = await discordRequest('POST', `http://127.0.0.1:${closedPort}/api`, { a: 1 }, []);
+  assert.equal(refused.status, 0);
+  assert.notEqual(refused.error, '');
+});
+
+test('Discord requests leave the server byte for byte like curl in PHP', { skip: PHP_SKIP }, async () => {
   const payload = {
     embeds: [{
       title: 'v2.4 – Äpfel & "quotes" / <b>     \u{1F41D} \\ back', url: 'https://oys.test/updates/7', color: 2278750,
@@ -146,7 +164,7 @@ test('Discord requests leave the server byte for byte like curl in PHP', async (
   }
 });
 
-test('Discord answers, broken replies and network errors give the same result as curl in PHP', async () => {
+test('Discord answers, broken replies and network errors give the same result as curl in PHP', { skip: PHP_SKIP }, async () => {
   const urls = Object.keys(REPLIES).filter((k) => !['hang', 'stall', 'stallchunked'].includes(k)).map((k) => base + '/r/' + k);
   urls.push(`http://127.0.0.1:${closedPort}/api`, 'https://nonexistent-host-oys.invalid/api/v10/webhooks/1/x');
   // Steuer- und Leerzeichen in der Adresse (z. B. eine gespeicherte Nachrichten-ID mit \n am Ende): curl sendet nichts
@@ -161,7 +179,7 @@ test('Discord answers, broken replies and network errors give the same result as
   }
 });
 
-test('Discord timeouts: no answer, a stuck body and a stuck TLS handshake give the texts of curl in PHP', async () => {
+test('Discord timeouts: no answer, a stuck body and a stuck TLS handshake give the texts of curl in PHP', { skip: PHP_SKIP }, async () => {
   // Alles gleichzeitig, damit der Test nur einmal 10 Sekunden wartet
   const urls = ['hang', 'stall', 'stallchunked'].map((k) => base + '/r/' + k);
   const stuckTls = base.replace('http:', 'https:') + '/r/hang';

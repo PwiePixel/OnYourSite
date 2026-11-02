@@ -1,9 +1,11 @@
-// Social-Plattformen gegen PHP: Erkennung der Plattform, Profil-Adressen, Symbole (viele und zufällige Eingaben)
+// Social-Plattformen gegen PHP (PHP-Version, siehe support/phpRef.ts): Erkennung der Plattform, Profil-Adressen,
+// Symbole (viele und zufällige Eingaben)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { brands, brandSvg, detectBrand, socialUrl, iconHtml, iconUsesBoxicons } from '../src/content/social.js';
 import { cleanIcon } from '../src/content/blocks.js';
 import { runPhp, PHP_EACH, nodeEach, diffs, jsonText, rng } from './modelHarness.js';
+import { PHP_SKIP } from './support/phpRef.js';
 
 const SCHEMES = ['https://', 'http://', 'HTTPS://', 'Http://', '', '//', 'mailto:', 'MAILTO:', 'tel:', 'TEL:', 'ftp://', 'javascript:'];
 const PREFIXES = ['', 'www.', 'm.', 'mobile.', 'open.', 'music.', 'vm.', 'WWW.', 'sub.', 'www.www.'];
@@ -20,7 +22,7 @@ function urls(r: ReturnType<typeof rng>, n: number): string[] {
   return out;
 }
 
-test('brand detection matches PHP', () => {
+test('brand detection matches PHP', { skip: PHP_SKIP }, () => {
   const cases = urls(rng(11), 1500);
   const php = JSON.parse(runPhp(PHP_EACH('oys_detect_brand($c)'), jsonText(cases))) as string[];
   assert.deepEqual(diffs(cases, nodeEach(cases, (c) => detectBrand(c as string)), php), []);
@@ -33,14 +35,14 @@ const VALUES = ['', '  ', 'user', '@user', '@@user', ' @user ', 'user.name', 'us
   'a/b', '%20', '🐝bee', 'x'.repeat(250), 'name\n', '\tname', 'a{u}b', '{u}', 'user?x=1', 'user#x', 'x&y', 'Ω', '٣', 'a b'];
 const PLATFORMS = [...Object.keys(brands()), 'unknown', '', 'Instagram', 'constructor', '__proto__', 'toString'];
 
-test('profile addresses match PHP for every platform', () => {
+test('profile addresses match PHP for every platform', { skip: PHP_SKIP }, () => {
   const cases = PLATFORMS.flatMap((p) => VALUES.map((v) => [p, v]));
   const php = JSON.parse(runPhp(PHP_EACH('oys_social_url($c[0], $c[1])'), jsonText(cases))) as string[];
   assert.deepEqual(diffs(cases, nodeEach(cases, (c) => socialUrl((c as string[])[0], (c as string[])[1])), php), []);
   assert.ok(new Set(php).size > 500, 'the cases produce many different addresses');
 });
 
-test('random profile addresses match PHP', () => {
+test('random profile addresses match PHP', { skip: PHP_SKIP }, () => {
   const r = rng(23);
   const parts = ['@', 'user', '.', 'com', 'de', '/', ' ', 'https://', 'mailto:', 'tel:', '+', '00', '49', '1', 'mastodon.social', 'ä', '🐝', '_', '-', '{u}', 'x', 'é', '\n'];
   const cases: string[][] = [];
@@ -57,7 +59,7 @@ const ICONS = ['', 'auto', 'none', ' auto ', 'brand:instagram', 'brand:', 'brand
   'bx bx-music', 'bxl bxl-github', 'bxs bxs-heart', 'bxl bx-x', 'bx bx-Music', 'bx bx-music ', ' bx bx-music', 'bx  bx-music', 'bx bx-mu"sic', 'bx bx-a<b',
   'fa fa-x', 'bx', 'bx ', 'bxx bx-a', 'bx bx-', 'bx bx-a-1-b', 'BX BX-A', 'bx bx-music\n', 'brand:Instagram', 'auto ', 'None'];
 
-test('link icons match PHP', () => {
+test('link icons match PHP', { skip: PHP_SKIP }, () => {
   const linkUrls = ['', 'tel:+49', 'TEL:+49', 'Tel:0', ' tel:1', 'https://instagram.com/x', 'mailto:a@b.de', 'https://unknown.example', 'https://mastodon.example/@me', 'x.com/y'];
   const cases = ICONS.flatMap((i) => linkUrls.map((u) => [i, u]));
   const php = JSON.parse(runPhp(PHP_EACH('[oys_icon_html($c[0], $c[1]), oys_icon_html($c[0]), oys_icon_uses_boxicons($c[0]), oys_clean_icon($c[0])]'), jsonText(cases))) as string[];
@@ -68,7 +70,7 @@ test('link icons match PHP', () => {
   assert.deepEqual(diffs(cases, node, php), []);
 });
 
-test('brand icons and the cleaning of icon values match PHP', () => {
+test('brand icons and the cleaning of icon values match PHP', { skip: PHP_SKIP }, () => {
   const keys = [...Object.keys(brands()), 'nope', '', 'constructor', '__proto__', 'Instagram'];
   const cases = keys.flatMap((k) => [[k, 'oys-ico'], [k, 'x"y'], [k, '']]);
   const php = JSON.parse(runPhp(PHP_EACH('oys_brand_svg($c[0], $c[1])'), jsonText(cases))) as string[];
@@ -82,7 +84,7 @@ test('brand icons and the cleaning of icon values match PHP', () => {
 // Prüfung des Pakets: [^\p{L}\p{N}._\-] kennt in PHP (PCRE2 10.42) die Zeichen bis Unicode 14, in JavaScript bis
 // Unicode 16. Verglichen wird jeder Codepoint (in Stücken, 'x' davor und danach: weder trim() noch die Domain-Erkennung
 // greifen), auch neue Schriften wie Kawi, Garay oder CJK-Erweiterung H.
-test('profile handles keep exactly the letters and digits PHP keeps (all code points)', () => {
+test('profile handles keep exactly the letters and digits PHP keeps (all code points)', { skip: PHP_SKIP }, () => {
   const cases: string[][] = [];
   let chunk = '';
   for (let c = 0; c <= 0x10ffff; c++) {
@@ -96,7 +98,9 @@ test('profile handles keep exactly the letters and digits PHP keeps (all code po
   const php = JSON.parse(runPhp(PHP_EACH('oys_social_url($c[0], $c[1])'), jsonText(cases))) as string[];
   const node = nodeEach(cases, (c) => socialUrl((c as string[])[0], (c as string[])[1]));
   assert.deepEqual(diffs(cases.map((c) => c[1].slice(0, 12)), node, php), []);
-  // Stichproben aus Unicode 15/16: PHP entfernt sie
+});
+
+test('profile handles drop letters newer than PCRE2 knows (Unicode 15/16), like PHP', () => {
   const fresh = [['instagram', 'mia\u{31350}'], ['instagram', '\u{1E030}'], ['tiktok', 'x\u{A7CB}y'], ['github', '\u{11F50}\u{11F51}']];
   assert.deepEqual(fresh.map(([p, v]) => socialUrl(p, v)), ['https://instagram.com/mia', '', 'https://www.tiktok.com/@xy', '']);
 });

@@ -64,7 +64,7 @@ Both ask only for the **bot token** and the **Application ID** (Enter takes the 
 | Change settings | `sudo bash install.sh` (Enter keeps the current values) | the same |
 | Update | `git pull && sudo bash install.sh --update` | the same |
 
-**Keep the settings out of the website folder.** The `.htaccess` blocks `/discord-bot/` and every `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
+**Keep the settings out of the website folder.** The website never serves `/discord-bot/` or any `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
 
 ## Files
 

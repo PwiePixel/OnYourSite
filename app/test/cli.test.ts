@@ -1,12 +1,13 @@
 // src/cli.ts – die Befehle für den Server. create-admin und cert-alert laufen gegen die PHP-Originale
 // (server/create-admin.php, server/cert-alert.php) in einer eigenen Kopie der PHP-Version mit eigener Datenbank:
 // gleiche Ausgabe, gleiche Rückgabe, gleiche Zeilen in der Datenbank bzw. gleiche Mails an den Test-SMTP-Server.
-// Dazu migrate (Rückgaben, Ausgabe), check --native, check --crypto (auch gegen PHP) und weekly-report.
-// Die PHP-Vergleiche brauchen die PHP-Version: im Repository oder unter OYS_PHP_REF – sonst werden sie übersprungen.
+// Dazu migrate (Rückgaben, Ausgabe), check --native, check --crypto (Werte von PHP verschlüsselt, wenn es da ist) und
+// weekly-report. Die PHP-Vergleiche brauchen die PHP-Version unter OYS_PHP_REF (support/phpRef.ts) – sonst werden sie
+// übersprungen.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawnSync, execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tls from 'node:tls';
@@ -20,10 +21,9 @@ import { setMailDirForTests } from '../src/mail.js';
 import { runCli, weeklyReport, type CliIo } from '../src/cli.js';
 import { SmtpSink } from './support/smtpSink.js';
 import { parseMessage, leaves, header, decodeWords } from './support/mime.js';
+import { PHP_SKIP, phpRef, phpTree, writePhpConfig } from './support/phpRef.js';
 
 const BASE = loadConfig();
-const PHP_REF = process.env.OYS_PHP_REF || ROOT_DIR;
-const HAS_PHP = spawnSync('php', ['-v']).status === 0 && existsSync(join(PHP_REF, 'lib', 'bootstrap.php'));
 const PREFIX = String((BASE.db as ConfigData).name ?? 'oys_test').replace(/[^a-z0-9_]/gi, '');
 const DB = { php: PREFIX + '_cli_php', node: PREFIX + '_cli_node', crypt: PREFIX + '_cli_crypt', fresh: PREFIX + '_cli_fresh' };
 let admin: Connection;
@@ -37,6 +37,16 @@ function config(dbName: string, extra: ConfigData = {}): ConfigData {
 async function recreate(name: string): Promise<void> {
   await admin.query(`DROP DATABASE IF EXISTS \`${name}\``);
   await admin.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+}
+
+// Neue Datenbank mit dem Schema dieser Version (die Befehle prüfen das Schema nur einmal je Prozess)
+async function recreateWithSchema(name: string): Promise<void> {
+  await recreate(name);
+  setConfigForTests(config(name));
+  await closePool();
+  await ensureSchema();
+  await closePool();
+  setConfigForTests(BASE);
 }
 
 // Node-Seite: Befehl mit eigener Ausgabe, eigener Umgebung und eigener Datenbank
@@ -56,8 +66,7 @@ async function node(argv: string[], dbName: string, env: Record<string, string> 
 
 // PHP-Seite: Skript aus der Kopie der PHP-Version mit config.php für die Test-Datenbank
 function php(script: string, args: string[], dbName: string, env: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
-  const cfg = config(dbName);
-  writeFileSync(join(phpRoot, 'config.php'), `<?php\nreturn json_decode(base64_decode('${Buffer.from(JSON.stringify(cfg)).toString('base64')}'), true);\n`);
+  writePhpConfig(phpRoot, config(dbName));
   return new Promise((resolve) => {
     execFile('php', ['-d', 'display_errors=0', '-d', `openssl.cafile=${join(dir, 'ca.pem')}`, join(phpRoot, 'server', script), ...args],
       { env: { PATH: process.env.PATH ?? '', ...env } }, (error, stdout, stderr) => {
@@ -70,17 +79,8 @@ before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'oys-cli-'));
   const db = BASE.db as ConfigData;
   admin = await mysql.createConnection({ host: String(db.host), user: String(db.user), password: String(db.pass), charset: 'utf8mb4_unicode_ci' });
-  if (HAS_PHP) {
-    // Kopie der PHP-Version (lib/ wirklich kopiert: PHP löst __DIR__ über Verknüpfungen hinweg auf und läse sonst die
-    // config.php des Repositorys)
-    phpRoot = join(dir, 'php');
-    mkdirSync(join(phpRoot, 'server'), { recursive: true });
-    mkdirSync(join(phpRoot, 'email'));
-    cpSync(join(PHP_REF, 'lib'), join(phpRoot, 'lib'), { recursive: true });
-    for (const f of ['db.php', 'security.php', 'mail.php', 'blacklist.php']) cpSync(join(PHP_REF, f), join(phpRoot, f));
-    for (const f of ['create-admin.php', 'cert-alert.php']) cpSync(join(PHP_REF, 'server', f), join(phpRoot, 'server', f));
-    symlinkSync(join(PHP_REF, 'PHPMailer'), join(phpRoot, 'PHPMailer'));
-  }
+  // Kopie der PHP-Version mit eigener config.php (je Aufruf neu geschrieben)
+  if (!PHP_SKIP) phpRoot = phpTree(BASE, dir);
 });
 
 after(async () => {
@@ -155,10 +155,10 @@ test('check --native loads sharp and @napi-rs/canvas and draws a picture', async
 
 const KEY = 'unit-test-key-' + 'k'.repeat(18);
 
-// Werte wie PHP sie verschlüsselt: mit security.php und demselben Schlüssel (nur solange PHP da ist), sonst mit Node
+// Werte wie PHP sie verschlüsselt: mit security.php und demselben Schlüssel (mit OYS_PHP_REF), sonst mit Node
 function phpEncrypt(values: string[], key: string): string[] {
-  if (!HAS_PHP) return values.map(enc);
-  const code = `define('AES_256_KEY', $argv[1]); require '${join(PHP_REF, 'security.php')}'; echo json_encode(array_map('encryptData', json_decode(stream_get_contents(STDIN), true)));`;
+  if (PHP_SKIP) return values.map(enc);
+  const code = `define('AES_256_KEY', $argv[1]); require '${phpRef('security.php')}'; echo json_encode(array_map('encryptData', json_decode(stream_get_contents(STDIN), true)));`;
   return JSON.parse(execFileSync('php', ['-d', 'display_errors=0', '-r', code, key], { input: JSON.stringify(values) }).toString());
 }
 
@@ -218,22 +218,12 @@ test('check --crypto fails with exit code 1 on a wrong key or broken values and 
   assert.match(r.err, /^2 encrypted values can’t be read .*messages\.email id 2; oys_meta\.discord meta_key discord/);
 });
 
-test('check --crypto --php gets the same bytes from PHP (key from config.json or from config.php)', { skip: !HAS_PHP && 'needs PHP and the PHP version' }, async () => {
-  await cryptoDb();
-  let r = await node(['check', '--crypto', '--php'], DB.crypt, {}, { aes_key: KEY });
-  assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /PHP decrypts all 14 values the same way\.\n/);
-  // Schlüssel aus einer config.php, die nur PHP selbst liest (prüft auch die Umwandlung nach config.json)
-  const phpConfig = join(dir, 'config-for-check.php');
-  writeFileSync(phpConfig, `<?php return ['aes_key' => '${KEY}'];`);
-  r = await node(['check', '--crypto', '--php', '--php-config', phpConfig], DB.crypt, {}, { aes_key: KEY });
-  assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /PHP decrypts all 14 values the same way \(with the key from .*config-for-check\.php\)\./);
-  // Ein anderer Schlüssel (die ersten 32 Zeichen zählen – mehr schneidet openssl ab)
-  writeFileSync(phpConfig, `<?php return ['aes_key' => 'X${KEY.slice(1)}'];`);
-  r = await node(['check', '--crypto', '--php', '--php-config', phpConfig], DB.crypt, {}, { aes_key: KEY });
-  assert.equal(r.code, 1);
-  assert.match(r.err, /^14 of 14 values decrypt differently in PHP/);
+test('check --crypto takes no other options', async () => {
+  for (const args of [['check', '--crypto', '--php'], ['check', '--crypto', '--extra'], ['check']]) {
+    const r = await node(args, DB.crypt);
+    assert.equal(r.code, 1, args.join(' '));
+    assert.equal(r.err, 'Usage: node app/dist/cli.js check --native | check --crypto\n');
+  }
 });
 
 // ---------------------------------------------------------------- create-admin = server/create-admin.php
@@ -269,9 +259,25 @@ async function adminRows(dbName: string): Promise<unknown> {
   };
 }
 
-test('create-admin answers like server/create-admin.php and writes the same rows', { skip: !HAS_PHP && 'needs PHP and the PHP version' }, async () => {
+test('create-admin creates the first admin with a page and refuses taken or invalid values', async () => {
+  await recreateWithSchema(DB.node);
+  const outs: Array<{ code: number; out: string; err: string }> = [];
+  for (const env of ADMIN_CASES) outs.push(await node(['create-admin'], DB.node, env));
+  assert.deepEqual(outs.map((o) => o.code), [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0]);
+  assert.equal(outs[0].err, 'Please fill in everything.\n');
+  assert.equal(outs[2].err, 'Please enter a valid email address.\n');
+  assert.equal(outs[3].err, 'The password must be at least 8 characters long.\n');
+  assert.equal(outs[11].err, 'This email address or page address is already taken.\n');
+  assert.match(outs[10].out, /^Admin account created – log in at https:\/\/oys\.test:8080\/login with pixel@example\.com\. Your page: https:\/\/mypage\.oys\.test:8080\/?\n$/);
+  const n = (await adminRows(DB.node)) as { users: Array<Record<string, unknown>>; passwords: string[]; pages: unknown[] };
+  assert.deepEqual(n.users.map((u) => [u.email, u.username, u.is_admin]), [['pixel@example.com', 'mypage', 1], ['mia@example.com', 'mia', 1]]);
+  assert.equal(n.pages.length, 2);
+  assert.equal(await passwordVerify('pässwörd', n.passwords[0]), true);
+});
+
+test('create-admin answers like server/create-admin.php and writes the same rows', { skip: PHP_SKIP }, async () => {
   await recreate(DB.php);
-  await recreate(DB.node);
+  await recreateWithSchema(DB.node);
   for (const env of ADMIN_CASES) {
     const p = await php('create-admin.php', [], DB.php, env);
     const n = await node(['create-admin'], DB.node, env);
@@ -291,7 +297,7 @@ test('create-admin answers like server/create-admin.php and writes the same rows
   }
 });
 
-test('create-admin prints the setup page and ends with 0 when the database is down, like PHP', { skip: !HAS_PHP && 'needs PHP and the PHP version' }, async () => {
+test('create-admin prints the setup page and ends with 0 when the database is down', async () => {
   const db = BASE.db as ConfigData;
   const n = await node(['create-admin'], DB.node, { OYS_NAME: 'x' }, { db: { ...db, name: DB.node, pass: 'wrong-' + 'password' } });
   assert.equal(n.code, 0);
@@ -317,7 +323,7 @@ function certs(): { ca: string; key: string; cert: string } {
 }
 
 function smtpJson(settings: Record<string, unknown> | null): void {
-  for (const d of [join(phpRoot, 'email'), join(dir, 'node-email')]) {
+  for (const d of phpRoot ? [join(phpRoot, 'email'), join(dir, 'node-email')] : [join(dir, 'node-email')]) {
     mkdirSync(d, { recursive: true });
     const f = join(d, 'smtp.json');
     if (settings === null) rmSync(f, { force: true });
@@ -327,21 +333,51 @@ function smtpJson(settings: Record<string, unknown> | null): void {
 }
 
 // Was beim SMTP-Server ankam: Empfänger, Betreff, Text (Pfad zur PHP-Kopie durch den Code-Ordner ersetzt)
-function received(from: number): Array<{ rcpt: string[]; from: string | null; subject: string; text: string; type: string }> {
-  return sink.sessions.slice(from).filter((s) => s.data).map((s) => {
+function received(from: number, server = sink): Array<{ rcpt: string[]; from: string | null; subject: string; text: string; type: string }> {
+  return server.sessions.slice(from).filter((s) => s.data).map((s) => {
     const msg = parseMessage(s.data!);
     const part = leaves(msg)[0];
     return {
       rcpt: s.rcpt,
       from: s.mailFrom,
       subject: decodeWords(header(msg, 'subject') ?? ''),
-      text: part.body.toString('utf8').replace(/\r\n/g, '\n').split(phpRoot).join(ROOT_DIR).replace(/\n+$/, ''),
+      text: part.body.toString('utf8').replace(/\r\n/g, '\n').split(phpRoot || '\0').join(ROOT_DIR).replace(/\n+$/, ''),
       type: part.type,
     };
   });
 }
 
-test('cert-alert warns every admin like server/cert-alert.php', { skip: !HAS_PHP && 'needs PHP and the PHP version' }, async () => {
+// Zwei Admins und ein normales Konto in einer frischen Datenbank
+async function certDb(name: string): Promise<void> {
+  await recreateWithSchema(name);
+  await admin.query(`INSERT INTO \`${name}\`.users (email, password, full_name, username, is_admin) VALUES ('boss@example.com', 'h', 'Boss', 'boss', 1), ('user@example.com', 'h', 'User', 'user', 0), ('ops@example.com', 'h', 'Ops', 'ops', 1)`);
+}
+
+test('cert-alert warns every admin by mail and does nothing without a mail server', async () => {
+  const c = certs();
+  tls.setDefaultCACertificates([...tls.getCACertificates('default'), c.ca]);
+  const server = new SmtpSink({ user: SMTP_USER, pass: SMTP_PASS }, { key: c.key, cert: c.cert });
+  server.behavior = { startTls: true };
+  const port = await server.listen('127.0.0.1', 0, false);
+  try {
+    await certDb(DB.node);
+    smtpJson(null);
+    let n = await node(['cert-alert', '12'], DB.node);
+    assert.deepEqual(n, { code: 1, out: '', err: 'No mail server is set up (Admin → Mail Server) – no warning sent.\n' });
+    smtpJson({ host: '127.0.0.1', port, username: SMTP_USER, password: SMTP_PASS, from_email: 'noreply@oys.test', from_name: 'OnYourSite' });
+    n = await node(['cert-alert', '12'], DB.node);
+    assert.deepEqual(n, { code: 0, out: 'Warning sent to 2 of 2 admins.\n', err: '' });
+    const mails = received(0, server);
+    assert.deepEqual(mails.map((m) => m.rcpt), [['boss@example.com'], ['ops@example.com']]);
+    assert.equal(mails[0].subject, 'HTTPS certificate of oys.test expires in 12 days');
+    assert.equal(mails[0].type, 'text/plain');
+    assert.ok(mails[0].text.includes(`sudo bash ${ROOT_DIR}/server/install.sh --https`), mails[0].text);
+  } finally {
+    await server.close();
+  }
+});
+
+test('cert-alert warns every admin like server/cert-alert.php', { skip: PHP_SKIP }, async () => {
   const c = certs();
   tls.setDefaultCACertificates([...tls.getCACertificates('default'), c.ca]);
   sink = new SmtpSink({ user: SMTP_USER, pass: SMTP_PASS }, { key: c.key, cert: c.cert });
@@ -349,15 +385,7 @@ test('cert-alert warns every admin like server/cert-alert.php', { skip: !HAS_PHP
   sinkPort = await sink.listen('127.0.0.1', 0, false);
   try {
     // Gleiche Daten in beiden Datenbanken: zwei Admins, ein normales Konto
-    for (const name of [DB.php, DB.node]) {
-      await recreate(name);
-      setConfigForTests(config(name));
-      await closePool();
-      await ensureSchema();
-      await closePool();
-      setConfigForTests(BASE);
-      await admin.query(`INSERT INTO \`${name}\`.users (email, password, full_name, username, is_admin) VALUES ('boss@example.com', 'h', 'Boss', 'boss', 1), ('user@example.com', 'h', 'User', 'user', 0), ('ops@example.com', 'h', 'Ops', 'ops', 1)`);
-    }
+    for (const name of [DB.php, DB.node]) await certDb(name);
     const settings = { host: '127.0.0.1', port: sinkPort, username: SMTP_USER, password: SMTP_PASS, from_email: 'noreply@oys.test', from_name: 'OnYourSite' };
     const cases: Array<[string, Record<string, unknown> | null, string[], { startTls?: boolean; rejectRcpt?: boolean }?]> = [
       ['no smtp.json', null, ['12']],

@@ -1,19 +1,20 @@
-// Markdown der Updates (oys_markdown, oys_md_plain, oys_md_link, oys_md_emphasis) gegen die echten PHP-Funktionen:
-// feste Fälle, gezielt feindliche Links und Zufallstexte – Byte für Byte gleich. Dazu die Zeichenklassen von PCRE2.
+// Markdown der Updates (oys_markdown, oys_md_plain, oys_md_link, oys_md_emphasis) gegen die echten PHP-Funktionen der
+// PHP-Version (siehe support/phpRef.ts): feste Fälle, gezielt feindliche Links und Zufallstexte – Byte für Byte gleich.
+// Dazu die Zeichenklassen von PCRE2.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR } from '../src/config.js';
 import { markdown, mdEmphasis, mdLink, mdPlain } from '../src/updates/markdown.js';
 import { ASCII_WS, UCP_DIGIT, UCP_WORD, UCP_WS, ucpRanges } from '../src/updates/pcre.js';
 import { random } from './fixtures/updates/random.js';
+import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
 
 function php(code: string, input: unknown): unknown {
-  const script = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
-    + `require '${ROOT_DIR}/lib/helpers.php'; require '${ROOT_DIR}/lib/updates.php';`
+  const script = `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');`
+    + `require '${phpFile('lib/helpers.php')}'; require '${phpFile('lib/updates.php')}';`
     + `$in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in);`
     + 'echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);';
-  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(input), cwd: ROOT_DIR, maxBuffer: 256 * 1024 * 1024 }).toString());
+  return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(input), cwd: phpRoot(), maxBuffer: 256 * 1024 * 1024 }).toString());
 }
 
 type Rendered = [string, string, string, string];
@@ -74,11 +75,11 @@ const CASES = [
   'Use snake_case and /updates#roadmap, **bold** and _it_', '**Bold** [link](https://x.de)\n`code`',
 ];
 
-test('markdown: fixed cases match PHP byte for byte', () => {
+test('markdown: fixed cases match PHP byte for byte', { skip: PHP_SKIP }, () => {
   compare(CASES);
 });
 
-test('markdown: random documents match PHP byte for byte', () => {
+test('markdown: random documents match PHP byte for byte', { skip: PHP_SKIP }, () => {
   const parts = ['# ', '## ', '### ', '#### ', '#', '- ', '* ', '\u{2022} ', '1. ', '2) ', '10. ', '\u{661}. ', '\u{1E950}) ', '\u{1E4F0}. ', '> ', '>', '```', '```js',
     '`', '**', '*', '_', '__', '~~', '~', '[', ']', '(', ')', '](', '[x](https://a.b/c)', '[lbl](/path)', '[top](#)', '[m](mail@x.de)', '[j](javascript:alert(1))',
     '[e](//evil.com)', '[b](/\\evil.com)', '[d](data:text/html,x)', '[t](tel:+491234567)', '[f](ftp://x.y)', 'https://example.com/a_(b)', 'http://www.foo.com/!',
@@ -96,7 +97,7 @@ test('markdown: random documents match PHP byte for byte', () => {
   compare(inputs);
 });
 
-test('markdown: random emphasis, code and link soup matches PHP byte for byte', () => {
+test('markdown: random emphasis, code and link soup matches PHP byte for byte', { skip: PHP_SKIP }, () => {
   // Kleiner Vorrat, damit Paare von *, **, _, ~~, ` und Klammern oft aufeinandertreffen
   const parts = ['*', '**', '_', '__', '~~', '`', 'a', 'b', ' ', ' ', '\u{A0}', '[', ']', '(', ')', 'https://x.y', '/p', '#t', '\u{E4}', '\n', '\x01', '1', '&', '<'];
   const rnd = random(777);
@@ -110,7 +111,7 @@ test('markdown: random emphasis, code and link soup matches PHP byte for byte', 
   compare(inputs);
 });
 
-test('markdown: very long links fail like the JIT stack of PCRE in PHP', () => {
+test('markdown: very long links fail like the JIT stack of PCRE in PHP', { skip: PHP_SKIP }, () => {
   // PHP bricht bei sehr langen Adressen mit „JIT stack limit exhausted“ ab: die Zeile bzw. der Klartext wird leer.
   // Gezählt wird je Durchlauf der Gruppe (Byte oder (…)-Gruppe) – hier genau an den Grenzen und knapp darüber.
   const x = (n: number): string => 'x'.repeat(n);
@@ -129,7 +130,7 @@ test('markdown: very long links fail like the JIT stack of PCRE in PHP', () => {
   compare(inputs);
 });
 
-test('markdown: random long links around the JIT limit match PHP', () => {
+test('markdown: random long links around the JIT limit match PHP', { skip: PHP_SKIP }, () => {
   // Läufe aus 1- bis 4-Byte-Zeichen, (…)-Gruppen und Satzzeichen am Ende, knapp unter und über den Grenzen
   const parts = ['x', 'x', 'x', '\u{E4}', '\u{20AC}', '\u{1F41D}', '(y)', '()', '.', '_', '-', '/', '?', '&', '=', '[', ']'];
   // Für nackte Adressen ohne [ und ] – sonst entstehen darin [Links](…), deren Platzhalter den Lauf teilen
@@ -155,20 +156,26 @@ test('markdown: random long links around the JIT limit match PHP', () => {
   compare(inputs);
 });
 
-test('markdown: floods of [ stay fast in the plain text and match PHP', () => {
-  // JavaScript verfolgte /\[([^\]\n]+)\]\(/ von jedem „[“ aus zurück – bei 20 000 Zeichen fast zwei Sekunden (PHP: 1 ms)
+// JavaScript verfolgte /\[([^\]\n]+)\]\(/ von jedem „[“ aus zurück – bei 20 000 Zeichen fast zwei Sekunden (PHP: 1 ms)
+const FLOODS = (): string[] => {
   const n = 20000;
-  const inputs = ['['.repeat(n - 1) + ')', '['.repeat(n), '[a'.repeat(n / 2 - 1) + ')', ('['.repeat(99) + '\n').repeat(n / 100) + ')',
+  return ['['.repeat(n - 1) + ')', '['.repeat(n), '[a'.repeat(n / 2 - 1) + ')', ('['.repeat(99) + '\n').repeat(n / 100) + ')',
     ('[' + 'a'.repeat(300)).repeat(n / 301) + ')', '](' .repeat(n / 2), '[a](' + '('.repeat(n - 6) + ')', '[a](x' + '[b](y)'.repeat(n / 6) + ' )'];
-  for (const s of inputs) {
+};
+
+test('markdown: floods of [ stay fast in the plain text', () => {
+  for (const s of FLOODS()) {
     const t = performance.now();
     mdPlain(s, 280);
     assert.ok(performance.now() - t < 500, `too slow for ${JSON.stringify(s.slice(0, 20))}`);
   }
-  compare(inputs);
 });
 
-test('markdown: links and emphasis on their own match PHP', () => {
+test('markdown: floods of [ match PHP', { skip: PHP_SKIP }, () => {
+  compare(FLOODS());
+});
+
+test('markdown: links and emphasis on their own match PHP', { skip: PHP_SKIP }, () => {
   const urls = ['/', '/dashboard', '//evil.com', '/\\evil.com', '#', '#roadmap', '#"x', 'https://a.b', 'example.org', 'someone@example.com', 'javascript:alert(1)',
     'ftp://a.b', 'mailto:a@b.c', 'tel:+4912345', '+49 123 4567', 'data:x', 'https://a.b/\u{E4}', 'HTTP://A.B', '', ' ', 'https://a.b/"<>', '\u{FF0F}x'];
   const labels = ['x', '<b>&amp;', '**y**'];
@@ -178,7 +185,7 @@ test('markdown: links and emphasis on their own match PHP', () => {
   assert.deepEqual(texts.map(mdEmphasis), php('return array_map("oys_md_emphasis", $in);', texts));
 });
 
-test('the Unicode classes are exactly those of PCRE2 in PHP', () => {
+test('the Unicode classes are exactly those of PCRE2 in PHP', { skip: PHP_SKIP }, () => {
   const theirs = php(`$sets = []; foreach (['d' => '/^\\d$/u', 'w' => '/^\\w$/u', 's' => '/^\\s$/u'] as $name => $re) {
       $r = []; $start = null; $prev = null;
       for ($cp = 0; $cp <= 0x10FFFF; $cp++) { if ($cp >= 0xD800 && $cp <= 0xDFFF) continue;

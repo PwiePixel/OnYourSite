@@ -1,10 +1,11 @@
-// Termin-Anfrage gegen PHP (views/kalender.php): dieselben gültigen Anfragen laufen in PHP und Node auf je einer
-// frischen Kopie der Test-Datenbank. Weiterleitung, die E-Mail an den Besitzer (Vorlage, Platzhalter in ihrer
-// Reihenfolge, Betreff, Antwortadresse) und alle betroffenen Tabellen müssen übereinstimmen – die Golden-Master-Suite
-// vergleicht E-Mails nicht, weil es dort keinen SMTP-Server gibt.
+// Termin-Anfrage gegen PHP (views/kalender.php der PHP-Version, siehe support/phpRef.ts): dieselben gültigen Anfragen
+// laufen in PHP und Node auf je einer frischen Kopie der Test-Datenbank. Weiterleitung, die E-Mail an den Besitzer
+// (Vorlage, Platzhalter in ihrer Reihenfolge, Betreff, Antwortadresse) und alle betroffenen Tabellen müssen
+// übereinstimmen – die Golden-Master-Suite vergleicht E-Mails nicht, weil es dort keinen SMTP-Server gibt. Ohne PHP
+// laufen die Anfragen nur in Node (eigene Kopie) und werden an Stichproben geprüft.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ROOT_DIR, loadConfig, setConfigForTests } from '../src/config.js';
+import { loadConfig, setConfigForTests } from '../src/config.js';
 import { closePool, exec } from '../src/db.js';
 import { decryptData, hmac } from '../src/crypto.js';
 import { date, strtotime, time, type PhpArray } from '../src/php.js';
@@ -13,15 +14,18 @@ import { loadPage } from '../src/content/pages.js';
 import { jsonDecode } from '../src/content/util.js';
 import { kalender, setBookingMailerForTests } from '../src/public/views/kalender.js';
 import { copyDatabase, configWith, runPhp, type DbCopies } from './filesHarness.js';
-import { PHP_RENDER_LIBS } from './renderHarness.js';
+import { phpRenderLibs } from './renderHarness.js';
+import { PHP_SKIP, phpFile } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const TABLES = ['user_bookings', 'notifications', 'rate_limits'];
 let dbs: DbCopies;
+let solo: DbCopies;
 let started = 0;
 
 before(async () => {
   dbs = await copyDatabase('pk');
+  solo = await copyDatabase('pks');
   started = time();
 });
 
@@ -29,6 +33,7 @@ after(async () => {
   setConfigForTests(BASE);
   await closePool();
   await dbs.drop();
+  await solo.drop();
 });
 
 // Nur Seiten aus gm/pristine.sql; sql = Änderungen vor der Anfrage (in beiden Kopien gleich)
@@ -51,7 +56,7 @@ const SCENARIOS: Scenario[] = [
   { pageId: 3, key: '', host: 'tom.oys.test:8080', sql: ['UPDATE pages SET user_id = 99 WHERE id = 3'], post: { t: token(3), guest_name: 'Nobody', guest_email: 'n@example.org', booking_date: inDays(1), booking_time: '13:00' } },
 ];
 
-const PHP_SCRIPT = `${PHP_RENDER_LIBS}
+const phpScript = (): string => `${phpRenderLibs()}
   $c = $in;
   foreach ($c['sql'] ?? [] as $sql) $pdo->exec($sql);
   $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -66,7 +71,7 @@ const PHP_SCRIPT = `${PHP_RENDER_LIBS}
   register_shutdown_function(function () {
     echo json_encode(['status' => http_response_code(), 'location' => $GLOBALS['okUrl'] ?? null, 'mails' => $GLOBALS['mails']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
   });
-  include '${ROOT_DIR}/views/kalender.php';`;
+  include '${phpFile('views/kalender.php')}';`;
 
 // Zeitstempel von „jetzt“ und verschlüsselte Werte (zufälliger IV) vereinheitlichen
 function normalize(json: string): string {
@@ -78,12 +83,9 @@ function normalize(json: string): string {
     .replace(/ENC:[A-Za-z0-9+/=]+/g, (m) => 'DEC(' + String(decryptData(m)) + ')');
 }
 
-test('a valid booking request writes, notifies and mails exactly like views/kalender.php', async () => {
-  // PHP: jede Anfrage in einem eigenen Prozess (exit), alle auf derselben Kopie
-  const phpOut: string[] = [];
-  for (const s of SCENARIOS) phpOut.push(runPhp(PHP_SCRIPT, JSON.stringify(s), { config: configWith(BASE, dbs.names.php), db: true }));
-
-  setConfigForTests(configWith(BASE, dbs.names.node));
+// Die Anfragen in Node auf dieser Datenbank: Status, Ziel und die E-Mails je Anfrage
+async function nodeRun(db: string): Promise<string[]> {
+  setConfigForTests(configWith(BASE, db));
   await closePool();
   const nodeOut: string[] = [];
   const mails: unknown[][] = [];
@@ -108,6 +110,24 @@ test('a valid booking request writes, notifies and mails exactly like views/kale
     await closePool();
     setConfigForTests(BASE);
   }
+  return nodeOut;
+}
+
+test('a valid booking request writes, notifies and mails the owner', async () => {
+  const before = Number((await solo.dump(solo.names.node, ['user_bookings'])).user_bookings.length);
+  const out = (await nodeRun(solo.names.node)).map((x) => JSON.parse(x) as { status: number; location: string; mails: unknown[][] });
+  assert.deepEqual(out.map((o) => o.status), SCENARIOS.map(() => 303));
+  assert.equal(out[2].location, 'http://oys.test:8080/lea/kalender?k=k3y&ok=1');
+  assert.deepEqual(out.map((o) => o.mails.length), [1, 1, 1, 0]);
+  assert.equal(out[0].mails[0][1], 'new_booking');
+  assert.equal((await solo.dump(solo.names.node, ['user_bookings'])).user_bookings.length, before + SCENARIOS.length);
+});
+
+test('a valid booking request writes, notifies and mails exactly like views/kalender.php', { skip: PHP_SKIP }, async () => {
+  // PHP: jede Anfrage in einem eigenen Prozess (exit), alle auf derselben Kopie
+  const phpOut: string[] = [];
+  for (const s of SCENARIOS) phpOut.push(runPhp(phpScript(), JSON.stringify(s), { config: configWith(BASE, dbs.names.php), db: true }));
+  const nodeOut = await nodeRun(dbs.names.node);
 
   for (let i = 0; i < SCENARIOS.length; i++) {
     assert.deepEqual(jsonDecode(normalize(nodeOut[i])), jsonDecode(normalize(phpOut[i])), `scenario ${i}`);

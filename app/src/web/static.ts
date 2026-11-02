@@ -1,6 +1,6 @@
 // Dateien direkt ausliefern (das hat bisher Apache gemacht): /static/**, /robots.txt. Wie Apache mit ETag und
-// Last-Modified, ohne Cache-Control – nur Schriften bekommen CORS und ein Jahr Cache (.htaccess). Teilbereiche (Range)
-// wie Apache, denn Safari lädt Musik nur so.
+// Last-Modified, ohne Cache-Control – nur Schriften bekommen CORS und ein Jahr Cache (wie mit der .htaccess von 2.x).
+// Teilbereiche (Range) wie Apache, denn Safari lädt Musik nur so.
 //
 // Sicherheit: Wie Apache (2.4, Einstellungen aus server/install.sh) wird die Adresse zuerst geprüft, dekodiert und
 // normalisiert (apachePath: %2e%2e = .., // = /, kodierter Schrägstrich 404, über die Wurzel hinaus 400), erst dann
@@ -25,11 +25,15 @@ const TYPES: Record<string, string> = {
   '.m4a': 'audio/mp4', '.vcf': 'text/vcard',
 };
 // Wie Apache: Texte mit Zeichensatz-Angabe nur, wenn AddDefaultCharset aktiv ist – das ist es auf Debian nicht
-const DENY = [/^(lib|cron|email|PHPMailer|tests|views|discord-bot|server|app|node_modules)(\/|$)/, /(^|\/)\.env$/, /^config(\.example)?\.(php|json)$/, /(^|\/)\.git(\/|$)/, /(^|\/)\./];
+
+// Interne Ordner und Zugangsdaten im Code-Ordner. Die Ordner der PHP-Version (lib, views, cron, tests, PHPMailer) gibt
+// es seit 3.0 nicht mehr: unter diesen Namen antwortet die Seite wie unter jedem anderen Pfad (Code-Seiten dürfen solche
+// Ordner haben). Ausgeliefert wird ohnehin nur, was in static/ liegt, und robots.txt.
+const DENY = [/^(email|discord-bot|server|app|node_modules)(\/|$)/, /(^|\/)\.env$/, /^config(\.example)?\.(php|json)$/, /(^|\/)\.git(\/|$)/, /(^|\/)\./];
 // static/uploads/.htaccess: nie als Skript, HTML oder SVG ausliefern
 const UPLOAD_DENY = /\.(php[0-9]?|phtml|phar|pl|py|cgi|sh|html?|svg|js)$/;
 
-// .htaccess-Sperren: 403 für interne Ordner und Zugangsdaten, in static/uploads/ auch für Skripte, HTML und SVG – über
+// Sperren: 403 für interne Ordner und Zugangsdaten, in static/uploads/ auch für Skripte, HTML und SVG – über
 // den Namen, auch wenn die Datei fehlt (Apache prüft den ersten Teil, den es nicht gibt: /static/uploads/x.php/y ist
 // ebenso gesperrt). path ist der Pfad nach apachePath() (dekodiert und normalisiert, mit führendem /); Groß-/
 // Kleinschreibung zählt.
@@ -187,7 +191,7 @@ function escapeUri(path: string): string {
 }
 
 // URL wie ap_construct_url() mit UseCanonicalName Off: Host aus der Anfrage, Port nur, wenn er nicht der übliche ist; das
-// Schema aus den Einstellungen (im Betrieb immer https, die .htaccess leitet vorher um)
+// Schema aus den Einstellungen (im Betrieb immer https, der Router leitet vorher um)
 export function apacheUrl(ctx: Ctx, path: string): string {
   const scheme = configString('scheme', 'https') === 'http' ? 'http' : 'https';
   const colon = ctx.hostHeader.lastIndexOf(':');

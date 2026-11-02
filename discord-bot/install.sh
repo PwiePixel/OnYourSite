@@ -128,7 +128,7 @@ else
   case "$SRC" in
     /var/www/*|*/httpdocs/*|*/public_html/*)
       info "Note: this is inside a website folder, and the settings file (.env) would be stored here."
-      info "The .htaccess blocks it, but --service keeps the settings in /etc instead." ;;
+      info "The website never serves it, but --service keeps the settings in /etc instead." ;;
   esac
 fi
 

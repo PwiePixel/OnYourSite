@@ -4,16 +4,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { ROOT_DIR } from '../src/config.js';
 import { hasRawBytes, mbStrlen, mbSubstr, phpBytes, phpText, rawurlencode, strlen, urlencode, type PhpValue } from '../src/php.js';
 import { cleanText, cleanUrl } from '../src/helpers.js';
 import { e, xmlEscape } from '../src/html.js';
 import { md5Hex, passwordHash, passwordVerify, sha256Hex } from '../src/crypto.js';
 import { readBody } from '../src/server.js';
 import { makeTestCtx } from '../src/web/ctx.js';
+import { PHP_SKIP, phpFile } from './support/phpRef.js';
 
 function php(code: string, input: unknown): unknown {
-  const script = `require '${ROOT_DIR}/lib/config.php'; require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php'; mb_internal_encoding('UTF-8');`
+  const script = `require '${phpFile('lib/config.php')}'; require '${phpFile('blacklist.php')}'; require '${phpFile('lib/helpers.php')}'; mb_internal_encoding('UTF-8');`
     + `$in = json_decode(stream_get_contents(STDIN), true); $out = (function ($in) { ${code} })($in); echo json_encode($out);`;
   return JSON.parse(execFileSync('php', ['-r', script], { input: JSON.stringify(input), maxBuffer: 1 << 26 }).toString());
 }
@@ -41,7 +41,7 @@ test('raw bytes survive the round trip and valid text stays as it was', () => {
   assert.equal(hasRawBytes('💀'), false);
 });
 
-test('length, mb_*, cleaning, escaping, URL encoding and hashes of raw bytes match PHP', () => {
+test('length, mb_*, cleaning, escaping, URL encoding and hashes of raw bytes match PHP', { skip: PHP_SKIP }, () => {
   const inputs = randomBytes(1500, 11);
   const ref = php(`return array_map(function ($h) { $s = hex2bin($h); return [strlen($s), mb_strlen($s), bin2hex(mb_substr($s, 0, 3)), bin2hex(mb_substr($s, 1)),
     bin2hex(oys_clean_text($s)), bin2hex(oys_clean_text($s, 255, true)), bin2hex(oys_clean_url($s)), bin2hex(e($s)), bin2hex(htmlspecialchars($s, ENT_XML1 | ENT_QUOTES)),
@@ -61,7 +61,7 @@ const hexTree = (v: PhpValue): unknown => (typeof v === 'string' ? hex(v)
   : Object.entries(v).map(([k, x]) => [hex(k), hexTree(x)]).sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)));
 const PHP_HEX_TREE = 'function h($v) { if (!is_array($v)) return bin2hex($v); $o = []; foreach ($v as $k => $x) $o[] = [bin2hex((string) $k), h($x)]; usort($o, fn ($a, $b) => strcmp($a[0], $b[0])); return $o; }';
 
-test('form bodies and query strings keep raw bytes like PHP', async () => {
+test('form bodies and query strings keep raw bytes like PHP', { skip: PHP_SKIP }, async () => {
   const bodies = [Buffer.from('name=Mia%FF&pw=%E2%82%ED%A0%80&ok=%C3%A4&raw=', 'latin1'), Buffer.concat([Buffer.from('direct='), Buffer.from([0xff, 0xc3]), Buffer.from('&k%FE=v')]),
     Buffer.from('a[%FF]=1&a[b%C3]=2&x=%25%FF%2B+%FF', 'latin1'), ...randomBytes(300, 21).map((b) => Buffer.concat([Buffer.from('f='), b, Buffer.from('&g%C3'), b]))];
   const ref = php(`${PHP_HEX_TREE} return array_map(function ($b) { parse_str(hex2bin($b), $o); return h($o); }, $in);`, bodies.map((b) => b.toString('hex'))) as unknown[];
@@ -75,19 +75,39 @@ test('form bodies and query strings keep raw bytes like PHP', async () => {
   assert.deepEqual(hexTree(ctx.get), (php(`${PHP_HEX_TREE} parse_str($in, $o); return h($o);`, 'q=%FF%FEa&n=%F0%9F%98%80')));
 });
 
-test('sign-up checks see the bytes PHP sees: name is cleaned to nothing, the password length counts bytes', async () => {
-  // 7 rohe Bytes: PHP zählt 7 (zu kurz), mit U+FFFD wären es 21 Bytes gewesen
-  const body = 'fullname=Mia%FF&password=%FF%FF%FF%FF%FF%FF%FF&password2=%FF%FF%FF%FF%FF%FF%FF%FF';
+// 7 rohe Bytes: PHP zählt 7 (zu kurz), mit U+FFFD wären es 21 Bytes gewesen
+const SIGN_UP = 'fullname=Mia%FF&password=%FF%FF%FF%FF%FF%FF%FF&password2=%FF%FF%FF%FF%FF%FF%FF%FF';
+async function signUpChecks(): Promise<unknown[]> {
   const ctx = makeTestCtx({ method: 'POST', url: '/register' });
-  await readBody(ctx, 'application/x-www-form-urlencoded', Buffer.from(body));
-  const mine = [cleanText(ctx.post.fullname ?? '', 120), strlen(ctx.p('password')), strlen(ctx.p('password2'))];
-  assert.deepEqual(mine, php(`parse_str($in, $p); return [oys_clean_text($p['fullname'] ?? '', 120), strlen($p['password']), strlen($p['password2'])];`, body));
-  assert.deepEqual(mine, ['', 7, 8]);
+  await readBody(ctx, 'application/x-www-form-urlencoded', Buffer.from(SIGN_UP));
+  return [cleanText(ctx.post.fullname ?? '', 120), strlen(ctx.p('password')), strlen(ctx.p('password2'))];
+}
+
+test('sign-up checks see the raw bytes: name is cleaned to nothing, the password length counts bytes', async () => {
+  assert.deepEqual(await signUpChecks(), ['', 7, 8]);
 });
 
-test('passwords with raw bytes hash and verify like PHP in both directions', async () => {
-  const raw = [Buffer.from([0xff, 0xfe, 0x41]), Buffer.from('pass\xe2\x82word', 'latin1'), Buffer.from([0xed, 0xa0, 0x80, 0x61]), Buffer.from([0xc3, 0xa4, 0xff]),
-    Buffer.concat([Buffer.alloc(70, 0x78), Buffer.from([0xff, 0xff, 0xff])]), ...randomBytes(6, 5).filter((b) => b.length > 0 && !b.includes(0))];
+test('sign-up checks see the bytes PHP sees', { skip: PHP_SKIP }, async () => {
+  assert.deepEqual(await signUpChecks(), php(`parse_str($in, $p); return [oys_clean_text($p['fullname'] ?? '', 120), strlen($p['password']), strlen($p['password2'])];`, SIGN_UP));
+});
+
+const rawPasswords = (): Buffer[] => [Buffer.from([0xff, 0xfe, 0x41]), Buffer.from('pass\xe2\x82word', 'latin1'), Buffer.from([0xed, 0xa0, 0x80, 0x61]), Buffer.from([0xc3, 0xa4, 0xff]),
+  Buffer.concat([Buffer.alloc(70, 0x78), Buffer.from([0xff, 0xff, 0xff])]), ...randomBytes(6, 5).filter((b) => b.length > 0 && !b.includes(0))];
+
+test('passwords with raw bytes hash and verify by their bytes', async () => {
+  for (const b of rawPasswords()) {
+    const hash = await passwordHash(phpText(b));
+    assert.match(hash, /^\$2y\$10\$[./A-Za-z0-9]{53}$/);
+    assert.equal(await passwordVerify(phpText(b), hash), true, b.toString('hex'));
+    const other = Buffer.from(b);
+    other[other.length - 1] ^= 0x01;
+    // Andere Bytes nach den ersten 72 zählen bei bcrypt nicht mit
+    if (b.length <= 72) assert.equal(await passwordVerify(phpText(other), hash), false, other.toString('hex'));
+  }
+});
+
+test('passwords with raw bytes hash and verify like PHP in both directions', { skip: PHP_SKIP }, async () => {
+  const raw = rawPasswords();
   const pws = raw.map(phpText);
   const nodeHashes = await Promise.all(pws.map((p) => passwordHash(p)));
   for (const h of nodeHashes) assert.match(h, /^\$2y\$10\$[./A-Za-z0-9]{53}$/);

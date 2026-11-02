@@ -1,12 +1,14 @@
-// Gemeinsame Hilfen für die Vergleiche der Darstellung mit PHP (lib/render.php, lib/demo.php, lib/share.php):
-// PHP lädt dieselben Bibliotheken wie im Betrieb (über runPhp aus modelHarness) und bekommt dieselben Eingaben als
-// JSON-Text. Zeitpunkte (now) werden als Unix-Sekunden übergeben und in PHP zu DateTimeImmutable in der Zeitzone der Seite.
-import { ROOT_DIR, type ConfigData } from '../src/config.js';
+// Gemeinsame Hilfen für die Vergleiche der Darstellung mit PHP (lib/render.php, lib/demo.php, lib/share.php der
+// PHP-Version): PHP lädt dieselben Bibliotheken wie im Betrieb (über runPhp aus modelHarness) und bekommt dieselben
+// Eingaben als JSON-Text. Zeitpunkte (now) werden als Unix-Sekunden übergeben und in PHP zu DateTimeImmutable in der
+// Zeitzone der Seite.
+import type { ConfigData } from '../src/config.js';
 import { hmac } from '../src/crypto.js';
 import { intval } from '../src/php.js';
 import { runPhp } from './modelHarness.js';
+import { phpFile } from './support/phpRef.js';
 
-export const PHP_RENDER_LIBS = `require_once '${ROOT_DIR}/lib/render.php'; require_once '${ROOT_DIR}/lib/demo.php';`;
+export const phpRenderLibs = (): string => `require_once '${phpFile('lib/render.php')}'; require_once '${phpFile('lib/demo.php')}';`;
 
 // PHP: $opts['now'] (Unix-Sekunden, auch mit Bruchteil) → DateTimeImmutable in der Zeitzone der Seite
 export const PHP_OPTS = `
@@ -19,7 +21,7 @@ export const PHP_OPTS = `
 
 // PHP-Code ausführen, der in $out eine Liste von Texten sammelt (Fehler → "THROW")
 export function runPhpList(body: string, input: string, opts: { config?: ConfigData; db?: boolean } = {}): string[] {
-  const script = `${PHP_RENDER_LIBS}
+  const script = `${phpRenderLibs()}
     ${PHP_OPTS}
     $out = [];
     ${body}

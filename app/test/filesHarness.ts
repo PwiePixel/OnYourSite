@@ -1,6 +1,7 @@
-// Gemeinsame Hilfen für die Vergleiche des Datei-Pakets (lib/storage.php, uploads.php, stats.php, spam.php) mit PHP:
-// PHP-Funktionen direkt aufrufen (eigene Einstellungen, eigene Datenbank-Kopie) und ein kleiner PHP-Webserver für das,
-// was nur mit einer echten Anfrage geht (Hochladen: is_uploaded_file, Ausliefern: header()).
+// Gemeinsame Hilfen für die Vergleiche des Datei-Pakets (lib/storage.php, uploads.php, stats.php, spam.php der
+// PHP-Version, siehe support/phpRef.ts) mit PHP: PHP-Funktionen direkt aufrufen (eigene Einstellungen, eigene
+// Datenbank-Kopie) und ein kleiner PHP-Webserver für das, was nur mit einer echten Anfrage geht (Hochladen:
+// is_uploaded_file, Ausliefern: header()).
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,14 +9,15 @@ import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, configString, loadConfig, type ConfigData } from '../src/config.js';
+import { configString, loadConfig, type ConfigData } from '../src/config.js';
+import { phpFile } from './support/phpRef.js';
 
 const LIBS = ['lib/helpers.php', 'lib/storage.php', 'lib/themes.php', 'lib/social.php', 'lib/blocks.php', 'lib/pages.php', 'lib/share.php',
   'lib/codesites.php', 'lib/stats.php', 'lib/spam.php', 'lib/uploads.php'];
 
 // oys_config() aus der Umgebung, security.php ohne sein require (das würde oys_config() ein zweites Mal anlegen) und
 // sendCustomEmail() als Aufzeichnung statt Versand
-export const PHP_PRELUDE = `
+export const phpPrelude = (): string => `
   function oys_config(?string $key = null, $default = null) {
     static $c = null;
     if ($c === null) $c = json_decode(getenv('OYS_TEST_CONFIG'), true);
@@ -26,16 +28,16 @@ export const PHP_PRELUDE = `
   }
   date_default_timezone_set(oys_config('timezone', 'Europe/Berlin'));
   mb_internal_encoding('UTF-8');
-  eval('?>' . str_replace("require_once __DIR__ . '/lib/config.php';", '', file_get_contents('${ROOT_DIR}/security.php')));
+  eval('?>' . str_replace("require_once __DIR__ . '/lib/config.php';", '', file_get_contents('${phpFile('security.php')}')));
   $GLOBALS['mails'] = [];
   function sendCustomEmail($to, $template, $vars = [], $subject = null, $replyTo = null) { $GLOBALS['mails'][] = [$to, $template, $vars, $subject, $replyTo]; return true; }
-  ${LIBS.map((f) => `require_once '${ROOT_DIR}/${f}';`).join('\n')}
+  ${LIBS.map((f) => `require_once '${phpFile(f)}';`).join('\n')}
 `;
 
 // PHP-Code ausführen: $in = json_decode(<input>, true); mit db: true steht $pdo bereit (wie db.php)
 export function runPhp(body: string, input: string, opts: { config?: ConfigData; db?: boolean; ini?: string[] } = {}): string {
   const config = opts.config ?? loadConfig();
-  const script = `${PHP_PRELUDE}
+  const script = `${phpPrelude()}
     ${opts.db ? `$pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . oys_config('db.name') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
       [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
       $pdo->exec("SET time_zone = '" . date('P') . "'");` : ''}
@@ -104,8 +106,8 @@ export function configWith(base: ConfigData, db: string, uploadsDir?: string): C
 // ---------------------------------------------------------------- PHP-Webserver (php -S) für Hochladen und Ausliefern
 
 // Der Router macht genau das, was index.php (Zeilen 5–10) bzw. routes_app.php für den Upload tun – ohne Datenbank
-const ROUTER = `<?php
-${PHP_PRELUDE}
+const router = (): string => `<?php
+${phpPrelude()}
 $path = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 if (strpos($path, '/static/uploads/') === 0) {
     oys_serve_upload(substr((string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), strlen('/static/uploads/')));
@@ -174,7 +176,7 @@ function spawnPhpServer(port: number, dir: string, config: ConfigData): Promise<
 // Der Port gehört diesem Paket; laufen zwei Testdateien gleichzeitig, wartet die zweite, bis er wieder frei ist
 export async function startPhpServer(port: number, config: ConfigData): Promise<PhpServer> {
   const dir = mkdtempSync(join(tmpdir(), 'oys-files-php-'));
-  writeFileSync(join(dir, 'router.php'), ROUTER);
+  writeFileSync(join(dir, 'router.php'), router());
   const deadline = Date.now() + 180_000;
   let child: ChildProcess | null = null;
   while (!child) {

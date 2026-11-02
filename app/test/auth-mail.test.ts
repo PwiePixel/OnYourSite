@@ -1,6 +1,7 @@
 // Die Begrüßungs-Mail einer Registrierung von Anfang bis Ende: register() mit dem echten mail.ts (kein Ersatz) schickt
 // an einen SMTP-Server dieses Tests inhaltlich dieselbe Nachricht wie PHP. PHP rechnet die Werte mit den Zeilen aus
-// routes_app.php (103-106, 139) und schickt mit einer unveränderten Kopie von mail.php und dem echten PHPMailer.
+// routes_app.php (103-106, 139) und schickt mit einer unveränderten Kopie von mail.php und dem echten PHPMailer (aus
+// der PHP-Version, siehe support/phpRef.ts – ohne OYS_PHP_REF wird hier nichts aufgebaut).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
@@ -17,6 +18,7 @@ import { setMailDirForTests } from '../src/mail.js';
 import { SmtpSink, type SinkSession } from './support/smtpSink.js';
 import { decodeWords, header, leaves, parseAddress, parseMessage } from './support/mime.js';
 import type { PhpArray } from '../src/php.js';
+import { PHP_SKIP, phpFile, phpRef } from './support/phpRef.js';
 
 const BASE = loadConfig();
 const SOURCE = configString('db.name');
@@ -29,6 +31,7 @@ let phpRoot = '';
 let sink: SmtpSink;
 
 before(async () => {
+  if (PHP_SKIP) return;
   // Eigene Kopie der Datenbank, ohne Zähler der Begrenzungen (frühere Läufe dürfen nichts sperren)
   admin = await mysql.createConnection({ host: configString('db.host', 'localhost'), user: configString('db.user', ''), password: configString('db.pass', ''), charset: 'utf8mb4_unicode_ci' });
   const [tables] = await admin.query<RowDataPacket[]>(`SHOW TABLES FROM \`${SOURCE}\``);
@@ -61,12 +64,12 @@ before(async () => {
   mkdirSync(join(phpRoot, 'email'), { recursive: true });
   for (const f of readdirSync(join(ROOT_DIR, 'email'))) if (f.endsWith('.json') && f !== 'smtp.json') copyFileSync(join(ROOT_DIR, 'email', f), join(phpRoot, 'email', f));
   writeFileSync(join(phpRoot, 'email', 'smtp.json'), JSON.stringify({ host: '127.0.0.1', port: String(port), username: USER, password: PASS, from_email: USER, from_name: 'OnYourSite' }));
-  copyFileSync(join(ROOT_DIR, 'mail.php'), join(phpRoot, 'mail.php'));
-  symlinkSync(join(ROOT_DIR, 'PHPMailer'), join(phpRoot, 'PHPMailer'));
+  copyFileSync(phpRef('mail.php'), join(phpRoot, 'mail.php'));
+  symlinkSync(phpRef('PHPMailer'), join(phpRoot, 'PHPMailer'));
   writeFileSync(join(phpRoot, 'harness.php'), `<?php
     date_default_timezone_set('Europe/Berlin');
     mb_internal_encoding('UTF-8');
-    require '${ROOT_DIR}/lib/helpers.php';
+    require '${phpFile('lib/helpers.php')}';
     require __DIR__ . '/mail.php';
     $in = json_decode(stream_get_contents(STDIN), true);
     $fullname = oys_clean_text($in['fullname'] ?? '', 120);
@@ -78,6 +81,7 @@ before(async () => {
 });
 
 after(async () => {
+  if (PHP_SKIP) return;
   setMailDirForTests(null);
   setAuthMailerForTests(undefined);
   await sink?.close();
@@ -138,7 +142,7 @@ const CASES: Array<Record<string, string>> = [
   { fullname: 'a😀'.repeat(70), email: `long${RUN}@sub.example.co.uk`, subdomain: `LONG-${RUN}` },
 ];
 
-test('a sign-up sends the same welcome mail as PHP through the real mail module', async () => {
+test('a sign-up sends the same welcome mail as PHP through the real mail module', { skip: PHP_SKIP }, async () => {
   setAuthMailerForTests(undefined);
   for (const [i, form] of CASES.entries()) {
     sink.sessions = [];

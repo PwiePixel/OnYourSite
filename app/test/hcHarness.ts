@@ -1,15 +1,17 @@
-// Prüfstand für Honigwaben und Code-Seiten: dieselben Aufrufe laufen einmal mit den echten PHP-Funktionen auf
-// Datenbank A und einmal mit der Node-Version auf Datenbank B (gleicher Ausgangsstand). Danach werden Ergebnisse
-// und Tabellen verglichen. Zeitstempel „jetzt“ und zufällige Formular-Schlüssel werden vereinheitlicht.
+// Prüfstand für Honigwaben und Code-Seiten: dieselben Aufrufe laufen einmal mit den echten PHP-Funktionen (PHP-Version,
+// siehe support/phpRef.ts) auf Datenbank A und einmal mit der Node-Version auf Datenbank B (gleicher Ausgangsstand).
+// Danach werden Ergebnisse und Tabellen verglichen. Zeitstempel „jetzt“ und zufällige Formular-Schlüssel werden
+// vereinheitlicht.
 import { execFile } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import type { Connection, RowDataPacket } from 'mysql2/promise';
-import { ROOT_DIR, loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
+import { loadConfig, setConfigForTests, type ConfigData } from '../src/config.js';
 import { closePool, exec } from '../src/db.js';
 import { ensureSchema } from '../src/schema.js';
 import { strtotime, time, type PhpArray } from '../src/php.js';
 import * as hc from '../src/honeycombs/honeycombs.js';
 import * as code from '../src/code/sites.js';
+import { phpFile, phpRoot } from './support/phpRef.js';
 
 export const BASE = loadConfig();
 export const started = time();
@@ -45,14 +47,14 @@ export async function freshDb(admin: Connection, name: string, rows: Array<[stri
 }
 
 // PHP mit eigener Verbindung auf die Test-Datenbank; die Funktionen kommen aus den echten Dateien
-export const PHP_BOOT = `require '${ROOT_DIR}/lib/config.php'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
+export const phpBoot = (): string => `require '${phpFile('lib/config.php')}'; date_default_timezone_set(oys_config('timezone', 'Europe/Berlin')); mb_internal_encoding('UTF-8');
   $pdo = new PDO('mysql:host=' . oys_config('db.host', 'localhost') . ';dbname=' . getenv('OYS_TEST_DB') . ';charset=utf8mb4', oys_config('db.user', ''), oys_config('db.pass', ''),
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
   $pdo->exec("SET time_zone = '" . date('P') . "'");
-  require '${ROOT_DIR}/security.php'; require '${ROOT_DIR}/blacklist.php'; require '${ROOT_DIR}/lib/helpers.php';
-  require '${ROOT_DIR}/lib/honeycombs.php'; require '${ROOT_DIR}/lib/codesites.php';`;
+  require '${phpFile('security.php')}'; require '${phpFile('blacklist.php')}'; require '${phpFile('lib/helpers.php')}';
+  require '${phpFile('lib/honeycombs.php')}'; require '${phpFile('lib/codesites.php')}';`;
 
-const PHP_OPS = `${PHP_BOOT}
+const phpOps = (): string => `${phpBoot()}
   $ops = json_decode(stream_get_contents(STDIN), true);
   // {"__pairs": [[k, v], …]} → PHP-Array in genau dieser Reihenfolge (wie json_decode)
   $arr = function ($v) { if (is_array($v) && array_key_exists('__pairs', $v)) { $a = []; foreach ($v['__pairs'] as $p) { $a[$p[0]] = $p[1]; } return $a; } return $v; };
@@ -106,7 +108,7 @@ const PHP_OPS = `${PHP_BOOT}
 
 export function phpRun(db: string, ops: Op[]): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
-    const child = execFile('php', ['-r', PHP_OPS], { env: { ...process.env, OYS_TEST_DB: db }, cwd: ROOT_DIR, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile('php', ['-r', phpOps()], { env: { ...process.env, OYS_TEST_DB: db }, cwd: phpRoot(), maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`php failed: ${err.message}\n${stderr}`));
       try {
         resolve(JSON.parse(stdout) as unknown[]);
