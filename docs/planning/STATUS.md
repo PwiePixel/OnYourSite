@@ -61,7 +61,7 @@ continue" below.
 | 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built and reviewed |
 | 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
-| 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
+| 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`); Where it lives, Download files, the Code page card for new pages and the all-code-pages state (on `feature/cs6-rest`) | Built (small rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
 | – | all others | | Open |
 
@@ -148,11 +148,20 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
      sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
      status addresses; edits of messages already posted still go out while the page is offline.
-   - CS-6 (core built; owner decisions R5–R7): still open – in the Code tab "Where it lives", "Show the link page
-     again" and "Download files" in the dialogs; rows for code pages and "Turn into a code page" in Settings → Your
-     pages; the "Code page" card in the Create-a-new-page dialog; the state where every slot shows a code page (design
-     U13) and the preview pane without a link page; a browser test for moving the own-address code page onto a slot;
-     `tests/e2e/editor-dialogs.js` should clear the address registry in its reset so it can run twice on one database.
+   - CS-6 (built; owner decisions R5–R7; the rest on `feature/cs6-rest`): the Code tab's "Where it lives" (Move to
+     one of your pages, Show link page again, Download files, Delete), "Download files" also in the Edit and delete
+     dialogs (one JSON file with every file, unsaved edits included), the "Link page / Code page" cards in "Create a new
+     page" (locked with the reason), and the state where every slot shows a code page (U13: own start box, Settings
+     with Your pages – code rows with Open code editor –, the weekly report and Discord, `#settings` opens without a
+     link page). Browser flow `tests/e2e/cs6-rest.js` (also on a phone). Still open: the code-page select and the
+     kind badge in the Code tab head (design §5.1, the page switcher covers switching), the unlock box for "More code
+     pages" inside the new-page dialog (it links to the shop instead), a browser test for moving the own-address code
+     page onto a slot from the page switcher, and `tests/e2e/editor-dialogs.js` should clear the address registry in its
+     reset so it can run twice on one database. From the review of the rest: the move dialog's reason "Your link pages
+     have custom domains" has no browser test (custom domains are off in the browser flows); the move dialog says the
+     own address "stays reserved for you for 30 days", but an address used for less than 7 days is free at once
+     (`HOLD_POLICY`) – say so or drop the sentence; deleting the open code page reloads to the Content tab, the design
+     says `/dashboard#code`.
    - ST-4 (first part built): still open – changing a status page's address (90-day redirect, cooldown), the brand
      rule for page titles, the owner's alert settings (mail and bell are written by the core but not verified end to
      end), the paused-module behaviour, incidents on user pages (the API exists, untested), subscribers, a test for

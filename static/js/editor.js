@@ -713,6 +713,7 @@
     UI.prompt({
       title: 'Delete code page “' + s.slug + '”?',
       text: 'All its files are deleted. This can’t be undone.' + (s.kind === 'page' ? ' Your page at this address shows its link page again.' : ''),
+      content: codeDownloadButton(id),
       match: s.slug, normalize: 'slug', transform: 'slug', ok: 'Delete code page', tone: 'danger',
       fallbackFocus: function () { return $('#pageSwitcherBtn'); },
       onConfirm: function (typed) {
@@ -726,11 +727,100 @@
     });
   }
 
+  // „Download files“: alle Dateien einer Code-Seite als eine JSON-Datei (Blob und a[download], ohne neue Abhängigkeit).
+  // Ist die Seite im Code-Tab offen, zählen die Dateien dort – auch noch nicht gespeicherte, und der Hinweis sagt das.
+  function codeDownload(id) {
+    var open = !!(code.st && code.st.site && code.st.site.id === id);
+    var got = open ? Promise.resolve({ ok: true, site: { id: id, slug: code.st.site.slug, url: code.st.site.url, files: code.files } }) : apiGet('code?site=' + id);
+    return got.then(function (res) {
+      // Die Antwort muss genau diese Code-Seite zeigen (eine gelöschte fällt sonst auf eine andere zurück)
+      if (!res || !res.ok || !res.site || res.site.id !== id) { toast((res && res.error) || 'Couldn’t load the files. Please try again.', 'err'); return; }
+      var now = new Date();
+      var files = res.site.files && !Array.isArray(res.site.files) ? res.site.files : {};
+      var data = { address: prettyUrl(res.site.url), exported: now.toISOString().replace(/\.\d+Z$/, 'Z'), files: files };
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      a.download = res.site.slug + '-code-' + now.toISOString().slice(0, 10) + '.json';
+      a.hidden = true;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+      toast(open && codeUnsaved() ? 'Files downloaded – with the changes you haven’t saved yet.' : 'Files downloaded.');
+    });
+  }
+  // Der Knopf dazu für Dialoge (ui.js nimmt Knoten als content)
+  function codeDownloadButton(id) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn-ghost';
+    b.setAttribute('data-code-download', String(id));
+    b.innerHTML = '<i class="bx bx-download"></i> Download files';
+    b.addEventListener('click', function () {
+      if (b.disabled) return;
+      b.disabled = true;
+      codeDownload(id).then(function () { b.disabled = false; });
+    });
+    return b;
+  }
+
+  // „Move to one of your pages“: die Code-Seite mit eigener Adresse auf einen Platz (code-move {site, slot}); die
+  // Link-Seite dort bleibt gespeichert und versteckt, die eigene Adresse bleibt 30 Tage für den Besitzer reserviert.
+  // Seiten mit eigener Domain sind gesperrt (E7) – der Server prüft alles noch einmal.
+  function openMoveCodeModal(site) {
+    var targets = state.pages.filter(function (p) { return !p.code; });
+    var reason = CODE.paused ? 'Code pages can’t move to a new address right now. Please try again later.'
+      : CODE.onPages >= CODE.maxOnPages ? onPagesLimitText()
+      : !targets.length ? 'You have no link page to show it on.'
+      : !targets.some(function (p) { return !p.custom_domain; }) ? 'Your link pages have custom domains. Remove the custom domain of a page first.' : '';
+    var options = targets.map(function (p) {
+      return '<option value="' + p.id + '"' + (p.custom_domain ? ' disabled' : '') + '>' + esc((p.title || p.slug) + ' – ' + prettyUrl(p.url) + (p.custom_domain ? ' (remove its custom domain first)' : '')) + '</option>';
+    }).join('');
+    openModal('Move your code page to one of your pages',
+      (reason ? '<p class="text-sm text-gray-400">' + esc(reason) + '</p>' :
+        '<label class="lbl" for="mvPage">Page</label><select class="field" id="mvPage">' + options + '</select>' +
+        '<p class="hint" id="mvWarn"></p>' +
+        '<p class="hint">' + esc(prettyUrl(site.url)) + ' stops working. It stays reserved for you for 30 days.</p>') +
+      '<p class="text-sm text-red-400 mt-3 hidden" id="mvErr"></p>',
+      '<button type="button" class="btn-ghost" data-close>Cancel</button>' + (reason ? '' : '<button type="button" class="btn-primary" id="mvGo"><i class="bx bx-transfer"></i> Move code page</button>'),
+      function (box) {
+        if (reason) return;
+        var sel = $('#mvPage', box), warn = $('#mvWarn', box), err = $('#mvErr', box);
+        var first = $('option:not([disabled])', sel);
+        if (first) sel.value = first.value;
+        else sel.value = '';
+        function paint() {
+          var p = pageById(Number(sel.value));
+          warn.textContent = p && !p.custom_domain ? 'Visitors at ' + prettyUrl(p.url) + ' will see this code page instead of your link page. Your link page stays saved.' : '';
+        }
+        sel.addEventListener('change', paint);
+        paint();
+        $('#mvGo', box).addEventListener('click', function () {
+          var btn = this, slot = Number(sel.value), p = pageById(slot);
+          if (btn.disabled) return;
+          if (!p || p.custom_domain) { err.textContent = 'Please choose a page.'; err.classList.remove('hidden'); return; }
+          var ask = guard.isDirty()
+            ? UI.confirm({ title: 'Move without saving?', text: 'You have unsaved changes. They’re lost when the editor reloads.', ok: 'Move without saving', tone: 'danger' })
+            : Promise.resolve(true);
+          ask.then(function (ok) {
+            if (!ok || !box.contains(btn) || btn.disabled) return;
+            btn.disabled = true;
+            api('code-move', { site: site.id, slot: slot }).then(function (res) {
+              if (!res || !res.ok) { btn.disabled = false; err.textContent = (res && res.error) || 'That didn’t work.'; err.classList.remove('hidden'); return; }
+              closeModal();
+              reloadTo('/dashboard?site=' + site.id + '#code');
+            });
+          });
+        });
+      });
+  }
+
   // „Edit“: Art des Platzes (Link-Seite oder Code-Seite) und seine Adresse. Umschalten über die CS-4-API: eine neue
   // Code-Seite auf den Platz (code-connect) oder die Code-Seite mit eigener Adresse dorthin (code-move); zurück zur
   // Link-Seite: die Code-Seite zieht an eine eigene Adresse (code-move) oder wird gelöscht (code-delete, Adresse tippen).
-  // page: Platz aus state.pages (oder null für die Code-Seite mit eigener Adresse); site: deren Code-Seite
-  function openEditModal(page, site) {
+  // page: Platz aus state.pages (oder null für die Code-Seite mit eigener Adresse); site: deren Code-Seite;
+  // want: 'link' wählt gleich „Link page“ (aus dem Code-Tab: „Show link page again“)
+  function openEditModal(page, site, want) {
     if (!page && !site) return;
     if (page && page.code && !site) site = codeSiteById(page.code);
     var isCode = !!site, address = page ? page.slug : site.slug;
@@ -742,8 +832,8 @@
         '<span><b class="text-white">' + esc(label) + '</b><small class="block text-xs text-gray-500">' + esc(sub) + '</small></span></label>';
     };
     var typeHtml = !page ? '' : '<label class="lbl">This page is a</label>' +
-      radio('link', 'Link page', 'Your links, blocks and theme.', !isCode, false) +
-      radio('code', 'Code page', page.custom_domain && !isCode ? 'Remove the custom domain of this page first.' : 'Your own HTML, CSS and JavaScript at this address.', isCode, !isCode && !canCode) +
+      radio('link', 'Link page', 'Your links, blocks and theme.', want === 'link' || !isCode, false) +
+      radio('code', 'Code page', page.custom_domain && !isCode ? 'Remove the custom domain of this page first.' : 'Your own HTML, CSS and JavaScript at this address.', want !== 'link' && isCode, !isCode && !canCode) +
       '<div id="edMore" class="mb-4"></div>';
     openModal(page ? 'Edit page “' + address + '”' : 'Edit code page “' + address + '”',
       typeHtml +
@@ -781,6 +871,10 @@
               more.insertAdjacentHTML('beforeend', '<input class="field mt-1" id="edConfirm" maxlength="30" autocomplete="off" autocapitalize="off" spellcheck="false">');
               clean($('#edConfirm', more));
             }
+            // Vor dem Umschalten die Dateien sichern können
+            var dl = codeDownloadButton(site.id);
+            dl.classList.add('mt-2');
+            more.appendChild(dl);
           }
         }
         $$('input[name=edType]', box).forEach(function (r) { r.addEventListener('change', paintMore); });
@@ -920,6 +1014,7 @@
     switch (action) {
       case 'new-page': closeDropdowns(); openNewPageModal(); break;
       case 'new-code': closeDropdowns(); openNewCodeModal(); break;
+      case 'open-code': switchTab('code'); break;
       case 'add-block': openAddBlockModal(); break;
       case 'quick-add': quickAdd(); break;
       case 'share': openShareModal(); break;
@@ -976,23 +1071,90 @@
     if ((ev.target.id === 'modal' && Date.now() - cropGuard > 400) || ev.target.closest('[data-close]')) closeModal();
   });
 
+  // Text, wenn schon so viele Seiten Code-Seiten zeigen, wie erlaubt ist
+  function onPagesLimitText() {
+    return CODE.maxOnPages > 0 ? 'Only ' + (CODE.maxOnPages === 1 ? 'one of your pages' : CODE.maxOnPages + ' of your pages') + ' can show a code page.' : 'Code pages can’t use your page addresses right now.';
+  }
+
+  // Warum auf einem neuen Platz gerade keine Code-Seite geht (null = sie geht); feature: was der Shop dafür anbietet
+  function newCodeReason() {
+    if (CODE.banned) return { text: 'Code pages are turned off for your account.' };
+    if (!CODE.unlocked) return { text: 'Unlock code pages with honeycombs first.', feature: 'code_page' };
+    if (CODE.paused) return { text: 'New code pages are paused right now.' };
+    if (CODE.onPages >= CODE.maxOnPages) return { text: onPagesLimitText() };
+    if (codeFree().needMore) return { text: 'You need “More code pages” for another code page.', feature: 'code_more' };
+    return null;
+  }
+
   function openNewPageModal() {
     var max = E.maxPages || 3;
     if (state.pages.length >= max && !E.pagesUnlimited) { toast('You already have ' + max + ' pages.', 'err'); return; }
+    // Art der neuen Seite (CS-6): Link-Seite oder Code-Seite auf dem neuen Platz – gesperrt mit dem Grund, wenn es nicht geht
+    var codeWhy = newCodeReason();
+    // Eine Karte ist ein radio; Grund und Shop-Knopf einer gesperrten Karte stehen darunter (Kinder eines radio
+    // wären für Screenreader nur Text), verbunden über aria-describedby
+    var card = function (kind, title, text, on, why) {
+      return '<div class="mode-card' + (on ? ' on' : '') + (why ? ' opacity-50' : '') + '" data-np-kind="' + kind + '" role="radio" tabindex="' + (on ? '0' : '-1') + '" aria-checked="' + (on ? 'true' : 'false') + '"' + (why ? ' aria-disabled="true" aria-describedby="npWhy-' + kind + '"' : '') + '>' +
+        '<b>' + esc(title) + '</b><small class="block mt-1">' + esc(text) + '</small></div>';
+    };
     openModal('Create a new page',
-      '<p class="text-sm text-gray-400 mb-4">Each page has its own address, its own theme and its own stats – for example, one for you and one for your project.</p>' +
+      '<div class="mode-cards" role="radiogroup" aria-label="Kind of page">' +
+        card('link', 'Link page', 'Links, socials and your design – with its own stats.', true, '') +
+        card('code', 'Code page', 'Your own HTML, CSS and JavaScript at this address.', false, codeWhy ? codeWhy.text : '') +
+      '</div>' +
+      (codeWhy ? '<div class="mt-2 text-right"><small class="block text-amber-400" id="npWhy-code">' + esc(codeWhy.text) + '</small>' +
+        (codeWhy.feature ? '<button type="button" class="btn-secondary mt-2" data-np-shop data-action="honeycombs" data-feature="' + codeWhy.feature + '"><i class="bx bx-hive hc-icon"></i> Open the shop</button>' : '') + '</div>' : '') +
+      '<div class="mb-4"></div>' +
+      '<p class="text-sm text-gray-400 mb-4" id="npIntro">Each page has its own address, its own theme and its own stats – for example, one for you and one for your project.</p>' +
       '<label class="lbl">Address</label>' +
       '<div class="input-group"><input class="field" id="npSlug" placeholder="projectname" maxlength="30" autocomplete="off"><span class="addon right">.' + esc(E.baseHost) + '</span></div>' +
       '<p class="hint">2–30 characters: a–z, 0–9 and hyphens. Also reachable at ' + esc(E.baseHost) + '/projectname.</p>' +
       '<label class="lbl mt-4">Name on the page</label><input class="field" id="npTitle" maxlength="120" placeholder="e.g. My Project">' +
+      (CODE.terms ? '' : '<div class="mt-4 hidden" id="npTermsBox">' + codeTermsHtml().replace('id="codeTerms"', 'id="npTerms"') + '</div>') +
       '<p class="text-sm text-red-400 mt-3 hidden" id="npErr"></p>',
       '<button type="button" class="btn-ghost" data-close>Cancel</button><button type="button" class="btn-primary" id="npCreate"><i class="bx bx-plus"></i> Create page</button>',
       function (box) {
-        var slug = $('#npSlug', box);
+        var slug = $('#npSlug', box), kind = 'link';
+        // Zum Shop: erst den Dialog schließen (den Shop öffnet der Klick-Handler des Dokuments)
+        $$('[data-np-shop]', box).forEach(function (b) { b.addEventListener('click', closeModal); });
         slug.addEventListener('input', function () { slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, ''); });
+        var fail = function (msg) {
+          var err = $('#npErr', box);
+          if (!err) return;
+          err.textContent = msg;
+          err.classList.remove('hidden');
+        };
+        // Karte wählen (Klick, Enter, Leertaste); eine gesperrte Karte bleibt aus
+        var cards = $$('[data-np-kind]', box);
+        cards.forEach(function (c, i) {
+          var pick = function () {
+            if (c.getAttribute('aria-disabled') === 'true') return;
+            kind = c.dataset.npKind;
+            cards.forEach(function (x) { x.classList.toggle('on', x === c); x.setAttribute('aria-checked', x === c ? 'true' : 'false'); x.tabIndex = x === c ? 0 : -1; });
+            $('#npIntro', box).textContent = kind === 'code'
+              ? 'A code page is your own website made of HTML, CSS and JavaScript. It uses one of your page slots and runs at its subdomain.'
+              : 'Each page has its own address, its own theme and its own stats – for example, one for you and one for your project.';
+            var tb = $('#npTermsBox', box);
+            if (tb) tb.classList.toggle('hidden', kind !== 'code');
+          };
+          c.addEventListener('click', pick);
+          c.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); return; }
+            // Pfeiltasten wie bei Radioknöpfen: zur nächsten wählbaren Karte und sie wählen
+            var step = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowLeft' || ev.key === 'ArrowUp' ? -1 : 0;
+            if (!step) return;
+            ev.preventDefault();
+            for (var k = 1; k < cards.length; k++) {
+              var next = cards[(i + step * k + cards.length * k) % cards.length];
+              if (next.getAttribute('aria-disabled') !== 'true') { next.click(); next.focus(); return; }
+            }
+          });
+        });
         var go = function () {
           var btn = $('#npCreate', box);
           if (btn.disabled) return;
+          var terms = $('#npTerms', box);
+          if (kind === 'code' && terms && !terms.checked) { fail('Please accept the rules for code pages first.'); return; }
           // Ungespeichertes gibt es auf der neuen Seite nicht: vorher fragen (eine inzwischen fertige Speicherung → keine Frage)
           var ask = guard.isDirty()
             ? UI.confirm({ title: 'Create the page without saving?', text: 'You have unsaved changes on this page. They’re lost if you continue.', ok: 'Create without saving', tone: 'danger' })
@@ -1000,6 +1162,15 @@
           ask.then(function (ok) {
             if (!ok || !box.contains(btn) || btn.disabled) return;
             btn.disabled = true;
+            if (kind === 'code') {
+              api('code-connect', { slot: 'new', slug: slug.value, title: $('#npTitle', box).value, terms: true }).then(function (res) {
+                // Bei Erfolg bleibt der Knopf gesperrt, bis die neue Seite lädt
+                if (!res || !res.ok || !res.site) { btn.disabled = false; fail((res && res.error) || 'That didn’t work.'); return; }
+                draft.discard();
+                guard.navigate('/dashboard?site=' + res.site.id + '#code', { force: true });
+              });
+              return;
+            }
             api('page-create', { slug: slug.value, title: $('#npTitle', box).value, page_id: 0 }).then(function (res) {
               btn.disabled = false;
               if (res && res.ok) {
@@ -1321,7 +1492,7 @@
     document.body.classList.toggle('code-mode', name === 'code');
     // Statusseite: ohne Vorschau des Profils und ohne den Speichern-Knopf (der Bereich speichert jede Änderung selbst)
     document.body.classList.toggle('status-mode', name === 'status');
-    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status' || name === 'honeycombs';
+    if ($('#noPageBox')) $('#noPageBox').hidden = name === 'code' || name === 'status' || name === 'honeycombs' || name === 'settings';
     if (wasCode !== (name === 'code') || wasStatus !== (name === 'status')) fitPhone();
     paintSave(name === 'code' ? code.state : pageSaveState);
     if (name === 'code') loadCode();
@@ -1334,6 +1505,8 @@
     if (name === 'messages') loadMessages();
     if (name === 'status') loadStatus();
     if (name === 'honeycombs') loadShop();
+    // Einstellungen des Kontos gibt es auch ohne gezeigte Link-Seite (jeder Platz zeigt eine Code-Seite)
+    if (name === 'settings' && !state.page) { renderSettings(); return; }
     if (!state.page) return;
     if (name === 'design') { renderDesign(); }
     if (name === 'stats') loadStats(statsRange);
@@ -2921,6 +3094,21 @@
     hc.codeUnlocked = res.unlocked;
     CODE.unlocked = !!res.unlocked;
     if (res.more) CODE.more = res.more;
+    // Die Übersicht für Seitenwechsler und Dialoge mit jeder Antwort abgleichen (z. B. eine eben im Tab angelegte Code-Seite)
+    if (res.sites) {
+      CODE.sites = res.sites;
+      CODE.own = res.sites.filter(function (x) { return x.kind === 'own'; }).length;
+    }
+    if (res.slots && res.slots.onPages) { CODE.onPages = res.slots.onPages.used; CODE.maxOnPages = res.slots.onPages.max; }
+    if (res.terms !== undefined) CODE.terms = !!res.terms;
+    if (typeof res.total === 'number') CODE.total = res.total;
+    if (res.banned !== undefined) CODE.banned = res.banned;
+    if (res.paused !== undefined) CODE.paused = !!res.paused;
+    // Adressen der Seiten (eine Code-Seite auf einem Platz ändert die Adresse ihrer Seite)
+    if (res.pages) res.pages.forEach(function (fresh) {
+      var pg = pageById(fresh.id);
+      if (pg) { pg.slug = fresh.slug; pg.url = fresh.url; pg.code = fresh.code; }
+    });
     if (res.site) {
       if (!keepEdits) { code.files = clone(res.site.files); code.docs = {}; }
       code.saved = clone(res.site.files);
@@ -3075,6 +3263,7 @@
           '<p class="hint">Your code page runs at this subdomain; ' + esc(E.baseHost) + '/name only redirects there.</p>' +
           '<button type="button" class="btn-secondary mt-3" data-code="address">Change subdomain</button></div>' +
       '</div>' +
+      '<div class="panel mt-4" id="codeWhere"></div>' +
       '<div class="panel mt-4 text-sm text-gray-400 code-info"><i class="bx bx-shield-quarter text-xl text-brand-400 shrink-0"></i><div><b class="text-white">Good to know</b><ul>' +
         '<li>Code pages are made of HTML, CSS and JavaScript – there’s no PHP or other server code.</li>' +
         '<li>For everyone’s safety your page runs in a sandbox: cookies and localStorage aren’t available, and a small “OnYourSite” badge is shown.</li>' +
@@ -3084,6 +3273,7 @@
     $('#codeTitleEdit').value = site.title;
     $('#codeSlugEdit').value = site.slug;
     renderCodeHead();
+    renderCodeWhere();
     mountCodeEditor();
     renderCodeFiles();
     codePreview();
@@ -3101,6 +3291,30 @@
           '<button type="button" class="btn-secondary" data-code="preview"><i class="bx bx-show"></i> Preview</button></div>' +
       '</div>' +
       (site.blocked ? '<div class="code-blocked"><i class="bx bx-block"></i><div><b>Your code page has been blocked by the team.</b><p>' + esc(site.blocked_reason || 'It broke the rules for code pages.') + ' Visitors can’t see it right now. If you think this is a mistake, please contact us.</p></div></div>' : '');
+  }
+
+  // „Where it lives“: eigene Adresse oder ein Platz einer Seite – mit Umziehen, der Link-Seite zurück, Dateien und Löschen
+  function renderCodeWhere() {
+    var site = code.st.site, box = $('#codeWhere');
+    if (!box) return;
+    var btn = function (act, cls, icon, label) { return '<button type="button" class="' + cls + '" data-code="' + act + '"><i class="bx ' + icon + '"></i> ' + label + '</button>'; };
+    var slot = site.kind === 'page' ? pageById(site.slot) : null;
+    var text;
+    if (site.blocked) {
+      // Gesperrt: der Hinweis im Kopf sagt den Grund; nur die Link-Seite eines Platzes wird erwähnt
+      if (site.kind !== 'page') { box.hidden = true; return; }
+      text = '<p class="text-sm text-gray-400">Your link page stays saved. You can show it again once the team has reviewed this code page.</p>';
+    } else if (site.kind === 'page') {
+      text = '<p class="text-sm text-gray-400">It replaces the link page of <b class="text-white">' + esc(prettyUrl(site.url)) + '</b>. Your link page is saved.</p>' +
+        '<div class="flex flex-wrap gap-2 mt-3">' + (slot ? btn('show-link', 'btn-secondary', 'bx-undo', 'Show link page again') : '') +
+        btn('download', 'btn-ghost', 'bx-download', 'Download files') + btn('site-delete', 'btn-ghost text-red-400', 'bx-trash', 'Delete code page') + '</div>';
+    } else {
+      text = '<p class="text-sm text-gray-400">It has its own address.</p>' +
+        '<div class="flex flex-wrap gap-2 mt-3">' + btn('move', 'btn-secondary', 'bx-transfer', 'Move to one of your pages') +
+        btn('download', 'btn-ghost', 'bx-download', 'Download files') + btn('site-delete', 'btn-ghost text-red-400', 'bx-trash', 'Delete code page') + '</div>';
+    }
+    box.hidden = false;
+    box.innerHTML = '<h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2"><i class="bx bx-map-pin text-brand-400"></i> Where it lives</h3>' + text;
   }
 
   function renderCodeFiles() {
@@ -3288,6 +3502,7 @@
       if (!res || !res.ok) { toast((res && res.error) || 'That didn’t work.', 'err'); return false; }
       setCodeState(res, true);
       renderCodeHead();
+      renderCodeWhere();
       if (done) done(res);
       return true;
     });
@@ -3306,6 +3521,13 @@
       case 'delete': deleteCodeFile(); break;
       case 'image': insertCodeImage(); break;
       case 'preview': openCodeBig(); break;
+      case 'download':
+        b.disabled = true;
+        codeDownload(code.st.site.id).then(function () { b.disabled = false; });
+        break;
+      case 'move': openMoveCodeModal(code.st.site); break;
+      case 'show-link': openEditModal(pageById(code.st.site.slot), codeSiteById(code.st.site.id), 'link'); break;
+      case 'site-delete': deleteCodeSite(code.st.site.id); break;
       case 'title':
         codeSettings('code-save', { files: {}, deleted: [], title: $('#codeTitleEdit').value }, function () {
           $('#codeTitleEdit').value = code.st.site.title;
@@ -3690,6 +3912,7 @@
   });
 
   function renderSettings() {
+    if (!state.page) { renderSettingsNoPage(); return; }
     var root = $('#settingsDynamic');
     var p = state.page, s = p.settings;
     var urls = p.urls || {};
@@ -3705,15 +3928,7 @@
 
       domainSectionHtml() +
 
-      '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Your pages <small>' + state.pages.length + ' of ' + max + ' · each with its own address & stats</small></h2><div class="panel">' +
-      state.pages.map(function (pg) {
-        var cur = pg.id === p.id;
-        return '<div class="page-row' + (cur ? ' current' : '') + '"><span class="ps-avatar" style="width:36px;height:36px">' + (pg.avatar ? '<img src="' + esc(pg.avatar) + '" alt="">' : esc(initials(pg.title || pg.slug))) + '</span>' +
-          '<span class="flex-1 min-w-0"><b class="truncate">' + esc(pg.title || pg.slug) + (cur ? ' <span class="bdg brand">Editing</span>' : '') + '</b><small>' + esc(pg.url) + '</small></span>' +
-          (cur ? '' : '<button type="button" class="btn-secondary" data-page="' + pg.id + '">Edit</button>') +
-          (state.pages.length > 1 ? '<button type="button" class="icon-btn danger" data-del-page="' + pg.id + '" data-slug="' + esc(pg.slug) + '" title="Delete page"><i class="bx bx-trash"></i></button>' : '') + '</div>';
-      }).join('') +
-      (state.pages.length < max || E.pagesUnlimited ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>' +
+      yourPagesHtml(p) +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Search engines (SEO) <small>Applied when you save</small></h2><div class="panel space-y-4">' +
       '<div><label class="lbl">Title</label><input class="field" data-bind="page.settings.seo.title" maxlength="120" placeholder="' + esc(seoTitleDefault(p, s.hide_branding)) + '"></div>' +
@@ -3724,10 +3939,7 @@
       '<div class="flex flex-wrap items-center justify-between gap-3"><label class="switch"><input type="checkbox" data-bind="page.settings.share_button"><span class="track"></span><span class="sw-text">Share button on your page<small>Visitors can copy your link, scan the QR code or share it on WhatsApp, X and Discord (takes effect when you save)</small></span></label>' +
       '<button type="button" class="btn-secondary" data-action="share"><i class="bx bx-qr"></i> QR code & links</button></div></div></section>' +
 
-      '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Notifications</h2><div class="panel space-y-5">' +
-      '<label class="switch"><input type="checkbox" data-bind="page.settings.notify_email"><span class="track"></span><span class="sw-text">Email me about new messages<small>In addition to the heads-up via the bell (applies to this page, takes effect when you save)</small></span></label>' +
-      '<div class="flex flex-wrap items-center justify-between gap-3"><label class="switch"><input type="checkbox" id="weeklyToggle"' + (E.user.weekly ? ' checked' : '') + '><span class="track"></span><span class="sw-text">Weekly report by email<small>Every Monday: views, clicks and your best link – for all your pages</small></span></label>' +
-      '<button type="button" class="btn-secondary" id="weeklyTest"><i class="bx bx-send"></i> Send test report</button></div></div></section>' +
+      notificationsHtml(true) +
 
       '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Branding & custom CSS</h2><div class="panel space-y-5">' +
       brandingSwitch(s) +
@@ -3735,11 +3947,7 @@
       cssWarningHtml() +
       '<p class="hint">All elements have classes like <code>.oys-name</code>, <code>.oys-link</code>, <code>.oys-socials</code>. URLs pointing to other servers (<code>url(https://…)</code>, <code>@import</code>) are removed for privacy reasons – upload images here in the editor instead.</p></div></div></section>' +
 
-      '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Integrations</h2><div class="panel space-y-3">' +
-      '<label class="lbl flex items-center gap-2">Discord ID <span class="text-[10px] text-[#5865F2] bg-[#5865F2]/10 px-1.5 rounded">Auto role</span></label>' +
-      '<div class="flex gap-2"><div class="input-group flex-1"><span class="addon left" style="color:#5865F2"><i class="bx bxl-discord-alt text-lg"></i></span><input class="field" id="discordId" value="' + esc(E.user.discord) + '" placeholder="1234567890" inputmode="numeric"></div>' +
-      '<button type="button" class="btn-secondary" id="saveDiscord">Save</button></div>' +
-      '<p class="hint">Link your Discord ID to automatically get the customer role on our server.</p></div></section>';
+      integrationsHtml();
 
     bindAll(root);
     // Eigene Domain: eigener Abschnitt mit eigenem Stand
@@ -3774,13 +3982,25 @@
         toast('Address saved: ' + prettyUrl(res.page.url));
       });
     });
+    bindPageDelete(root);
+    // Der Standard-Titel folgt dem Schalter für das Branding
+    var brandingBox = $('[data-bind="page.settings.hide_branding"]', root);
+    if (brandingBox) brandingBox.addEventListener('change', function () {
+      var seoTitle = $('[data-bind="page.settings.seo.title"]', root);
+      if (seoTitle) seoTitle.placeholder = seoTitleDefault(state.page, brandingBox.checked);
+    });
+    bindAccountSettings();
+  }
+
+  // Seite löschen in „Your pages“ (auch ein Platz, der eine Code-Seite zeigt: dann mit der Code-Seite)
+  function bindPageDelete(root) {
     $$('[data-del-page]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
         var s2 = btn.dataset.slug, delId = Number(btn.dataset.delPage), deleted = false;
         // Bestätigen durch Tippen der Adresse; der Server prüft sie noch einmal. Fehler bleiben im Dialog.
         UI.prompt({
           title: 'Delete page “' + s2 + '”?',
-          text: 'All its blocks, stats and messages are deleted. This can’t be undone.',
+          text: btn.dataset.codeSlot ? 'This deletes the code page and the saved link page with all its blocks, stats and messages. This can’t be undone.' : 'All its blocks, stats and messages are deleted. This can’t be undone.',
           match: s2, normalize: 'slug', transform: 'slug', ok: 'Delete page', tone: 'danger',
           fallbackFocus: function () { return $('#settingsDynamic [data-del-page]') || $('#mainNav [data-tab="settings"]'); },
           onConfirm: function (typed) {
@@ -3796,12 +4016,64 @@
         });
       });
     });
-    // Der Standard-Titel folgt dem Schalter für das Branding
-    var brandingBox = $('[data-bind="page.settings.hide_branding"]', root);
-    if (brandingBox) brandingBox.addEventListener('change', function () {
-      var seoTitle = $('[data-bind="page.settings.seo.title"]', root);
-      if (seoTitle) seoTitle.placeholder = seoTitleDefault(state.page, brandingBox.checked);
+  }
+
+  // Einstellungen ohne gezeigte Link-Seite (jeder Platz zeigt eine Code-Seite, U13): nur, was zum Konto gehört
+  function renderSettingsNoPage() {
+    var root = $('#settingsDynamic');
+    root.innerHTML = yourPagesHtml(null).replace(' mt-8"', '"') + notificationsHtml(false) + integrationsHtml();
+    bindPageDelete(root);
+    bindAccountSettings();
+  }
+
+  // „Your pages“: Link-Seiten, Plätze mit Code-Seite und die Code-Seite mit eigener Adresse (CS-6). cur: die offene Link-Seite
+  function yourPagesHtml(cur) {
+    var max = E.maxPages || 3;
+    var avatar = function (inner) { return '<span class="ps-avatar" style="width:36px;height:36px">' + inner + '</span>'; };
+    var codeRow = function (site, slot) {
+      var note = slot ? prettyUrl(site.url) + ' · Your link page is saved and hidden' : prettyUrl(site.url) + ' · Its own address';
+      return '<div class="page-row' + (E.openSite === site.id ? ' current' : '') + '">' + avatar('<i class="bx bx-code-alt"></i>') +
+        '<span class="flex-1 min-w-0"><b class="truncate">' + esc(site.title || site.slug) + ' <span class="bdg ' + (site.blocked ? 'red">Blocked' : 'brand">Code page') + '</span></b><small>' + esc(note) + '</small></span>' +
+        '<button type="button" class="btn-secondary" data-open-site="' + site.id + '">Open code editor</button>' +
+        (site.blocked ? '' : '<button type="button" class="icon-btn" data-edit-site="' + site.id + '" title="Edit" aria-label="Edit ' + esc(site.slug) + '"><i class="bx bx-edit-alt"></i></button>' +
+          // Ein Platz wird als Seite gelöscht (mit der Code-Seite), solange es nicht die letzte Seite ist; sonst nur die Code-Seite
+          (slot && state.pages.length > 1
+            ? '<button type="button" class="icon-btn danger" data-del-page="' + slot.id + '" data-slug="' + esc(slot.slug) + '" data-code-slot="1" title="Delete page" aria-label="Delete page ' + esc(slot.slug) + '"><i class="bx bx-trash"></i></button>'
+            : '<button type="button" class="icon-btn danger" data-del-site="' + site.id + '" title="Delete code page" aria-label="Delete code page ' + esc(site.slug) + '"><i class="bx bx-trash"></i></button>')) + '</div>';
+    };
+    var rows = state.pages.map(function (pg) {
+      var site = pg.code ? codeSiteById(pg.code) : null;
+      if (site) return codeRow(site, pg);
+      var isCur = !!cur && pg.id === cur.id;
+      return '<div class="page-row' + (isCur ? ' current' : '') + '">' + avatar(pg.avatar ? '<img src="' + esc(pg.avatar) + '" alt="">' : esc(initials(pg.title || pg.slug))) +
+        '<span class="flex-1 min-w-0"><b class="truncate">' + esc(pg.title || pg.slug) + (isCur ? ' <span class="bdg brand">Editing</span>' : '') + '</b><small>' + esc(pg.url) + '</small></span>' +
+        (isCur ? '' : '<button type="button" class="btn-secondary" data-page="' + pg.id + '">Edit</button>') +
+        (state.pages.length > 1 ? '<button type="button" class="icon-btn danger" data-del-page="' + pg.id + '" data-slug="' + esc(pg.slug) + '" title="Delete page"><i class="bx bx-trash"></i></button>' : '') + '</div>';
     });
+    CODE.sites.forEach(function (site) { if (site.kind === 'own') rows.push(codeRow(site, null)); });
+    return '<section class="max-w-3xl mx-auto mt-8" id="yourPagesSection"><h2 class="section-title">Your pages <small>' + state.pages.length + ' of ' + max + ' · each with its own address & stats</small></h2><div class="panel">' +
+      rows.join('') +
+      (state.pages.length < max || E.pagesUnlimited ? '<button type="button" class="btn-secondary mt-3" data-action="new-page"><i class="bx bx-plus"></i> Create a new page</button>' : '') + '</div></section>';
+  }
+
+  // Benachrichtigungen; perPage: mit dem Schalter der offenen Link-Seite (ohne Seite nur der Wochenbericht)
+  function notificationsHtml(perPage) {
+    return '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Notifications</h2><div class="panel space-y-5">' +
+      (perPage ? '<label class="switch"><input type="checkbox" data-bind="page.settings.notify_email"><span class="track"></span><span class="sw-text">Email me about new messages<small>In addition to the heads-up via the bell (applies to this page, takes effect when you save)</small></span></label>' : '') +
+      '<div class="flex flex-wrap items-center justify-between gap-3"><label class="switch"><input type="checkbox" id="weeklyToggle"' + (E.user.weekly ? ' checked' : '') + '><span class="track"></span><span class="sw-text">Weekly report by email<small>Every Monday: views, clicks and your best link – for all your pages</small></span></label>' +
+      '<button type="button" class="btn-secondary" id="weeklyTest"><i class="bx bx-send"></i> Send test report</button></div></div></section>';
+  }
+
+  function integrationsHtml() {
+    return '<section class="max-w-3xl mx-auto mt-8"><h2 class="section-title">Integrations</h2><div class="panel space-y-3">' +
+      '<label class="lbl flex items-center gap-2">Discord ID <span class="text-[10px] text-[#5865F2] bg-[#5865F2]/10 px-1.5 rounded">Auto role</span></label>' +
+      '<div class="flex gap-2"><div class="input-group flex-1"><span class="addon left" style="color:#5865F2"><i class="bx bxl-discord-alt text-lg"></i></span><input class="field" id="discordId" value="' + esc(E.user.discord) + '" placeholder="1234567890" inputmode="numeric"></div>' +
+      '<button type="button" class="btn-secondary" id="saveDiscord">Save</button></div>' +
+      '<p class="hint">Link your Discord ID to automatically get the customer role on our server.</p></div></section>';
+  }
+
+  // Wochenbericht und Discord-ID gehören zum Konto: mit und ohne Seite gleich
+  function bindAccountSettings() {
     $('#weeklyToggle').addEventListener('change', function (ev) {
       var on = ev.target.checked;
       api('weekly', { enabled: on }).then(function (res) {
@@ -4198,9 +4470,11 @@
     $('#navPreviewBtn').classList.add('hidden');
     $('#viewPageLink').classList.add('hidden');
     $('#shareBtn').classList.add('hidden');
-    $('#psLabel').textContent = 'No page yet';
+    // Ohne Seite – oder jeder Platz zeigt eine Code-Seite (U13)
+    $('#psLabel').textContent = state.pages.length ? 'Your pages' : 'No page yet';
     if (startHash === '#code' || (E.openSite && !startHash)) switchTab('code');
     else if (/^#messages\b/.test(startHash)) switchTab('messages');
+    else if (/^#settings\b/.test(startHash)) switchTab('settings');
     else if (/^#status\b/.test(startHash) && $('#tab-status')) switchTab('status');
   }
   draft.start();
