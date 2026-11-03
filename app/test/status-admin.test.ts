@@ -42,10 +42,11 @@ const section = (page: string): string => {
 test('navigation, tab colour and the place of the section', async () => {
   const page = await adminPage();
   assert.match(page, /onclick="switchAdminTab\('status'\)" id="nav-status"[^>]*>\n {20}<i class='bx bx-pulse text-xl'><\/i> <span class="hidden lg:block text-sm">Status pages<\/span>/);
-  const nav = ['nav-community', 'nav-honeycombs', 'nav-code-pages', 'nav-status', 'nav-storage'].map((id) => page.indexOf(`id="${id}"`));
+  // Reihenfolge nach ROADMAP §3.11: … Code pages, Custom domains (PD-5), Status pages, Storage
+  const nav = ['nav-community', 'nav-honeycombs', 'nav-code-pages', 'nav-domains', 'nav-status', 'nav-storage'].map((id) => page.indexOf(`id="${id}"`));
   assert.deepEqual([...nav].sort((a, b) => a - b), nav);
-  assert.match(page, /'code-pages': \['Code pages', [^\]]+\],\n {12}status: \['Status pages', 'border-lime-500\/30 bg-lime-500\/10 text-lime-400'\],\n {12}storage:/);
-  const order = ['tab-code-pages', 'tab-status', 'tab-storage'].map((id) => page.indexOf(`<div id="${id}"`));
+  assert.match(page, /'code-pages': \['Code pages', [^\]]+\],\n {12}domains: \['Custom domains', [^\]]+\],\n {12}status: \['Status pages', 'border-lime-500\/30 bg-lime-500\/10 text-lime-400'\],\n {12}storage:/);
+  const order = ['tab-code-pages', 'tab-domains', 'tab-status', 'tab-storage'].map((id) => page.indexOf(`<div id="${id}"`));
   assert.ok(order.every((i) => i > 0));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.ok(page.includes('<meta name="robots" content="noindex, nofollow">'));

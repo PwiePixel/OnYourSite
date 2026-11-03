@@ -13,6 +13,7 @@ export function adminBackUrl(post: PhpArray): string {
   if (post.community_action !== undefined) return '/admin#community';
   if (post.hc_action !== undefined) return hcBackUrl(post);
   if (post.code_action !== undefined) return '/admin#code-pages';
+  if (post.domain_action !== undefined) return '/admin#domains';
   if (post.oys_action !== undefined) {
     const action = field(post, 'oys_action');
     if (action.startsWith('discord_')) return '/admin#discord';

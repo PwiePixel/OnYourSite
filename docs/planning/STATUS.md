@@ -63,10 +63,11 @@ continue" below.
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
+| 33 | PD-5 | Custom domains admin: Admin → Custom domains with setup, settings (incl. the worker's mail budget), all domains with Check now / Disable with a reason / Enable / Remove and their history, blocked hostnames with Release (R2), hostnames not managed here (on `feature/pd5-domains-admin`) | Built |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
-- Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
+- Premium and domains: PD-6 (installer: Cloudflare for SaaS, domain worker unit); PD-5 is on `feature/pd5-domains-admin`.
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
@@ -85,8 +86,12 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-   - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
-     worker).
+   - Premium and domains: PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain worker); PD-5 (domains
+     admin) is on `feature/pd5-domains-admin`. Still open from PD-5: the globe badge for pages with a live domain in the
+     admin user list (design §5.4 last bullet), "place in line" and "N waiting" in the list and the Hostnames row, a
+     copy button for "Customers point to", the problem as text instead of its code, the Cloudflare docs link in the
+     not-set-up card; `removeDomain()` re-reads under REPEATABLE READ, so a takeover during an admin remove can end in
+     "kept changing" (500) – read with a locking read in the retry.
    - Code pages: CS-5 (moderation), the rest of CS-6.
    - Status pages: the rest of ST-4, then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
