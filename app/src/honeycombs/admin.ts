@@ -17,17 +17,18 @@ import { audit, type AuditDetails } from './audit.js';
 import { grantFeature, revokeFeature } from './grants.js';
 import { refund } from './shop.js';
 import { reverseEntry, setFrozen } from './teamTools.js';
+import { createCode, disableCode } from './codes.js';
 import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export type AdminResult = { ok: string } | { error: string };
 
-// Unterbereiche (codes kommt mit HC-9)
-export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger'] as const;
+// Unterbereiche
+export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'codes'] as const;
 export type HcTab = (typeof HC_TABS)[number];
 const ACTION_TAB: Readonly<Record<string, HcTab>> = {
   settings: 'rules', item_save: 'catalogue', item_add: 'catalogue', offer_create: 'offers', offer_cancel: 'offers', grant: 'users',
   feature_grant: 'users', feature_revoke: 'users', refund: 'users', reverse: 'users', freeze: 'users', unfreeze: 'users',
-  grant_preview: 'users', grant_bulk: 'users', grant_bulk_cancel: 'users',
+  grant_preview: 'users', grant_bulk: 'users', grant_bulk_cancel: 'users', code_create: 'codes', code_disable: 'codes',
 };
 // Aktionen aus den Details eines Nutzers: zurück zu diesen Details
 const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund', 'reverse', 'freeze', 'unfreeze']);
@@ -315,6 +316,19 @@ export async function adminShopHandle(post: PhpArray, adminId: number): Promise<
       const id = wholeNumber(f.ledger_id, 1, 2147483647);
       if (id === null) return { error: 'This entry no longer exists.' };
       return reverseEntry(adminId, id, f.note);
+    }
+    case 'code_create': {
+      const f = textFields(post, ['code', 'amount', 'note', 'starts_at', 'ends_at', 'max_uses', 'min_account_days']);
+      if (!f) return { error: BAD };
+      return createCode(adminId, f);
+    }
+    case 'code_disable': {
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['code_id']);
+      if (!f) return { error: BAD };
+      const id = wholeNumber(f.code_id, 1, 2147483647);
+      if (id === null) return { error: 'This code no longer exists.' };
+      return disableCode(adminId, id);
     }
     case 'freeze':
     case 'unfreeze': {

@@ -249,9 +249,10 @@ async function earnRules(uid: number, streak: StreakInfo, lim: EarnLimits): Prom
     { key: 'views', icon: 'bx-trending-up', title: 'Get visitors', text: 'For every ' + numberFormat(cfg.views_step) + ' views of your pages – one reward a day',
       amount: cfg.views, done: viewRewards >= HC_MAX_VIEW_REWARDS, doneText: 'All ' + HC_MAX_VIEW_REWARDS + ' rewards collected',
       progress: { value: Math.min(viewRewards, HC_MAX_VIEW_REWARDS), goal: HC_MAX_VIEW_REWARDS } },
+    { key: 'codes', icon: 'bx-purchase-tag-alt', title: 'Event codes', text: 'Codes from events and the team – redeem them below', amount: 0, done: false, doneText: '', progress: null },
     { key: 'gifts', icon: 'bx-gift', title: 'Gifts from the team', text: 'For great pages, events and helping others', amount: 0, done: false, doneText: '', progress: null },
   ];
-  return rules.filter((r) => r.key === 'gifts' || r.amount > 0);
+  return rules.filter((r) => r.key === 'gifts' || r.key === 'codes' || r.amount > 0);
 }
 
 // „Earn honeycombs“: Regeln, Serie und was vom Tageslimit heute noch übrig ist

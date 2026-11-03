@@ -100,7 +100,7 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.deepEqual(c.options, [{ item: 'code_page', label: 'Unlock', days: null, units: 1, listPrice: 100, price: 100, offer: null, availableUntil: null, affordable: true, note: '' }]);
   assert.deepEqual(st.owned, []);
   const rules = (st.earn as { rules: Array<{ key: string; amount: number; progress: unknown }> }).rules;
-  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['streak', 15], ['profile', 20], ['views', 10], ['gifts', 0]]);
+  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['streak', 15], ['profile', 20], ['views', 10], ['codes', 0], ['gifts', 0]]);
   assert.deepEqual(rules.find((r) => r.key === 'views')?.progress, { value: 0, goal: 20 });
   // POST geht genauso (z. B. aus einem Formular), und der Kontostand zählt für „affordable“
   const poor = jsonBody(await api('shop', { userId: 9, json: {} })).shop as State;
@@ -307,7 +307,8 @@ test('hc-history: pages of 20 with next, before as query or JSON, bad input and 
 });
 
 test('unknown actions of the area answer 404 (GET and POST)', async () => {
-  for (const action of ['shop-redeem', 'hc-redeem', 'shop-auto-renew', 'shop-reminders', 'hc-foo']) {
+  // hc-redeem gibt es seit HC-9 (nur POST; GET bleibt 404, siehe hc-codes.http.test.ts)
+  for (const action of ['shop-redeem', 'shop-auto-renew', 'shop-reminders', 'hc-foo']) {
     for (const method of ['GET', 'POST']) {
       const ctx = await api(action, { userId: 5, method });
       assert.equal(ctx.status, 404, action + ' ' + method);

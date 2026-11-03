@@ -46,6 +46,7 @@ export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Clou
 export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnamen bleiben gesperrt, auch nach „Entfernen“ (R2)
 export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeichertes max_on_pages 0 aus der dunklen Phase wird 1
 export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_day, best_streak), aus den Tagesbuchungen nachgetragen
+export const V_SHOP_EVENT_CODES = 20; // Honigwaben: Event-Codes des Teams (hc_codes)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -89,6 +90,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_DOMAIN_BLOCKS, name: 'domainBlocks', run: domainBlocks },
   { version: V_CODE_SLOTS_LIVE, name: 'codeSlotsLive', run: codeSlotsLive },
   { version: V_SHOP_STREAKS, name: 'shopStreaks', run: shopStreaks },
+  { version: V_SHOP_EVENT_CODES, name: 'shopEventCodes', run: shopEventCodes },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1530,4 +1532,23 @@ export async function shopStreaks(conn: PoolConnection): Promise<void> {
     await run(conn, `UPDATE hc_accounts SET streak = ?, streak_day = ?, best_streak = GREATEST(best_streak, ?)
         WHERE user_id = ? AND streak_day IS NULL`, [Math.min(65535, current), current > 0 ? prev : null, Math.min(65535, best), uid]);
   }
+}
+
+// HC-9: Event-Codes. code in Großbuchstaben, Ziffern, Bindestrich; uses zählt die Einlösungen (unter der Kontosperre)
+async function shopEventCodes(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_codes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(32) NOT NULL,
+        amount INT UNSIGNED NOT NULL,
+        note VARCHAR(150) NOT NULL DEFAULT '',
+        starts_at DATETIME NULL,
+        ends_at DATETIME NULL,
+        max_uses INT UNSIGNED NULL,
+        uses INT UNSIGNED NOT NULL DEFAULT 0,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        disabled_at DATETIME NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_code (code)
+    ) ${OPTS}`);
 }
