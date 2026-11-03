@@ -10,7 +10,9 @@ import type { Ctx } from '../web/ctx.js';
 import { transaction, withConnection, type Db, type Row } from '../db.js';
 import { rateLimit } from '../web/security.js';
 import { adminMode } from '../honeycombs/shop.js';
-import { intval, phpTruthy } from '../php.js';
+import { date, intval, phpTruthy } from '../php.js';
+import { isStaff } from '../app/context.js';
+import { statusTitleProblem } from './names.js';
 import { cleanText } from '../helpers.js';
 import { report } from '../discord/botReport.js';
 import { INDICATOR_TEXT } from './aggregate.js';
@@ -42,6 +44,7 @@ type Input = Record<string, unknown>;
 const NOT_ALLOWED = { ok: false, error: 'Not allowed.' };
 const LOCKED = { ok: false, error: 'Unlock status pages with honeycombs first.' };
 const GONE = { ok: false, error: 'This component no longer exists. Please reload.' };
+const PAGE_GONE = { ok: false, error: 'This status page no longer exists. Please reload.' };
 
 // Öffentliche Resolver für die Probe beim Speichern (Tests setzen einen eigenen)
 let resolver: PublicResolver | null = null;
@@ -72,15 +75,23 @@ const limitsOf = (page: StatusPageRow, db?: Db): ReturnType<typeof statusLimits>
 
 // Aktionen, die nur OnYourSites eigene Seite kennt (Bot-Kanäle, Alarme an alle Admins)
 const SYSTEM_ONLY = new Set(['status-alerts', 'status-alerts-owner', 'status-bot-channels']);
+// Nur für die eigene Seite eines Kontos: OnYourSites Seite behält ihre Adresse und hat die Alarme der Admins
+const USER_ONLY = new Set(['status-address', 'status-owner-alerts']);
+// Das Team hat keine Sperrfrist beim Adresswechsel (wie bei Link-Seiten); je Anfrage gemerkt für den Zustand
+const staffOf = new WeakMap<Ctx, boolean>();
+const SLUG_COOLDOWN = 30 * 86400;
+const SLUG_REDIRECT = 90 * 86400;
 const NO_PAGE = { ok: false, error: 'Create your status page first.' };
 
 export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPost: boolean, raw: unknown): Promise<void> {
   const input: Input = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Input) : {};
   const scope = scopeOf(ctx, input);
   const uid = intval(user.id);
+  staffOf.set(ctx, isStaff(ctx, user));
   let page: StatusPageRow | null;
   if (scope === 'system') {
     if (!statusAdmin(ctx, user)) ctx.json(NOT_ALLOWED, 403);
+    if (USER_ONLY.has(action)) ctx.json(NOT_ALLOWED, 403);
     page = await withConnection((db) => systemStatusPage(db));
     if (!page) ctx.json({ ok: false, error: 'OnYourSite’s status page doesn’t exist yet – the database update hasn’t run.' }, 404);
   } else {
@@ -121,6 +132,8 @@ export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPos
     case 'status-incident-delete': return deleteIncident(ctx, page, intval(input.id ?? 0));
     case 'status-alerts-owner': return saveAlerts(ctx, page, input);
     case 'status-bot-channels': return saveBotChannels(ctx, page, input);
+    case 'status-address': return changeAddress(ctx, page, uid, input);
+    case 'status-owner-alerts': return saveOwnerAlerts(ctx, page, input);
   }
   ctx.json({ ok: false, error: 'Unknown action.' }, 404);
 }
@@ -159,6 +172,12 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
         clash,
         status: view.indicator, statusText: INDICATOR_TEXT[view.indicator],
         settings: { show_uptime: settings.show_uptime, show_response: settings.show_response, history_days: settings.history_days, auto_incident: settings.auto_incident },
+        // Name mit einer Marke, noch nicht vom Team freigegeben (die Seite bleibt so lange noindex)
+        review: page.reviewNote !== '' && page.reviewedAt === null ? page.reviewNote : '',
+        // Adresswechsel: Tage bis zum nächsten (0 = jetzt möglich; das Team ohne Sperrfrist)
+        address: { daysLeft: slugDaysLeft(page, staffOf.get(ctx) === true, t) },
+        // Eigene Seite: E-Mail an den Besitzer und die Ereignisse (die Glocke gibt es immer)
+        ...(page.isSystem ? {} : { alerts: { email: settings.alerts.owner, events: settings.alerts.events } }),
         kpis: { uptime30, avgMs, openIncidents: view.active.filter((i) => i.kind === 'incident').length, components: view.components.length },
       },
       limits: { checks: limits.checks, components: limits.components, minInterval: limits.minInterval, intervals: module.intervals, timeoutMax: module.timeout_max },
@@ -289,9 +308,21 @@ async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<ne
     const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
     let title = cur.title;
     let description = cur.description;
+    let reviewNote = cur.reviewNote;
+    let reviewedAt = cur.reviewedAt;
     if (input.title !== undefined) {
       title = cleanText(input.title, 120);
       if (title === '') return { ok: false, error: 'Please give the page a name.', field: 'title' };
+      if (!cur.isSystem) {
+        const tp = statusTitleProblem(title);
+        if (tp.error) return { ok: false, error: tp.error, field: 'title' };
+        // Eine neue Marke im Namen markiert wieder zur Prüfung; dieselbe Marke bleibt freigegeben
+        const note = tp.review ?? '';
+        if (note !== cur.reviewNote) {
+          reviewNote = note;
+          reviewedAt = null;
+        }
+      }
     }
     if (input.description !== undefined) description = cleanText(input.description, 300);
     const bool = (k: 'show_uptime' | 'show_response'): void => {
@@ -316,8 +347,8 @@ async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<ne
       }
       published = input.online;
     }
-    await db.exec('UPDATE status_pages SET title = ?, description = ?, settings = ?, is_published = ? WHERE id = ?',
-      [title, description, JSON.stringify(raw), published ? 1 : 0, cur.id]);
+    await db.exec('UPDATE status_pages SET title = ?, description = ?, settings = ?, is_published = ?, review_note = ?, reviewed_at = ? WHERE id = ?',
+      [title, description, JSON.stringify(raw), published ? 1 : 0, reviewNote, reviewedAt, cur.id]);
     await bumpRev(db, cur.id);
     return { ok: true };
   });
@@ -343,6 +374,8 @@ async function createPage(ctx: Ctx, uid: number, input: Input): Promise<never> {
   if (!(await rateLimit('statuscreate:' + uid, 10, 3600))) ctx.json({ ok: false, error: 'You’re doing this very often – please wait a bit.' });
   const title = cleanText(input.title, 120);
   if (title === '') ctx.json({ ok: false, error: 'Please give the page a name.', field: 'title' });
+  const tp = statusTitleProblem(title);
+  if (tp.error) ctx.json({ ok: false, error: tp.error, field: 'title' });
   const slug = (typeof input.slug === 'string' ? input.slug : '').trim().toLowerCase();
   let res: { ok: boolean; error?: string; field?: string };
   try {
@@ -352,8 +385,8 @@ async function createPage(ctx: Ctx, uid: number, input: Input): Promise<never> {
       if (problem !== null) return { ok: false, error: problem, field: 'slug' };
       if (await db.one('SELECT id FROM status_pages WHERE slug = ?', [slug])) return { ok: false, error: takenText(slug), field: 'slug' };
       const t = now();
-      const ins = await db.exec(`INSERT INTO status_pages (user_id, is_system, slug, title, description, settings, is_published, changed_at, created_at, updated_at)
-          VALUES (?, 0, ?, ?, '', NULL, 1, ?, ?, ?)`, [uid, slug, title, t, stamp(t), stamp(t)]);
+      const ins = await db.exec(`INSERT INTO status_pages (user_id, is_system, slug, title, description, settings, is_published, review_note, changed_at, created_at, updated_at)
+          VALUES (?, 0, ?, ?, '', NULL, 1, ?, ?, ?, ?)`, [uid, slug, title, tp.review ?? '', t, stamp(t), stamp(t)]);
       await claimAddress(db, slug, 'status', ins.insertId, uid);
       await bumpRev(db, ins.insertId, t);
       return { ok: true };
@@ -396,6 +429,78 @@ async function deletePage(ctx: Ctx, uid: number, page: StatusPageRow): Promise<n
     throw err;
   }
   return emptyState(ctx, uid);
+}
+
+// ---------------------------------------------------------------- Adresse und Benachrichtigungen der eigenen Seite (ST-4)
+
+// Tage bis zum nächsten Adresswechsel: der erste ist frei, danach einmal in 30 Tagen; das Team ohne Sperrfrist
+function slugDaysLeft(page: StatusPageRow, staff: boolean, t: number): number {
+  if (staff || page.slugChangedAt === null) return 0;
+  return Math.max(0, Math.ceil((page.slugChangedAt + SLUG_COOLDOWN - t) / 86400));
+}
+
+// Neue Adresse: unter der Sperre der Plätze des Kontos; die neue über die Liste aller Adressen, die alte bleibt 90 Tage
+// für den Besitzer reserviert und leitet so lange weiter (status_slug_redirects; eine Weiterleitung, die auf der neuen
+// Adresse lag, endet)
+async function changeAddress(ctx: Ctx, page: StatusPageRow, uid: number, input: Input): Promise<never> {
+  const slug = (typeof input.slug === 'string' ? input.slug : '').trim().toLowerCase();
+  if (slug === page.slug) return stateOf(ctx, page);
+  if (!(await rateLimit('statusaddr:' + uid, 10, 3600))) ctx.json({ ok: false, error: 'You’re doing this very often – please wait a bit.' });
+  const staff = staffOf.get(ctx) === true;
+  let res: { ok: boolean; error?: string; field?: string };
+  try {
+    res = await withSlotLock(uid, async (db) => {
+      if (!(await lockStatusPage(db, page.id))) return PAGE_GONE;
+      const cur = (await statusPageById(db, page.id))!;
+      if (slug === cur.slug) return { ok: true };
+      const t = now();
+      if (slugDaysLeft(cur, staff, t) > 0) {
+        return { ok: false, error: `You can change the address again on ${date('M j, Y', (cur.slugChangedAt ?? t) + SLUG_COOLDOWN)}.`, field: 'slug' };
+      }
+      const problem = await slugProblem(slug, null, null, { userId: uid, db, kind: 'status' });
+      if (problem !== null) return { ok: false, error: problem, field: 'slug' };
+      if (await db.one('SELECT id FROM status_pages WHERE slug = ?', [slug])) return { ok: false, error: takenText(slug), field: 'slug' };
+      await claimAddress(db, slug, 'status', cur.id, uid);
+      await db.exec('UPDATE status_pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, t, cur.id]);
+      await releaseAddress(db, cur.slug, uid, 'owner', { kind: 'status', refId: cur.id });
+      await db.exec('DELETE FROM status_slug_redirects WHERE slug = ?', [slug]);
+      await db.exec('INSERT INTO status_slug_redirects (slug, page_id, until) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE page_id = VALUES(page_id), until = VALUES(until)',
+        [cur.slug, cur.id, t + SLUG_REDIRECT]);
+      await bumpRev(db, cur.id, t);
+      await bumpGlobalRev(db);
+      return { ok: true };
+    });
+  } catch (err) {
+    if (isTakenError(err)) ctx.json({ ok: false, error: takenText(slug), field: 'slug' });
+    if (err instanceof SlotBusyError) ctx.json(BUSY);
+    throw err;
+  }
+  if (!res.ok) ctx.json(res);
+  const fresh = await withConnection((db) => statusPageById(db, page.id));
+  return stateOf(ctx, fresh ?? page);
+}
+
+// Benachrichtigungen des Besitzers: E-Mail an oder aus und welche Ereignisse; die Glocke bekommt sie immer
+async function saveOwnerAlerts(ctx: Ctx, page: StatusPageRow, input: Input): Promise<never> {
+  const events = input.events;
+  if (events !== undefined && (!Array.isArray(events) || !events.every((x) => typeof x === 'string' && (ALERT_EVENTS as readonly string[]).includes(x)))) {
+    ctx.json({ ok: false, error: 'Please choose the events again.', field: 'events' });
+  }
+  const res = await transaction(async (_conn, db) => {
+    if (!(await lockStatusPage(db, page.id))) return PAGE_GONE;
+    const cur = (await statusPageById(db, page.id))!;
+    const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
+    const alerts = raw.alerts && typeof raw.alerts === 'object' && !Array.isArray(raw.alerts) ? { ...(raw.alerts as Record<string, unknown>) } : {};
+    if (typeof input.email === 'boolean') alerts.owner = input.email;
+    if (Array.isArray(events)) alerts.events = ALERT_EVENTS.filter((ev) => (events as AlertEvent[]).includes(ev));
+    raw.alerts = alerts;
+    await db.exec('UPDATE status_pages SET settings = ? WHERE id = ?', [JSON.stringify(raw), cur.id]);
+    await bumpRev(db, cur.id);
+    return { ok: true };
+  });
+  if (!res.ok) ctx.json(res);
+  const fresh = await withConnection((db) => statusPageById(db, page.id));
+  return stateOf(ctx, fresh ?? page);
 }
 
 // ---------------------------------------------------------------- Bestandteile

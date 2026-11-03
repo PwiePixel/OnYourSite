@@ -293,8 +293,15 @@ export async function statusSubdomain(ctx: Ctx, slug: string): Promise<void> {
 
 // Hauptdomain on-your.site/<adresse>: eine Statusseite gibt es nur unter ihrer eigenen Subdomain
 export async function statusPathRedirect(ctx: Ctx, slug: string): Promise<void> {
-  const page = await withConnection((db) => statusPageBySlug(db, slug));
-  if (page) ctx.redirect(statusPageUrl(page.slug), 302);
+  const now = Math.floor(Date.now() / 1000);
+  const to = await withConnection(async (db) => {
+    const page = await statusPageBySlug(db, slug);
+    if (page) return page.slug;
+    // Eine alte Adresse (90 Tage nach dem Wechsel) leitet auch hier zur neuen
+    const r = await db.one('SELECT p.slug FROM status_slug_redirects r JOIN status_pages p ON p.id = r.page_id WHERE r.slug = ? AND r.until > ?', [slug, now]);
+    return r ? String(r.slug) : null;
+  });
+  if (to !== null) ctx.redirect(statusPageUrl(to), 302);
 }
 
 // Router: die Datenbank fehlt schon vor dem Abfragen der Adresse – bekannte Statusseiten bekommen ihre Notfall-Ausgabe

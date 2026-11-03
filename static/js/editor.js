@@ -1539,7 +1539,7 @@
       });
     }
     statusLoading.then(function () {
-      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: E.statusAdmin ? 'system' : 'user', baseHost: E.baseHost, user: E.user || {} });
+      if (window.OYS_STATUS) window.OYS_STATUS.mount(root, { api: '/dashboard/api/', csrf: E.csrf, scope: E.statusAdmin ? 'system' : 'user', canSwitch: !!E.statusAdmin, baseHost: E.baseHost, user: E.user || {} });
     }, function () {
       statusLoading = null;
       root.textContent = '';

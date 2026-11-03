@@ -33,6 +33,7 @@
 .st-m-s-maintenance .st-m-dot { background: #3b82f6; }
 
 .st-m-tabs { margin-top: 4px; }
+.st-m-scope { margin-bottom: 12px; }
 
 /* ---------- Bestandteile ---------- */
 .st-m-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

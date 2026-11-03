@@ -14,6 +14,8 @@ import { errorText } from './errors.js';
 import { statusServerConfig } from './settings.js';
 import { statusPageUrl, SYSTEM_SLUG } from './model.js';
 import { editorLink } from './links.js';
+import { csrfField } from '../web/security.js';
+import { confirmAttrs, confirmField } from '../views/partials/ui.js';
 
 const BADGE = 'text-[10px] font-bold uppercase px-1.5 py-0.5 rounded';
 const OK = `${BADGE} bg-emerald-500/15 text-emerald-400`;
@@ -71,7 +73,6 @@ const STATE_BADGE: Record<string, [string, string]> = {
 };
 
 export async function adminStatusView(ctx: Ctx): Promise<string> {
-  void ctx;
   const now = Math.floor(Date.now() / 1000);
   let o = '';
   o += '            <!-- ===================== Statusseiten ===================== -->\n';
@@ -148,6 +149,8 @@ export async function adminStatusView(ctx: Ctx): Promise<string> {
 `;
   }
 
+  o += await userPagesCard(ctx);
+
   o += `                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
                     <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
                         <i class='bx bx-pulse text-2xl text-lime-400'></i>
@@ -211,4 +214,43 @@ ${Number(p.is_public) === 1 ? '' : `                                    <span cl
   o += '                </div>\n';
   o += '            </div>\n';
   return o;
+}
+
+// Statusseiten der Nutzer (ST-4): wie viele es gibt und die Namen mit einer Marke, die das Team prüft – bis zur Freigabe
+// sehen Suchmaschinen diese Seiten nicht (Entwurf §6.6)
+async function userPagesCard(ctx: Ctx): Promise<string> {
+  const count = Number((await q('SELECT COUNT(*) AS n FROM status_pages WHERE is_system = 0'))[0]?.n ?? 0);
+  const review = await q(`SELECT p.id, p.slug, p.title, p.review_note, u.email FROM status_pages p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.is_system = 0 AND p.review_note <> '' AND p.reviewed_at IS NULL ORDER BY p.id LIMIT 100`);
+  let o = `                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden" id="statusUserPages">
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-user-circle text-xl text-lime-400'></i> Status pages of users <span class="text-gray-500 text-sm font-normal">${e(String(count))}</span></h2>
+                    </div>
+`;
+  if (!review.length) {
+    o += '                    <p class="p-6 text-sm text-gray-500">No names need review.</p>\n';
+    return o + '                </div>\n';
+  }
+  const csrf = await csrfField(ctx);
+  o += `                    <p class="px-5 sm:px-6 pt-4 text-xs text-gray-500 uppercase tracking-wider font-semibold">Name needs review</p>
+                    <div class="divide-y divide-bordercolor">
+`;
+  for (const r of review) {
+    const url = statusPageUrl(String(r.slug));
+    o += `                        <div class="p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center gap-3">
+                            <div class="min-w-0 flex-1">
+                                <p class="text-sm text-white font-medium break-words">${e(String(r.title))} <span class="${WARN}">${e(String(r.review_note))}</span></p>
+                                <p class="text-xs text-gray-500 mt-1 break-all"><a href="${e(url)}" target="_blank" rel="noopener" class="text-lime-400 hover:underline">${e(url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</a> · ${e(String(r.email ?? ''))}</p>
+                            </div>
+                            <form action="/admin" method="POST" class="m-0 shrink-0"${confirmAttrs({ title: 'Approve this name?', text: '“' + String(r.title) + '” can be found by search engines again.', ok: 'Approve name' })}>
+                                ${csrf}${confirmField()}
+                                <input type="hidden" name="status_action" value="review_ok">
+                                <input type="hidden" name="page_id" value="${e(String(r.id))}">
+                                <input type="hidden" name="review_note" value="${e(String(r.review_note))}">
+                                <button type="submit" class="bg-white/5 hover:bg-white/10 border border-bordercolor text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2"><i class='bx bx-check'></i> Approve name</button>
+                            </form>
+                        </div>
+`;
+  }
+  return o + '                    </div>\n                </div>\n';
 }
