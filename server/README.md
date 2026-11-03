@@ -104,7 +104,33 @@ What the installer does through the Cloudflare API:
 
 It shows this plan and changes nothing until you say yes. The DNS is only switched once the tunnel is connected and the website answers on this server – if not, the website keeps running as before and `--tunnel` picks up the same tunnel later. Afterwards it checks from outside that a random subdomain really reaches this server through Cloudflare. In Cloudflare, *SSL/TLS* must not be set to *Off* (*Full (strict)* is right) – otherwise visitors end up in a redirect loop; the check points that out. A token that is missing a permission is forgotten, so the next run asks for a new one. On the server, `cloudflared` runs as the service `onyoursite-tunnel` (its own user without rights, the tunnel token in `/etc/onyoursite/tunnel.env`, readable only by root). Apache takes the real visitor address from Cloudflare and hands it to the website – the spam and login protection keep working.
 
-Running the installer again (or `--tunnel`) keeps the tunnel and only repairs what is missing; `--update` keeps `cloudflared` up to date and only restarts it when something changed. To stop using the tunnel: delete it in Cloudflare (*Zero Trust → Networks → Tunnels*), point the DNS to the server again, delete `TUNNEL=yes` from `/etc/onyoursite/server.conf`, run the installer and answer *n* to the tunnel question – it opens the web ports again. `sudo systemctl disable --now onyoursite-tunnel` stops `cloudflared`.
+Running the installer again (or `--tunnel`) keeps the tunnel and only adds what is missing (rules you added to the tunnel yourself stay); `--update` keeps `cloudflared` up to date and only restarts it when something changed. To stop using the tunnel: delete it in Cloudflare (*Zero Trust → Networks → Tunnels*), point the DNS to the server again, delete `TUNNEL=yes` from `/etc/onyoursite/server.conf`, run the installer and answer *n* to the tunnel question – it opens the web ports again. `sudo systemctl disable --now onyoursite-tunnel` stops `cloudflared`.
+
+## Custom domains (Premium)
+
+Premium users can show their page on their own domain (`links.theirname.com`). Cloudflare issues the certificates and routes those visitors through the tunnel (*Cloudflare for SaaS*); the service `onyoursite-domains` checks the domains and talks to Cloudflare. It needs the Cloudflare tunnel.
+
+Before you start:
+
+- In Cloudflare: *on-your.site → SSL/TLS → Custom Hostnames → Enable*. Cloudflare asks for a payment method: 100 domains are included, each further one costs $0.10 a month (the admin decides whether paid ones are allowed).
+- A **second API token** for the website: *My Profile → API Tokens → Create Token → Create Custom Token* with **Zone · SSL and Certificates · Edit**, Zone Resources: *Specific zone → on-your.site*. It stays on the server in `/etc/onyoursite/cf-saas.token` (only root) and reaches the service as a systemd credential – never `config.json`.
+- Keep *Under Attack* mode and *Bot Fight Mode* off, and no WAF or challenge rule may match `/_/domain-check` – otherwise domains can’t go live.
+
+```bash
+sudo bash /var/www/onyoursite/server/install.sh --domains
+```
+
+It checks the token, asks for the two names (`origin` – the fallback origin – and `edge` – where customers point their CNAME), shows the plan and only then creates the DNS records `origin.on-your.site` (to the tunnel) and `edge.on-your.site` (to `origin`), sets the fallback origin at Cloudflare, lets the tunnel send names it doesn’t know to the website (rules you added yourself stay), lets Apache take any host, writes the settings into `config.json` and starts `onyoursite-domains`. Afterwards switch new domains on for users in *Admin → Custom domains* – they stay off until you do.
+
+- `--update` checks all of this quietly and repairs what it can (a missing fallback origin, missing DNS records, the tunnel rules); problems are only warnings.
+- `--reset` deletes the domains at Cloudflare before the database; the token and the settings stay.
+- A new domain for the website releases the custom domains of the old zone; their owners are told to point their CNAME to the new `edge` name, then run `--domains` for the new zone.
+- Logs: `journalctl -u onyoursite-domains`. One domain in detail, without changing anything – with the token, the way the service gets it:
+
+  ```bash
+  sudo systemd-run --pipe --wait -p DynamicUser=yes -p SupplementaryGroups=www-data -p LoadCredential=cf_saas_token:/etc/onyoursite/cf-saas.token -p WorkingDirectory=/var/www/onyoursite/app node dist/cli.js domains:check links.example.com
+  ```
+- Problems: the fallback origin stays *pending* for a few minutes after setup; a CAA record at the customer must allow `letsencrypt.org`, `pki.goog` and `ssl.com`; customers on Cloudflare DNS need a grey-cloud CNAME; for a root domain the editor shows the extra records Cloudflare needs; "Checks paused" in the admin means our own site didn’t answer through Cloudflare (*Check again now* tests it).
 
 ## Start from scratch
 

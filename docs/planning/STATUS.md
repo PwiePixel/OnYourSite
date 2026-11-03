@@ -66,7 +66,7 @@ continue" below.
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
-- Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
+- Premium and domains: PD-5 (domains admin); PD-6 is on `feature/pd6-installer-domains`.
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
@@ -89,6 +89,19 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      worker).
    - Code pages: CS-5 (moderation), the rest of CS-6.
    - Status pages: the rest of ST-4, then ST-5, ST-7.
+   - Premium and domains: PD-5 (domains admin). PD-6 (installer: Cloudflare for SaaS) is on
+     `feature/pd6-installer-domains`: `--domains` / `step_domains` (website token in `/etc/onyoursite/cf-saas.token`,
+     `origin`/`edge` DNS, fallback origin, merged tunnel rules – rules of the admin stay –, `config.json`), the
+     `onyoursite-domains` unit, `ServerAlias *` with custom domains, the quiet `--update` step, `--reset` deleting the
+     hostnames at Cloudflare and the domain-change routine; tests with a stand-in Cloudflare API
+     (`app/test/install-domains.test.ts`). Not tried on a real server and a real Cloudflare zone yet – do that once
+     before switching custom domains on. Not built: the local catch-all self-test of design §8.2 step 7; `--update`
+     filling in missing config keys (§8.3); `--reset` only deletes the hostnames in `custom_domains.cf_id` (orphans known
+     only from `custom_domain_log` stay); `tunnel_rules_json` drops rules without a hostname other than the catch-all
+     (e.g. path-only rules) and keeps the old domain's rules after a domain change; `CF_ERRFILE` of `--update`/`--reset`
+     stays in /tmp.
+   - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
+   - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
