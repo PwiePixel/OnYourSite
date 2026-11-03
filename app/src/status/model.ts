@@ -22,6 +22,7 @@ export interface StatusPageRow {
   blockedReason: string;
   reviewNote: string;
   reviewedAt: number | null;
+  slugChangedAt: number | null; // letzter Adresswechsel (Unix-Zeit), für die Sperrfrist
   rev: number;
   createdAt: string | null;
 }
@@ -44,12 +45,13 @@ export function pageFromRow(r: Row): StatusPageRow {
     blockedReason: String(r.blocked_reason ?? ''),
     reviewNote: String(r.review_note ?? ''),
     reviewedAt: num(r.reviewed_at),
+    slugChangedAt: num(r.slug_changed_at),
     rev: Number(r.rev ?? 0),
     createdAt: r.created_at === null || r.created_at === undefined ? null : String(r.created_at),
   };
 }
 
-const PAGE_COLUMNS = 'id, user_id, is_system, slug, title, description, theme, settings, is_published, is_blocked, blocked_reason, review_note, reviewed_at, rev, created_at';
+const PAGE_COLUMNS = 'id, user_id, is_system, slug, title, description, theme, settings, is_published, is_blocked, blocked_reason, review_note, reviewed_at, slug_changed_at, rev, created_at';
 
 export async function statusPageBySlug(db: Db, slug: string): Promise<StatusPageRow | null> {
   const r = await db.one(`SELECT ${PAGE_COLUMNS} FROM status_pages WHERE slug = ?`, [slug]);

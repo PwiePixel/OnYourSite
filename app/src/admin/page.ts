@@ -18,6 +18,7 @@ import { hcBackUrl } from '../honeycombs/admin.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
 import { adminCodePagesView } from '../code/adminView.js';
 import { adminStatusView } from '../status/adminView.js';
+import { statusAdminPost } from '../status/admin.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
 import { resetPassword, toggleAdmin } from './users.js';
@@ -77,6 +78,11 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
   if (isPost && post.code_action !== undefined) {
     await codeAction(ctx, session, post);
+  }
+
+  // Statusseiten der Nutzer: Namen freigeben (ST-4)
+  if (isPost && post.status_action !== undefined) {
+    await statusAdminPost(ctx, session, post);
   }
 
   // Updates, Roadmap und Discord – nur weiterleiten, wenn die Aktion dorthin gehört

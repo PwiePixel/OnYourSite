@@ -374,7 +374,7 @@ export function renderNotice(page: Pick<StatusPageRow, 'theme' | 'settings' | 'i
 export function renderSystemFallback(page: Pick<StatusPageRow, 'slug' | 'title'>, since: number, links: RenderLinks): string {
   const p: StatusPageRow = {
     id: 0, userId: null, isSystem: true, slug: page.slug, title: page.title || 'OnYourSite status', description: '', theme: 'deep-dark',
-    settings: '{"accent":"#6366f1"}', published: true, blocked: false, blockedReason: '', reviewNote: '', reviewedAt: null, rev: 0, createdAt: null,
+    settings: '{"accent":"#6366f1"}', published: true, blocked: false, blockedReason: '', reviewNote: '', reviewedAt: null, slugChangedAt: null, rev: 0, createdAt: null,
   };
   let body = '<main class="oys-main st-main">\n';
   body += header({ page: p, url: '' }, links, true);

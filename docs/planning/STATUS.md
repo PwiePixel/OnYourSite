@@ -62,13 +62,13 @@ continue" below.
 | 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
-| 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
+| 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`); address change, name rule with review, owner alerts, admin switch (on `feature/st4-rest`) | Built (small rest below) |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
+- Status pages: ST-5, ST-7 (the rest of ST-4 is on `feature/st4-rest`).
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Later (Stage C): `ROADMAP.md` §4.2.
 
@@ -88,7 +88,7 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
    - Code pages: CS-5 (moderation), the rest of CS-6.
-   - Status pages: the rest of ST-4, then ST-5, ST-7.
+   - Status pages: ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
@@ -136,12 +136,21 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      pages; the "Code page" card in the Create-a-new-page dialog; the state where every slot shows a code page (design
      U13) and the preview pane without a link page; a browser test for moving the own-address code page onto a slot;
      `tests/e2e/editor-dialogs.js` should clear the address registry in its reset so it can run twice on one database.
-   - ST-4 (first part built): still open – changing a status page's address (90-day redirect, cooldown), the brand
-     rule for page titles, the owner's alert settings (mail and bell are written by the core but not verified end to
-     end), the paused-module behaviour, incidents on user pages (the API exists, untested), subscribers, a test for
-     concurrent component adds, the remaining browser flows of the design, and the admin's switch between OnYourSite's
-     page and their own. `app/test/e2e/status-system.e2e.ts` test 1 (the incident isn't shown resolved after
-     "Resolve") fails on the base too.
+   - ST-4 (built; the rest on `feature/st4-rest`): changing a status page's address (`status-address`: first change
+     free, then once per 30 days, staff exempt; the old address forwards for 90 days through `status_slug_redirects`
+     and stays held for the owner), the name rule (`status/names.ts`: the OnYourSite name is refused; a distinctive
+     brand sets `review_note`, the page stays noindex until an admin approves it under Admin → Status pages → "Name
+     needs review", `status_action=review_ok`), the owner's alerts (`status-owner-alerts`: email on/off and events;
+     the bell always), the admin's switch between OnYourSite's page and their own in the editor, and tests for
+     incidents and maintenance on user pages, the "new unlocks" switch and concurrent component adds
+     (`app/test/status-user-rest.test.ts`, `tests/e2e/status-user.js`). Subscribers are ST-6 (Stage C). Still open:
+     blocking a user's status page from the admin (the public side already answers for `is_blocked`), editing the
+     address of OnYourSite's own page, and `app/test/e2e/status-system.e2e.ts` test 1 (the incident isn't shown
+     resolved after "Resolve") fails on the base too. From the review: delete + create resets the address cooldown
+     (status holds have no minimum use), so the "about four held addresses per 90 days" cap of ST-E10 is not enforced
+     (`statuscreate` allows 10 creates an hour); while the database is down, `statusDbDownHost` serves an old address
+     from the process-local `knownSlugs` list instead of redirecting; "Pay Pal status" (a brand split into words) is not
+     flagged; an admin working as a user has no address cooldown (like link and code pages, `isStaff`).
    - R1: while an admin works as another admin account, that account's bell can still show team notifications that
      link to `/admin` (they lead back to the editor – a dead end, not a way into admin rights); `editorData.user.admin`
      in the editor bootstrap still reflects `is_admin` (nothing reads it yet – switch it to `isAdminSession` before

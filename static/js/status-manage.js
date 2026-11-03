@@ -1,6 +1,7 @@
 /* OnYourSite – Statusseite verwalten (Editor, Bereich „Status“). Der Editor lädt diese Datei erst beim ersten Öffnen
    des Bereichs und ruft OYS_STATUS.mount(root, opts) auf. Bis jedes Konto eine eigene Statusseite freischalten kann,
-   gibt es hier nur OnYourSites eigene Seite (scope system, nur für Admins): Bestandteile, Vorfälle und Wartungen,
+   gab es hier nur OnYourSites eigene Seite (scope system, nur für Admins); seit ST-4 auch die eigene Seite eines Kontos
+   (scope user), Admins schalten zwischen beiden um. Bestandteile, Vorfälle und Wartungen,
    Alarme und die Kanäle des Bots, Einstellungen. Dialoge und Hinweise kommen aus window.OYSUI – keine Browser-Popups.
    Jeder Text vom Server wird maskiert (esc) oder als textContent gesetzt. */
 (function () {
@@ -145,10 +146,9 @@
   // ---------------------------------------------------------------- Zeichnen
 
   function render() {
-    S.root.innerHTML = '<div class="st-m"><div id="stmHead"></div><div class="chips st-m-tabs" role="tablist"></div><div id="stmBody"></div></div>';
+    S.root.innerHTML = '<div class="st-m">' + scopeSwitchHtml() + '<div id="stmHead"></div><div class="chips st-m-tabs" role="tablist"></div><div id="stmBody"></div></div>';
     var tabs = $('.st-m-tabs', S.root);
     TABS.forEach(function (t) {
-      if (t[0] === 'alerts' && userScope()) return;
       var b = h('<button type="button" class="chip" role="tab" data-stm-tab="' + t[0] + '"><i class="bx ' + t[1] + '"></i> ' + esc(t[2]) + '</button>');
       tabs.appendChild(b);
     });
@@ -156,11 +156,21 @@
     renderBody();
   }
 
+  // Admins (ST-4): zwischen OnYourSites Seite und der eigenen Statusseite umschalten (für Admins ist sie dabei)
+  function scopeSwitchHtml() {
+    if (!S.opts || !S.opts.canSwitch) return '';
+    var cur = S.opts.scope;
+    return '<div class="chips st-m-scope" role="tablist" aria-label="Which status page">' +
+      [['system', 'bx-broadcast', 'OnYourSite status page'], ['user', 'bx-user', 'My status page']].map(function (x) {
+        return '<button type="button" class="chip' + (x[0] === cur ? ' on' : '') + '" role="tab" aria-selected="' + (x[0] === cur) + '" data-stm-scope="' + x[0] + '"><i class="bx ' + x[1] + '"></i> ' + esc(x[2]) + '</button>';
+      }).join('') + '</div>';
+  }
+
   // Noch keine eigene Seite: Name und Adresse (eigene Subdomain) wählen
   function renderCreate() {
     var lim = (S.state && S.state.limits) || {};
     S.root.innerHTML = '';
-    var box = h('<div class="st-m"><div class="panel st-m-create space-y-4 max-w-xl">' +
+    var box = h('<div class="st-m">' + scopeSwitchHtml() + '<div class="panel st-m-create space-y-4 max-w-xl">' +
       '<div><h2 class="section-title"><i class="bx bx-pulse"></i> Create your status page</h2>' +
       '<p class="st-m-hint"></p></div>' +
       '<div><label class="lbl" for="stmNewTitle">Name</label><input class="field" id="stmNewTitle" name="title" maxlength="120" placeholder="Acme status"></div>' +
@@ -735,6 +745,7 @@
   // ---------------------------------------------------------------- Alarme
 
   function alertsView() {
+    if (userScope()) return ownerAlertsView();
     var wrap = h('<div class="st-m-pane"></div>');
     var a = S.alerts;
     if (!a) { wrap.appendChild(h('<div class="panel empty-state"><i class="bx bx-error-circle"></i>The alerts couldn’t be loaded.</div>')); return wrap; }
@@ -756,6 +767,20 @@
       list.appendChild(row);
     });
     wrap.appendChild(recent);
+    return wrap;
+  }
+
+  // Eigene Seite: E-Mail an den Besitzer an oder aus, welche Ereignisse; die Glocke zeigt sie immer
+  function ownerAlertsView() {
+    var wrap = h('<div class="st-m-pane"></div>');
+    var a = (S.state.page && S.state.page.alerts) || { email: true, events: [] };
+    var events = {};
+    a.events.forEach(function (e) { events[e] = 1; });
+    var email = (S.opts.user && S.opts.user.email) || '';
+    wrap.appendChild(h('<div class="panel space-y-4"><h3 class="section-title">Email and bell</h3>' +
+      sw('owner_email', 'Email me' + (email ? ' at ' + email : ''), a.email, 'Your bell in the editor always shows them.') +
+      '<div class="st-m-events-pick">' + EVENTS.map(function (e) { return '<label class="st-m-check"><input type="checkbox" data-ev="' + e[0] + '"' + (events[e[0]] ? ' checked' : '') + '> ' + esc(e[1]) + '</label>'; }).join('') + '</div>' +
+      '<button type="button" class="btn-secondary" data-stm="save-owner-alerts"><i class="bx bx-save"></i> Save</button></div>'));
     return wrap;
   }
 
@@ -797,6 +822,7 @@
       '<div><label class="lbl">Past incidents on the page (days)</label><input class="field" name="history_days" type="number" min="0" max="30" value="' + esc(s.history_days) + '"></div></div>' +
       '<div class="flex items-center gap-3 flex-wrap"><button type="button" class="btn-primary" data-stm="save-page"><i class="bx bx-save"></i> Save</button>' +
       '<a class="btn-ghost" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> View page</a></div></div>' +
+      (userScope() ? addressPanelHtml(p) : '') +
       (userScope() ? '<div class="panel st-m-danger"><div><b>Delete status page</b><p>Removes the page with all components and incidents.</p></div>' +
         '<button type="button" class="btn-danger" data-stm="delete-page"><i class="bx bx-trash"></i> Delete</button></div>' : '') + '</div>');
     $('[name=title]', wrap).value = p.title;
@@ -805,16 +831,61 @@
     return wrap;
   }
 
+  // Adresse der eigenen Seite: die alte leitet 90 Tage weiter und bleibt so lange reserviert; danach Sperrfrist
+  function addressPanelHtml(p) {
+    var left = p.address ? p.address.daysLeft : 0;
+    return '<div class="panel space-y-3" id="stmAddress"><h3 class="section-title">Address</h3>' +
+      (p.review ? '<p class="st-m-note"><i class="bx bx-search-alt"></i> ' + esc('Your page’s name ' + p.review.replace(/^Mentions /, 'mentions ') + '. Search engines see the page once the team has checked the name.') + '</p>' : '') +
+      '<div class="st-m-addr"><input class="field" name="slug" maxlength="30" autocomplete="off" spellcheck="false" value="' + esc(p.slug) + '"' + (left > 0 ? ' readonly' : '') + '><span class="st-m-suffix">.' + esc(S.opts.baseHost || '') + '</span></div>' +
+      '<p class="hint">' + esc(left > 0 ? 'You can change the address again in ' + left + (left === 1 ? ' day.' : ' days.') : 'Your old address keeps forwarding here for 90 days and stays reserved for you.') + '</p>' +
+      '<p class="st-m-err" hidden></p>' +
+      (left > 0 ? '' : '<button type="button" class="btn-secondary" data-stm="change-address"><i class="bx bx-link"></i> Change address</button>') + '</div>';
+  }
+
+  function changeAddress(btn) {
+    var box = $('#stmAddress', S.root), input = $('[name=slug]', box), err = $('.st-m-err', box);
+    var slug = input.value.trim().toLowerCase();
+    if (!slug || slug === S.state.page.slug) return;
+    UI.confirm({ title: 'Change the address?', text: 'New address: ' + slug + '.' + (S.opts.baseHost || '') + '. The old one forwards visitors here for 90 days.', ok: 'Change address', tone: 'warn' }).then(function (yes) {
+      // Nach dem Dialog: dasselbe Feld mit derselben Eingabe
+      if (!yes || !box.isConnected || input.value.trim().toLowerCase() !== slug) return;
+      btn.disabled = true;
+      api('status-address', { slug: slug }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { err.hidden = false; err.textContent = r.error || 'Something went wrong. Please try again.'; return; }
+        S.state = r;
+        toast('Your status page is now at ' + r.page.url.replace(/^https?:\/\//, '').replace(/\/$/, '') + '.');
+        renderHead();
+        renderBody();
+      });
+    });
+  }
+
+  // Umschalten (Admins): alles der anderen Seite neu laden
+  function switchScope(scope) {
+    if (!S.opts.canSwitch || scope === S.opts.scope || S.loading) return;
+    S.opts.scope = scope;
+    S.state = null;
+    S.mons = null;
+    S.incs = null;
+    S.alerts = null;
+    S.tab = 'components';
+    S.root.innerHTML = '<div class="st-m"><div class="st-m-loading"><i class="bx bx-loader-alt bx-spin"></i></div></div>';
+    loadAll();
+  }
+
   // ---------------------------------------------------------------- Aktionen
 
   function onClick(ev) {
+    var scopeBtn = ev.target.closest('[data-stm-scope]');
+    if (scopeBtn) { switchScope(scopeBtn.getAttribute('data-stm-scope')); return; }
     var tabBtn = ev.target.closest('[data-stm-tab]');
     if (tabBtn) {
       S.tab = tabBtn.getAttribute('data-stm-tab');
       renderBody();
       if (S.tab === 'components') refreshMonitors();
       if (S.tab === 'incidents') refreshIncidents();
-      if (S.tab === 'alerts') refreshAlerts();
+      if (S.tab === 'alerts' && !userScope()) refreshAlerts();
       return;
     }
     var btn = ev.target.closest('[data-stm]');
@@ -825,6 +896,19 @@
     var card = btn.closest('[data-inc]');
     var inc = card ? incidentById(Number(card.getAttribute('data-inc'))) : null;
     if (act === 'create-page') return createPage(btn);
+    if (act === 'change-address') return changeAddress(btn);
+    if (act === 'save-owner-alerts') {
+      var picked = $$('[data-ev]', S.root).filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-ev'); });
+      btn.disabled = true;
+      api('status-owner-alerts', { email: $('[name=owner_email]', S.root).checked, events: picked }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        S.state = r;
+        toast('Alerts saved.');
+        renderBody();
+      });
+      return;
+    }
     if (act === 'delete-page') return deletePage();
     if (act === 'add') return componentDialog(null);
     if (act === 'edit' && m) return componentDialog(m);
