@@ -158,7 +158,7 @@ test('a fresh install creates every table and the seeds', async () => {
   assert.equal(await version(DBS.nodeFresh), String(SCHEMA_VERSION));
   const all = await tables(DBS.nodeFresh);
   for (const t of [...DATA_TABLES, 'oys_meta', 'oys_sessions']) assert.ok(all.includes(t), t);
-  assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
+  await historySamples(DBS.nodeFresh);
   assert.match(await ddl(DBS.nodeFresh, 'notifications'), /KEY `idx_user_id` \(`user_id`,`id`\)/);
 });
 
@@ -170,6 +170,22 @@ test('a fresh install creates the same tables and seeds as PHP', { skip: PHP_SKI
   await assertSame(DBS.phpFresh, DBS.nodeFresh);
   assert.equal((await dump(DBS.nodeFresh, 'updates')).length, 4);
 });
+
+// V_UPDATE_HISTORY: die vier Seeds 2.0–2.2 veröffentlicht und als „Shipped“ verknüpft, dazu Entwürfe für 3.0 und 3.1
+// (nur 3.1 kündigt sich in Discord an)
+async function historySamples(db: string): Promise<void> {
+  const updates = (await dump(db, 'updates')) as Array<Record<string, unknown>>;
+  const milestones = (await dump(db, 'milestones')) as Array<Record<string, unknown>>;
+  assert.deepEqual(updates.map((u) => [u.version, u.is_published, u.discord_announce]),
+    [['2.0', 1, 0], ['2.0.1', 1, 0], ['2.1', 1, 0], ['2.2', 1, 1], ['3.0', 0, 0], ['3.1', 0, 1]]);
+  assert.deepEqual(milestones.map((m) => [m.title, m.status, m.position]), [
+    ['New editor, themes and blocks', 'done', 1], ['Security review', 'done', 2],
+    ['English interface, new themes and phones', 'done', 3], ['Updates page, roadmap and Discord', 'done', 4]]);
+  assert.deepEqual(updates.slice(0, 4).map((u) => u.milestone_id), milestones.map((m) => m.id));
+  assert.equal(updates[0].published_at, '2026-10-27 18:00:00');
+  assert.equal(updates[3].published_at, '2026-10-29 12:00:00', '2.2 keeps its release day');
+  assert.deepEqual(updates.slice(4).map((u) => u.published_at), [null, null]);
+}
 
 // Stichproben: Seiten nur für Nutzer mit Adresse, „Story“ nach den Links bei bento-grid, fremde Adressen im CSS entfernt
 async function legacySamples(db: string): Promise<void> {
@@ -228,10 +244,13 @@ test('Node upgrades a database PHP has migrated, and a second run changes nothin
   const known = async (): Promise<unknown[][]> => {
     marked = [];
     return (await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)))).map((rows, i) =>
-      (rows as Array<Record<string, unknown>>).map((row, j) => {
+      // Neue Zeilen in updates und milestones (V_UPDATE_HISTORY) prüft historySamples
+      (rows as Array<Record<string, unknown>>).filter((_row, j) => !['updates', 'milestones'].includes(DATA_TABLES[i]) || j < (before[i] as unknown[]).length).map((row, j) => {
         const old = (before[i] as Array<Record<string, unknown>>)[j] ?? {};
         for (const [k, v] of Object.entries(row)) if (!(k in old)) assert.equal(v, null, `${DATA_TABLES[i]}.${k} of an existing row`);
         const out = Object.fromEntries(Object.entries(row).filter(([k]) => k in old));
+        // V_UPDATE_HISTORY veröffentlicht die Seeds und verknüpft sie (geprüft in historySamples)
+        if (DATA_TABLES[i] === 'updates') for (const k of ['is_published', 'published_at', 'milestone_id', 'updated_at']) delete out[k];
         if (DATA_TABLES[i] === 'pages' && typeof out.settings === 'string' && out.settings.endsWith(LEGACY_MARK)) {
           marked.push(Number(out.id));
           out.settings = out.settings.slice(0, -LEGACY_MARK.length) + '}';
@@ -239,6 +258,8 @@ test('Node upgrades a database PHP has migrated, and a second run changes nothin
         return out;
       }));
   };
+  const strip = (rows: unknown[][]): unknown[][] => rows.map((r, i) => DATA_TABLES[i] !== 'updates' ? r
+    : (r as Array<Record<string, unknown>>).map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => !['is_published', 'published_at', 'milestone_id', 'updated_at'].includes(k)))));
   // Seiten, die den Hinweis vorher ausblendeten (keiner der alten Besitzer ist Admin oder hat Premium)
   const hiding = (before[DATA_TABLES.indexOf('pages')] as Array<Record<string, unknown>>)
     .filter((r) => (JSON.parse(String(r.settings)) as { hide_branding?: unknown }).hide_branding === true).map((r) => Number(r.id));
@@ -246,13 +267,16 @@ test('Node upgrades a database PHP has migrated, and a second run changes nothin
   await nodeEnsure(DBS.phpLegacy);
   assert.equal(await version(DBS.phpLegacy), String(SCHEMA_VERSION));
   assert.ok((await tables(DBS.phpLegacy)).includes('oys_sessions'));
-  assert.deepEqual(await known(), before);
+  assert.deepEqual(await known(), strip(before));
   assert.deepEqual(marked, hiding, 'exactly the pages that hide the note keep hiding it');
+  await historySamples(DBS.phpLegacy);
+  const migrated = await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t)));
   // PHP kommt mit der höheren Version zurecht (nichts wird erneut ausgeführt)
   phpEnsure(DBS.phpLegacy);
   await nodeEnsure(DBS.phpLegacy);
-  assert.deepEqual(await known(), before);
+  assert.deepEqual(await known(), strip(before));
   assert.deepEqual(marked, hiding);
+  assert.deepEqual(await Promise.all(DATA_TABLES.map((t) => dump(DBS.phpLegacy, t))), migrated);
 });
 
 test('the feature steps give a database PHP installed the same tables as a fresh Node install', { skip: PHP_SKIP }, async () => {

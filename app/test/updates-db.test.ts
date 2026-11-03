@@ -23,7 +23,7 @@ import { BASE_CONFIG, createTestEnv, loadFixture, normalizeNow, snapshot, type T
 import { random } from './fixtures/updates/random.js';
 import { withoutDialogs, withoutNativeConfirms } from './support/dialogParity.js';
 import { PHP_SKIP, phpFile } from './support/phpRef.js';
-import { withoutDiscordChips } from './support/discordParity.js';
+import { phpUserAgent, withoutDiscordChips } from './support/discordParity.js';
 
 let env: TestEnv;
 let standIn: StandIn | null = null;
@@ -198,7 +198,7 @@ async function same(steps: Step[], opts: { fixture?: () => Record<string, Array<
     const rawLog = (await (await fetch(mockRoot + '/__log')).json()) as unknown[];
     runs[side] = {
       results: normalizeNow(JSON.stringify(raw, null, 1), from, to),
-      log: normalizeNow(JSON.stringify(rawLog, null, 1), from, to),
+      log: normalizeNow(side === 'php' ? phpUserAgent(JSON.stringify(rawLog, null, 1)) : JSON.stringify(rawLog, null, 1), from, to),
       snap: normalizeNow(withoutDiscordColumns(await snapshot(env)) + '\n' + (await discordState(side)), from, to),
       raw,
       rawLog,

@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { baseHost, cleanText } from '../helpers.js';
 import { jsonUnescaped } from '../html.js';
 import { intval, phpRtrim, phpStr } from '../php.js';
+import { appVersion } from '../version.js';
 
 export type Payload = Record<string, unknown>;
 // status 0 = keine Antwort; dann steht der Grund in error (Text wie curl)
@@ -25,7 +26,7 @@ export function discordBase(): string {
 export async function discordRequest(method: string, url: string, json: Payload | null = null, headers: string[] = []): Promise<DiscordResponse> {
   const body = json === null ? null : jsonUnescaped(json);
   // Discord verlangt dieses Format für den User-Agent
-  const all = ['Content-Type: application/json', 'User-Agent: DiscordBot (https://' + baseHost() + ', 2.2)', ...headers];
+  const all = ['Content-Type: application/json', 'User-Agent: DiscordBot (https://' + baseHost() + ', ' + appVersion() + ')', ...headers];
   const res = await curlRequest(method, url, body, all);
   const data = res.body !== null && res.body.length ? jsonDecode(res.body) : null;
   const obj = data !== null && typeof data === 'object' ? (data as Record<string, unknown>) : null;
