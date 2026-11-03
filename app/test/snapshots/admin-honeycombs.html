@@ -7,6 +7,7 @@
                     <a href="/admin?hc_tab=rules#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-slider-alt'></i> Earning rules</a>
                     <a href="/admin?hc_tab=users#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !bg-white/10 !text-white" aria-current="page"><i class='bx bx-group'></i> Users</a>
                     <a href="/admin?hc_tab=purchases#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-receipt'></i> Purchases</a>
+                    <a href="/admin?hc_tab=ledger#honeycombs" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-list-ul'></i> Ledger</a>
                 </nav>
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6">
                     <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">
@@ -43,6 +44,13 @@
                     </form>
                 </div>
 
+                <details class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6" id="hcBulk"><summary class="cursor-pointer text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-group text-xl text-yellow-400'></i> Give honeycombs to several users</summary>
+                    <form action="/admin" method="POST" class="space-y-4 mt-4" id="hcBulkForm"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="hc_action" value="grant_preview"><input type="hidden" name="grant_ref" value="REF">
+                        <div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcBulkList">Users</label><textarea id="hcBulkList" name="user_list" rows="5" required maxlength="20000" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm font-mono" placeholder="mia@example.com&#10;#42&#10;@tom"></textarea><p class="text-xs text-gray-500 mt-1">One per line: an email, #id or @name. Up to 200.</p></div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4"><div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcBulkAmount">Amount</label><input id="hcBulkAmount" type="number" name="amount" required min="-100000" max="100000" step="1" placeholder="50" value="" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm"></div><div class="sm:col-span-2"><label class="block text-sm font-medium text-gray-300 mb-1.5" for="hcBulkNote">Note <span class="text-gray-500 font-normal">(the users see it)</span></label><input id="hcBulkNote" type="text" name="note" maxlength="150" value="" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm"></div></div>
+                        <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-list-check'></i> Check list</button>
+                    </form>
+                </details>
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
                     <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
                         <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>

@@ -141,7 +141,7 @@ test('approved snapshots of the Honeycombs and Code pages sections', async () =>
   usersCtx.session = ctx.session;
   const users = await q('SELECT id, full_name, email, username, discord_id, is_admin, created_at FROM users ORDER BY id DESC');
   const views = {
-    'admin-honeycombs.html': (await adminHoneycombsView(usersCtx, users)).replace(/name="grant_ref" value="[0-9a-f]{16}"/, 'name="grant_ref" value="REF"'),
+    'admin-honeycombs.html': (await adminHoneycombsView(usersCtx, users)).replace(/name="grant_ref" value="[0-9a-f]{16}"/g, 'name="grant_ref" value="REF"'),
     'admin-code-pages.html': await adminCodePagesView(ctx, users),
   };
   for (const [name, htmlOut] of Object.entries(views)) {

@@ -16,19 +16,21 @@ import { cleanText } from '../helpers.js';
 import { audit, type AuditDetails } from './audit.js';
 import { grantFeature, revokeFeature } from './grants.js';
 import { refund } from './shop.js';
+import { reverseEntry, setFrozen } from './teamTools.js';
 import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export type AdminResult = { ok: string } | { error: string };
 
-// Unterbereiche (die übrigen – ledger, codes – kommen mit HC-6b/HC-9)
-export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases'] as const;
+// Unterbereiche (codes kommt mit HC-9)
+export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger'] as const;
 export type HcTab = (typeof HC_TABS)[number];
 const ACTION_TAB: Readonly<Record<string, HcTab>> = {
   settings: 'rules', item_save: 'catalogue', item_add: 'catalogue', offer_create: 'offers', offer_cancel: 'offers', grant: 'users',
-  feature_grant: 'users', feature_revoke: 'users', refund: 'users',
+  feature_grant: 'users', feature_revoke: 'users', refund: 'users', reverse: 'users', freeze: 'users', unfreeze: 'users',
+  grant_preview: 'users', grant_bulk: 'users', grant_bulk_cancel: 'users',
 };
 // Aktionen aus den Details eines Nutzers: zurück zu diesen Details
-const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund']);
+const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund', 'reverse', 'freeze', 'unfreeze']);
 
 // ?hc_tab=… → Unterbereich (Unbekanntes: Übersicht)
 export function hcTab(v: unknown): HcTab {
@@ -38,7 +40,8 @@ export function hcTab(v: unknown): HcTab {
 // Zurück zum Unterbereich der Aktion (nach dem Speichern und wenn die Bestätigung fehlt)
 export function hcBackUrl(post: PhpArray): string {
   const action = typeof post.hc_action === 'string' ? post.hc_action : '';
-  const tab = Object.hasOwn(ACTION_TAB, action) ? ACTION_TAB[action] : 'overview';
+  // Zurücknehmen geht auch aus dem Unterbereich „Ledger“ – dann dorthin zurück
+  const tab = action === 'reverse' && post.from_tab === 'ledger' ? 'ledger' : Object.hasOwn(ACTION_TAB, action) ? ACTION_TAB[action] : 'overview';
   const uid = USER_ACTIONS.has(action) && typeof post.user_id === 'string' && /^[1-9][0-9]{0,9}$/.test(post.user_id) ? Number(post.user_id) : 0;
   return '/admin' + (tab === 'overview' ? '' : '?hc_tab=' + tab) + (uid > 0 && uid <= 2147483647 ? '&hc_user=' + uid : '') + '#honeycombs';
 }
@@ -304,6 +307,24 @@ export async function adminShopHandle(post: PhpArray, adminId: number): Promise<
       return featureRevokeAction(post, adminId);
     case 'refund':
       return refundAction(post, adminId);
+    case 'reverse': {
+      // Geld bewegt sich: nur nach dem eigenen Dialog (wie das Abziehen)
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['ledger_id', 'note']);
+      if (!f) return { error: BAD };
+      const id = wholeNumber(f.ledger_id, 1, 2147483647);
+      if (id === null) return { error: 'This entry no longer exists.' };
+      return reverseEntry(adminId, id, f.note);
+    }
+    case 'freeze':
+    case 'unfreeze': {
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['user_id', 'reason']);
+      if (!f) return { error: BAD };
+      const uid = wholeNumber(f.user_id, 1, 2147483647);
+      if (uid === null) return { error: 'Please choose a user.' };
+      return setFrozen(adminId, uid, post.hc_action === 'freeze', f.reason);
+    }
   }
   return null;
 }

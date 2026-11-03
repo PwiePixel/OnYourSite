@@ -79,11 +79,12 @@ Next, as soon as their dependencies are in:
 - Status pages: ST-5, ST-7 (the rest of ST-4 is on `feature/st4-rest`).
 | 34 | HC-8 | Streaks and the daily cap: `earnOnVisit()` (`app/src/honeycombs/earn.ts`) on `GET /dashboard` – +15 every 7 days and +50 every 30 days in a row (30 wins), daily cap 300 for profile and views under the account lock (NOWAIT), 10-second throttle, nothing while frozen or in admin mode; schema step 19 back-fills streaks from the last 60 days; `honeycombs.streak` in the bootstrap and the `honeycombs` API, `earn.streak`/`capLeft`/`cap` and the rule "Keep a streak" in the shop, the streak chip and the daily-limit hint in the editor, the new fields in *Admin → Honeycombs → Earning rules* (on `feature/hc8-streaks`; tests `app/test/hc-streaks.http.test.ts`, browser flow `tests/e2e/hc-streaks.js`) | Built and reviewed |
 | 39 | HC-7a | Time-limited lifecycle and jobs runner: `app/src/jobs/registry.ts` (`registerJob`, `registerNightly`, `GET_LOCK` per job, schema minimum, `oys_meta['jobs']` with `at`/`every` for the status page's `job:runner`), `cli.js jobs:tick [--force]` with its own pool of 3, the honeycomb job `app/src/honeycombs/job.ts` (reconcile retries after 30 s, bell reminders at 7/3/1 days with the loss-preview lines, expiry once per lot with bell, marker and reconcile, nightly entitlement repair), `LIFECYCLE_READY` on (admins can switch on timed options – Premium can be sold), expiry banners in the shop (ends within 3 days: hide for today; Premium ended within 14 days: dismiss), installer `onyoursite-jobs.service`/`.timer` (written and enabled by `write_timers`, stopped by `--reset`, removed when an update goes back to PHP) (on `feature/hc7a-lifecycle`, based on `feature/hc8-streaks`; tests `app/test/hc-jobs.db.test.ts`, `cli.test.ts`, `install-sh.test.ts`, browser flow `tests/e2e/hc-lifecycle.js`) | Built and reviewed |
+| 40 | HC-6b | Shop admin III: *Reverse* for rewards and gifts (`reversal/x<id>`, once, never below 0, bell, audit) in the user details and the new *Ledger* sub-tab (filters reason, user, dates; 50 per page), *Freeze*/*Unfreeze* with a reason the user sees (earning and buying stop, unlocks keep working), honeycombs for several users (email, `#id`, `@name` or page address; up to 200; preview from the session for 15 minutes with unclear/missing entries and “below 0” warnings; *Confirm* books once per account with the form's key) – `app/src/honeycombs/teamTools.ts`, `bulkAction.ts` (on `feature/hc6b-admin`, based on `feature/hc7a-lifecycle`; tests `app/test/hc-admin3.http.test.ts`, browser flow `tests/e2e/hc-admin3.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
-- Shop: HC-6b, HC-9, HC-7b (HC-8 is on `feature/hc8-streaks`, HC-7a on `feature/hc7a-lifecycle`).
+- Shop: HC-9, HC-7b (HC-8, HC-7a and HC-6b are on their branches).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
@@ -160,6 +161,8 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8, on its bra
      can't be deleted (the server refuses it), only blocked; the free unlocks and the limits write their log line after
      their own commit (not in one transaction); the access table lists only `code_page` holders, not `code_more`; the
      source viewer loads every file of the page to show one.
+   - HC-6b: *Reverse* has no note field (the user sees "Correction: <entry>"); after a reverse from the Ledger the filters
+     and page are not kept; "several users" is its own card under *Give honeycombs* instead of a toggle inside it.
    - HC-7a: not built – the integrity checks and watch rules of §3.5 (`hc_watch`) in the nightly run, the admin
      overview of the job runs (the status page's `job:runner` reads `oys_meta['jobs']`), auto-renew (HC-7c) and the
      reminder/ended mails (HC-7b). Reminders and ends are bell notifications only. The domains worker and the
@@ -175,8 +178,8 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8, on its bra
      never paid (the admin form doesn't warn yet); the back-fill (schema step 19) reads all daily rows of the last 62
      days in one query and writes one row per user – fine for today's size, batch it for a much larger ledger.
    - HC-6a: the free unlock in *Admin → Code pages* (`app/src/code/admin.ts`) still books through `hcAdd` (no audit
-     line) – switch it to `grantFeature`. Not in HC-6a: bulk grants, the History tab with Reverse, freeze/unfreeze
-     (HC-6b) and codes (HC-9).
+     line) – switch it to `grantFeature`. Bulk grants, the Ledger tab with Reverse and freeze/unfreeze came with HC-6b;
+     codes come with HC-9.
    - PD-4: the worker stores only problem codes, so the editor can't show "Found: …" values; the server's
      `fastUntil` has no time zone (the editor counts 15 minutes itself); browser flows still missing: claiming another
      account's domain, the root-domain choice, a live domain with the forwarding switch, the paused view, polling
