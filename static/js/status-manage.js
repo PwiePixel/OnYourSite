@@ -89,6 +89,14 @@
     if (first) {
       root.innerHTML = '<div class="st-m"><div class="st-m-loading"><i class="bx bx-loader-alt bx-spin"></i></div></div>';
       root.addEventListener('click', onClick);
+      // Kanal hinzufügen: Platzhalter, Hinweis und „Incident updates“ (nur Discord) nach dem Typ
+      root.addEventListener('change', function (ev) {
+        if (!ev.target || ev.target.id !== 'stChType') return;
+        var discord = ev.target.value === 'discord';
+        $('#stChTarget', root).placeholder = discord ? 'https://discord.com/api/webhooks/…' : 'name@example.com';
+        $('#stChInc', root).hidden = !discord;
+        $('#stChHint', root).textContent = discord ? 'We check the link and post a test message – the channel works once Discord accepts it.' : 'We send a confirmation link to the address first.';
+      });
       document.addEventListener('visibilitychange', function () { if (!document.hidden && visible()) refreshMonitors(); });
     }
     loadAll();
@@ -105,8 +113,8 @@
     // Eigene Seite: erst fragen, ob es sie gibt (ohne Seite nur das Formular zum Anlegen, keine 404-Anfragen)
     var first = userScope() ? api('status').then(function (st) {
       if (!st.ok || !st.page) return [st];
-      return Promise.all([st, api('status-monitors'), api('status-incidents'), { ok: false }]);
-    }) : Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts')]);
+      return Promise.all([st, api('status-monitors'), api('status-incidents'), { ok: false }, api('status-channels')]);
+    }) : Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts'), api('status-channels')]);
     first.then(function (r) {
       S.loading = false;
       if (!r[0].ok) { showError(r[0].error); return; }
@@ -115,6 +123,7 @@
       S.mons = r[1].ok ? r[1] : null;
       S.incs = r[2].ok ? r[2] : null;
       S.alerts = r[3].ok ? r[3] : null;
+      S.chan = r[4] && r[4].ok ? r[4] : null;
       render();
     });
   }
@@ -131,6 +140,10 @@
   function refreshIncidents() {
     if (!S.state || !S.state.page) return Promise.resolve();
     return api('status-incidents').then(function (r) { if (r.ok) { S.incs = r; if (S.tab === 'incidents') renderBody(); } });
+  }
+  function refreshChannels() {
+    if (!hasPage()) return Promise.resolve();
+    return api('status-channels').then(function (r) { if (r.ok) { S.chan = r; if (S.tab === 'alerts') renderBody(); } });
   }
   function refreshAlerts() {
     return api('status-alerts').then(function (r) { if (r.ok) { S.alerts = r; if (S.tab === 'alerts') renderBody(); } });
@@ -757,6 +770,7 @@
       '<button type="button" class="btn-secondary" data-stm="save-alerts"><i class="bx bx-save"></i> Save</button></div>');
     wrap.appendChild(mail);
     wrap.appendChild(botCard(a.bot));
+    wrap.appendChild(channelsCard());
     var recent = h('<div class="panel"><h3 class="section-title">Recent alerts</h3><div class="st-m-recent"></div></div>');
     var list = $('.st-m-recent', recent);
     if (!a.recent.length) list.appendChild(h('<p class="hint">No alerts yet.</p>'));
@@ -781,7 +795,105 @@
       sw('owner_email', 'Email me' + (email ? ' at ' + email : ''), a.email, 'Your bell in the editor always shows them.') +
       '<div class="st-m-events-pick">' + EVENTS.map(function (e) { return '<label class="st-m-check"><input type="checkbox" data-ev="' + e[0] + '"' + (events[e[0]] ? ' checked' : '') + '> ' + esc(e[1]) + '</label>'; }).join('') + '</div>' +
       '<button type="button" class="btn-secondary" data-stm="save-owner-alerts"><i class="bx bx-save"></i> Save</button></div>'));
+    var working = S.chan ? S.chan.channels.filter(function (c) { return c.state === 'working'; }).length : 0;
+    if (!a.email && !working) wrap.insertBefore(h('<div class="panel st-m-warn"><i class="bx bx-bell-off"></i> You won’t be notified when something breaks.</div>'), wrap.firstChild);
+    wrap.appendChild(channelsCard());
+    if (S.chan) wrap.appendChild(recentCard(S.chan.recent));
     return wrap;
+  }
+
+  // Zusätzliche Kanäle (ST-5): Liste mit Zustand und Aktionen, Formular zum Hinzufügen
+  var CH_STATE = { waiting: ['Waiting for confirmation', 'amber'], working: ['Working', 'green'], failing: ['Failing', 'red'], off: ['Off', ''] };
+  function evLabel(e) {
+    if (e === 'incident') return 'Incident updates';
+    var f = EVENTS.filter(function (x) { return x[0] === e; })[0];
+    return f ? f[1] : e;
+  }
+  function channelsCard() {
+    var c = S.chan;
+    var ro = !!(S.chan && S.chan.readOnly);
+    var card = h('<div class="panel space-y-4" id="stChannels"><h3 class="section-title">More alert channels</h3></div>');
+    if (!c) { card.appendChild(h('<p class="hint">The channels couldn’t be loaded.</p>')); return card; }
+    if (c.limit <= 0) { card.appendChild(h('<p class="hint">Extra alert channels aren’t available for this page.</p>')); return card; }
+    var list = h('<div class="st-m-channels"></div>');
+    if (!c.channels.length) list.appendChild(h('<p class="hint">No extra channels yet. Add an email address or a Discord webhook.</p>'));
+    c.channels.forEach(function (ch) {
+      var st = CH_STATE[ch.state] || ['', ''];
+      var row = h('<div class="st-m-ch" data-ch="' + ch.id + '"><i class="bx ' + (ch.type === 'discord' ? 'bxl-discord-alt' : 'bx-envelope') + '"></i>' +
+        '<span class="st-m-ch-l"><b></b><small></small></span><span class="bdg ' + st[1] + '"></span><span class="st-m-ch-a"></span></div>');
+      $('b', row).textContent = ch.label;
+      $('small', row).textContent = ch.events.map(evLabel).join(' · ') + (ch.state === 'failing' && ch.error ? ' – ' + ch.error : '');
+      $('.bdg', row).textContent = st[0];
+      var acts = $('.st-m-ch-a', row);
+      if (!ro) {
+        if (ch.verified && ch.enabled) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-test">Test</button>'));
+        if (ch.type === 'email' && !ch.verified) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-resend"' + (ch.canResend ? '' : ' disabled title="You can send it again 10 minutes after the last one."') + '>Resend</button>'));
+        if (ch.verified) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-toggle">' + (ch.enabled ? 'Turn off' : 'Turn on') + '</button>'));
+        acts.appendChild(h('<button type="button" class="icon-btn danger" data-stm="ch-remove" aria-label="Remove channel" title="Remove"><i class="bx bx-trash"></i></button>'));
+      }
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+    if (!ro && c.channels.length < c.limit) {
+      card.appendChild(h('<div class="st-m-ch-add space-y-3"><div class="field-row cols-2"><div><label class="lbl" for="stChType">Type</label><select class="field" id="stChType"><option value="email">Email address</option><option value="discord">Discord webhook</option></select></div>' +
+        '<div><label class="lbl" for="stChTarget">Address or link</label><input class="field" id="stChTarget" maxlength="400" autocomplete="off" placeholder="name@example.com"></div></div>' +
+        '<div class="st-m-events-pick">' + EVENTS.map(function (e) { return '<label class="st-m-check"><input type="checkbox" data-chev="' + e[0] + '" checked> ' + esc(e[1]) + '</label>'; }).join('') +
+        '<label class="st-m-check" id="stChInc" hidden><input type="checkbox" data-chev="incident" checked> Incident updates</label></div>' +
+        '<p class="hint" id="stChHint">We send a confirmation link to the address first.</p>' +
+        '<button type="button" class="btn-secondary" data-stm="ch-add"><i class="bx bx-plus"></i> Add</button></div>'));
+    }
+    card.appendChild(h('<p class="hint m-0">' + c.channels.length + ' of ' + c.limit + ' channels used.</p>'));
+    return card;
+  }
+
+  function recentCard(items) {
+    var recent = h('<div class="panel"><h3 class="section-title">Recent alerts</h3><div class="st-m-recent"></div></div>');
+    var list = $('.st-m-recent', recent);
+    if (!items.length) list.appendChild(h('<p class="hint">No alerts yet.</p>'));
+    items.forEach(function (r) {
+      var row = h('<p class="st-m-rec"><span class="bdg ' + (r.state === 'sent' ? 'green' : r.state === 'failed' ? 'red' : '') + '"></span> <span class="st-m-rec-t"></span></p>');
+      $('.bdg', row).textContent = r.state === 'sent' ? 'Sent' : r.state === 'failed' ? 'Failed' : r.state === 'merged' ? 'Merged' : r.state === 'skipped' ? 'Skipped' : 'Waiting';
+      $('.st-m-rec-t', row).textContent = when(r.at) + ' · ' + r.title + ' · ' + r.to + (r.error ? ' – ' + r.error : '');
+      list.appendChild(row);
+    });
+    return recent;
+  }
+
+  function channelAction(act, btn) {
+    var row = btn.closest('[data-ch]');
+    var id = row ? Number(row.getAttribute('data-ch')) : 0;
+    var ch = S.chan && S.chan.channels.filter(function (c) { return c.id === id; })[0];
+    var done = function (msg) {
+      return function (r) {
+        btn.disabled = false;
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        S.chan = r;
+        if (msg) toast(msg);
+        renderBody();
+      };
+    };
+    if (act === 'ch-add') {
+      var type = $('#stChType', S.root).value;
+      var evs = $$('[data-chev]', S.root).filter(function (x) { return x.checked && (type === 'discord' || x.getAttribute('data-chev') !== 'incident'); }).map(function (x) { return x.getAttribute('data-chev'); });
+      btn.disabled = true;
+      api('status-channel-add', { type: type, target: $('#stChTarget', S.root).value, events: evs })
+        .then(done(type === 'email' ? 'Added – we sent a confirmation link to the address.' : 'Added – the test message is in Discord.'));
+      return;
+    }
+    if (!ch) return;
+    if (act === 'ch-test') { btn.disabled = true; api('status-channel-test', { id: id }).then(done('Test sent – it arrives in a moment.')); return; }
+    if (act === 'ch-resend') { btn.disabled = true; api('status-channel-resend', { id: id }).then(done('We sent the link again.')); return; }
+    if (act === 'ch-toggle') {
+      btn.disabled = true;
+      api('status-channel-edit', { id: id, enabled: !ch.enabled }).then(function (r) { btn.disabled = false; if (r.ok) refreshChannels(); else toast(r.error, 'err'); });
+      return;
+    }
+    if (act === 'ch-remove') {
+      UI.confirm({ title: 'Remove ' + ch.label + '?', text: 'No more alerts go there. Discord messages that were already posted stay.', ok: 'Remove', tone: 'danger' }).then(function (yes) {
+        if (!yes) return;
+        api('status-channel-remove', { id: id }).then(done('Channel removed.'));
+      });
+    }
   }
 
   function botCard(b) {
@@ -886,6 +998,7 @@
       if (S.tab === 'components') refreshMonitors();
       if (S.tab === 'incidents') refreshIncidents();
       if (S.tab === 'alerts' && !userScope()) refreshAlerts();
+      if (S.tab === 'alerts') refreshChannels();
       return;
     }
     var btn = ev.target.closest('[data-stm]');
@@ -895,6 +1008,7 @@
     var m = row ? monitorById(Number(row.getAttribute('data-id'))) : null;
     var card = btn.closest('[data-inc]');
     var inc = card ? incidentById(Number(card.getAttribute('data-inc'))) : null;
+    if (act.indexOf('ch-') === 0) return channelAction(act, btn);
     if (act === 'create-page') return createPage(btn);
     if (act === 'change-address') return changeAddress(btn);
     if (act === 'save-owner-alerts') {

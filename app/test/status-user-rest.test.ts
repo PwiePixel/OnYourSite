@@ -210,7 +210,8 @@ test('owner alerts: email on or off and the events; the bell always; only for th
   const settings = statusPageSettings({ settings: String((await pageOf(MIA)).settings), is_system: 0 });
   const src = (kind: string) => ({ page: { id: 1, slug: 'mia-status', title: 'Mia', isSystem: false, userId: MIA }, monitor: { id: 1, name: 'Web', type: 'http', target: 'https://example.com', isPublic: true }, event: { kind, at: unixNow(), error: null } });
   assert.deepEqual(alertRows(src('down') as never, settings).map((x) => x.channel), ['bell']);
-  assert.deepEqual(alertRows(src('degraded') as never, settings), []);
+  // Nicht gewählt: nur noch die Verteilung an zusätzliche Kanäle (die ihre eigenen Ereignisse haben, ST-5)
+  assert.deepEqual(alertRows(src('degraded') as never, settings).map((x) => x.channel), ['channels']);
   await api('status-owner-alerts', { userId: MIA, json: { email: true } });
   const on = statusPageSettings({ settings: String((await pageOf(MIA)).settings), is_system: 0 });
   assert.deepEqual(alertRows(src('down') as never, on).map((x) => x.channel), ['owner', 'bell']);

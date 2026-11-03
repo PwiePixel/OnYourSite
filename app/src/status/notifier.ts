@@ -21,17 +21,20 @@ import { alertEmbed, alertMessage, bellType, type AlertPayload, type MailClass }
 import { MailBudget, emptyUsed, type BudgetLimits, type Used } from './budget.js';
 import { editorLink } from './links.js';
 import { metaJson, statusPageUrl } from './model.js';
-import { alertRef, botChannels } from './posts.js';
+import { alertRef, botChannels, incidentContent, queueChannelPost } from './posts.js';
+import { BROKEN_AFTER, channelTarget, mintVerifyToken } from './channels.js';
+import { discordError, parseWebhookLink, webhookDelete, webhookEdit, webhookPost, type DiscordResponse } from '../discord/index.js';
 import { statusSettings, type StatusSettings } from './settings.js';
 
 export const NOTIFIER_VERSION = '1';
 export const RETRY_AFTER = [30, 120, 600]; // Sekunden nach dem 1., 2. und 3. Fehlversuch; danach failed
 export const STALE_AFTER = 1800; // ältere Zeilen werden nicht mehr zugestellt
 export const PAGE_ALERTS_HOUR = 30; // Alarme je Seite und Stunde (Seiten von Nutzern)
+export const PAGE_CONFIRM_DAY = 10; // Bestätigungsmails je Seite und Tag (X12)
 
 export interface MailRequest {
   to: string;
-  template: 'status_alert' | 'status_owner_alert';
+  template: 'status_alert' | 'status_owner_alert' | 'status_verify' | 'status_channel_alert';
   subject: string;
   vars: Record<string, string>; // schon maskiert
 }
@@ -93,7 +96,10 @@ async function defaultSend(m: MailRequest): Promise<boolean> {
 }
 
 // Ergebnis eines Versands, das noch geschrieben werden muss
-type Outcome = { state: 'sent'; payload?: Record<string, unknown> } | { state: 'retry'; error: string; payload: Record<string, unknown> };
+// post: Stand eines Vorfall-Beitrags (Webhook), in derselben Transaktion wie das Ergebnis geschrieben
+interface PostUpdate { id: number; state: 'posted' | 'failed'; messageId: string | null; error: string | null }
+type Outcome = { state: 'sent'; payload?: Record<string, unknown>; post?: PostUpdate } | { state: 'retry'; error: string; payload: Record<string, unknown>; post?: PostUpdate }
+  | { state: 'failed'; error: string; post?: PostUpdate };
 
 export class Notifier {
   budget: MailBudget;
@@ -213,6 +219,8 @@ export class Notifier {
           await this.deliverOwner(item);
         } else if (item.channel === 'bot') {
           await this.deliverBot(item);
+        } else if (item.channel.startsWith('channel:')) {
+          await this.deliverChannel(item);
         } else {
           await this.finish(item, 'skipped', 'This kind of channel isn’t available.');
         }
@@ -244,8 +252,16 @@ export class Notifier {
   // Ergebnis nach einem Versand schreiben; scheitert das, bleibt es im Speicher (unsaved) für den nächsten Durchgang
   private async record(item: OutboxItem, outcome: Outcome): Promise<void> {
     try {
-      if (outcome.state === 'sent') await this.finish(item, 'sent', null, outcome.payload);
-      else await this.retry(item, outcome.error, outcome.payload);
+      await transaction(async (_conn, db) => {
+        const post = outcome.post;
+        if (post) {
+          await db.exec('UPDATE status_incident_posts SET state = ?, message_id = COALESCE(message_id, ?), error = ?, updated_at = ? WHERE id = ?',
+            [post.state, post.messageId, post.error === null ? null : post.error.slice(0, 160), this.nowS(), post.id]);
+        }
+        if (outcome.state === 'sent') await this.finish(item, 'sent', null, outcome.payload);
+        else if (outcome.state === 'failed') await this.finish(item, 'failed', outcome.error);
+        else await this.retry(item, outcome.error, outcome.payload);
+      });
       this.unsaved.delete(item.id);
     } catch (err) {
       this.unsaved.set(item.id, outcome);
@@ -333,7 +349,8 @@ export class Notifier {
 
   // Seiten von Nutzern: höchstens PAGE_ALERTS_HOUR Alarme je Stunde über alle Wege
   private async pageMuted(db: Db, pageId: number, now: number): Promise<boolean> {
-    const n = Number(await db.value("SELECT COUNT(*) FROM status_outbox WHERE page_id = ? AND kind = 'alert' AND state = 'sent' AND sent_at >= ?", [pageId, now - 3600]));
+    // Zusätzliche Kanäle zählen nicht mit (sonst wären die Mails an den Besitzer mit drei Kanälen schneller stumm)
+    const n = Number(await db.value("SELECT COUNT(*) FROM status_outbox WHERE page_id = ? AND kind = 'alert' AND state = 'sent' AND sent_at >= ? AND channel NOT LIKE 'channel:%'", [pageId, now - 3600]));
     return n >= PAGE_ALERTS_HOUR;
   }
 
@@ -373,7 +390,10 @@ export class Notifier {
     }
     const { subject, vars } = item.kind === 'muted'
       ? { subject: '[Status] Alerts are muted until tomorrow', vars: { ...this.mailVars(p, true).vars, title: 'Alerts are muted until tomorrow', text: e('Your status page sent the most alert emails it can send for now. You’ll get emails again tomorrow – the bell in the editor keeps working.') } }
-      : this.mailVars(p, true);
+      : item.kind === 'channel_broken'
+        ? { subject: `Your Discord alerts for ${p.page.title} stopped working`, vars: { ...this.mailVars(p, true).vars, title: `Your Discord alerts for ${e(p.page.title)} stopped working`,
+          text: e(`Discord rejected the webhook ${String(item.payload.label ?? '')} five times in a row, so we turned it off. Add the webhook again in the editor under Status → Alerts.`) } }
+        : this.mailVars(p, true);
     const ok = await this.send({ to: check.to, template: 'status_owner_alert', subject, vars });
     if (ok) {
       this.smtpFail = 0;
@@ -419,6 +439,206 @@ export class Notifier {
       return null;
     });
     if (skipped) this.log(`Status notifier: bot alert #${item.id} skipped – ${skipped}`);
+  }
+
+  // ---------------------------------------------------------------- Zusätzliche Kanäle (ST-5)
+
+  // E-Mail-Adresse oder Discord-Webhook einer Seite: Alarme, Tests, Bestätigungsmails, Beiträge zu Vorfällen
+  private async deliverChannel(item: OutboxItem): Promise<void> {
+    const id = Number(item.channel.slice('channel:'.length));
+    const row = await withConnection((db) => db.one('SELECT * FROM status_channels WHERE id = ? AND page_id = ?', [id, item.pageId]));
+    if (!row) {
+      await this.finish(item, 'skipped', 'The channel was removed.');
+      return;
+    }
+    if (item.kind === 'channel_verify') return this.deliverVerify(item, row);
+    if (item.kind === 'incident') return this.deliverIncidentPost(item, row);
+    if (Number(row.is_enabled) !== 1) {
+      await this.finish(item, 'skipped', 'The channel is off.');
+      return;
+    }
+    if (row.verified_at === null) {
+      await this.finish(item, 'skipped', 'The address isn’t confirmed yet.');
+      return;
+    }
+    const p = item.payload as unknown as AlertPayload;
+    const now = this.nowS();
+    // Die Grenze gilt für Seiten von Nutzern (OnYourSites Seite meldet jeden Ausfall)
+    if (item.kind === 'alert' && !p.page?.system && (await withConnection((db) => this.pageMuted(db, item.pageId, now)))) {
+      await this.finish(item, 'skipped', 'Muted: too many alerts in the last hour.');
+      return;
+    }
+    const target = channelTarget(row);
+    if (String(row.type) === 'email') {
+      const taken = this.budget.take('owner', this.clock());
+      if (taken === 'day') { await this.finish(item, 'skipped', 'The daily email budget for alerts is used up.'); return; }
+      if (taken === 'wait') { await this.later(item, this.budget.nextTokenIn(this.clock())); return; }
+      const { subject, vars } = item.kind === 'test'
+        ? { subject: `[Test] Status alerts for ${p.page.title}`, vars: { ...this.mailVars(p, false).vars, title: 'Test alert', text: e(`This is a test. Alerts for ${p.page.title} arrive at this address.`) } }
+        : this.mailVars(p, false);
+      // An eine fremde Adresse: immer mit der Adresse der Seite und dem Link zur Seite (nie zum Editor)
+      vars.button_url = e(statusPageUrl(p.page.slug));
+      vars.button = 'Open status page';
+      const ok = await this.send({ to: target, template: 'status_channel_alert', subject, vars });
+      if (ok) {
+        this.smtpFail = 0;
+        this.sentTotal++;
+        // Erst das Ergebnis (sonst ginge die Mail bei einem kurzen Datenbankfehler noch einmal hinaus), dann der Kanal
+        await this.record(item, { state: 'sent' });
+        await this.touchChannel(id, now);
+      } else {
+        this.budget.giveBack('owner');
+        this.smtpFail++;
+        await this.retry(item, 'The mail server didn’t take the email.');
+      }
+      return;
+    }
+    const hook = parseWebhookLink(target);
+    if (!hook) {
+      await this.finish(item, 'failed', 'The webhook link is invalid.');
+      return;
+    }
+    const body = item.kind === 'test'
+      ? { content: 'Test alert for ' + p.page.title + ' – alerts arrive here.', allowed_mentions: { parse: [] } }
+      : { embeds: [alertEmbed(p, statusPageUrl(p.page.slug))], allowed_mentions: { parse: [] } };
+    const res = await webhookPost(hook, body, { threadId: hook.threadId });
+    await this.afterDiscord(item, row, res, now);
+  }
+
+  // Kanal hat angenommen: Zeitpunkt und Fehlerzählung (danach, nur Bestmühe – das Ergebnis steht schon)
+  private async touchChannel(id: number, now: number): Promise<void> {
+    await withConnection((db) => db.exec('UPDATE status_channels SET last_sent_at = ?, fail_count = 0, last_error = NULL WHERE id = ?', [now, id])).catch(() => undefined);
+  }
+
+  // Ergebnis einer Discord-Anfrage: angenommen → gesendet; Webhook weg (401/404, 10015/10003) → zählen, nach 5 aus
+  // (mit Mail an den Besitzer); alles andere → später noch einmal
+  private async afterDiscord(item: OutboxItem, row: Record<string, unknown>, res: DiscordResponse, now: number, post?: (ok: boolean, error: string | null) => PostUpdate): Promise<boolean> {
+    const id = Number(row.id);
+    if (res.status >= 200 && res.status < 300) {
+      await this.record(item, { state: 'sent', post: post ? post(true, null) : undefined });
+      await this.touchChannel(id, now);
+      return true;
+    }
+    const error = discordError(res, 'webhook').slice(0, 160);
+    // Nur die Nachricht fehlt (in Discord gelöscht, 10008): der Beitrag ist erledigt, der Webhook zählt keinen Fehler
+    if (res.code === 10008) {
+      await this.record(item, { state: 'failed', error: 'The message was deleted in Discord.', post: post ? post(false, 'The message was deleted in Discord.') : undefined });
+      return false;
+    }
+    const gone = res.status === 401 || res.status === 404 || res.code === 10015 || res.code === 10003;
+    if (!gone) {
+      await this.retry(item, error);
+      return false;
+    }
+    await transaction(async (_conn, db) => {
+      const cur = await db.one('SELECT fail_count, is_enabled, label FROM status_channels WHERE id = ? FOR UPDATE', [id]);
+      if (!cur) return;
+      const fails = Number(cur.fail_count) + 1;
+      const off = fails >= BROKEN_AFTER && Number(cur.is_enabled) === 1;
+      await db.exec('UPDATE status_channels SET fail_count = ?, last_error = ?, is_enabled = ? WHERE id = ?', [Math.min(255, fails), error, off ? 0 : Number(cur.is_enabled), id]);
+      await db.exec("UPDATE status_outbox SET state = 'failed', error = ?, attempts = attempts + 1 WHERE id = ? AND state = 'pending'", [error, item.id]);
+      if (post) {
+        const u = post(false, error);
+        await db.exec('UPDATE status_incident_posts SET state = ?, error = ?, updated_at = ? WHERE id = ?', [u.state, u.error, now, u.id]);
+      }
+      if (off) {
+        // Einmal: Mail an den Besitzer (Klasse owner)
+        const page = await db.one('SELECT id, user_id, is_system, slug, title FROM status_pages WHERE id = ?', [item.pageId]);
+        if (page && page.user_id !== null) {
+          const payload2 = { page: { id: Number(page.id), slug: String(page.slug), title: String(page.title), system: Number(page.is_system) === 1, owner: Number(page.user_id) },
+            monitor: { id: 0, name: 'Discord', type: 'channel', target: '', public: false }, event: 'channel_broken', category: 'down', at: now, label: String(cur.label ?? '') };
+          await db.exec(`INSERT INTO status_outbox (page_id, monitor_id, kind, class, channel, event, payload, state, attempts, next_at, created_at)
+              VALUES (?, NULL, 'channel_broken', 'owner', 'owner', '', ?, 'pending', 0, ?, ?)`, [item.pageId, JSON.stringify(payload2), now, now]);
+        }
+      }
+    });
+    return false;
+  }
+
+  // Bestätigungsmail: der Link entsteht erst jetzt (nur sein Hash wird gespeichert); je Seite höchstens 10 am Tag
+  private async deliverVerify(item: OutboxItem, row: Record<string, unknown>): Promise<void> {
+    if (String(row.type) !== 'email' || row.verified_at !== null) {
+      await this.finish(item, 'skipped', 'Already confirmed.');
+      return;
+    }
+    const now = this.nowS();
+    const today = Number(await withConnection((db) => db.value("SELECT COUNT(*) FROM status_outbox WHERE page_id = ? AND kind = 'channel_verify' AND state = 'sent' AND sent_at >= ?", [item.pageId, now - 86400])));
+    if (today >= PAGE_CONFIRM_DAY) {
+      await this.finish(item, 'skipped', 'This page sent the most confirmation emails it can send today.');
+      return;
+    }
+    const taken = this.budget.take('confirm', this.clock());
+    if (taken === 'day') { await this.finish(item, 'skipped', 'The daily email budget for confirmations is used up.'); return; }
+    if (taken === 'wait') { await this.later(item, this.budget.nextTokenIn(this.clock())); return; }
+    const page = await withConnection((db) => db.one('SELECT p.slug, p.title, u.full_name, u.email FROM status_pages p LEFT JOIN users u ON u.id = p.user_id WHERE p.id = ?', [item.pageId]));
+    if (!page) {
+      this.budget.giveBack('confirm');
+      await this.finish(item, 'skipped', 'The page no longer exists.');
+      return;
+    }
+    const { token, hash } = mintVerifyToken();
+    await withConnection((db) => db.exec('UPDATE status_channels SET verify_hash = ?, verify_sent_at = ? WHERE id = ?', [hash, now, Number(row.id)]));
+    const owner = String(page.full_name ?? '') || 'Someone';
+    const address = statusPageUrl(String(page.slug)).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const ok = await this.send({
+      to: channelTarget(row), template: 'status_verify', subject: `Confirm alerts for ${String(page.title)}`,
+      vars: { owner: e(owner), page: e(String(page.title)), address: e(address), button_url: e(mainUrl('/_/status/verify/' + token)), domain: e(baseHost()) },
+    });
+    if (ok) {
+      this.smtpFail = 0;
+      this.sentTotal++;
+      await this.record(item, { state: 'sent' });
+    } else {
+      this.budget.giveBack('confirm');
+      this.smtpFail++;
+      await this.retry(item, 'The mail server didn’t take the email.');
+    }
+  }
+
+  // Beitrag zu einem Vorfall in einem Webhook-Kanal: neu, bearbeiten oder löschen (immer mit dem aktuellen Stand).
+  // Vor dem Lesen wird dirty gelöscht: ändert sich der Vorfall während des Sendens, setzt das dirty wieder, und danach
+  // folgt ein weiteres Bearbeiten. Die Nachrichten-ID steht in derselben Transaktion wie das Ergebnis.
+  private async deliverIncidentPost(item: OutboxItem, row: Record<string, unknown>): Promise<void> {
+    const hook = parseWebhookLink(channelTarget(row));
+    if (!hook || Number(row.is_enabled) !== 1) {
+      await this.finish(item, 'skipped', 'The channel is off.');
+      return;
+    }
+    const now = this.nowS();
+    const op = String(item.payload.op ?? 'post');
+    if (op === 'delete') {
+      const res = await webhookDelete(hook, String(item.payload.message_id ?? ''), hook.threadId);
+      if (res.status === 404) await this.finish(item, 'sent', null);
+      else await this.afterDiscord(item, row, res, now);
+      return;
+    }
+    const postId = Number(item.payload.post_id ?? 0);
+    const found = await withConnection(async (db) => {
+      const post = await db.one('SELECT * FROM status_incident_posts WHERE id = ?', [postId]);
+      if (!post) return null;
+      await db.exec('UPDATE status_incident_posts SET dirty = 0 WHERE id = ?', [postId]);
+      const content = await incidentContent(db, Number(post.incident_id));
+      return content ? { post, content } : null;
+    });
+    if (!found) {
+      await this.finish(item, 'skipped', 'The incident was deleted.');
+      return;
+    }
+    const body = { embeds: [found.content.embed], allowed_mentions: { parse: [] } };
+    const messageId = found.post.message_id === null ? '' : String(found.post.message_id);
+    const res = messageId !== '' ? await webhookEdit(hook, messageId, body, hook.threadId) : await webhookPost(hook, body, { threadId: hook.threadId });
+    const newId = res.data && typeof res.data.id === 'string' ? res.data.id : null;
+    const sent = await this.afterDiscord(item, row, res, now, (ok, error) => ({ id: postId, state: ok ? 'posted' : 'failed', messageId: ok ? newId : null, error }));
+    // Während des Sendens geändert: noch einmal bearbeiten
+    if (sent) {
+      await withConnection(async (db) => {
+        const again = await db.one('SELECT dirty FROM status_incident_posts WHERE id = ?', [postId]);
+        if (again && Number(again.dirty) === 1) {
+          await db.exec('UPDATE status_incident_posts SET dirty = 0 WHERE id = ?', [postId]);
+          await queueChannelPost(db, item.pageId, Number(row.id), postId, Number(found.post.incident_id), 'edit');
+        }
+      }).catch((err) => this.log(`Status notifier: follow-up edit for post #${postId} – ${(err as Error).message}`));
+    }
   }
 
   // ---------------------------------------------------------------- Gesundheitseintrag

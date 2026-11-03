@@ -370,6 +370,17 @@ export function renderNotice(page: Pick<StatusPageRow, 'theme' | 'settings' | 'i
   return frame({ page: p, title, description: '', canonical: '', noindex: true, accent: accentOf(p), body });
 }
 
+// Bestätigung einer Alarm-Adresse (ST-5): Hinweis mit einem Knopf, der dieselbe Adresse per POST aufruft
+export function renderConfirm(title: string, text: string, button: string | null): string {
+  const p = { id: 0, userId: null, isSystem: false, slug: '', title: 'OnYourSite', description: '', theme: null, settings: null, published: true, blocked: false,
+    blockedReason: '', reviewNote: '', reviewedAt: null, rev: 0, createdAt: null } as unknown as StatusPageRow;
+  let body = '<main class="oys-main st-main st-notice">\n';
+  body += `  <section class="oys-card st-notice-card"><h1 class="st-h1">${e(title)}</h1><p>${e(text)}</p>`;
+  if (button !== null) body += `<form method="POST" class="st-confirm"><button type="submit" class="st-btn">${e(button)}</button></form>`;
+  body += '</section>\n</main>\n';
+  return frame({ page: p, title, description: '', canonical: '', noindex: true, accent: accentOf(p), body });
+}
+
 // OnYourSites Seite ohne Datenbank und ohne gespeicherte Ausgabe (z. B. die Webseite startete während des Ausfalls)
 export function renderSystemFallback(page: Pick<StatusPageRow, 'slug' | 'title'>, since: number, links: RenderLinks): string {
   const p: StatusPageRow = {
