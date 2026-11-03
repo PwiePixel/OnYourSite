@@ -103,6 +103,10 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    reports which channels everyone can see; team alerts of the status page are only sent to a channel an admin saved
    in *Editor → Status → Alerts* that is not public (until then they are skipped, with the reason in the editor).
 6. **Follow-ups found during the work:**
+   - Test database: `cd app && npm run test:seed` builds it (`app/test/seed.ts`, see README.md → Development
+     environment). Before it existed the seed lived only in the original workspace; with it a fresh checkout passes
+     the whole suite (on `main` 1011 of 1012 – the one left is the PHP Unicode comparison, which needs a PHP with a PCRE
+     as new as Node's Unicode tables).
    - The browser flows (`tests/e2e/*.js`, `app/test/e2e/*.e2e.ts`) are not part of `npm test`; the tsconfig does not
      type-check the test files.
    - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
