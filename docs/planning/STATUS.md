@@ -117,9 +117,9 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    - PD-4: the worker stores only problem codes, so the editor can't show "Found: …" values; the server's
      `fastUntil` has no time zone (the editor counts 15 minutes itself); browser flows still missing: claiming another
      account's domain, the root-domain choice, a live domain with the forwarding switch, the paused view, polling
-     stops; the "Checks are delayed" line has no test. An admin working as a user can no longer change domains (R8); open
-     question for the owner: in that mode, deleting a whole page still disconnects its domain (`page-delete` →
-     `beforePageRemoved`). Small: Enter in the domain field doesn't check the busy flag; after a 404
+     stops; the "Checks are delayed" line has no test. An admin working as a user can no longer change domains (R8), and –
+     assumed in the spirit of R8 while the owner was away, easy to undo – can't delete a page that has a custom domain
+     either (`page-delete` answers 403 `admin_mode`; other pages are deleted as before). Small: Enter in the domain field doesn't check the busy flag; after a 404
      the section shows the old domain until it reloads; a takeover keeps the old owner's forwarding setting;
      `domain-check` has no 403 without Premium (the worker refuses it) and `domain-settings` has no rate limit.
    - Domain worker (premium review, left open on purpose – retry policy for the lead): send domain mails from their own

@@ -31,7 +31,8 @@ import {
   SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError, pageAllowance, pageLimitText, slotRateKey,
   withSlotLock, type SlotUser,
 } from '../code/slots.js';
-import { beforePageRemoved } from '../domains/index.js';
+import { beforePageRemoved, hasDomain } from '../domains/index.js';
+import { adminMode } from '../honeycombs/shop.js';
 import { claimAddress, isTakenError, releaseAddress } from '../content/addresses.js';
 import { currentPage, isStaff } from './context.js';
 import { accountApi } from './accountApi.js';
@@ -247,6 +248,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       if (intval(await db.value('SELECT COUNT(*) FROM pages WHERE user_id = ?', [userId])) <= 1) return { error: 'You can’t delete your last page.' };
       const site = isShownLinkPage(page) ? null : await codeSiteOfUser(userId, intval(page.code_site_id), db, true);
       if (site && phpTruthy(site.is_blocked)) return { error: PAGE_BLOCKED_TEXT };
+      // R8: ein Admin, der als dieser Nutzer arbeitet, trennt keine Domain – auch nicht über das Löschen ihrer Seite
+      if (adminMode(ctx) && (await hasDomain(intval(page.id), db))) return { error: 'Pages with a custom domain can’t be deleted in admin mode.', status: 403, code: 'admin_mode' };
       // Eigene Domain der Seite entfernen (nur Datenbank; nach allen Prüfungen, damit eine abgelehnte Löschung nie eine
       // Domain trennt)
       await beforePageRemoved(intval(page.id), db);
@@ -254,7 +257,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
       const files = await deletePage(page, db);
       return { files: [...files, ...codeUploads] };
     });
-    if ('error' in deleted) ctx.json({ ok: false, error: deleted.error }, deleted.status ?? 200);
+    if ('error' in deleted) ctx.json({ ok: false, ...('code' in deleted && deleted.code ? { code: deleted.code } : {}), error: deleted.error }, deleted.status ?? 200);
     // Nach dem Commit: Dateien der Seite und Bilder der Code-Seite, die nichts anderes mehr benutzt
     await cleanupFiles(userId, deleted.files);
     session.delete('page_id');

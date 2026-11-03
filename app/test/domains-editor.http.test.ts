@@ -316,6 +316,30 @@ test('R8: an admin working as the user sees the domain but changes nothing – e
   }
 });
 
+test('R8: in admin mode a page with a custom domain isn’t deleted (the domain would go with it); other pages are', async () => {
+  const ADMIN = 3;
+  const HOST_DEL = 'admin-delete.example.com';
+  const [extra] = await t.admin.query(`INSERT INTO \`${t.name}\`.pages (user_id, slug, title, created_at) VALUES (?, 'pg-r8-extra', 'x', ?)`, [V, OLD]);
+  const extraId = (extra as { insertId: number }).insertId;
+  await createDomain({ hostname: HOST_DEL, targetId: pages.v1, userId: V });
+  try {
+    const del = (id: number, slug: string) => api('page-delete', { userId: V, json: { id, confirm: slug }, impersonatedBy: ADMIN });
+    const r = await del(pages.v1, 'pg-v1');
+    assert.equal(r.status, 403);
+    assert.deepEqual(jsonBody(r), { ok: false, code: 'admin_mode', error: 'Pages with a custom domain can’t be deleted in admin mode.' });
+    assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.pages WHERE id = ?', [pages.v1]), 1);
+    assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', [HOST_DEL]), 1);
+    // Eine Seite ohne Domain löscht der Admin wie bisher
+    const ok = await del(extraId, 'pg-r8-extra');
+    assert.equal(jsonBody(ok).ok, true, JSON.stringify(jsonBody(ok)));
+    assert.equal(await count('SELECT COUNT(*) AS n FROM `DB`.pages WHERE id = ?', [extraId]), 0);
+  } finally {
+    await sql('DELETE FROM `DB`.custom_domains WHERE hostname = ?', [HOST_DEL]);
+    await sql('DELETE FROM `DB`.pages WHERE id = ?', [extraId]);
+    await sql('DELETE FROM `DB`.rate_limits');
+  }
+});
+
 test('rate limit: at most 10 add attempts per account and day', async () => {
   for (let i = 0; i < 10; i++) assert.equal((await add(N, pages.n1, 'x.example.com')).status, 403);
   // Premium-Prüfung kommt vor dem Limit: auch das elfte Mal 403 für N – für U zählt jeder Versuch nach der Premium-Prüfung
