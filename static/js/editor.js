@@ -2658,6 +2658,7 @@
       ? '<span class="block mt-1"><span class="bdg hc" id="shopStreak"><i class="bx bx-flame"></i> ' + (sk.days > 0 ? 'Day ' + fmtNum(sk.days) : 'No streak') + ' · best ' + fmtNum(sk.best) + '</span></span>' : '';
     html += '<div class="panel shop-wallet"><div class="hc-big"><i class="bx bx-hive"></i><div class="min-w-0"><b>' + fmtNum(st.balance) + '</b><small>honeycombs</small>' + chip + '</div></div>' +
       '<div class="shop-wallet-actions"><button type="button" class="btn-ghost" data-shop-go="earn"><i class="bx bx-trending-up"></i> How to earn</button>' +
+      '<button type="button" class="btn-ghost" data-shop-redeem-focus><i class="bx bx-purchase-tag-alt"></i> Redeem a code</button>' +
       '<button type="button" class="btn-ghost" data-shop-go="history"><i class="bx bx-history"></i> History</button></div></div>';
     html += '<h2 class="section-title mt-8">Unlock</h2>' + (st.features.length
       ? '<div class="shop-grid">' + st.features.map(shopCardHtml).join('') + '</div>'
@@ -2669,6 +2670,12 @@
       (st.earn.cap ? '<p class="hint" id="shopCap">' + (st.earn.capLeft > 0
         ? 'Daily limit: ' + fmtNum(st.earn.capLeft) + ' of ' + fmtNum(st.earn.cap) + ' left today – for the profile and visitor rewards. Active days and streaks always count.'
         : 'Daily limit reached – the rest arrives tomorrow. Active days and streaks always count.') + '</p>' : '');
+    // Event-Code einlösen (HC-9); im Admin-Modus und bei angehaltenem Konto aus
+    var off = st.readOnly || st.frozen;
+    html += '<h2 class="section-title mt-8" id="shopRedeem">Redeem a code</h2><div class="panel"><form class="flex flex-wrap gap-2 items-start" id="shopRedeemForm" novalidate>' +
+      '<input type="text" class="field flex-1 min-w-0" id="shopCode" name="code" maxlength="40" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="e.g. HALLOWEEN-2026" aria-label="Code"' + (off ? ' disabled' : '') + '>' +
+      '<button type="submit" class="btn-secondary"' + (off ? ' disabled' : '') + '>Redeem</button></form>' +
+      '<p class="text-sm text-red-400 mt-3" id="shopCodeErr" role="alert" hidden></p>' + (off ? '<p class="hint m-0">' + esc(st.readOnly ? 'Redeeming is turned off in admin mode.' : 'Your honeycombs are on hold – redeeming is paused.') + '</p>' : '') + '</div>';
     html += '<h2 class="section-title mt-8" id="shopHistory">History</h2><div class="panel" id="shopHist">' + histHtml() + '</div>';
     root.innerHTML = html;
   }
@@ -2884,8 +2891,33 @@
     shopFocus();
   }
 
+  var redeemBusy = false;
+  function redeemCode(form) {
+    var input = form.code, err = $('#shopCodeErr');
+    var show = function (text) { err.textContent = text || ''; err.hidden = !text; };
+    if (!input.value.trim()) { show('Please enter a code.'); input.focus(); return; }
+    if (redeemBusy) return;
+    redeemBusy = true;
+    var btn = form.querySelector('button[type=submit]');
+    if (btn) btn.disabled = true;
+    show('');
+    api('hc-redeem', { code: input.value }).then(function (res) {
+      redeemBusy = false;
+      if (btn) btn.disabled = false;
+      if (!res || !res.ok) { show((res && res.error) || 'Something went wrong. Please try again.'); return; }
+      input.value = '';
+      setBalance(res.balance, true);
+      // Neuer Stand und Verlauf (die gelbe Meldung zeigt ui.js aus res.notices)
+      apiGet('shop').then(function (s2) { if (s2 && s2.ok) { shop.st = s2.shop; if (activeTab === 'honeycombs') renderShop(); } });
+      apiGet('hc-history').then(function (h) { if (h && h.ok) { shop.hist = h.items; shop.next = h.next; var box = $('#shopHist'); if (box) box.innerHTML = histHtml(); } });
+    });
+  }
+
   var shopRoot = $('#tab-honeycombs');
   if (shopRoot) {
+    shopRoot.addEventListener('submit', function (ev) {
+      if (ev.target && ev.target.id === 'shopRedeemForm') { ev.preventDefault(); redeemCode(ev.target); }
+    });
     shopRoot.addEventListener('click', function (ev) {
       var t = ev.target, el;
       if ((el = t.closest('[data-shop-opt]'))) {
@@ -2899,6 +2931,11 @@
       }
       if ((el = t.closest('[data-shop-buy]'))) { openPurchase(el.dataset.shopBuy); return; }
       if ((el = t.closest('[data-shop-renew]'))) { renewFeature(el.dataset.shopRenew); return; }
+      if (t.closest('[data-shop-redeem-focus]')) {
+        var ci = $('#shopCode');
+        if (ci) { $('#shopRedeem').scrollIntoView({ behavior: 'smooth', block: 'start' }); ci.focus({ preventScroll: true }); }
+        return;
+      }
       if ((el = t.closest('[data-end-dismiss]'))) {
         var ban = el.closest('[data-end-key]');
         if (ban) { hcDismiss(ban.dataset.endKey, el.dataset.endDismiss === 'day' ? todayKey() : '1'); ban.remove(); }

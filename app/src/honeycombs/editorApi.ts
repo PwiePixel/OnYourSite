@@ -4,6 +4,7 @@
 // mit Statuscodes. Kaufen folgt dem Vertrag der Kauf-Routen (ROADMAP §3.2): request_id (32 hex, im Browser beim Öffnen
 // des Dialogs erzeugt) und expected_price; fehlen sie → 409 mit reload, Admin-Modus → 403, anderer Preis → 200 mit
 // code 'price_changed'. Hinweise (notices) stehen oben in der Antwort; angezeigt werden sie nur vom Browser.
+import { redeemCode } from './codes.js';
 import type { Ctx } from '../web/ctx.js';
 import type { Row } from '../db.js';
 import { rateLimit } from '../web/security.js';
@@ -72,6 +73,17 @@ export async function shopApi(ctx: Ctx, user: Row, action: string, isPost: boole
     ctx.json({ ok: true, purchase: r.purchase, notices: r.notices, shop: await shopState(userId, false) });
   }
 
-  // Unbekannte Aktion des Bereichs (z. B. eine spätere wie hc-redeem in einem älteren Server)
+  // Event-Code einlösen (HC-9): Fehler mit 200 und Text, im Admin-Modus nie
+  if (action === 'hc-redeem') {
+    if (!isPost) ctx.json(NOT_FOUND, 404);
+    const code = inp('code');
+    if (typeof code !== 'string' || code.length > 40) ctx.json(BAD_INPUT, 400);
+    if (adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Redeeming is turned off in admin mode.' }, 403);
+    const r = await redeemCode(ctx, userId, code);
+    if (!r.ok) ctx.json({ ok: false, error: r.error });
+    ctx.json({ ok: true, amount: r.amount, balance: r.balance, notices: [{ tone: 'hc', amount: r.amount, text: r.text }] });
+  }
+
+  // Unbekannte Aktion des Bereichs (z. B. eine spätere in einem älteren Server)
   ctx.json(NOT_FOUND, 404);
 }

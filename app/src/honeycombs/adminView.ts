@@ -22,6 +22,7 @@ import { isActive, type EntRow } from './entitlements.js';
 import { refundableValue, type PurchaseRow } from './shop.js';
 import { premiumReady } from './premium.js';
 import { REVERSIBLE, reversedIds } from './teamTools.js';
+import { CODE_MAX_AMOUNT, codeStatus, type CodeRow } from './codes.js';
 import { bulkFromSession } from './bulkAction.js';
 import { Session } from '../web/session.js';
 
@@ -41,6 +42,7 @@ const TAB_LABELS: Readonly<Record<HcTab, [string, string]>> = {
   users: ['Users', 'bx-group'],
   purchases: ['Purchases', 'bx-receipt'],
   ledger: ['Ledger', 'bx-list-ul'],
+  codes: ['Codes', 'bx-purchase-tag-alt'],
 };
 
 // $userName: Name, sonst E-Mail (null und '' zählen als leer)
@@ -130,6 +132,7 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   else if (tab === 'rules') o += await rules(csrf);
   else if (tab === 'purchases') o += await purchasesTab(ctx, csrf, now);
   else if (tab === 'ledger') o += await ledgerTab(ctx, csrf);
+  else if (tab === 'codes') o += await codesTab(csrf, now);
   else o += await users(ctx, csrf, allUsers, now);
   o += '            </div>\n';
   return o;
@@ -668,6 +671,43 @@ async function ledgerTab(ctx: Ctx, csrf: string): Promise<string> {
       + (pageNow > 1 ? `<a href="${qs(pageNow - 1)}" class="${BTN}">Previous</a>` : '') + (pageNow < pages ? `<a href="${qs(pageNow + 1)}" class="${BTN}">Next</a>` : '') + '</span></div>\n';
   }
   return o + '                </div>\n';
+}
+
+// ---------------------------------------------------------------- Event-Codes (HC-9)
+
+const CODE_BADGES: Readonly<Record<ReturnType<typeof codeStatus>, string>> = {
+  running: 'bg-emerald-500/15 text-emerald-400', scheduled: 'bg-sky-500/15 text-sky-400', ended: 'bg-white/5 text-gray-400', off: 'bg-white/5 text-gray-400', 'used up': 'bg-white/5 text-gray-400',
+};
+
+// Anlegen (Code, Betrag, Zeitraum, höchstens so oft, Mindestalter, Notiz) und Liste mit „Disable“
+async function codesTab(csrf: string, now: string): Promise<string> {
+  let o = `                <div class="${CARD} p-5 sm:p-6" id="hcCodeCreate">\n` + `                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4"><i class='bx bx-purchase-tag-alt text-2xl text-yellow-400'></i><h2 class="text-base font-semibold text-white">Create a code</h2></div>\n`
+    + `                    <form action="/admin" method="POST" class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="hcCodeForm">` + csrf.trim() + '<input type="hidden" name="hc_action" value="code_create">\n'
+    + `                        <div><label class="${LBL}" for="hcCode">Code</label><input id="hcCode" type="text" name="code" minlength="4" maxlength="32" pattern="[A-Za-z0-9\\-]{4,32}" title="4–32 letters, digits or dashes – empty: a random code" placeholder="Empty: a random code" autocomplete="off" class="${IN} uppercase"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeAmount">Amount</label><input id="hcCodeAmount" type="number" name="amount" required min="1" max="${CODE_MAX_AMOUNT}" step="1" placeholder="50" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeNote">Note <span class="text-gray-500 font-normal">(in their history)</span></label><input id="hcCodeNote" type="text" name="note" maxlength="150" placeholder="Halloween 2026" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeFrom">From <span class="text-gray-500 font-normal">(optional)</span></label><input id="hcCodeFrom" type="datetime-local" name="starts_at" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeTo">Until <span class="text-gray-500 font-normal">(optional)</span></label><input id="hcCodeTo" type="datetime-local" name="ends_at" class="${IN}"></div>\n`
+    + `                        <div class="grid grid-cols-2 gap-3"><div><label class="${LBL}" for="hcCodeMax">Max. uses</label><input id="hcCodeMax" type="number" name="max_uses" min="1" step="1" placeholder="No limit" class="${IN}"></div>`
+    + `<div><label class="${LBL}" for="hcCodeAge">Min. age (days)</label><input id="hcCodeAge" type="number" name="min_account_days" min="0" max="3650" step="1" value="0" class="${IN}"></div></div>\n`
+    + `                        <div class="sm:col-span-3"><button type="submit" class="${SUBMIT}"><i class='bx bx-plus'></i> Create code</button><p class="text-xs text-gray-500 mt-2">Each account can redeem a code once. Codes don’t count towards the daily limit.</p></div>\n`
+    + '                    </form>\n                </div>\n';
+  const rows = await q<CodeRow>('SELECT * FROM hc_codes ORDER BY id DESC LIMIT 200');
+  o += `                <div class="${CARD} overflow-hidden" id="hcCodes">\n` + cardHead('bx-list-ul', 'Codes');
+  if (!rows.length) return o + '                    <p class="p-5 sm:p-6 text-sm text-gray-500">No codes yet.</p>\n                </div>\n';
+  o += '                    <ul class="divide-y divide-bordercolor text-sm px-5 sm:px-6" id="hcCodeRows">\n';
+  for (const c of rows) {
+    const st = codeStatus(c, now);
+    const win = (c.starts_at ? 'from ' + date('M j, Y H:i', stamp(c.starts_at)) : '') + (c.ends_at ? (c.starts_at ? ' ' : '') + 'until ' + date('M j, Y H:i', stamp(c.ends_at)) : '');
+    o += `                        <li class="py-3 flex flex-wrap items-center justify-between gap-3" data-code="${intval(c.id)}"><span class="min-w-0"><span class="font-mono text-white">${e(c.code)}</span> <span class="${BADGE} ${CODE_BADGES[st]}">${e(st)}</span>`
+      + `<span class="block text-xs text-gray-500">${numberFormat(intval(c.amount))} honeycombs · ${numberFormat(intval(c.uses))}${c.max_uses !== null ? ' / ' + numberFormat(intval(c.max_uses)) : ''} uses${win ? ' · ' + e(win) : ''}${intval(c.min_account_days) > 0 ? ' · accounts ≥ ' + intval(c.min_account_days) + ' days' : ''}${phpStr(c.note) ? ' · ' + e(c.note) : ''}</span></span>`;
+    if (c.disabled_at === null && st !== 'ended') {
+      o += `<form action="/admin" method="POST" class="m-0"${confirmAttrs({ title: 'Turn off the code ' + phpStr(c.code) + '?', text: 'Nobody can redeem it any more. Honeycombs already given stay.', ok: 'Turn off', tone: 'danger' })}>`
+        + csrf.trim() + confirmField() + `<input type="hidden" name="hc_action" value="code_disable"><input type="hidden" name="code_id" value="${intval(c.id)}"><button type="submit" class="${BTN} hover:text-red-400"><i class='bx bx-block'></i> Disable</button></form>`;
+    }
+    o += '</li>\n';
+  }
+  return o + '                    </ul>\n                </div>\n';
 }
 
 // Honigwaben an mehrere Nutzer: Formular mit der Liste und – nach „Check list“ – die Vorschau aus der Sitzung
