@@ -2839,6 +2839,9 @@
     html += '<h2 class="section-title mt-8">Your unlocks</h2>' + (st.owned.length
       ? '<div class="panel"><div class="hc-rules">' + st.owned.map(ownedHtml).join('') + '</div></div>'
       : '<div class="panel"><p class="hint m-0">Nothing unlocked yet. Pick something above.</p></div>');
+    // Mails vor dem Ende und beim Ende (HC-7b) – im Admin-Modus nur ansehen
+    html += '<div class="panel mt-3" id="shopMailRow"><label class="switch"><input type="checkbox" id="shopMailReminders"' + (st.mailReminders ? ' checked' : '') + (st.readOnly ? ' disabled' : '') + '><span class="track"></span>' +
+      '<span class="sw-text">Email me before an unlock ends<small>One email 3 days before and one when it has ended</small></span></label></div>';
     html += '<h2 class="section-title mt-8" id="shopEarn">Earn honeycombs</h2><div class="hc-rules">' + st.earn.rules.map(earnHtml).join('') + '</div>' +
       (st.earn.cap ? '<p class="hint" id="shopCap">' + (st.earn.capLeft > 0
         ? 'Daily limit: ' + fmtNum(st.earn.capLeft) + ' of ' + fmtNum(st.earn.cap) + ' left today – for the profile and visitor rewards. Active days and streaks always count.'
@@ -3088,6 +3091,22 @@
 
   var shopRoot = $('#tab-honeycombs');
   if (shopRoot) {
+    shopRoot.addEventListener('change', function (ev) {
+      var box = ev.target;
+      if (!box || box.id !== 'shopMailReminders') return;
+      var want = box.checked;
+      box.disabled = true;
+      api('shop-reminders', { enabled: want }).then(function (res) {
+        box.disabled = false;
+        if (!res || !res.ok) {
+          box.checked = !want;
+          toast((res && res.error) || 'Couldn’t save – please try again.', 'err');
+          return;
+        }
+        if (shop.st) shop.st.mailReminders = want;
+        toast(want ? 'You’ll get an email before an unlock ends.' : 'No more emails before an unlock ends.');
+      });
+    });
     shopRoot.addEventListener('submit', function (ev) {
       if (ev.target && ev.target.id === 'shopRedeemForm') { ev.preventDefault(); redeemCode(ev.target); }
     });

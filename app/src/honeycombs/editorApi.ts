@@ -4,6 +4,7 @@
 // mit Statuscodes. Kaufen folgt dem Vertrag der Kauf-Routen (ROADMAP §3.2): request_id (32 hex, im Browser beim Öffnen
 // des Dialogs erzeugt) und expected_price; fehlen sie → 409 mit reload, Admin-Modus → 403, anderer Preis → 200 mit
 // code 'price_changed'. Hinweise (notices) stehen oben in der Antwort; angezeigt werden sie nur vom Browser.
+import { setMailReminders } from './outbox.js';
 import { redeemCode } from './codes.js';
 import type { Ctx } from '../web/ctx.js';
 import type { Row } from '../db.js';
@@ -19,6 +20,7 @@ const NOT_FOUND = { ok: false, error: 'Not found.' };
 const RELOAD = { ok: false, error: 'OnYourSite was updated – please reload the editor.', reload: true };
 export const BUY_RATE = { max: 20, windowSec: 600 };
 export const HISTORY_RATE = { max: 120, windowSec: 60 };
+export const SETTINGS_RATE = { max: 30, windowSec: 600 };
 
 // Gehört die Aktion zu diesem Bereich?
 export const isShopAction = (action: string): boolean => action === 'shop' || action.startsWith('shop-') || action.startsWith('hc-');
@@ -71,6 +73,17 @@ export async function shopApi(ctx: Ctx, user: Row, action: string, isPost: boole
     const r = await buy(ctx, userId, item as string, requestId as string, price, { via: 'shop', mode: mode ?? undefined, terms: phpTruthy(inp('terms')) });
     if (!r.ok) ctx.json(r.price === undefined ? { ok: false, code: r.code, error: r.error } : { ok: false, code: r.code, price: r.price, error: r.error }, r.status);
     ctx.json({ ok: true, purchase: r.purchase, notices: r.notices, shop: await shopState(userId, false) });
+  }
+
+  // Schalter „Email me before an unlock ends“ (HC-7b)
+  if (action === 'shop-reminders') {
+    if (!isPost) ctx.json(NOT_FOUND, 404);
+    const enabled = inp('enabled');
+    if (typeof enabled !== 'boolean') ctx.json(BAD_INPUT, 400);
+    if (adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Settings can’t be changed in admin mode.' }, 403);
+    if (!(await rateLimit('hcset:' + userId, SETTINGS_RATE.max, SETTINGS_RATE.windowSec))) ctx.json({ ok: false, error: 'Too many changes – please wait a moment.' });
+    await setMailReminders(userId, enabled as boolean);
+    ctx.json({ ok: true });
   }
 
   // Event-Code einlösen (HC-9): Fehler mit 200 und Text, im Admin-Modus nie

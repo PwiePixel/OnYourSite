@@ -87,7 +87,7 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.equal((await api('shop', { userId: 5, json: {}, csrf: 'x'.repeat(64) })).status, 419);
   await give(5, 150);
   const st = await shop(5);
-  assert.deepEqual(Object.keys(st), ['balance', 'frozen', 'frozenReason', 'readOnly', 'premium', 'features', 'owned', 'earn']);
+  assert.deepEqual(Object.keys(st), ['balance', 'frozen', 'frozenReason', 'readOnly', 'premium', 'features', 'owned', 'earn', 'mailReminders']);
   assert.equal(st.balance, 150);
   assert.deepEqual([st.frozen, st.frozenReason, st.readOnly], [false, '', false]);
   assert.deepEqual(st.premium, { active: false, until: null, forever: false, source: null, buyable: false });
@@ -308,7 +308,8 @@ test('hc-history: pages of 20 with next, before as query or JSON, bad input and 
 
 test('unknown actions of the area answer 404 (GET and POST)', async () => {
   // hc-redeem gibt es seit HC-9 (nur POST; GET bleibt 404, siehe hc-codes.http.test.ts)
-  for (const action of ['shop-redeem', 'shop-auto-renew', 'shop-reminders', 'hc-foo']) {
+  // shop-reminders gibt es seit HC-7b (nur POST; GET bleibt 404, siehe hc-mails.db.test.ts)
+  for (const action of ['shop-redeem', 'shop-auto-renew', 'hc-foo']) {
     for (const method of ['GET', 'POST']) {
       const ctx = await api(action, { userId: 5, method });
       assert.equal(ctx.status, 404, action + ' ' + method);

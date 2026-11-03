@@ -2,6 +2,7 @@
 // Optionen und Preisen), was das Konto besitzt, wie man mehr verdient und der Verlauf. Nur lesen, eine Pool-Abfrage
 // nach der anderen (keine gehaltene Verbindung). Ob ein Kauf wirklich geht, entscheidet allein buy() unter der
 // Kontosperre – hier steht nur, was die Karte zeigt (Preis mit Angebot, Grund statt Kauf-Knopf).
+import { mailRemindersOn } from './outbox.js';
 import { cappedToday, earnLimits, streakOf, type EarnLimits, type StreakInfo } from './earn.js';
 import type { Row } from '../db.js';
 import { date, intval, numberFormat, phpStr, phpTruthy } from '../php.js';
@@ -84,6 +85,7 @@ export interface ShopState {
   features: ShopFeature[];
   owned: Owned[];
   earn: { rules: EarnRule[]; streak: StreakInfo; capLeft: number; cap: number };
+  mailReminders: boolean; // „Email me before an unlock ends“ (HC-7b)
 }
 
 // Beendete Zeitpakete bleiben so lange in „Your unlocks“ (grau, mit „Renew“)
@@ -287,6 +289,7 @@ export async function shopState(uid: number, readOnly: boolean): Promise<ShopSta
     features: cards,
     owned: await ownedList(uid, now),
     earn: await earnState(uid),
+    mailReminders: await mailRemindersOn(uid),
   };
 }
 

@@ -18,6 +18,7 @@ import { grantFeature, revokeFeature } from './grants.js';
 import { refund } from './shop.js';
 import { reverseEntry, setFrozen } from './teamTools.js';
 import { createCode, disableCode } from './codes.js';
+import { mailBudgetFrom } from './outbox.js';
 import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export type AdminResult = { ok: string } | { error: string };
@@ -95,7 +96,7 @@ function storedObject(raw: string): Record<string, unknown> {
 // Was das Formular nicht schickt, bleibt; unbekannte Schlüssel (spätere Schritte) und der alte Preis der Code-Seite
 // bleiben stehen – der Preis gilt nur noch im Katalog.
 export async function saveRules(post: PhpArray, adminId: number): Promise<AdminResult> {
-  const f = textFields(post, [...RULE_KEYS, ...EARN_KEYS]);
+  const f = textFields(post, [...RULE_KEYS, ...EARN_KEYS, 'mail_per_run']);
   if (!f) return { error: BAD };
   return transaction(async (_conn, db: Db) => {
     const raw = phpStr(await db.value("SELECT meta_value FROM oys_meta WHERE meta_key = 'honeycombs' FOR UPDATE"));
@@ -116,6 +117,12 @@ export async function saveRules(post: PhpArray, adminId: number): Promise<AdminR
       const v = clampEarn(key, phpInt(f[key]));
       next[key] = v;
       if (v !== beforeEarn[key]) changed[key] = v;
+    }
+    // Mails je Lauf der Hintergrundaufgabe (HC-7b): 1–1000
+    if (post.mail_per_run !== undefined) {
+      const v = Math.min(1000, Math.max(1, phpInt(f.mail_per_run)));
+      if (v !== mailBudgetFrom(raw)) changed.mail_per_run = v;
+      next.mail_per_run = v;
     }
     await db.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [phpJson(next)]);
     if (Object.keys(changed).length) await audit(db, adminId, 'settings', null, 'honeycombs', changed);
