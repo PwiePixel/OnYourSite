@@ -309,13 +309,23 @@
     return esc(t);
   }
 
+  // Plan der eigenen Seite (ST-7): Zusatzpakete oder Premium und das früheste Ende
+  function planText() {
+    var l = S.state && S.state.limits;
+    if (!userScope() || !l || !l.plan) return '';
+    var name = l.plan === 'premium' ? ' · Premium' : l.plan === 'addons' ? ' · with add-ons' : '';
+    var p = String(l.until || '').split(/\D/);
+    var until = l.until ? ' until ' + new Date(+p[0], p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return name + until + (l.minInterval <= 60 ? ' · every minute' : '');
+  }
+
   function componentsView() {
     var wrap = h('<div class="st-m-pane"></div>');
     var mons = S.mons;
     if (!mons) { wrap.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>The components couldn’t be loaded.</div>'; return wrap; }
     var u = mons.usage;
     wrap.appendChild(h('<div class="st-m-toolbar"><button type="button" class="btn-primary" data-stm="add"><i class="bx bx-plus"></i> Add component</button>' +
-      '<span class="hint">' + esc(u.components + ' of ' + u.componentsMax + ' components · ' + u.checks + ' checks') + '</span></div>'));
+      '<span class="hint" id="stmUsage">' + esc(u.components + ' of ' + u.componentsMax + ' components · ' + u.checks + ' of ' + u.checksMax + ' checks' + planText()) + '</span></div>'));
     if (mons.gate && mons.gate.state === 'frozen') {
       wrap.appendChild(h('<p class="st-m-note"><i class="bx bx-error"></i> Checks are paused – a problem on our side since ' + esc(when(mons.gate.since)) + '. Nothing is counted as down meanwhile.</p>'));
     }
@@ -486,6 +496,13 @@
         });
       }
     });
+  }
+
+  // „Made with OnYourSite“ ausblenden: nur mit Premium (ohne: aus und der Hinweis)
+  function brandingSwitch(s) {
+    var premium = !!(S.state && S.state.page && S.state.page.premium);
+    var html = sw('hide_branding', 'Hide “Made with OnYourSite”', !!s.hide_branding, premium ? 'The footer keeps “Report this page”.' : 'Comes with Premium.');
+    return premium || s.hide_branding ? html : html.replace('<input type="checkbox"', '<input type="checkbox" disabled');
   }
 
   function sw(name, label, on, hint) {
@@ -930,6 +947,7 @@
       '<div><label class="lbl">Description</label><input class="field" name="description" maxlength="300"></div></div>' +
       sw('online', 'Online', p.online, p.online ? 'Visitors see the page.' : 'Visitors get “This status page is offline”.') +
       sw('show_uptime', 'Show uptime', s.show_uptime) + sw('show_response', 'Show response times', s.show_response) +
+      (userScope() ? brandingSwitch(s) : '') +
       '<div class="field-row cols-2"><div><label class="lbl">Open an incident automatically</label><select class="field" name="auto_incident">' + options([['0', 'Off'], ['300', 'When a check is down for 5 min'], ['900', 'When a check is down for 15 min']], String(s.auto_incident)) + '</select></div>' +
       '<div><label class="lbl">Past incidents on the page (days)</label><input class="field" name="history_days" type="number" min="0" max="30" value="' + esc(s.history_days) + '"></div></div>' +
       '<div class="flex items-center gap-3 flex-wrap"><button type="button" class="btn-primary" data-stm="save-page"><i class="bx bx-save"></i> Save</button>' +
@@ -1083,6 +1101,7 @@
       api('status-page', {
         title: $('[name=title]', root).value, description: $('[name=description]', root).value, online: $('[name=online]', root).checked,
         show_uptime: $('[name=show_uptime]', root).checked, show_response: $('[name=show_response]', root).checked,
+        hide_branding: $('[name=hide_branding]', root) ? $('[name=hide_branding]', root).checked : undefined,
         auto_incident: Number($('[name=auto_incident]', root).value), history_days: Number($('[name=history_days]', root).value)
       }).then(function (r) {
         if (!r.ok) { toast(r.error, 'err'); return; }

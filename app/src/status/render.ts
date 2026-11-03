@@ -17,6 +17,7 @@ import { BAR_DAYS, lastDays, type ComponentView, type IncidentView, type PageVie
 
 export interface RenderLinks {
   discord: string; // Einladung (nur OnYourSites Seite)
+  footerHidden?: boolean; // „Made with OnYourSite“ aus (Schalter der Seite und Premium des Besitzers, ST-7)
 }
 
 // ---------------------------------------------------------------- Zeit
@@ -114,12 +115,12 @@ function header(view: Pick<PageView, 'page' | 'url'>, links: RenderLinks, asH1 =
   return o;
 }
 
-function footer(page: StatusPageRow): string {
+function footer(page: StatusPageRow, links?: RenderLinks): string {
   let o = '  <footer class="oys-foot st-foot">\n';
   if (page.isSystem) {
     o += `    <a href="${e(mainUrl('/'))}">OnYourSite</a> <a href="${e(mainUrl('/privacy'))}">Privacy</a> <a href="${e(mainUrl('/imprint'))}">Legal notice</a>\n`;
   } else {
-    o += `    <a href="${e(mainUrl('/'))}" target="_blank" rel="noopener">Made with <strong>OnYourSite</strong></a>\n`;
+    if (!links?.footerHidden) o += `    <a href="${e(mainUrl('/'))}" target="_blank" rel="noopener">Made with <strong>OnYourSite</strong></a>\n`;
     o += `    <a href="${e(mainUrl('/terms/status-pages?page=' + encodeURIComponent(page.slug) + '#report'))}" target="_blank" rel="noopener">Report this page</a>\n`;
   }
   o += '  </footer>\n';
@@ -285,7 +286,7 @@ export function renderStatusPage(view: PageView, links: RenderLinks): string {
   body += view.components.length ? groups(view) : '    <p class="st-none">No components yet.</p>\n';
   body += '  </section>\n';
   body += past(view);
-  body += footer(p);
+  body += footer(p, links);
   body += '</main>\n';
   return frame({
     page: p, title: (p.title || p.slug), description: p.description, canonical: view.url, noindex: view.noindex, accent: accentOf(p), body,
@@ -314,7 +315,7 @@ export function renderIncidentPage(view: PageView, inc: IncidentView, links: Ren
     body += `<div class="md">${md(view, u.body)}</div></li>\n`;
   }
   body += '    </ol>\n  </article>\n';
-  body += footer(p);
+  body += footer(p, links);
   body += '</main>\n';
   return frame({
     page: p, title: `${inc.title} – ${p.title || p.slug}`, description: inc.updates.length ? inc.updates[inc.updates.length - 1].body.slice(0, 160) : '',
@@ -353,7 +354,7 @@ export function renderHistoryPage(view: PageView, h: HistoryPage, links: RenderL
     if (h.more) body += `<a href="${e(historyPath(h.page + 1))}">Older</a>`;
     body += '</nav>\n';
   }
-  body += footer(p);
+  body += footer(p, links);
   body += '</main>\n';
   return frame({
     page: p, title: `Incident history – ${p.title || p.slug}`, description: '', canonical: view.url.replace(/\/$/, '') + historyPath(h.page),

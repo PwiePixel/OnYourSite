@@ -6,6 +6,8 @@
 // „Unlock status pages with honeycombs first.“.
 // Jede Änderung an Seite, Bestandteilen oder Vorfällen läuft in einer Transaktion mit gesperrter Seite und erhöht
 // rev/status_rev (der Prüfdienst gleicht dann binnen 5 s ab, die öffentliche Seite zeigt es sofort).
+import { ownerPremium } from '../content/branding.js';
+import './limitsSync.js';
 import type { Ctx } from '../web/ctx.js';
 import { transaction, withConnection, type Db, type Row } from '../db.js';
 import { rateLimit } from '../web/security.js';
@@ -203,7 +205,10 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
         preview: page.published ? '' : statusPageUrl(page.slug, '/?preview=' + statusPreviewToken(page)),
         clash,
         status: view.indicator, statusText: INDICATOR_TEXT[view.indicator],
-        settings: { show_uptime: settings.show_uptime, show_response: settings.show_response, history_days: settings.history_days, auto_incident: settings.auto_incident },
+        settings: { show_uptime: settings.show_uptime, show_response: settings.show_response, history_days: settings.history_days, auto_incident: settings.auto_incident,
+          ...(page.isSystem ? {} : { hide_branding: hideBranding(page.settings) }) },
+        // Premium des Besitzers (Schalter „Made with OnYourSite“, Grenzen)
+        ...(page.isSystem ? {} : { premium: await ownerPremium({ user_id: page.userId }, db) }),
         // Name mit einer Marke, noch nicht vom Team freigegeben (die Seite bleibt so lange noindex)
         review: page.reviewNote !== '' && page.reviewedAt === null ? page.reviewNote : '',
         // Adresswechsel: Tage bis zum nächsten (0 = jetzt möglich; das Team ohne Sperrfrist)
@@ -212,7 +217,7 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
         ...(page.isSystem ? {} : { alerts: { email: settings.alerts.owner, events: settings.alerts.events } }),
         kpis: { uptime30, avgMs, openIncidents: view.active.filter((i) => i.kind === 'incident').length, components: view.components.length },
       },
-      limits: { checks: limits.checks, components: limits.components, minInterval: limits.minInterval, intervals: module.intervals, timeoutMax: module.timeout_max },
+      limits: { plan: limits.plan, until: limits.until, checks: limits.checks, components: limits.components, minInterval: limits.minInterval, intervals: module.intervals, timeoutMax: module.timeout_max },
       gate: view.gate,
       worker: { ok: !view.checker.stale, at: numOrNull(worker?.at) },
       notifier: { ok: numOrNull(notifier?.at) !== null && t - Number(notifier?.at) <= 180, at: numOrNull(notifier?.at) },
@@ -389,6 +394,13 @@ async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<ne
       const d = Number(input.history_days);
       if (!Number.isInteger(d) || d < 0 || d > 30) return { ok: false, error: 'Past incidents can show 0 to 30 days.', field: 'history_days' };
       raw.history_days = d;
+    }
+    // „Made with OnYourSite“ ausblenden (ST-7): nur mit Premium des Besitzers; ausschalten geht immer
+    if (input.hide_branding !== undefined) {
+      if (typeof input.hide_branding !== 'boolean' || cur.isSystem) return { ok: false, error: 'Not all of the data arrived. Please try again.', field: 'hide_branding' };
+      // Einschalten braucht Premium; ein schon gespeichertes „an“ (Premium inzwischen beendet) wirkt nicht und hält nichts auf
+      if (input.hide_branding && raw.hide_branding !== true && !(await ownerPremium({ user_id: cur.userId }, db))) return { ok: false, error: 'Hiding “Made with OnYourSite” comes with Premium.', field: 'hide_branding' };
+      raw.hide_branding = input.hide_branding;
     }
     if (input.auto_incident !== undefined) {
       const a = Number(input.auto_incident);
@@ -887,3 +899,13 @@ async function saveBotChannels(ctx: Ctx, page: StatusPageRow, input: Input): Pro
 }
 
 export { STATUS_FEATURE, MANUAL_STATUSES };
+
+// Gespeicherter Schalter „Made with OnYourSite“ aus (ohne Premium wirkt er nicht – siehe footerHidden)
+function hideBranding(raw: string | null): boolean {
+  try {
+    const v = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    return v !== null && typeof v === 'object' && v.hide_branding === true;
+  } catch {
+    return false;
+  }
+}

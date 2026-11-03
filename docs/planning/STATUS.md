@@ -66,6 +66,7 @@ continue" below.
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`); address change, name rule with review, owner alerts, admin switch (on `feature/st4-rest`) | Built (small rest below) |
 | 43 | ST-5 | Status alert channels: extra email addresses (confirmation link minted by the notifier, only its sha256 stored, `GET|POST /_/status/verify/<token>` on the main host – GET only shows a button –, 7 days valid, resend after 10 minutes, at most 10 confirmation mails a page a day) and Discord webhooks (checked and tested when added; alerts as embeds without mentions; 5 rejections (401/404) turn it off with the mail "Your Discord alerts for … stopped working"; *Incident updates*: one post per incident, edited on updates, deleted with the incident, sent by the notifier, not the bot), alerts fanned out to confirmed channels with the event (`alerts.ts`), *Test* (3 per 10 minutes), *Recent alerts* for user pages, the warning when nothing is on, limit 3 (`limits.channels`), refused in admin mode – `app/src/status/channels.ts`, templates `email/status_verify.json`, `email/status_channel_alert.json` (on `feature/st5-channels`, based on `feature/st4-rest`; tests `app/test/status-channels.test.ts`, browser flow `tests/e2e/status-channels.js`) | Built and reviewed |
+| 44 | ST-7 | Status add-ons and Premium limits: `status_more_checks` (+10 checks for 30 days, up to 2 packs, 60) and `status_fast_checks` (every minute for 30 days, 80) in the shop with their rules (a page, not blocked, checks not paused by the team, not with Premium for good); `statusLimits` reads the packs and Premium at run time (free 10/3 min, packs up to 30, Premium 30 and every minute with 250 subscribers – channels and broadcasts stay as free, DECISIONS Q1 = b; the admin role counts as Premium) with the earliest end; the Premium perk text; the reconcile step `refreshStatusLimits` (`app/src/status/limitsSync.ts`: bumps the page for the checker, one bell per change of paused checks in `status_pages.limit_paused`); *Hide “Made with OnYourSite”* for status pages (Premium only, `footerHidden`); the plan and its end in the Status tab (on `feature/st7-addons`, based on `feature/st5-channels`; timed packs go on sale with HC-7a's `LIFECYCLE_READY`; tests `app/test/status-addons.test.ts`, browser flow `tests/e2e/status-addons.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
@@ -90,6 +91,7 @@ Next, as soon as their dependencies are in:
 - Shop: done for v1 (HC-8, HC-7a, HC-6b, HC-9 and HC-7b are on their branches); auto-renewal (HC-7c) comes after the Premium sale has started.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Status pages: ST-7 (the rest of ST-4 is on `feature/st4-rest`, ST-5 on `feature/st5-channels`).
+- Status pages: done for v1 (ST-4 rest, ST-5 and ST-7 are on their branches); subscriptions (ST-6) are Stage C.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: the rest of CS-6 (see follow-ups); CS-5 is on `feature/cs5-moderation`.
@@ -136,7 +138,7 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
    - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Status pages: ST-5, ST-7.
    - Code pages: CS-5 (moderation), the rest of CS-6.
-   - Status pages: ST-5 is on `feature/st5-channels`; then ST-7.
+   - Status pages: ST-5 is on `feature/st5-channels`, ST-7 on `feature/st7-addons`.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
@@ -188,6 +190,11 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
      works with `daily` 0 and with daily rows a PHP rollback wrote); a profile or views reward above the daily limit is
      never paid (the admin form doesn't warn yet); the back-fill (schema step 19) reads all daily rows of the last 62
      days in one query and writes one row per user – fine for today's size, batch it for a much larger ledger.
+   - ST-7: the status page's title and favicon don't follow `fullyUnbranded` yet (only the footer is hidden); the
+     limit notice is sent by the reconcile step (purchase, grant, refund, expiry through HC-7a's job), not by the checker
+     itself – a limit lowered by an admin setting gets no notice; the Premium perk text leaves out "250 subscribers"
+     until subscriptions (ST-6) exist; every reconcile of the account (also for code pages or domains) bumps the status
+     page's rev once (harmless: the page cache and the checker reload).
    - ST-5: the Discord test message is posted before the locked limit check (in a race the message is posted but the
      channel isn't saved); unconfirmed email channels are purged 7 days after they were added (a link resent on day 6
      lives one more day); a resend that the per-page cap skips leaves the older link valid a little longer; Premium's

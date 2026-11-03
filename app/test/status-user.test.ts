@@ -69,7 +69,8 @@ test('status_page is registered: permanent, 150 honeycombs, included for admins,
 test('limits: plan none without the unlock, free with it; admins have it included', async () => {
   assert.equal((await statusLimits(MIA)).plan, 'none');
   assert.equal((await statusLimits(MIA)).checks, 0);
-  assert.equal((await statusLimits(ADMIN)).plan, 'free');
+  // Die Rolle zählt als Premium (ST-7)
+  assert.equal((await statusLimits(ADMIN)).plan, 'premium');
   assert.equal((await statusLimits(null)).plan, 'system');
 });
 

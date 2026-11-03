@@ -192,7 +192,9 @@ export function checkMonitorInput(input: Record<string, unknown>, existing: Row 
   if (!url.ok) return fail(url.error, 'url');
   const interval = intOf(input.interval ?? base.interval);
   if (interval === null || !s.intervals.includes(interval)) return fail(`Please choose how often to check (${s.intervals.map((i) => i / 60).join(', ')} minutes).`, 'interval');
-  if (interval < deps.limits.minInterval) {
+  // Kürzer als erlaubt – außer die gespeicherte Prüfung hatte schon diesen Abstand (z. B. nach dem Ende von „Fast checks“:
+  // der Prüfdienst streckt ihn, Bearbeiten soll weiter gehen)
+  if (interval < deps.limits.minInterval && !(existing && Number(existing.interval_s) === interval)) {
     return fail(`You can check every ${deps.limits.minInterval / 60} minutes at most. “Fast checks” or Premium check every minute.`, 'interval');
   }
   const timeout = intOf(input.timeout ?? prevConfig.timeout ?? 10);
