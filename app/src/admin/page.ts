@@ -13,6 +13,7 @@ import { storageDownloadZip, storageMoveToDataDir, uploadsDir } from '../content
 import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
+import { hcBulkAction } from '../honeycombs/bulkAction.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
 import { hcBackUrl } from '../honeycombs/admin.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
@@ -68,7 +69,9 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     // Formulare der Code-Seiten von vor der Trennung (hc_action=code_*) gehen an den Bereich Code-Seiten
     const legacy = legacyCodePost(post);
     if (legacy) await codeAction(ctx, session, legacy);
-    const result = await adminHcHandle(post, intval(session.get('user_id')));
+    // Mehrere Nutzer: erst prüfen (Liste in der Sitzung, 15 Minuten), dann buchen – braucht die Sitzung, deshalb hier
+    const bulk = await hcBulkAction(session, post, intval(session.get('user_id')));
+    const result = bulk ?? await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
     // Zurück zum Unterbereich der Aktion (z. B. /admin?hc_tab=offers#honeycombs)
     ctx.redirect(hcBackUrl(post));
