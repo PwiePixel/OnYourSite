@@ -168,6 +168,8 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     csrfField: String(await csrfField(ctx)),
     userData,
     hasPage: page !== null,
+    codeOnly: page === null && pages.length > 0,
+    canCreatePage: allowance.unlimited || pages.length < allowance.max,
     isImpersonating,
     balance: honeycombs.balance,
     bellHtml: await bellMarkup(ctx),

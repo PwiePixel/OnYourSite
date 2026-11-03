@@ -142,3 +142,40 @@ test('ownership: another account’s code page is never listed, opened or delete
   assert.equal(del.status, 409);
   assert.equal(await n('SELECT COUNT(*) FROM code_sites WHERE id = ?', [mias]), 1);
 });
+
+test('U13: when every page slot shows a code page, the start box says so; without any page it stays “Create your first page”', async () => {
+  // Ein eigenes Konto (20) mit einer Seite, unabhängig von den Fällen davor
+  const U = 20;
+  await q("INSERT INTO users (id, email, password, full_name, created_at) VALUES (?, 'u13@test.de', 'x', 'U13', NOW())", [U]);
+  const sid = await loginSession(U);
+  const page = async (): Promise<string> => String((await runRequest(makeTestCtx({ url: '/dashboard', host: HOST, cookies: { PHPSESSID: sid } }), appRoutes)).body);
+  const box = (html: string): string => /<div id="noPageBox"[\s\S]*?<\/div>\s*<\/div>/.exec(html)?.[0] ?? '';
+  const codeOn = async (slug: string): Promise<void> => {
+    const pageId = Number(((await q("INSERT INTO pages (user_id, slug, title, created_at) VALUES (?, ?, 'x', NOW())", [U, slug])) as unknown as { insertId: number }).insertId);
+    const site = Number(((await q("INSERT INTO code_sites (user_id, slug, title, created_at, updated_at) VALUES (?, NULL, 'Only code', NOW(), NOW())", [U])) as unknown as { insertId: number }).insertId);
+    await q('UPDATE pages SET code_site_id = ? WHERE id = ?', [site, pageId]);
+  };
+  try {
+    // Ohne Seite: wie bisher
+    assert.match(box(await page()), /Create your first page/);
+    // Die einzige Seite zeigt eine Code-Seite
+    await codeOn('u13-a');
+    let html = box(await page());
+    assert.match(html, /Your pages show code pages/);
+    assert.match(html, /Show a link page again or create a new page\./);
+    assert.match(html, /data-action="open-code"/);
+    assert.match(html, /data-action="new-page"[^>]*>.*Create page/);
+    assert.doesNotMatch(html, /Create your first page/);
+    // Alle drei Plätze belegt: kein „Create page“
+    await codeOn('u13-b');
+    await codeOn('u13-c');
+    html = box(await page());
+    assert.match(html, /Your pages show code pages/);
+    assert.doesNotMatch(html, /data-action="new-page"/);
+    assert.match(html, /Show a link page again or delete a page\./);
+  } finally {
+    await q('DELETE FROM pages WHERE user_id = ?', [U]);
+    await q('DELETE FROM code_sites WHERE user_id = ?', [U]);
+    await q('DELETE FROM users WHERE id = ?', [U]);
+  }
+});

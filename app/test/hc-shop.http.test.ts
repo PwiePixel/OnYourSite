@@ -89,7 +89,7 @@ test('code-unlock: a changed price, success with a notice, a replay and an unloc
   assert.equal(ctx.status, 200);
   const body = jsonBody(ctx);
   // Antwort: Zustand des Code-Tabs (die fünf bisherigen Schlüssel zuerst, dann die Plätze) plus die Hinweise
-  assert.deepEqual(Object.keys(body), ['ok', 'unlocked', 'terms', 'cost', 'balance', 'site', 'sites', 'slots', 'more', 'banned', 'paused', 'pages', 'notices']);
+  assert.deepEqual(Object.keys(body), ['ok', 'unlocked', 'terms', 'cost', 'balance', 'site', 'sites', 'slots', 'more', 'total', 'banned', 'paused', 'pages', 'notices']);
   assert.deepEqual(pickState(body), { ok: true, unlocked: true, terms: true, cost: 100, balance: 200, site: null, notices: [{ tone: 'hc', text: 'Code page unlocked', amount: -100 }] });
   assert.deepEqual(body.sites, []);
   assert.deepEqual(body.more, { unlocked: true, cost: 0 });

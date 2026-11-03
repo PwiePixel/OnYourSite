@@ -138,6 +138,8 @@ export async function codeApiState(ctx: Ctx, user: Row, selectedId: number | nul
       onPages: { used: pages.filter((p) => p.code_site_id !== null && p.code_site_id !== undefined).length, max: settings.max_on_pages },
     },
     more: { unlocked: morePrice === 0 || (await has(uid, 'code_more')), cost: morePrice },
+    // Alle Code-Seiten des Kontos (auch ohne Adresse) – wie code.total im Start des Editors (Regel für More code pages)
+    total: sites.length,
     banned: phpTruthy(u.code_banned_at) ? { reason: phpStr(u.code_ban_reason ?? '') } : null,
     paused: settings.paused,
     pages: pages.map((p) => ({
