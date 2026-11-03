@@ -65,6 +65,7 @@ continue" below.
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`); address change, name rule with review, owner alerts, admin switch (on `feature/st4-rest`) | Built (small rest below) |
+| 43 | ST-5 | Status alert channels: extra email addresses (confirmation link minted by the notifier, only its sha256 stored, `GET|POST /_/status/verify/<token>` on the main host – GET only shows a button –, 7 days valid, resend after 10 minutes, at most 10 confirmation mails a page a day) and Discord webhooks (checked and tested when added; alerts as embeds without mentions; 5 rejections (401/404) turn it off with the mail "Your Discord alerts for … stopped working"; *Incident updates*: one post per incident, edited on updates, deleted with the incident, sent by the notifier, not the bot), alerts fanned out to confirmed channels with the event (`alerts.ts`), *Test* (3 per 10 minutes), *Recent alerts* for user pages, the warning when nothing is on, limit 3 (`limits.channels`), refused in admin mode – `app/src/status/channels.ts`, templates `email/status_verify.json`, `email/status_channel_alert.json` (on `feature/st5-channels`, based on `feature/st4-rest`; tests `app/test/status-channels.test.ts`, browser flow `tests/e2e/status-channels.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
@@ -88,6 +89,7 @@ Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
 - Shop: done for v1 (HC-8, HC-7a, HC-6b, HC-9 and HC-7b are on their branches); auto-renewal (HC-7c) comes after the Premium sale has started.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
+- Status pages: ST-7 (the rest of ST-4 is on `feature/st4-rest`, ST-5 on `feature/st5-channels`).
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: the rest of CS-6 (see follow-ups); CS-5 is on `feature/cs5-moderation`.
@@ -133,6 +135,8 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
    - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
    - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
    - Status pages: ST-5, ST-7.
+   - Code pages: CS-5 (moderation), the rest of CS-6.
+   - Status pages: ST-5 is on `feature/st5-channels`; then ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
@@ -184,6 +188,10 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
      works with `daily` 0 and with daily rows a PHP rollback wrote); a profile or views reward above the daily limit is
      never paid (the admin form doesn't warn yet); the back-fill (schema step 19) reads all daily rows of the last 62
      days in one query and writes one row per user – fine for today's size, batch it for a much larger ledger.
+   - ST-5: the Discord test message is posted before the locked limit check (in a race the message is posted but the
+     channel isn't saved); unconfirmed email channels are purged 7 days after they were added (a link resent on day 6
+     lives one more day); a resend that the per-page cap skips leaves the older link valid a little longer; Premium's
+     5 channels come with ST-7.
    - HC-6a: the free unlock in *Admin → Code pages* (`app/src/code/admin.ts`) still books through `hcAdd` (no audit
      line) – switch it to `grantFeature`. Bulk grants, the Ledger tab with Reverse and freeze/unfreeze came with HC-6b;
      codes come with HC-9.

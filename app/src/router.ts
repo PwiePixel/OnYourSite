@@ -12,7 +12,7 @@ import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
 import { DbUnavailableError, dbReachable } from './db.js';
-import { statusHealth, statusHeartbeat } from './status/endpoints.js';
+import { statusHealth, statusHeartbeat, statusVerify } from './status/endpoints.js';
 import { statusDbDownHost } from './status/routes.js';
 
 export function baseAuthority(): string {
@@ -91,6 +91,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
     ctx.header('X-Robots-Tag', 'noindex');
     // Statusseiten: Heartbeats (Token in der Adresse)
     if (path.startsWith('/_/hb/')) return statusHeartbeat(ctx);
+    // Bestätigung einer zusätzlichen Alarm-Adresse (nur auf der Hauptadresse – so steht sie im Link der Mail)
+    if (path.startsWith('/_/status/verify/') && isMainHost(host)) return statusVerify(ctx);
     return publicRoutes(ctx);
   }
   // Alte Klick-Zählung

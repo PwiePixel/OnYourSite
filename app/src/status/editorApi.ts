@@ -38,6 +38,7 @@ import {
 import { alertsChannelProblem, botChannels, pagePostable, postableChannel, removeIncidentPosts, syncIncidentPosts, STATUS_FEATURE } from './posts.js';
 import { statusPreviewToken } from './routes.js';
 import { alertMessage, type AlertPayload } from './alerts.js';
+import { addChannel, editChannel, listChannels, removeChannel, resendVerify, testChannel } from './channels.js';
 import { loadPageView } from './view.js';
 
 type Input = Record<string, unknown>;
@@ -82,6 +83,8 @@ const staffOf = new WeakMap<Ctx, boolean>();
 const SLUG_COOLDOWN = 30 * 86400;
 const SLUG_REDIRECT = 90 * 86400;
 const NO_PAGE = { ok: false, error: 'Create your status page first.' };
+// OnYourSites eigene Seite: feste Zahl zusätzlicher Kanäle (neben Admins und Bot)
+const SYSTEM_CHANNELS = 5;
 
 export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPost: boolean, raw: unknown): Promise<void> {
   const input: Input = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Input) : {};
@@ -114,9 +117,12 @@ export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPos
     'status-monitor': () => monitorDetail(ctx, page, intval(ctx.get.id ?? 0)),
     'status-incidents': () => incidentsOf(ctx, page, intval(ctx.get.before ?? 0)),
     'status-alerts': () => alertsOf(ctx, page),
+    'status-channels': () => channelsOf(ctx, page),
   };
   if (Object.hasOwn(reads, action)) await reads[action]();
   if (!isPost) ctx.json({ ok: false, error: 'Unknown action.' }, 404);
+  // Fremde Adressen und Webhooks eines Kontos ändert das Team nicht (Admin-Modus: nur ansehen)
+  if (action.startsWith('status-channel-') && adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Alert channels can’t be changed in admin mode.' }, 403);
   switch (action) {
     case 'status-page': return savePage(ctx, page, input);
     case 'status-monitor-save': return saveMonitor(ctx, page, uid, input);
@@ -134,6 +140,32 @@ export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPos
     case 'status-bot-channels': return saveBotChannels(ctx, page, input);
     case 'status-address': return changeAddress(ctx, page, uid, input);
     case 'status-owner-alerts': return saveOwnerAlerts(ctx, page, input);
+    case 'status-channel-add': {
+      const limit = (await limitsOf(page)).channels;
+      const r = await addChannel(page.id, uid, page.isSystem ? SYSTEM_CHANNELS : limit, input);
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page, { channel: r.channel });
+    }
+    case 'status-channel-edit': {
+      const r = await editChannel(page.id, intval(input.id ?? 0), input);
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page, { channel: r.channel });
+    }
+    case 'status-channel-remove': {
+      const r = await removeChannel(page.id, intval(input.id ?? 0));
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
+    case 'status-channel-test': {
+      const r = await testChannel(page.id, intval(input.id ?? 0), { slug: page.slug, title: page.title, system: page.isSystem, owner: page.userId });
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
+    case 'status-channel-resend': {
+      const r = await resendVerify(page.id, intval(input.id ?? 0));
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
   }
   ctx.json({ ok: false, error: 'Unknown action.' }, 404);
 }
@@ -264,6 +296,29 @@ async function incidentsOf(ctx: Ctx, page: StatusPageRow, before: number): Promi
     };
   });
   ctx.json(out);
+}
+
+// Zusätzliche Kanäle, die letzten 20 Zustellungen und die Grenze (beide Bereiche)
+async function channelsOf(ctx: Ctx, page: StatusPageRow, extra: Record<string, unknown> = {}): Promise<never> {
+  const limit = page.isSystem ? SYSTEM_CHANNELS : (await limitsOf(page)).channels;
+  ctx.json(await withConnection(async (db) => {
+    const channels = await listChannels(db, page.id);
+    const label = new Map(channels.map((c) => ['channel:' + c.id, c.label]));
+    const recent = (await db.q("SELECT id, channel, event, kind, state, error, payload, created_at, sent_at FROM status_outbox WHERE page_id = ? AND kind IN ('alert', 'muted', 'test', 'channel_broken') ORDER BY id DESC LIMIT 20", [page.id]))
+      .map((r) => {
+        let title = String(r.event);
+        try {
+          const p = JSON.parse(String(r.payload)) as AlertPayload;
+          title = r.kind === 'test' ? 'Test alert' : r.kind === 'channel_broken' ? 'Discord alerts stopped working' : r.kind === 'muted' ? 'Alerts are muted until tomorrow' : alertMessage(p).title;
+        } catch {
+          title = String(r.event);
+        }
+        const ch = String(r.channel);
+        const to = ch === 'owner' ? 'email to you' : ch === 'bell' ? 'bell' : ch === 'admins' ? 'email to admins' : ch === 'bot' ? 'Discord #alerts' : label.get(ch) ?? 'a removed channel';
+        return { id: Number(r.id), to, state: String(r.state), error: String(r.error ?? ''), title, at: Number(r.created_at), sentAt: numOrNull(r.sent_at) };
+      });
+    return { ok: true, channels, recent, limit, readOnly: adminMode(ctx), ...extra };
+  }));
 }
 
 async function alertsOf(ctx: Ctx, page: StatusPageRow): Promise<never> {

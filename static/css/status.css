@@ -141,6 +141,10 @@
 .st-notice { justify-content: center; }
 .st-notice-card { text-align: center; padding: 28px 22px; }
 .st-notice-card p { margin: 0; color: var(--muted); }
+.st-confirm { margin: 18px 0 0; }
+.st-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 22px; border-radius: 999px; border: 0; font: inherit; font-weight: 700; cursor: pointer; background: var(--accent, #6366f1); color: #fff; }
+.st-btn:hover { filter: brightness(1.1); }
+.st-btn:focus-visible { outline: 2px solid var(--accent, #6366f1); outline-offset: 3px; }
 
 .st-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 4px; }
 

@@ -9,7 +9,9 @@
 import type { Ctx } from '../web/ctx.js';
 import { exec, one, value } from '../db.js';
 import { sha256Hex } from '../crypto.js';
-import { clientKey } from '../web/security.js';
+import { clientKey, rateLimit } from '../web/security.js';
+import { renderConfirm } from './render.js';
+import { verifyConfirm, verifyLookup } from './channels.js';
 
 // ---------------------------------------------------------------- /_/health
 
@@ -158,4 +160,32 @@ export async function statusHeartbeat(ctx: Ctx): Promise<void> {
 // Einmal beim Start (server.ts): die Minute davor war unser Eingang weg – Heartbeat-Fristen beginnen danach neu
 export async function recordWebStart(at = Math.floor(Date.now() / 1000)): Promise<void> {
   await exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('status_web_start', ?)", [String(at)]);
+}
+
+// ---------------------------------------------------------------- Bestätigung einer Alarm-Adresse (ST-5)
+
+const VERIFY_PATH = /^\/_\/status\/verify\/([A-Za-z0-9_-]{1,64})$/;
+const BAD_LINK = 'This link isn’t valid any more. Ask the page’s owner to send it again.';
+
+// GET zeigt nur einen Knopf (Vorschau-Dienste in Mailprogrammen bestätigen so nichts); POST bestätigt
+export async function statusVerify(ctx: Ctx): Promise<void> {
+  ctx.header('Cache-Control', 'no-store');
+  ctx.header('Referrer-Policy', 'no-referrer');
+  if (ctx.method !== 'GET' && ctx.method !== 'POST') {
+    ctx.header('Allow', 'GET, POST');
+    text(ctx, 'Method not allowed', 405);
+  }
+  if (!(await rateLimit('statusverifylink:' + clientKey(ctx), 30, 3600))) ctx.send(renderConfirm('Too many tries', 'Please wait an hour and open the link again.', null), 429);
+  const m = VERIFY_PATH.exec(ctx.path);
+  const token = m ? m[1] : '';
+  if (ctx.method === 'POST') {
+    const done = await verifyConfirm(token);
+    if (done === null) ctx.send(renderConfirm('This link isn’t valid', BAD_LINK, null), 404);
+    if (done.already) ctx.send(renderConfirm('Already confirmed', `Alerts for ${done.title} already go to this address.`, null));
+    ctx.send(renderConfirm('Address confirmed', `Alerts for ${done.title} will now go to this address.`, null));
+  }
+  const found = await verifyLookup(token);
+  if (!found) ctx.send(renderConfirm('This link isn’t valid', BAD_LINK, null), 404);
+  if (found.verified) ctx.send(renderConfirm('Already confirmed', `Alerts for ${found.pageTitle} already go to this address.`, null));
+  ctx.send(renderConfirm('Confirm status alerts', `Alerts for ${found.pageTitle} will be sent to this address. Not you? Just close this page.`, 'Confirm'));
 }

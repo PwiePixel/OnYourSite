@@ -6,13 +6,16 @@
 // - Seiten von Nutzern (ab ST-4): der Besitzer per E-Mail (alerts.owner, Klasse owner) und seine Glocke.
 // Kommt ein „up“, solange das „down“ für dieselbe Prüfung und denselben Empfänger noch wartet, wird beides eine
 // Nachricht („… was down for 40 s“, die Zeile von „down“ wird merged). Die Nutzdaten enthalten nie Geheimnisse.
+// Dazu die zusätzlichen Kanäle der Seite (ST-5: bestätigte E-Mail-Adressen, Discord-Webhooks), je nach ihren Ereignissen.
 import type { Db } from '../db.js';
 import { errorText } from './errors.js';
 import { duration } from './incidents.js';
 import type { AlertEvent, PageSettings } from './settings.js';
 import { JOB_HEARTBEATS } from './system.js';
+import { channelsFor } from './channels.js';
 
-export type AlertChannel = 'admins' | 'owner' | 'bell' | 'bot';
+// 'channels': nur zum Verteilen auf die zusätzlichen Kanäle (wird selbst nie geschrieben)
+export type AlertChannel = 'admins' | 'owner' | 'bell' | 'bot' | 'channels' | `channel:${number}`;
 export type MailClass = 'system' | 'confirm' | 'owner' | 'broadcast';
 
 export interface AlertPayload {
@@ -63,7 +66,9 @@ export function alertRows(src: AlertSource, settings: PageSettings): OutboxRow[]
   const ev = src.event;
   if (ev.muted) return [];
   const category = alertCategory(src.monitor.type, src.monitor.target, ev.kind);
-  if (category === null || !settings.alerts.events.includes(category)) return [];
+  if (category === null) return [];
+  // Nicht für den Besitzer gewählt: nur die zusätzlichen Kanäle prüfen ihre eigenen Ereignisse
+  const ownerWants = settings.alerts.events.includes(category);
   const payload: AlertPayload = {
     page: { id: src.page.id, slug: src.page.slug, title: src.page.title, system: src.page.isSystem, owner: src.page.userId },
     monitor: { id: src.monitor.id, name: src.monitor.name, type: src.monitor.type, target: src.monitor.type === 'http' ? src.monitor.target : '', public: src.monitor.isPublic },
@@ -79,6 +84,7 @@ export function alertRows(src: AlertSource, settings: PageSettings): OutboxRow[]
   if (src.monitor.timeout !== undefined) payload.timeout = src.monitor.timeout;
   if (src.monitor.retries !== undefined) payload.checks = 1 + src.monitor.retries;
   const base = { pageId: src.page.id, monitorId: src.monitor.id, event: ev.kind, payload };
+  if (!ownerWants) return [{ ...base, channel: 'channels', cls: 'owner' }];
   if (src.page.isSystem) {
     const rows: OutboxRow[] = [];
     if (settings.alerts.admins) rows.push({ ...base, channel: 'admins', cls: 'system' });
@@ -111,7 +117,15 @@ export function gateAlertRows(page: AlertSource['page'], settings: PageSettings,
 // Zeilen schreiben (Transaktion des Prüfdienstes). „up“ fasst ein noch wartendes „down“ desselben Empfängers zusammen.
 export async function writeAlertRows(db: Db, rows: OutboxRow[], now: number): Promise<number> {
   let written = 0;
+  // Zusätzliche Kanäle der Seite (ST-5): je Ereignis einmal (an der Zeile der Glocke, die es für jedes Ereignis gibt)
+  const all: OutboxRow[] = [];
   for (const r of rows) {
+    all.push(r);
+    if ((r.channel !== 'bell' && r.channel !== 'channels') || r.monitorId === null) continue;
+    for (const id of await channelsFor(db, r.pageId, r.payload.category)) all.push({ ...r, channel: `channel:${id}`, cls: 'owner' });
+  }
+  for (const r of all) {
+    if (r.channel === 'channels') continue;
     const payload = { ...r.payload };
     if (r.event === 'up' && r.monitorId !== null) {
       const merged = await db.exec("UPDATE status_outbox SET state = 'merged' WHERE monitor_id = ? AND channel = ? AND kind = 'alert' AND event = 'down' AND state = 'pending'",

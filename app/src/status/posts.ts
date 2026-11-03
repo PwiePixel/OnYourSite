@@ -128,7 +128,7 @@ export function incidentEmbed(page: StatusPageRow, inc: Incident): Record<string
   return embed;
 }
 
-async function embedOf(db: Db, incidentId: number): Promise<{ embed: Record<string, unknown>; page: StatusPageRow } | null> {
+export async function incidentContent(db: Db, incidentId: number): Promise<{ embed: Record<string, unknown>; page: StatusPageRow } | null> {
   const inc = (await loadIncidents(db, 'id = ?', [incidentId]))[0];
   if (!inc) return null;
   const row = await db.one('SELECT id, user_id, is_system, slug, title, description, theme, settings, is_published, is_blocked, blocked_reason, review_note, reviewed_at, rev, created_at FROM status_pages WHERE id = ?', [inc.pageId]);
@@ -190,7 +190,8 @@ async function queueEdit(db: Db, row: PostRow): Promise<void> {
 // - bestehende Beiträge: noch ausstehend → dirty, gepostet → bearbeiten, gescheitert ohne Nachricht → mit post neu;
 // - post: noch kein Beitrag im Kanal #status → einen anlegen (nur OnYourSites Seite, nur mit Bot status.v1).
 export async function syncIncidentPosts(db: Db, page: StatusPageRow, incidentId: number, opts: { post?: boolean } = {}): Promise<void> {
-  const rows = (await db.q('SELECT * FROM status_incident_posts WHERE incident_id = ? ORDER BY id FOR UPDATE', [incidentId])).map(postFrom);
+  await syncChannelPosts(db, page, incidentId, !!opts.post);
+  const rows = (await db.q("SELECT * FROM status_incident_posts WHERE incident_id = ? AND target NOT LIKE 'channel:%' ORDER BY id FOR UPDATE", [incidentId])).map(postFrom);
   // Neu posten nur auf Wunsch und solange die Seite erreichbar ist (offline bleibt der Vorfall auf der Seite)
   const fresh = !!opts.post && (await pagePostable(db, page));
   for (const row of rows) {
@@ -219,7 +220,8 @@ export async function syncIncidentPosts(db: Db, page: StatusPageRow, incidentId:
 // Ergebnis (removing).
 export async function removeIncidentPosts(db: Db, incidentId: number): Promise<void> {
   const ref = incidentRef(incidentId);
-  const rows = (await db.q('SELECT * FROM status_incident_posts WHERE incident_id = ? ORDER BY id FOR UPDATE', [incidentId])).map(postFrom);
+  await removeChannelPosts(db, incidentId);
+  const rows = (await db.q("SELECT * FROM status_incident_posts WHERE incident_id = ? AND target NOT LIKE 'channel:%' ORDER BY id FOR UPDATE", [incidentId])).map(postFrom);
   // Offene Bearbeitungen braucht niemand mehr (eine schon abgeholte läuft zu Ende und ändert nichts)
   await db.exec("UPDATE community_outbox SET done_at = NOW(), last_error = 'cancelled' WHERE ref = ? AND action = 'status.edit' AND done_at IS NULL AND claimed_at IS NULL", [ref]);
   for (const row of rows) {
@@ -236,6 +238,50 @@ export async function removeIncidentPosts(db: Db, incidentId: number): Promise<v
       }
       for (const j of jobs) await closeJob(db, Number(j.id), 'cancelled');
     }
+    await db.exec('DELETE FROM status_incident_posts WHERE id = ?', [row.id]);
+  }
+}
+
+// ---------------------------------------------------------------- Webhook-Kanäle der Seite (ST-5)
+
+// Beiträge in den Discord-Kanälen der Seite (Ereignis „Incident updates“) gehen nicht über den Bot, sondern als
+// Zeile in status_outbox (Art incident) an den Benachrichtigungsdienst – er postet oder bearbeitet mit dem aktuellen
+// Stand. Neu nur für eine erreichbare Seite (online, nicht gesperrt).
+export async function queueChannelPost(db: Db, pageId: number, channelId: number, postId: number, incidentId: number, op: 'post' | 'edit' | 'delete', messageId: string | null = null): Promise<void> {
+  const t = now();
+  // Ein noch wartender Auftrag für denselben Beitrag genügt (er nimmt beim Senden den aktuellen Stand)
+  // Läuft schon einer (vielleicht gerade beim Senden): merken, dass sich etwas geändert hat – der Dienst bearbeitet danach
+  if (op !== 'delete' && (await db.value("SELECT 1 FROM status_outbox WHERE channel = ? AND kind = 'incident' AND state = 'pending' AND payload LIKE ?", ['channel:' + channelId, `%"post_id":${postId},%`]))) {
+    await db.exec('UPDATE status_incident_posts SET dirty = 1 WHERE id = ?', [postId]);
+    return;
+  }
+  await db.exec(`INSERT INTO status_outbox (page_id, monitor_id, kind, class, channel, event, payload, state, attempts, next_at, created_at)
+      VALUES (?, NULL, 'incident', 'owner', ?, 'incident', ?, 'pending', 0, ?, ?)`,
+  [pageId, 'channel:' + channelId, JSON.stringify({ post_id: postId, incident_id: incidentId, op, ...(messageId ? { message_id: messageId } : {}) }), t, t]);
+}
+
+async function syncChannelPosts(db: Db, page: StatusPageRow, incidentId: number, post: boolean): Promise<void> {
+  const rows = (await db.q("SELECT * FROM status_incident_posts WHERE incident_id = ? AND target LIKE 'channel:%' ORDER BY id FOR UPDATE", [incidentId])).map(postFrom);
+  for (const row of rows) {
+    const channelId = Number(row.target.slice('channel:'.length));
+    if (row.state === 'posted' || row.state === 'queued') await queueChannelPost(db, page.id, channelId, row.id, incidentId, row.messageId ? 'edit' : 'post');
+  }
+  if (!post || !page.published || page.blocked) return;
+  const channels = await db.q("SELECT id, events FROM status_channels WHERE page_id = ? AND type = 'discord' AND is_enabled = 1 AND verified_at IS NOT NULL", [page.id]);
+  for (const c of channels) {
+    if (!String(c.events ?? '').split(',').includes('incident')) continue;
+    const target = 'channel:' + Number(c.id);
+    if (rows.some((r) => r.target === target)) continue;
+    const res = await db.exec("INSERT IGNORE INTO status_incident_posts (incident_id, target, channel_id, state, dirty, updated_at) VALUES (?, ?, NULL, 'queued', 0, ?)", [incidentId, target, now()]);
+    if (res.affectedRows) await queueChannelPost(db, page.id, Number(c.id), res.insertId, incidentId, 'post');
+  }
+}
+
+async function removeChannelPosts(db: Db, incidentId: number): Promise<void> {
+  const rows = (await db.q("SELECT p.*, i.page_id FROM status_incident_posts p JOIN status_incidents i ON i.id = p.incident_id WHERE p.incident_id = ? AND p.target LIKE 'channel:%' FOR UPDATE", [incidentId]));
+  for (const r of rows) {
+    const row = postFrom(r);
+    if (row.messageId !== null) await queueChannelPost(db, Number(r.page_id), Number(row.target.slice('channel:'.length)), row.id, incidentId, 'delete', row.messageId);
     await db.exec('DELETE FROM status_incident_posts WHERE id = ?', [row.id]);
   }
 }
@@ -259,7 +305,7 @@ async function preparePost(db: Db, job: OutboxJob): Promise<Prepared> {
       return { send: false, reason: 'cancelled' };
     }
   }
-  const found = await embedOf(db, row.incidentId);
+  const found = await incidentContent(db, row.incidentId);
   if (!found && row.state !== 'removing') return { send: false, reason: 'skipped' };
   // Inzwischen offline (oder die Adresse gehört einer anderen Seite): nicht posten. Eine Nachfrage (recheck) läuft
   // weiter – der Bot hat vielleicht schon gepostet.
@@ -284,7 +330,7 @@ async function preparePost(db: Db, job: OutboxJob): Promise<Prepared> {
 async function prepareEdit(db: Db, job: OutboxJob): Promise<Prepared> {
   const row = await lockPost(db, Number(job.data?.post_id ?? 0));
   if (!row || row.state !== 'posted' || row.messageId === null) return { send: false, reason: 'skipped' };
-  const found = await embedOf(db, row.incidentId);
+  const found = await incidentContent(db, row.incidentId);
   if (!found) return { send: false, reason: 'skipped' };
   return { send: true, data: { channel_id: row.channelId, message_id: row.messageId, message: { embeds: [found.embed] } } };
 }

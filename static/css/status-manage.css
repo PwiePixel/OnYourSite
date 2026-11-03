@@ -170,3 +170,14 @@
 .st-m-r-part::before { background: #f97316; }
 .st-m-r-part .st-m-state { background: rgba(249, 115, 22, .14); color: #fb923c; }
 #stmHead > .st-m-kpis { margin-top: 12px; }
+
+/* Zusätzliche Alarm-Kanäle (ST-5) */
+.st-m-channels { display: flex; flex-direction: column; gap: 8px; }
+.st-m-ch { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, .03); border: 1px solid rgba(255, 255, 255, .06); }
+.st-m-ch > i { font-size: 20px; color: #a1a1aa; }
+.st-m-ch-l { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; }
+.st-m-ch-l b { color: #fff; font-weight: 600; overflow-wrap: anywhere; }
+.st-m-ch-l small { color: #a1a1aa; font-size: 12px; overflow-wrap: anywhere; }
+.st-m-ch-a { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-m-warn { display: flex; align-items: center; gap: 10px; color: #fcd34d; border-color: rgba(245, 158, 11, .3); background: rgba(245, 158, 11, .08); }
+.st-m-check[hidden] { display: none; }
