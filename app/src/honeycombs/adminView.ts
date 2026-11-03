@@ -23,6 +23,7 @@ import { refundableValue, type PurchaseRow } from './shop.js';
 import { premiumReady } from './premium.js';
 import { REVERSIBLE, reversedIds } from './teamTools.js';
 import { CODE_MAX_AMOUNT, codeStatus, type CodeRow } from './codes.js';
+import { mailBudget } from './outbox.js';
 import { bulkFromSession } from './bulkAction.js';
 import { Session } from '../web/session.js';
 
@@ -385,8 +386,8 @@ async function offers(csrf: string, now: string): Promise<string> {
 // ---------------------------------------------------------------- Regeln zum Verdienen
 
 async function rules(csrf: string): Promise<string> {
-  const settings: HcSettings & EarnLimits = { ...await hcSettings(), ...await earnLimits() };
-  const ruleFields: Array<[keyof (HcSettings & EarnLimits), [string, string]]> = [
+  const settings: HcSettings & EarnLimits & { mail_per_run: number } = { ...await hcSettings(), ...await earnLimits(), mail_per_run: await mailBudget() };
+  const ruleFields: Array<[keyof (HcSettings & EarnLimits) | 'mail_per_run', [string, string]]> = [
     ['daily', ['Active day', 'For opening the editor (once a day)']],
     ['profile', ['Complete profile', 'Once: profile picture, bio and at least 3 links']],
     ['views', ['Visitors', 'Per step of page views (one step a day, up to ' + HC_MAX_VIEW_REWARDS + ' times)']],
@@ -394,12 +395,13 @@ async function rules(csrf: string): Promise<string> {
     ['streak_week', ['7-day streak', 'Bonus every 7 days in a row']],
     ['streak_month', ['30-day streak', 'Bonus every 30 days in a row (instead of the 7-day bonus that day)']],
     ['daily_cap', ['Daily limit', 'Most honeycombs one user can get per day from automatic rewards (not daily, streaks, gifts or codes)']],
+    ['mail_per_run', ['Emails per run', 'Most “ends soon” and “has ended” emails the background job sends every 15 minutes']],
   ];
   let o = `                <div class="${CARD} p-5 sm:p-6 max-w-2xl">\n                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">\n                        <i class='bx bx-slider-alt text-2xl text-brand-400'></i>\n                        <h2 class="text-base font-semibold text-white">How users earn them</h2>\n                    </div>\n`;
   o += '                    <form action="/admin" method="POST" class="space-y-3" id="hcRulesForm">\n                        ' + csrf + '                        <input type="hidden" name="hc_action" value="settings">\n';
   for (const [key, [title, hint]] of ruleFields) {
     o += `                        <div class="flex items-center gap-3">\n                            <label class="flex-1 min-w-0" for="hcRule-${key}"><span class="block text-sm text-white">${e(title)}</span><span class="block text-xs text-gray-500">${e(hint)}</span></label>\n`
-      + `                            <input id="hcRule-${key}" type="number" name="${key}" min="${key === 'views_step' ? 1 : key === 'daily_cap' ? 50 : 0}" max="100000" step="1" value="${intval(settings[key])}" class="${IN} !w-28 text-right">\n                        </div>\n`;
+      + `                            <input id="hcRule-${key}" type="number" name="${key}" min="${key === 'views_step' || key === 'mail_per_run' ? 1 : key === 'daily_cap' ? 50 : 0}" max="${key === 'mail_per_run' ? 1000 : 100000}" step="1" value="${intval(settings[key])}" class="${IN} !w-28 text-right">\n                        </div>\n`;
   }
   o += '                        <p class="text-xs text-gray-500 pt-1">0 switches a reward off. Changes count from now on – nobody loses honeycombs they already have. Prices are set under <a href="/admin?hc_tab=catalogue#honeycombs" class="text-brand-400 hover:text-brand-300">Catalogue &amp; prices</a>.</p>\n'
     + `                        <button type="submit" class="${SUBMIT}"><i class='bx bx-save'></i> Save</button>\n                    </form>\n                </div>\n`;

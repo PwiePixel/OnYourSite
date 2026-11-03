@@ -67,18 +67,19 @@ continue" below.
 | 39 | HC-7a | Time-limited lifecycle and jobs runner: `app/src/jobs/registry.ts` (`registerJob`, `registerNightly`, `GET_LOCK` per job, schema minimum, `oys_meta['jobs']` with `at`/`every` for the status page's `job:runner`), `cli.js jobs:tick [--force]` with its own pool of 3, the honeycomb job `app/src/honeycombs/job.ts` (reconcile retries after 30 s, bell reminders at 7/3/1 days with the loss-preview lines, expiry once per lot with bell, marker and reconcile, nightly entitlement repair), `LIFECYCLE_READY` on (admins can switch on timed options – Premium can be sold), expiry banners in the shop (ends within 3 days: hide for today; Premium ended within 14 days: dismiss), installer `onyoursite-jobs.service`/`.timer` (written and enabled by `write_timers`, stopped by `--reset`, removed when an update goes back to PHP) (on `feature/hc7a-lifecycle`, based on `feature/hc8-streaks`; tests `app/test/hc-jobs.db.test.ts`, `cli.test.ts`, `install-sh.test.ts`, browser flow `tests/e2e/hc-lifecycle.js`) | Built and reviewed |
 | 40 | HC-6b | Shop admin III: *Reverse* for rewards and gifts (`reversal/x<id>`, once, never below 0, bell, audit) in the user details and the new *Ledger* sub-tab (filters reason, user, dates; 50 per page), *Freeze*/*Unfreeze* with a reason the user sees (earning and buying stop, unlocks keep working), honeycombs for several users (email, `#id`, `@name` or page address; up to 200; preview from the session for 15 minutes with unclear/missing entries and “below 0” warnings; *Confirm* books once per account with the form's key) – `app/src/honeycombs/teamTools.ts`, `bulkAction.ts` (on `feature/hc6b-admin`, based on `feature/hc7a-lifecycle`; tests `app/test/hc-admin3.http.test.ts`, browser flow `tests/e2e/hc-admin3.js`) | Built and reviewed |
 | 41 | HC-9 | Event codes: schema step 20 (`hc_codes`), `app/src/honeycombs/codes.ts` (normalised codes, once per account `code/c<id>`, `max_uses` counted under the account lock – the last place goes to exactly one account, window, `disabled_at`, minimum account age, frozen accounts, 5 wrong tries per 15 minutes), `hc-redeem` in the editor API (403 in admin mode), the *Redeem a code* card and wallet button, the rule *Event codes*, *Admin → Honeycombs → Codes* (create, list with uses and status, *Disable* after the dialog, audit) (on `feature/hc9-codes`, based on `feature/hc6b-admin`; tests `app/test/hc-codes.http.test.ts`, browser flow `tests/e2e/hc-codes.js`) | Built and reviewed |
+| 42 | HC-7b | Reminder and "ended" emails: schema step 21 (`hc_mail_outbox`, `hc_accounts.mail_reminders`), `app/src/honeycombs/outbox.ts` (queued in the transaction of the change, once per ref – `rem2:<ent>:<end>` at reminder stage 2 for the last pack, `end:<ent>:<end>` on expiry, a full refund with *Also remove* and a revoke by the team, only when the loss preview has lines; sent by the honeycomb job, budget per run in *Admin → Honeycombs → Earning rules* (default 100), 5 tries, reminders older than 3 days dropped, rows older than 30 days removed at night), template `email/unlock_reminder.json`, the switch *Email me before an unlock ends* (`shop-reminders`, 403 in admin mode) (on `feature/hc7b-mails`, based on `feature/hc9-codes`; tests `app/test/hc-mails.db.test.ts`, browser flow `tests/e2e/hc-mails.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
-- Shop: HC-7b (HC-8, HC-7a, HC-6b and HC-9 are on their branches).
+- Shop: done for v1 (HC-8, HC-7a, HC-6b, HC-9 and HC-7b are on their branches); auto-renewal (HC-7c) comes after the Premium sale has started.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9) (both on their branches) – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9), 21 shop mail (HC-7b) (all on their branches) – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
@@ -115,6 +116,8 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
      "page already over a lowered limit" rule); the terms page doesn't show the limits and both prices yet; nobody is
      told when a refund takes code pages offline (needs notifications with `ref`, CS-5); the editor bootstrap still
      lacks `pages[].code` and the code summary (CS-6).
+   - HC-7b: an "ended" mail already queued still goes out if the user renews before the job sends it (a switch turned
+     off before sending is respected); the job and its nightly run now need schema step 21.
    - HC-9: a code disabled between the look-up and the booking answers "used up"; the end of a code's window is not
      checked again under the lock; codes are counted per account (5 wrong tries per address, 50 in total per 15
      minutes) – there is no limit across accounts.

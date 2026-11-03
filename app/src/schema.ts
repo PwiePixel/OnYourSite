@@ -47,6 +47,7 @@ export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnam
 export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeichertes max_on_pages 0 aus der dunklen Phase wird 1
 export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_day, best_streak), aus den Tagesbuchungen nachgetragen
 export const V_SHOP_EVENT_CODES = 20; // Honigwaben: Event-Codes des Teams (hc_codes)
+export const V_SHOP_MAIL = 21; // Honigwaben: Mails „endet bald“/„beendet“ (hc_mail_outbox, hc_accounts.mail_reminders)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -91,6 +92,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_CODE_SLOTS_LIVE, name: 'codeSlotsLive', run: codeSlotsLive },
   { version: V_SHOP_STREAKS, name: 'shopStreaks', run: shopStreaks },
   { version: V_SHOP_EVENT_CODES, name: 'shopEventCodes', run: shopEventCodes },
+  { version: V_SHOP_MAIL, name: 'shopMail', run: shopMail },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1550,4 +1552,25 @@ async function shopEventCodes(conn: PoolConnection): Promise<void> {
         created_at DATETIME NOT NULL,
         UNIQUE KEY uq_code (code)
     ) ${OPTS}`);
+}
+
+// HC-7b: Mails des Honigwaben-Jobs – in derselben Transaktion wie die Glocke geschrieben, danach in Ruhe verschickt.
+// ref ist je Anlass eindeutig (rem2:<Berechtigung>:<Ende>, end:<Berechtigung>:<Ende>); vars = JSON mit Rohwerten.
+async function shopMail(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_mail_outbox (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        template VARCHAR(40) NOT NULL,
+        ref VARCHAR(80) NOT NULL,
+        subject VARCHAR(200) NOT NULL,
+        vars TEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        sent_at DATETIME NULL,
+        tries TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        last_error VARCHAR(200) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_ref (user_id, ref),
+        KEY idx_pending (sent_at, id)
+    ) ${OPTS}`);
+  // Schalter „Email me before an unlock ends“ (Standard an)
+  await addColumn(conn, 'hc_accounts', 'mail_reminders', 'TINYINT(1) NOT NULL DEFAULT 1');
 }

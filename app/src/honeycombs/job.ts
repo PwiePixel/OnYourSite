@@ -5,10 +5,11 @@
 // Nachts: Freischaltungen im Buch ohne Berechtigung nachtragen.
 // Jede Zeile in ihrer eigenen kurzen Kontosperre; Glocke und Zustand (reminded, expiry_done_at) in derselben
 // Transaktion – ein zweiter Lauf wiederholt nichts, ein Absturz verliert nichts. Ist das Budget aufgebraucht, kommt der
-// Rest im nächsten Lauf. Automatisches Verlängern (HC-7c) und Mails (HC-7b) gehören nicht hierher.
+// Rest im nächsten Lauf. Mails (HC-7b): Stufe 2 der Erinnerung und das Ende, verschickt im Schritt „mails“ (outbox.ts).
+// Automatisches Verlängern (HC-7c) gehört nicht hierher.
 import type { Db, Row } from '../db.js';
 import { intval, phpStr } from '../php.js';
-import { V_SHOP_CATALOGUE } from '../schema.js';
+import { V_SHOP_MAIL } from '../schema.js';
 import { notify } from '../notify/notify.js';
 import { registerJob, registerNightly, type JobContext } from '../jobs/registry.js';
 import { addSeconds, dayLabel, nowStr, toUnix } from './clock.js';
@@ -17,6 +18,7 @@ import { isActive, stage } from './entitlements.js';
 import { feature, lossPreview } from './features.js';
 import { markReconcile, reconcileNow } from './reconcile.js';
 import { poolDb } from './util.js';
+import { laterLots, mailBudget, pruneShopMails, queueEndedMail, queueReminderMail, sendShopMails } from './outbox.js';
 
 export const RECONCILE_BATCH = 200;
 const ROWS_PER_STEP = 500;
@@ -32,12 +34,6 @@ export function endsText(title: string, expiresAt: string, now: string): string 
   return title + ' ends in ' + days + ' days';
 }
 
-// Weitere Pakete derselben Funktion (stapelbar), die noch laufen – oder ebenfalls abgelaufen und noch nicht verarbeitet
-// sind: dann endet nur „ein Paket“ (die volle Meldung mit „was wegfällt“ kommt mit dem letzten)
-async function otherActiveLots(db: Db, uid: number, key: string, lot: number, now: string): Promise<number> {
-  const rows = await db.q('SELECT quantity, permanent, expires_at, expiry_done_at FROM hc_entitlements WHERE user_id = ? AND feature = ? AND lot <> ?', [uid, key, lot]);
-  return rows.filter((r) => isActive(r, now) || (intval(r.quantity) > 0 && r.expiry_done_at === null && r.expires_at !== null)).length;
-}
 
 const outOfTime = (c: JobContext): boolean => Date.now() > c.deadline;
 
@@ -78,13 +74,16 @@ export async function reminderStep(c: JobContext, now: string = nowStr()): Promi
       if (!e || !isActive(e, now) || e.expires_at === null) return false;
       const st = stage(phpStr(e.expires_at), now);
       if (st <= intval(e.reminded)) return false;
+      const before = intval(e.reminded);
       await db.exec('UPDATE hc_entitlements SET reminded = ?, updated_at = ? WHERE id = ?', [st, now, intval(e.id)]);
       const key = phpStr(e.feature);
-      const others = await otherActiveLots(db, uid, key, intval(e.lot), now);
+      const others = await laterLots(db, uid, key, intval(e.lot), phpStr(e.expires_at), now, false);
       const title = others > 0 ? endsText('A pack of ' + titleOf(key), phpStr(e.expires_at), now) : endsText(titleOf(key), phpStr(e.expires_at), now);
       const lines = others > 0 ? [] : await lossPreview(key, uid, db);
       const body = [(others > 0 ? '' : 'It ends on ' + dayLabel(phpStr(e.expires_at)) + '. ') + 'Renew it in the shop to keep it.', ...lines].join(' ');
       await notify(uid, 'unlock', title, body, linkOf(key), { db });
+      // 3 Tage vorher (Stufe 2) zusätzlich eine Mail – für das letzte Paket, wenn das Konto sie nicht abgeschaltet hat
+      if (st >= 2 && before < 2 && others === 0) await queueReminderMail(db, uid, intval(e.id), key, phpStr(e.expires_at));
       return true;
     }));
     if (out === true) sent++;
@@ -105,10 +104,11 @@ export async function expiryStep(c: JobContext, now: string = nowStr()): Promise
       if (!e || e.expiry_done_at !== null || isActive(e, now) || intval(e.quantity) <= 0 || intval(e.permanent) === 1) return false;
       await db.exec('UPDATE hc_entitlements SET expiry_done_at = ?, updated_at = ? WHERE id = ?', [now, now, intval(e.id)]);
       const key = phpStr(e.feature);
-      const others = await otherActiveLots(db, uid, key, intval(e.lot), now);
+      const others = await laterLots(db, uid, key, intval(e.lot), phpStr(e.expires_at), now, true);
       const lines = others > 0 ? [] : await lossPreview(key, uid, db);
       await notify(uid, 'unlock', others > 0 ? 'A pack of ' + titleOf(key) + ' has ended' : titleOf(key) + ' has ended',
         ['It ended on ' + dayLabel(phpStr(e.expires_at)) + '. You can renew it in the shop.', ...lines].join(' '), linkOf(key), { db });
+      if (others === 0) await queueEndedMail(db, uid, intval(e.id), key, phpStr(e.expires_at));
       await markReconcile(db, uid, now);
       return true;
     }));
@@ -154,7 +154,8 @@ export async function repairEntitlements(c: JobContext): Promise<number> {
 // Die ganze Aufgabe; ein Fehler eines Schritts wird gemeldet, die nächsten laufen trotzdem
 export async function honeycombJob(c: JobContext): Promise<void> {
   const errors: string[] = [];
-  const steps: Array<[string, (c: JobContext) => Promise<number>]> = [['reconcile', (x) => reconcileStep(x)], ['reminders', (x) => reminderStep(x)], ['expiry', (x) => expiryStep(x)]];
+  const steps: Array<[string, (c: JobContext) => Promise<number>]> = [['reconcile', (x) => reconcileStep(x)], ['reminders', (x) => reminderStep(x)], ['expiry', (x) => expiryStep(x)],
+    ['mails', async (x) => sendShopMails({ budget: await mailBudget(), deadline: x.deadline })]];
   for (const [name, fn] of steps) {
     try {
       const n = await fn(c);
@@ -173,11 +174,13 @@ let registered = false;
 export function registerHoneycombJobs(): void {
   if (registered) return;
   registered = true;
-  registerJob({ name: 'honeycombs', everyMinutes: 15, minSchema: V_SHOP_CATALOGUE, budgetSec: 240, run: honeycombJob });
+  registerJob({ name: 'honeycombs', everyMinutes: 15, minSchema: V_SHOP_MAIL, budgetSec: 240, run: honeycombJob });
   registerNightly('honeycombs', async (c) => {
     const n = await repairEntitlements(c);
     if (n > 0) c.log(`repaired entitlements: ${n}`);
-  }, V_SHOP_CATALOGUE);
+    const old = await pruneShopMails();
+    if (old > 0) c.log(`old mails removed: ${old}`);
+  }, V_SHOP_MAIL);
 }
 
 export function resetHoneycombJobsForTests(): void {
