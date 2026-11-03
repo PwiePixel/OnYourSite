@@ -2763,6 +2763,60 @@
     return '<div class="shop-banner ' + kind + '"><i class="bx ' + icon + '"></i><span>' + esc(text) + '</span></div>';
   }
 
+  // Hinweise „endet bald“ (≤ 3 Tage, für heute ausblendbar) und „Premium ist beendet“ (≤ 14 Tage, je Ende ausblendbar).
+  // Ausblenden merkt sich der Browser (localStorage); geht das nicht, erscheint der Hinweis eben wieder.
+  function hcStore() { try { return window.localStorage || null; } catch (e) { return null; } }
+  function hcDismissed(key, val) {
+    var st = hcStore();
+    try { return !!st && st.getItem('oys-hc-' + key) === val; } catch (e) { return false; }
+  }
+  function hcDismiss(key, val) {
+    var st = hcStore();
+    try { if (st) st.setItem('oys-hc-' + key, val); } catch (e) { /* nicht gespeichert: kommt beim nächsten Laden wieder */ }
+  }
+  // Tage seit einem Zeitpunkt der Seite ('Y-m-d H:i:s'; Ortszeit des Browsers reicht für „in den letzten 14 Tagen“)
+  function daysSince(v) {
+    var p = String(v || '').split(/\D/);
+    var t = new Date(+p[0], p[1] - 1, +p[2], +p[3] || 0, +p[4] || 0).getTime();
+    return isNaN(t) ? Infinity : (Date.now() - t) / 86400000;
+  }
+  // Kalendertage bis zu einem Zeitpunkt der Seite (0 = heute, 1 = morgen), wie die Glocke zählt
+  function calendarDaysUntil(v) {
+    var p = String(v || '').split(/\D/);
+    var end = new Date(+p[0], p[1] - 1, +p[2]), now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return isNaN(end.getTime()) ? Infinity : Math.round((end - today) / 86400000);
+  }
+  function todayKey() { var d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+  function endBanners(st) {
+    var out = '', seen = {};
+    st.owned.forEach(function (u) {
+      if (seen[u.feature] || u.permanent || !u.expiresAt) return;
+      var c = shopCard(u.feature);
+      var renew = c ? '<button type="button" class="btn-secondary" data-shop-renew="' + esc(u.feature) + '">Renew</button>' : '';
+      var left = calendarDaysUntil(u.expiresAt);
+      if (u.active && left <= 3) {
+        var key = 'soon:' + u.feature + ':' + u.expiresAt;
+        if (hcDismissed(key, todayKey())) return;
+        seen[u.feature] = 1;
+        // Läuft danach noch ein weiteres Paket, endet nur dieses eine
+        var more = st.owned.some(function (x) { return x !== u && x.feature === u.feature && x.active && (x.permanent || String(x.expiresAt) > String(u.expiresAt)); });
+        var what = (more ? 'A pack of ' : '') + u.title;
+        out += '<div class="shop-banner warn shop-end" data-end-key="' + esc(key) + '"><i class="bx bx-time-five"></i><span class="flex-1 min-w-0">' +
+          esc(what + (left <= 0 ? ' ends today' : left === 1 ? ' ends tomorrow' : ' ends in ' + plural(left, 'day', 'days')) + ' (' + fmtDate(u.expiresAt, true) + ').') + '</span>' +
+          '<span class="shop-end-actions">' + renew + '<button type="button" class="btn-ghost" data-end-dismiss="day">Hide for today</button></span></div>';
+      } else if (!u.active && u.feature === 'premium' && daysSince(u.expiresAt) <= 14) {
+        var k2 = 'ended:' + u.feature + ':' + u.expiresAt;
+        if (hcDismissed(k2, '1')) return;
+        seen[u.feature] = 1;
+        out += '<div class="shop-banner ended shop-end" data-end-key="' + esc(k2) + '"><i class="bx bx-info-circle"></i><span class="flex-1 min-w-0">' +
+          esc('Premium ended on ' + fmtDate(u.expiresAt) + '. Your content is kept – renew it to get the Premium extras back.') + '</span>' +
+          '<span class="shop-end-actions">' + renew + '<button type="button" class="btn-ghost" data-end-dismiss="end">Dismiss</button></span></div>';
+      }
+    });
+    return out;
+  }
+
   function renderShop() {
     var st = shop.st, root = $('#tab-honeycombs'), html = '';
     if (st.readOnly) html += shopBanner('info', 'bx-mask', 'Admin mode – you can look around, but buying is turned off. Use the admin area to give honeycombs or unlocks.');
@@ -2770,6 +2824,7 @@
       html += shopBanner('warn', 'bx-pause-circle', 'Your honeycombs are on hold' + (st.frozenReason ? ': ' + st.frozenReason.replace(/[.\s]+$/, '') : '') +
         '. Earning and buying are paused – your unlocks keep working.');
     }
+    html += endBanners(st);
     var sk = st.earn && st.earn.streak;
     // Serie: „Day 4 · best 12“ (nur, wenn es schon eine gab)
     var chip = sk && (sk.days > 0 || sk.best > 0)
@@ -3017,6 +3072,11 @@
       }
       if ((el = t.closest('[data-shop-buy]'))) { openPurchase(el.dataset.shopBuy); return; }
       if ((el = t.closest('[data-shop-renew]'))) { renewFeature(el.dataset.shopRenew); return; }
+      if ((el = t.closest('[data-end-dismiss]'))) {
+        var ban = el.closest('[data-end-key]');
+        if (ban) { hcDismiss(ban.dataset.endKey, el.dataset.endDismiss === 'day' ? todayKey() : '1'); ban.remove(); }
+        return;
+      }
       if ((el = t.closest('[data-shop-go]'))) { shop.focus = el.dataset.shopGo; shopFocus(); return; }
       if ((el = t.closest('[data-shop-open]'))) {
         var oc = shopCard(el.dataset.shopOpen);

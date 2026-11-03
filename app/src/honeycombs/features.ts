@@ -62,8 +62,8 @@ export interface Feature {
   href?: string; // Ziel nach dem Kauf, z. B. '#code'
 }
 
-// Zeitlich begrenzte Optionen lassen sich erst einschalten, wenn Erinnerungen und das Ende verarbeitet werden (HC-7a)
-export let LIFECYCLE_READY = false;
+// Zeitlich begrenzte Optionen lassen sich einschalten: Erinnerungen und das Ende verarbeitet die Hintergrundaufgabe (HC-7a)
+export let LIFECYCLE_READY = true;
 export function setLifecycleReadyForTests(v: boolean): void {
   LIFECYCLE_READY = v;
 }

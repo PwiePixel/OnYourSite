@@ -1939,6 +1939,42 @@ ProtectHome=true
 PrivateTmp=true
 EOF
   fi
+  # Hintergrundaufgaben (cli.js jobs:tick, alle 5 Minuten): Erinnerungen und Ende zeitlich begrenzter Freischaltungen,
+  # Abgleiche, nächtliche Prüfungen. Ein Lauf auf einmal (oneshot); jede Aufgabe sperrt sich zusätzlich selbst.
+  if [ -n "$NODE" ]; then
+    cat > "$UNITS/onyoursite-jobs.service" <<EOF
+# OnYourSite – written by server/install.sh
+[Unit]
+Description=OnYourSite background jobs (honeycombs: reminders, ends, checks)
+After=mariadb.service
+
+[Service]
+Type=oneshot
+User=$WEB
+Group=$WEB
+WorkingDirectory=$CODE/app
+Environment=NODE_ENV=production
+ExecStart=$NODE $CODE/app/dist/cli.js jobs:tick
+TimeoutStartSec=10min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+EOF
+    cat > "$UNITS/onyoursite-jobs.timer" <<EOF
+# OnYourSite – written by server/install.sh
+[Unit]
+Description=OnYourSite background jobs every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+  fi
   cat > "$UNITS/onyoursite-weekly-report.timer" <<EOF
 # OnYourSite – written by server/install.sh
 [Unit]
@@ -2005,6 +2041,7 @@ EOF
   systemctl daemon-reload
   systemctl enable --now onyoursite-weekly-report.timer onyoursite-backup.timer >/dev/null 2>&1
   if [ -x "$ACME" ]; then systemctl enable --now onyoursite-certs.timer >/dev/null 2>&1; fi
+  if [ -f "$UNITS/onyoursite-jobs.timer" ]; then systemctl enable --now onyoursite-jobs.timer >/dev/null 2>&1; fi
 }
 
 # write_if_changed DATEI [RECHTE] – nur schreiben, wenn sich der Inhalt ändert (Inhalt über stdin); 0 = geändert
@@ -2747,6 +2784,9 @@ revert_release() {
   rm -rf "$WEB_UNIT.d"
   if [ "$MIGRATE" = 1 ]; then
     systemctl disable --now onyoursite-web >/dev/null 2>&1
+    # Zurück zu PHP: die Hintergrundaufgaben gehören zur Node-Version
+    systemctl disable --now onyoursite-jobs.timer >/dev/null 2>&1 || true
+    rm -f "${UNITS:-/etc/systemd/system}/onyoursite-jobs.service" "${UNITS:-/etc/systemd/system}/onyoursite-jobs.timer"
     echo
     info "The log of the new version (journalctl -u onyoursite-web):"
     web_log 20
@@ -3080,6 +3120,8 @@ case $MODE in
     # Die Webseite und die Dienste der Statusseiten halten Verbindungen und Einstellungen – sie starten gleich mit den
     # neuen wieder
     systemctl stop onyoursite-web >/dev/null 2>&1 || true
+    # Keine Hintergrundaufgabe gegen die Datenbank, die gleich gelöscht wird (die Neuinstallation startet sie wieder)
+    systemctl stop onyoursite-jobs.timer onyoursite-jobs.service >/dev/null 2>&1 || true
     status_load
     if declare -F status_units_stop >/dev/null; then status_units_stop; fi
     # Kunden-Hostnamen bei Cloudflare zuerst (sie hielten sonst die Domains der Kunden fest); eigene Domains bleiben

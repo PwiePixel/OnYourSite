@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/PwiePixel/OnYourSite/main/server/in
 - a **Cloudflare Tunnel** (if the DNS is at Cloudflare): the installer creates the tunnel, points `on-your.site`, `www` and every subdomain to it and removes old records and tunnels of the website – visitors come in through Cloudflare and the server needs no open web ports
 - **HTTPS for the domain and every subdomain** (`*.on-your.site` – also the ones added later) with a free Let’s Encrypt certificate that **renews itself**; if a renewal ever fails, all admins get an email two weeks before it runs out
 - **protection**: a firewall, fail2ban against password guessing on SSH, automatic security updates, a database that only answers the server itself, a website service that may only write to its own folders, hardened network settings – and, if you like, SSH logins only with a key
-- the **weekly report** every Monday at 8:00 and a **backup** every night
+- the **weekly report** every Monday at 8:00, a **backup** every night and the **background jobs** every 5 minutes (reminders and the end of time-limited unlocks)
 - your **admin account**
 - the **Discord bot** as a system service (optional)
 - **safe updates**: a backup first, then the new version is built and checked next to the running one, and the switch only happens when it works – if not, the previous version comes back by itself
@@ -237,7 +237,7 @@ When it asks for the folder with the files from the old server, enter `/root/imp
 | Cloudflare | API token in `/etc/onyoursite/cloudflare.env`, tunnel token in `/etc/onyoursite/tunnel.env` (only root), service `onyoursite-tunnel` |
 | Certificate | `/etc/ssl/onyoursite/` – issued and renewed by acme.sh (`/root/.acme.sh`) |
 | Apache | `/etc/apache2/sites-available/onyoursite.conf` (HTTPS and the way to the website; with the tunnel also `conf-available/onyoursite-tunnel.conf`) |
-| Timers | `onyoursite-weekly-report` (Mondays 8:00), `onyoursite-backup` (nightly), `onyoursite-certs` (daily) in `/etc/systemd/system` |
+| Timers | `onyoursite-weekly-report` (Mondays 8:00), `onyoursite-backup` (nightly), `onyoursite-certs` (daily), `onyoursite-jobs` (every 5 minutes: `node app/dist/cli.js jobs:tick`; `journalctl -u onyoursite-jobs` shows the runs) in `/etc/systemd/system` |
 | Status page services | `onyoursite-status` (the checks, locked out of this server and private networks), `onyoursite-status-notify` (alerts by email, bell and Discord), `onyoursite-status-local.timer` (local probes every minute) – written by the installer from `server/status-units.sh`. Incidents and maintenance are posted in the editor (*Status*, admins only). Backups leave out the raw check results (`status_checks`); the daily and hourly sums stay. |
 | Discord bot | `/opt/onyoursite-bot`, settings in `/etc/onyoursite-bot.env` (only root) |
 
