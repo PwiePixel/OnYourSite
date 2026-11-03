@@ -203,8 +203,13 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
     ['admin', g({ user_id: '9', amount: '-1', grant_ref: 'bbbbbbbbbbbbbbb3', _confirmed: '1' }), 3],
     ['admin', { hc_action: 'code_block', site_id: '999' }, 3], ['admin', { hc_action: 'code_block' }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: '  Selling\tstuff  ' + 'y'.repeat(250) }, 3],
+    // Seit CS-5 ändert ein zweites Sperren nichts („already blocked“) – dazwischen entsperren, damit jeder Aufruf in PHP
+    // und Node dasselbe tut
+    ['admin', { hc_action: 'code_unblock', site_id: '1' }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: '' }, 3],
+    ['admin', { hc_action: 'code_unblock', site_id: '1' }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: ['x'] }, 3],
+    ['admin', { hc_action: 'code_unblock', site_id: '1' }, 3],
     ['admin', { hc_action: 'code_block', site_id: '1', reason: '0' }, 3],
     ['admin', { hc_action: 'code_unblock', site_id: '2', reason: 'ignored' }, 3],
     ['admin', { hc_action: 'code_block', site_id: ' 3x', reason: '“Bad” <i>' }, 3],
@@ -217,6 +222,8 @@ test('admin handler: every action incl. invalid input', { skip: PHP_SKIP }, asyn
     ['code_admin', {}, 3], ['code_admin', { code_action: 'nope' }, 3], ['code_admin', { code_action: ['block'] }, 3], ['code_admin', { code_action: 'Block', site_id: '1' }, 3],
     ['code_admin', { code_action: 'block', site_id: '999' }, 3], ['code_admin', { code_action: 'block' }, 3],
     ['code_admin', { code_action: 'block', site_id: '2', reason: '  Phishing\t<b>x</b>  ' + 'z'.repeat(250) }, 3],
+    // Seite 3 ist oben schon gesperrt (hc_action=code_block): erst entsperren (seit CS-5 ändert ein zweites Sperren nichts)
+    ['code_admin', { code_action: 'unblock', site_id: '3' }, 3],
     ['code_admin', { code_action: 'block', site_id: '3', reason: '' }, 3],
     ['code_admin', { code_action: 'unblock', site_id: '2', reason: 'ignored' }, 3], ['code_admin', { code_action: 'unblock', site_id: ' 1x' }, 3],
     ['code_admin', { code_action: 'unblock', site_id: '999' }, 3],
@@ -336,7 +343,7 @@ function nodeCodeList(node: string): string {
 // Die Formulare senden jetzt code_action statt hc_action=code_*
 const asCodeAction = (s: string) => s.replace(/name="hc_action" value="code_(block|unblock)"/g, 'name="code_action" value="$1"');
 
-test('admin view: the grant form and balances keep the fields of PHP, the moved code page list is unchanged (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
+test('admin view: the grant form and balances keep the fields of PHP, the code page list shows every code page PHP shows (with data, after changes, and empty)', { skip: PHP_SKIP }, async () => {
   // Beide Datenbanken bekommen dieselben Aufrufe nacheinander: lag eine Minutengrenze dazwischen, zeigten die letzten
   // Buchungen verschiedene Uhrzeiten. Die Dumps werten „jetzt“ ohnehin gleich (normalize) – hier bekommt jede
   // Node-Buchung die Zeit der PHP-Buchung an derselben Stelle (Inhalt und Reihenfolge sind gleich, die IDs und die
@@ -365,7 +372,11 @@ test('admin view: the grant form and balances keep the fields of PHP, the moved 
     }
     assert.doesNotMatch(node, /bx-hive[^']*text-brand/, label);
     assert.doesNotMatch(node, /code_action|hc_action" value="code_|bx-code-alt|Code page/, label);
-    assert.equal(withoutDialogs(nodeCodeList(await nodeCodeView(DB.node))), withoutNativeConfirms(asCodeAction(php.codeList)), label);
+    // Seit CS-5 hat die Liste Filter, Suche, Quelltext und Löschen – sie ist nicht mehr gleich; jede Code-Seite, die PHP
+    // zeigt, steht aber auch hier (mit derselben Adresse)
+    const nodeList = nodeCodeList(await nodeCodeView(DB.node));
+    for (const m of php.codeList.matchAll(/href="([^"]+)\/" target="_blank"/g)) assert.ok(nodeList.includes(`href="${m[1]}/"`), label + ': ' + m[1]);
+    if (!/href="[^"]+\/" target="_blank"/.test(php.codeList)) assert.ok(!/target="_blank" rel="noopener noreferrer"/.test(nodeList), label + ': no code pages listed');
   }
 });
 

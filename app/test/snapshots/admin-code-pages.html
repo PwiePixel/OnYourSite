@@ -6,10 +6,16 @@
                             <i class='bx bx-key text-2xl text-brand-400'></i>
                             <h2 class="text-base font-semibold text-white">Give code access</h2>
                         </div>
-                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
+                        <form action="/admin" method="POST" class="space-y-4" id="codeAccessForm" data-confirm="Unlock for free?" data-confirm-text="This user gets it without paying honeycombs." data-confirm-ok="Unlock">
                             <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off">
                             <input type="hidden" name="code_action" value="unlock">
-                            <input type="hidden" name="item" value="code_page">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-1.5" for="codeItem">What</label>
+                                <select id="codeItem" name="item" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
+                                    <option value="code_page">Code page</option>
+                                    <option value="code_more">More code pages (needs the code page)</option>
+                                </select>
+                            </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-300 mb-1.5" for="codeUser">User</label>
                                 <select id="codeUser" name="user_id" required data-error-required="Please choose a user." class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm">
@@ -42,54 +48,75 @@
                     </div>
                 </div>
 
+                <div class="bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6" id="codeSettings">
+                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4"><i class='bx bx-slider-alt text-2xl text-brand-400'></i><h2 class="text-base font-semibold text-white">Limits</h2></div>
+                    <form action="/admin" method="POST" class="space-y-4" data-confirm="Save the code page limits?" data-confirm-text="They apply to every save right away. Pages already above a lowered limit can only get smaller." data-confirm-ok="Save">
+                        <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="settings">
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                            <div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="cs_max_on_pages">Pages that may show code</label><input class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm" type="number" id="cs_max_on_pages" name="max_on_pages" min="0" max="3" value="1"></div>
+                            <div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="cs_max_files">Files per page</label><input class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm" type="number" id="cs_max_files" name="max_files" min="1" max="100" value="30"></div>
+                            <div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="cs_max_file_kb">KB per file</label><input class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm" type="number" id="cs_max_file_kb" name="max_file_kb" min="16" max="1024" value="256"></div>
+                            <div><label class="block text-sm font-medium text-gray-300 mb-1.5" for="cs_max_total_kb">KB per page</label><input class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm" type="number" id="cs_max_total_kb" name="max_total_kb" min="256" max="5120" value="2048"></div>
+                        </div>
+                        <label class="flex items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="paused" value="1" class="mt-1"><span>Pause new code pages<small class="block text-xs text-gray-500">Existing ones keep running; nobody can create or move one.</small></span></label>
+                        <button type="submit" class="bg-white text-black hover:bg-gray-200 font-bold py-2.5 px-6 rounded-lg transition-all flex items-center gap-2"><i class='bx bx-save'></i> Save</button>
+                    </form>
+                </div>
                 <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden">
                     <div class="flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor">
                         <h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-code-alt text-xl text-brand-400'></i> Code pages <span class="text-gray-500 text-sm font-normal">3</span></h2>
                         <a href="/terms/code-pages" target="_blank" rel="noopener" class="text-sm text-gray-400 hover:text-white flex items-center gap-1 py-2">Rules for code pages <i class='bx bx-link-external'></i></a>
                     </div>
-                                        <div class="divide-y divide-bordercolor">
+                    <div class="px-5 sm:px-6 pt-4 flex flex-wrap items-center gap-2" id="codeFilters"><a href="/admin?cs=all#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-white !bg-white/10" aria-current="true">All <span class="text-gray-500">3</span></a><a href="/admin?cs=online#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors">Online <span class="text-gray-500">1</span></a><a href="/admin?cs=offline#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors">Offline</a><a href="/admin?cs=blocked#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors">Blocked <span class="text-gray-500">1</span></a><a href="/admin?cs=own#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors">Own address</a><a href="/admin?cs=page#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors">On a page address <span class="text-gray-500">0</span></a><form action="/admin#code-pages" method="GET" class="m-0 flex gap-2 ml-auto"><input type="hidden" name="cs" value="all"><input type="search" name="csq" value="" placeholder="Address, name or email" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 sm:!w-56" aria-label="Search code pages"><button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-search'></i> Search</button></form></div>
+                    <div class="divide-y divide-bordercolor">
                                                 <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
                             <div class="min-w-0 flex-1">
                                 <div class="flex items-center gap-2 flex-wrap">
-                                    <a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">miacode.oys.test:8080</a>
+                                    <a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="text-white font-medium hover:text-brand-400 break-all">miacode.oys.test:8080</a>
                                                                         <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Online</span>
                                                                     </div>
                                 <p class="text-xs text-gray-500 mt-1">Mia Code · Mia Müller (mia@test.de) · 2 files · 1 KB · 1,234 views · changed Oct 5, 2026</p>
                                                             </div>
-                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                            <a href="/admin?code_site=1#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors shrink-0"><i class='bx bx-code-block'></i> Source</a>
+                            <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
                                 <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="1">
                                 <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
                                 <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
                             </form>
-                                                    </div>
+                            <form action="/admin" method="POST" class="m-0 shrink-0 flex flex-wrap gap-2" data-confirm="Delete “miacode”?" data-confirm-text="Its files are deleted; the address stays reserved for nobody. This can’t be undone." data-confirm-ok="Delete" data-confirm-tone="danger" data-confirm-match="miacode" data-confirm-label="Type miacode to confirm" data-confirm-normalize="slug" data-confirm-into="confirm"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="delete"><input type="hidden" name="site_id" value="1"><input type="hidden" name="confirm" value=""><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" aria-label="Reason for deleting" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 !w-48"><button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-trash'></i> Delete</button></form>
+                        </div>
                                                 <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
                             <div class="min-w-0 flex-1">
                                 <div class="flex items-center gap-2 flex-wrap">
-                                    <a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">tomcode.oys.test:8080</a>
+                                    <a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="text-white font-medium hover:text-brand-400 break-all">tomcode.oys.test:8080</a>
                                                                         <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">Blocked</span>
                                                                     </div>
                                 <p class="text-xs text-gray-500 mt-1">Tom · tom@test.de (tom@test.de) · 1 files · 2 KB · 3 views · changed Oct 4, 2026</p>
                                                                 <p class="text-xs text-red-300 mt-1">Reason: Spam &lt;b&gt;</p>
                                                             </div>
-                                                        <form action="/admin" method="POST" class="m-0 shrink-0">
-                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="code_action" value="unblock"><input type="hidden" name="site_id" value="2">
+                            <a href="/admin?code_site=2#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors shrink-0"><i class='bx bx-code-block'></i> Source</a>
+                            <form action="/admin" method="POST" class="m-0 shrink-0" data-confirm="Unblock this code page?" data-confirm-text="Visitors see it again (if it is online)." data-confirm-ok="Unblock">
+                                <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="unblock"><input type="hidden" name="site_id" value="2">
                                 <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors"><i class='bx bx-check-circle'></i> Unblock</button>
                             </form>
-                                                    </div>
+                            <form action="/admin" method="POST" class="m-0 shrink-0 flex flex-wrap gap-2" data-confirm="Delete “tomcode”?" data-confirm-text="Its files are deleted; the address stays reserved for nobody. This can’t be undone." data-confirm-ok="Delete" data-confirm-tone="danger" data-confirm-match="tomcode" data-confirm-label="Type tomcode to confirm" data-confirm-normalize="slug" data-confirm-into="confirm"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="delete"><input type="hidden" name="site_id" value="2"><input type="hidden" name="confirm" value=""><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" aria-label="Reason for deleting" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 !w-48"><button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-trash'></i> Delete</button></form>
+                        </div>
                                                 <div class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
                             <div class="min-w-0 flex-1">
                                 <div class="flex items-center gap-2 flex-wrap">
-                                    <a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener" class="text-white font-medium hover:text-brand-400 break-all">quotecode.oys.test:8080</a>
+                                    <a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="text-white font-medium hover:text-brand-400 break-all">quotecode.oys.test:8080</a>
                                                                         <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-white/10 text-gray-400">Offline</span>
                                                                     </div>
                                 <p class="text-xs text-gray-500 mt-1">&lt;script&gt;alert(1)&lt;/script&gt; · O&#039;Brien &lt;b&gt;&amp; “Co” (Quote@Test.de) · 0 files · 1 KB · 0 views · changed Oct 3, 2026</p>
                                                             </div>
-                                                        <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
+                            <a href="/admin?code_site=3#code-pages" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors shrink-0"><i class='bx bx-code-block'></i> Source</a>
+                            <form action="/admin" method="POST" class="m-0 shrink-0 flex gap-2" data-confirm="Block this code page?" data-confirm-text="Visitors will only see a notice." data-confirm-ok="Block" data-confirm-tone="danger">
                                 <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="block"><input type="hidden" name="site_id" value="3">
                                 <input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 lg:!w-56">
                                 <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-block'></i> Block</button>
                             </form>
-                                                    </div>
+                            <form action="/admin" method="POST" class="m-0 shrink-0 flex flex-wrap gap-2" data-confirm="Delete “quotecode”?" data-confirm-text="Its files are deleted; the address stays reserved for nobody. This can’t be undone." data-confirm-ok="Delete" data-confirm-tone="danger" data-confirm-match="quotecode" data-confirm-label="Type quotecode to confirm" data-confirm-normalize="slug" data-confirm-into="confirm"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="delete"><input type="hidden" name="site_id" value="3"><input type="hidden" name="confirm" value=""><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" aria-label="Reason for deleting" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-2 !w-48"><button type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium border border-bordercolor text-gray-300 hover:text-white hover:bg-white/5 transition-colors !text-red-400 hover:!bg-red-500/10"><i class='bx bx-trash'></i> Delete</button></form>
+                        </div>
                                             </div>
                                     </div>
 
@@ -106,28 +133,32 @@
                             <tbody class="divide-y divide-bordercolor" id="codeAccessRows">
                                 <tr data-search="o&#039;brien &lt;b&gt;&amp; “co” quote@test.de quote quotecode.oys.test:8080">
                                     <td class="px-5 py-3"><span class="text-white">O&#039;Brien &lt;b&gt;&amp; “Co”</span><span class="block text-xs text-gray-500 break-all">Quote@Test.de</span></td>
-                                    <td class="px-4 py-3"><a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">quotecode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><a href="http://quotecode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="block text-gray-300 hover:text-brand-400 break-all">quotecode.oys.test:8080</a></td>
                                     <td class="px-4 py-3"><span class="text-gray-500">—</span></td>
                                     <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0" data-confirm="Unlock the code page for free?" data-confirm-text="This user gets the code page without paying honeycombs." data-confirm-ok="Unlock">
                                             <input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="unlock"><input type="hidden" name="item" value="code_page"><input type="hidden" name="user_id" value="10">
                                             <button type="submit" class="text-xs text-gray-400 hover:text-white underline underline-offset-2 py-1">Unlock for free</button>
-                                        </form></td>
+                                        </form><form action="/admin" method="POST" class="m-0 mt-2 flex flex-wrap justify-end gap-2" data-confirm="Turn code pages off for O&#039;Brien &lt;b&gt;&amp; “Co”?" data-confirm-text="They can no longer create or change code pages." data-confirm-ok="Turn off" data-confirm-tone="danger"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="ban"><input type="hidden" name="user_id" value="10"><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-1.5 !w-48"><label class="text-xs text-gray-400 flex items-center gap-1"><input type="checkbox" name="block_all" value="1" checked> Block their code pages</label><button type="submit" class="text-xs text-red-400 hover:text-red-300 underline underline-offset-2 py-1">Turn code pages off</button></form></td>
                                 </tr>
                                 <tr data-search="tom@test.de tom@test.de tom tomcode.oys.test:8080">
                                     <td class="px-5 py-3"><span class="text-white">tom@test.de</span><span class="block text-xs text-gray-500 break-all">tom@test.de</span></td>
-                                    <td class="px-4 py-3"><a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">tomcode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><a href="http://tomcode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="block text-gray-300 hover:text-brand-400 break-all">tomcode.oys.test:8080</a></td>
                                     <td class="px-4 py-3"><span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Free</span></td>
-                                    <td class="px-5 py-3 text-right"></td>
+                                    <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0 mt-2 flex flex-wrap justify-end gap-2" data-confirm="Turn code pages off for tom@test.de?" data-confirm-text="They can no longer create or change code pages." data-confirm-ok="Turn off" data-confirm-tone="danger"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="ban"><input type="hidden" name="user_id" value="6"><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-1.5 !w-48"><label class="text-xs text-gray-400 flex items-center gap-1"><input type="checkbox" name="block_all" value="1" checked> Block their code pages</label><button type="submit" class="text-xs text-red-400 hover:text-red-300 underline underline-offset-2 py-1">Turn code pages off</button></form></td>
                                 </tr>
                                 <tr data-search="mia müller mia@test.de mia miacode.oys.test:8080">
                                     <td class="px-5 py-3"><span class="text-white">Mia Müller</span><span class="block text-xs text-gray-500 break-all">mia@test.de</span></td>
-                                    <td class="px-4 py-3"><a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener" class="block text-gray-300 hover:text-brand-400 break-all">miacode.oys.test:8080</a></td>
+                                    <td class="px-4 py-3"><a href="http://miacode.oys.test:8080/" target="_blank" rel="noopener noreferrer" class="block text-gray-300 hover:text-brand-400 break-all">miacode.oys.test:8080</a></td>
                                     <td class="px-4 py-3"><span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Paid 100</span></td>
-                                    <td class="px-5 py-3 text-right"></td>
+                                    <td class="px-5 py-3 text-right"><form action="/admin" method="POST" class="m-0 mt-2 flex flex-wrap justify-end gap-2" data-confirm="Turn code pages off for Mia Müller?" data-confirm-text="They can no longer create or change code pages." data-confirm-ok="Turn off" data-confirm-tone="danger"><input type="hidden" name="csrf" value="CSRFTOKEN"><input type="hidden" name="_confirmed" value="0" autocomplete="off"><input type="hidden" name="code_action" value="ban"><input type="hidden" name="user_id" value="5"><input type="text" name="reason" maxlength="200" placeholder="Reason (the user sees it)" class="w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm !py-1.5 !w-48"><label class="text-xs text-gray-400 flex items-center gap-1"><input type="checkbox" name="block_all" value="1" checked> Block their code pages</label><button type="submit" class="text-xs text-red-400 hover:text-red-300 underline underline-offset-2 py-1">Turn code pages off</button></form></td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
+                </div>
+                <div class="bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden" id="codeLog">
+                    <div class="p-5 sm:p-6 border-b border-bordercolor"><h2 class="text-base font-semibold text-white flex items-center gap-2"><i class='bx bx-history text-xl text-brand-400'></i> Moderation log</h2></div>
+                    <p class="p-6 text-sm text-gray-500">Nothing yet.</p>
                 </div>
             </div>
             <script>

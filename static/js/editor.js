@@ -3127,10 +3127,22 @@
 
   function renderCode() {
     var st = code.st, root = $('#tab-code');
+    // Vom Team für Code-Seiten gesperrt (CS-5): ein Hinweis statt Anlegen und Bearbeiten; löschen geht weiter
+    if (st.banned) { root.innerHTML = codeBannedHtml(st); paintSave(activeTab === 'code' ? code.state : pageSaveState); return; }
     if (!st.unlocked) root.innerHTML = codeLockedHtml(st);
     else if (!st.site) root.innerHTML = codeCreateHtml(st);
     else renderCodeEditor();
     paintSave(activeTab === 'code' ? code.state : pageSaveState);
+  }
+
+  function codeBannedHtml(st) {
+    var list = (st.sites || []).map(function (x) {
+      return '<div class="page-row"><span class="ps-avatar" style="width:36px;height:36px"><i class="bx bx-code-alt"></i></span>' +
+        '<span class="flex-1 min-w-0"><b class="truncate">' + esc(x.title || x.slug) + (x.blocked ? ' <span class="bdg red">Blocked</span>' : '') + '</b><small>' + esc(prettyUrl(x.url)) + '</small></span>' +
+        (x.blocked ? '' : '<button type="button" class="icon-btn danger" data-del-site="' + x.id + '" title="Delete code page" aria-label="Delete code page ' + esc(x.slug) + '"><i class="bx bx-trash"></i></button>') + '</div>';
+    }).join('');
+    return '<div class="panel max-w-xl mx-auto" id="codeBanned"><div class="code-blocked"><i class="bx bx-block"></i><div><b>Code pages are turned off for your account</b>' +
+      '<p>' + esc(st.banned.reason || '') + (st.banned.reason ? ' ' : '') + 'If you think this is a mistake, please contact us.</p></div></div>' + (list ? '<div class="mt-4">' + list + '</div>' : '') + '</div>';
   }
 
   function codeTermsHtml() {
