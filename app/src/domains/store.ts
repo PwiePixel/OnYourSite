@@ -238,6 +238,7 @@ export async function removeDomain(db: Db, id: number, detail: string): Promise<
       const res = await db.exec('DELETE FROM custom_domains WHERE id = ? AND version = ?', [id, row.version]);
       if (res.affectedRows === 0) continue;
       if (target) await target.setPrimary(db, row.target_id, null);
+      await keepBlock(db, row);
       await logEvent(db, row, 'removed', detail);
       return 'deleted';
     }
@@ -248,9 +249,65 @@ export async function removeDomain(db: Db, id: number, detail: string): Promise<
     // Der Dienst löscht den Hostnamen bei der nächsten Runde (sofort fällig) und danach die Zeile
     const ok = await transition(row, { state: 'removing', set: { next_check_at: date('Y-m-d H:i:s'), fast_until: null, manual_at: null },
       log: { event: 'removed', detail } }, db);
-    if (ok) return 'removing';
+    if (ok) {
+      await keepBlock(db, row);
+      return 'removing';
+    }
   }
   throw new Error(`custom domain #${id} kept changing while it was being removed`);
+}
+
+// ---------------------------------------------------------------- Gesperrte Hostnamen (R2)
+
+// Eine gesperrte Domain, die ihre Seite verliert (Entfernen, Seite oder Konto gelöscht), lässt ihren Hostnamen gesperrt:
+// Eintrag in custom_domain_blocks in derselben Transaktion wie das Löschen der Zeile (Reihenfolge custom_domains →
+// custom_domain_blocks wie in domain-add)
+async function keepBlock(db: Db, row: DomainRow): Promise<void> {
+  if (row.state !== 'blocked') return;
+  const reason = row.blocked_reason === null || row.blocked_reason === undefined ? null : mbSubstr(phpStr(row.blocked_reason), 0, 200);
+  await db.exec('INSERT INTO custom_domain_blocks (hostname, reason, created_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason)',
+    [row.hostname, reason, date('Y-m-d H:i:s')]);
+}
+
+// Ist der Hostname vom Team gesperrt – als Zeile im Zustand blocked (an einer Seite) oder als Eintrag nach dem
+// Entfernen? Gilt für jedes Konto, bis ein Admin ihn freigibt. lock = sperrendes Lesen (in einer Transaktion nach der
+// Zeile aus custom_domains): sieht auch einen gerade bestätigten Eintrag.
+export async function hostnameBlocked(host: string, db?: Db, lock = false): Promise<boolean> {
+  const x = use(db);
+  const suffix = lock ? ' FOR UPDATE' : '';
+  if ((await x.one(`SELECT id FROM custom_domains WHERE hostname = ? AND state = 'blocked'${suffix}`, [host])) !== null) return true;
+  return (await x.one(`SELECT hostname FROM custom_domain_blocks WHERE hostname = ?${suffix}`, [host])) !== null;
+}
+
+// Admin hebt die Sperre eines Hostnamens auf (PD-5): der Eintrag in custom_domain_blocks verschwindet, und hängt die
+// gesperrte Domain noch an ihrer Seite, geht sie wieder in die Prüfung (blocked → verifying, sofort fällig, Verlauf
+// „unblocked“). Danach kann jedes Konto den Hostnamen wieder verbinden. true = es gab eine Sperre.
+// Sperrreihenfolge wie removeDomain(): Ziel → custom_domains → custom_domain_blocks.
+export async function releaseBlock(host: string, db?: Db): Promise<boolean> {
+  const run = async (x: Db): Promise<boolean> => {
+    let released = false;
+    const peek = await domainByHost(host, x);
+    if (peek && peek.state === 'blocked') {
+      const target = domainTarget(peek.target_type);
+      if (target) await target.lock(x, intval(peek.target_id));
+      const row = asRow(await x.one('SELECT * FROM custom_domains WHERE id = ? FOR UPDATE', [peek.id]));
+      if (row && row.state === 'blocked') {
+        released = await transition(row, { state: 'verifying',
+          set: { blocked_reason: null, problem: '', problem_detail: '', next_check_at: date('Y-m-d H:i:s'), fast_until: null, manual_at: null },
+          log: { event: 'unblocked' } }, x);
+        if (!released) throw new Error(`custom domain #${row.id} changed while its block was being released`);
+      }
+    }
+    const res = await x.exec('DELETE FROM custom_domain_blocks WHERE hostname = ?', [host]);
+    if (res.affectedRows > 0) {
+      released = true;
+      await logEvent(x, { id: null, hostname: host, user_id: null }, 'unblocked', 'hostname released');
+    }
+    return released;
+  };
+  const done = db ? await run(db) : await transaction((_conn, x) => run(x));
+  forgetUnknownHost(host);
+  return done;
 }
 
 // Vor dem Löschen einer Seite (code-slots-admin: page-delete in der Transaktion unter der Platz-Sperre, nach den

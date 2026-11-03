@@ -17,8 +17,9 @@ import { bellMarkup } from '../views/partials/ui.js';
 import { currentPage, flash, isStaff } from './context.js';
 import { pageAllowance } from '../code/slots.js';
 import { dashboardView } from './views/dashboard.js';
-import { statusAdmin } from '../status/editorApi.js';
+import { statusAdmin, statusUnlocked } from '../status/editorApi.js';
 import { editorDomainFlags, pagesWithDomain } from '../domains/editor.js';
+import { codeSummary } from '../code/editorApi.js';
 
 export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const userId = intval(user.id);
@@ -76,10 +77,20 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)
   const premiumNow = await premiumState(userId);
   const isStatusAdmin = statusAdmin(ctx, user);
+  // Eigene Statusseite (ST-4): mit der Freischaltung status_page (im Admin-Modus die des Nutzers)
+  const isStatusUser = !isStatusAdmin && (await statusUnlocked(userId));
   // Eigene Domains (PD-4): Schalter für den Abschnitt und Seiten mit Domain in irgendeinem Zustand (ohne Einrichtung
   // keine Abfrage)
   const domainFlags = await editorDomainFlags();
   const withDomain = await pagesWithDomain(userId);
+  // Code-Seiten-Plätze (CS-6): Übersicht für Seitenwechsler und Dialoge; openSite = ?site=ID (eine eigene Code-Seite)
+  // oder ?page=ID eines Platzes, der eine Code-Seite zeigt – unbekannte IDs zählen nicht
+  const code = await codeSummary(user);
+  const codeList = code.sites as Array<{ id: number; slot: number | null; title: string }>;
+  const wantSite = intval(phpStr(ctx.get.site ?? ''));
+  const wantPage = intval(phpStr(ctx.get.page ?? ''));
+  const openSite = codeList.find((s) => wantSite > 0 && s.id === wantSite)?.id
+    ?? codeList.find((s) => wantPage > 0 && s.slot === wantPage)?.id ?? null;
 
   // views/dashboard.php: Daten für static/js/editor.js (Reihenfolge der Schlüssel wie in PHP)
   let slugDaysLeft = 0;
@@ -98,6 +109,10 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
       url: pageDisplayUrl(p as unknown as PageLike),
       avatar: phpTruthy(p.avatar) ? uploadUrl(p.avatar) : '',
       custom_domain: withDomain.has(intval(p.id)),
+      // Code-Seite des Platzes (CS-6): ihre ID, und als Name ihr Titel; die Art der Adresse für den Dialog „Edit“
+      mode: p.address_mode === 'path' ? 'path' : 'subdomain',
+      code: p.code_site_id === null || p.code_site_id === undefined ? null : intval(p.code_site_id),
+      ...(p.code_site_id === null || p.code_site_id === undefined ? {} : { title: codeList.find((s) => s.id === intval(p.code_site_id))?.title ?? p.title }),
     })),
     maxPages: allowance.max,
     premium,
@@ -121,6 +136,9 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     honeycombs,
     cm: { js: asset('/static/vendor/codemirror/codemirror.js'), css: asset('/static/vendor/codemirror/codemirror.css') },
     codeTerms: '/terms/code-pages',
+    // Code-Seiten-Plätze (CS-6)
+    code,
+    openSite,
     slugDaysLeft,
     user: {
       name: userData.full_name ?? '',
@@ -136,7 +154,9 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     // OnYourSites Statusseite: der Bereich „Status“ nur für Admins (nicht im Admin-Modus); Skript und Stil lädt der
     // Editor erst beim ersten Öffnen
     statusAdmin: isStatusAdmin,
-    ...(isStatusAdmin ? { statusManage: { js: asset('/static/js/status-manage.js'), css: asset('/static/css/status-manage.css') } } : {}),
+    ...(isStatusAdmin || isStatusUser ? { statusManage: { js: asset('/static/js/status-manage.js'), css: asset('/static/css/status-manage.css') } } : {}),
+    // Freigeschaltete Nutzer verwalten ihre eigene Statusseite (scope user)
+    statusUser: isStatusUser,
   };
   const flashSuccess = ctx.session?.take('success') ?? null;
   const flashError = ctx.session?.take('error') ?? null;
@@ -152,5 +172,6 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
     balance: honeycombs.balance,
     bellHtml: await bellMarkup(ctx),
     statusAdmin: isStatusAdmin,
+    statusUser: isStatusUser,
   }));
 }

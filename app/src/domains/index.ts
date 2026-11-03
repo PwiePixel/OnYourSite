@@ -18,7 +18,7 @@ import { premiumLossPreview, reconcileUser } from './lifecycle.js';
 export { domainsAvailable, cnameTarget, fallbackOrigin } from './config.js';
 export { hostRoute } from './host.js';
 export {
-  beforePageRemoved, createDomain, domainById, domainForTarget, hasDomain, hostnameForPage, removeDomain, transition,
+  beforePageRemoved, createDomain, domainById, domainForTarget, hasDomain, hostnameBlocked, hostnameForPage, releaseBlock, removeDomain, transition,
   type DomainChange, type DomainRef, type DomainRow, type DomainState,
 } from './store.js';
 export { CUSTOM_HOST_ENDPOINTS, registerDomainTarget, type DomainTarget, type EndpointRule, type TargetInfo } from './targets.js';

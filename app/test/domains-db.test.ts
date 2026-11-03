@@ -11,15 +11,16 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { loadConfig, setConfigForTests } from '../src/config.js';
 import { exec, one, q, transaction, value, type Db } from '../src/db.js';
 import { date, strtotime, time } from '../src/php.js';
-import { ensureSchema, SCHEMA_VERSION, V_CUSTOM_DOMAINS } from '../src/schema.js';
+import { ensureSchema, SCHEMA_VERSION, V_CUSTOM_DOMAINS, V_DOMAIN_BLOCKS } from '../src/schema.js';
 import { slugProblem } from '../src/helpers.js';
 import {
   AccountDeletionError, deleteAccount, registerUserDeletion, unregisterUserDeletionForTests, userDeletionHooks,
 } from '../src/admin/accountDeletion.js';
 import {
-  beforePageRemoved, createDomain, domainById, hasDomain, hostnameForPage, removeDomain, transition, type DomainRow, type DomainState,
+  beforePageRemoved, createDomain, domainById, hasDomain, hostnameBlocked, hostnameForPage, releaseBlock, removeDomain, transition, type DomainRow,
+  type DomainState,
 } from '../src/domains/index.js';
-import { forwardingDomain } from '../src/domains/store.js';
+import { forwardingDomain, removeUserDomains } from '../src/domains/store.js';
 import { testDatabase, type TestDb } from './coreHarness.js';
 
 let t: TestDb;
@@ -268,4 +269,45 @@ test('the names of the custom-domain setup can’t become page addresses', async
   assert.equal(await slugProblem('customers'), 'The address “customers” is reserved.');
   assert.equal(await slugProblem('fallback'), 'The address “fallback” is reserved.');
   assert.equal(await slugProblem('customer'), null);
+});
+
+test('R2: a blocked domain keeps its hostname blocked when its page or account goes; only releaseBlock frees it', async () => {
+  const blocks = await ddl('custom_domain_blocks');
+  assert.match(blocks, /`hostname` varchar\(253\) CHARACTER SET ascii COLLATE ascii_bin NOT NULL/);
+  assert.match(blocks, /PRIMARY KEY \(`hostname`\)/);
+  await t.admin.query(`REPLACE INTO \`${t.name}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', ?)`, [String(V_DOMAIN_BLOCKS - 1)]);
+  await ensureSchema();
+  assert.equal(await ddl('custom_domain_blocks'), blocks);
+  const now = date('Y-m-d H:i:s');
+  for (const uid of [990, 991]) {
+    await exec('INSERT INTO users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, 0, ?)', [uid, `r2-${uid}@test.de`, 'R2', now]);
+  }
+  const page = async (uid: number, slug: string): Promise<number> =>
+    (await exec('INSERT INTO pages (user_id, slug, title, created_at) VALUES (?, ?, ?, ?)', [uid, slug, slug, now])).insertId;
+  const a = await domainIn('blocked', 'gone-page.example.com', await page(990, 'r2-one'), 990);
+  const b = await domainIn('blocked', 'gone-account.example.com', await page(990, 'r2-two'), 990, 'cf-r2');
+  const c = await domainIn('blocked', 'still-on.example.com', await page(991, 'r2-three'), 991);
+  // Seite gelöscht: die Zeile geht, die Sperre bleibt
+  await transaction(async (_conn, db) => beforePageRemoved(a.target_id, db));
+  assert.equal(await domainById(a.id), null);
+  assert.equal(await hostnameBlocked('gone-page.example.com'), true);
+  // Konto gelöscht, Hostname noch bei Cloudflare: removing für den Dienst, die Sperre bleibt
+  await transaction(async (_conn, db) => removeUserDomains(db, 990));
+  assert.equal((await fresh(b.id)).state, 'removing');
+  assert.equal(await hostnameBlocked('gone-account.example.com'), true);
+  assert.equal(await hostnameBlocked('free.example.com'), false);
+  // Freigabe einer noch angehängten gesperrten Domain: wieder in der Prüfung, sofort fällig
+  await exec("UPDATE custom_domains SET blocked_reason = 'spam' WHERE id = ?", [c.id]);
+  assert.equal(await hostnameBlocked('still-on.example.com'), true);
+  assert.equal(await releaseBlock('still-on.example.com'), true);
+  const back = await fresh(c.id);
+  assert.deepEqual([back.state, back.blocked_reason], ['verifying', null]);
+  assert.ok(String(back.next_check_at) <= date('Y-m-d H:i:s'));
+  assert.equal(await hostnameBlocked('still-on.example.com'), false);
+  assert.deepEqual((await logRows('still-on.example.com')).map((l) => l.event).slice(-1), ['unblocked']);
+  // Freigabe nach dem Entfernen: nur der Eintrag geht
+  assert.equal(await releaseBlock('gone-page.example.com'), true);
+  assert.equal(await hostnameBlocked('gone-page.example.com'), false);
+  assert.equal(await releaseBlock('gone-page.example.com'), false);
+  assert.equal(await releaseBlock('free.example.com'), false);
 });

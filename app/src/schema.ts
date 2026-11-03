@@ -43,6 +43,8 @@ export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge d
 export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
 export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
 export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Cloudflare (Apex: Besitz-TXT, DCV) je Domain
+export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnamen bleiben gesperrt, auch nach „Entfernen“ (R2)
+export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeichertes max_on_pages 0 aus der dunklen Phase wird 1
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -83,6 +85,8 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
   { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
   { version: V_DOMAIN_RECORDS, name: 'domainRecords', run: domainRecords },
+  { version: V_DOMAIN_BLOCKS, name: 'domainBlocks', run: domainBlocks },
+  { version: V_CODE_SLOTS_LIVE, name: 'codeSlotsLive', run: codeSlotsLive },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -541,6 +545,18 @@ async function notificationsIndex(conn: PoolConnection): Promise<void> {
 // unter „Additional records“.
 async function domainRecords(conn: PoolConnection): Promise<void> {
   await addColumn(conn, 'custom_domains', 'extra_records', 'TEXT NULL');
+}
+
+// V_DOMAIN_BLOCKS (braucht custom_domains aus V_CUSTOM_DOMAINS): vom Team gesperrte Hostnamen (Entscheidung R2).
+// Solange die gesperrte Domain an ihrer Seite hängt, sperrt ihre Zeile (Zustand blocked) den Hostnamen. Entfernt der
+// Besitzer sie (oder gehen Seite oder Konto), verschwindet die Zeile wie sonst – die Sperre bleibt hier stehen, für
+// jedes Konto, bis ein Admin sie aufhebt (releaseBlock in domains/store.ts).
+async function domainBlocks(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS custom_domain_blocks (
+        hostname VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+        reason VARCHAR(200) NULL,
+        created_at DATETIME NOT NULL
+    ) ${OPTS}`);
 }
 
 // V_CUSTOM_DOMAINS (braucht nur pages aus V_PAGES): eigene Domains (Premium). Eine Zeile je Domain, Ziel ist (vorerst)
@@ -1455,4 +1471,20 @@ export async function reserveSuggestions(conn: PoolConnection): Promise<void> {
     await conn.rollback();
     throw err;
   }
+}
+
+// V_CODE_SLOTS_LIVE (CS-6): Einstellungen der Code-Seiten, die in der dunklen Phase gespeichert wurden, enthalten
+// max_on_pages 0 – damals der feste Standard, keine Wahl des Teams. Einmal auf 1 heben (der Standard ab CS-6), damit
+// „More code pages“ einen nutzbaren Platz gibt; alle anderen Werte bleiben. Ohne gespeicherte Einstellungen gilt der
+// neue Standard ohnehin. Kaputtes JSON bleibt unverändert (codeSettingsFrom liest dann die Standards).
+async function codeSlotsLive(conn: PoolConnection): Promise<void> {
+  const r = await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'code_pages'");
+  if (!r.length) return;
+  let obj: unknown;
+  try { obj = JSON.parse(String(r[0].meta_value)); } catch { return; }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return;
+  const o = obj as Record<string, unknown>;
+  if (o.max_on_pages === undefined || Number(o.max_on_pages) !== 0) return;
+  o.max_on_pages = 1;
+  await run(conn, "UPDATE oys_meta SET meta_value = ? WHERE meta_key = 'code_pages'", [JSON.stringify(o)]);
 }

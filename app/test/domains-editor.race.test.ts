@@ -189,3 +189,27 @@ test('a double click on Connect: both requests answer with the one new domain', 
   }
   assert.equal((await sql('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', [host]))[0].n, 1);
 });
+
+test('R2: a hostname blocked and removed while another account’s Connect waits is still refused', { timeout: 60000 }, async () => {
+  const host = 'blocked-race.example.com';
+  for (const table of ['custom_domains', 'custom_domain_log', 'notifications', 'rate_limits']) await sql(`DELETE FROM \`DB\`.${table}`);
+  let removed: Promise<Ctx> | null = null;
+  // U verbindet den Namen, das Team sperrt ihn, U entfernt ihn – nachdem W „frei“ gelesen hat, vor Ws Transaktion
+  const outside = AsyncResource.bind(async (): Promise<Ctx> => {
+    await createDomain({ hostname: host, targetId: pages[U], userId: U });
+    await sql("UPDATE `DB`.custom_domains SET state = 'blocked' WHERE hostname = ?", [host]);
+    return api(U, 'domain-remove', { page_id: pages[U], confirm: host });
+  });
+  setPauseGateForTests(async (name) => {
+    if (name !== 'domain-add' || removed) return;
+    removed = outside();
+    await removed;
+  });
+  const r = await api(W, 'domain-add', { page_id: pages[W], hostname: host });
+  assert.ok(removed, 'the pause point was reached');
+  assert.equal((await (removed as unknown as Promise<Ctx>)).status, 200);
+  assert.equal(r.status, 409, JSON.stringify(jsonBody(r)));
+  assert.equal(jsonBody(r).error, 'This domain was disabled by the OnYourSite team and can’t be connected. Please contact support.');
+  assert.equal((await sql('SELECT COUNT(*) AS n FROM `DB`.custom_domains WHERE hostname = ?', [host]))[0].n, 0);
+  assert.equal((await sql('SELECT COUNT(*) AS n FROM `DB`.custom_domain_blocks WHERE hostname = ?', [host]))[0].n, 1);
+});

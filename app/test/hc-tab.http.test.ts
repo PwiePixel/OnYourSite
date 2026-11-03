@@ -89,7 +89,7 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.equal(st.balance, 150);
   assert.deepEqual([st.frozen, st.frozenReason, st.readOnly], [false, '', false]);
   assert.deepEqual(st.premium, { active: false, until: null, forever: false, source: null, buyable: false });
-  assert.deepEqual(st.features.map((c) => c.feature), ['code_page'], 'Premium stays hidden until it is ready and timed options can be sold');
+  assert.deepEqual(st.features.map((c) => c.feature), ['code_page', 'status_page'], 'Premium stays hidden until it is ready and timed options can be sold (the status page card is in since ST-4)');
   const c = st.features[0];
   assert.deepEqual({ ...c, options: undefined }, {
     feature: 'code_page', title: 'Code page', icon: 'bx-code-alt', description: 'Your own website with HTML, CSS and JavaScript at its own address.', perks: [],

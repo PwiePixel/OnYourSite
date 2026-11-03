@@ -25,15 +25,12 @@ change the plan, update `STATUS.md` (and the documents you changed) in the same 
 
 | Branch | Pull request | Content |
 |---|---|---|
-| `feature/node-complete` | #15 | Release 3.0: the complete Node.js port – merge first |
-| `feature/new-features` | #14 | The new features on top of the port; this folder lives here |
-| `main` | – | Release 2.x (PHP) plus the first part of the port |
+| `main` | – | Release 3.0 (Node.js only) with the new features – PR #15 (the port) and PR #14 (the features) are merged |
+| `php-2.x` | – | The last PHP version; the parity tests read it through `OYS_PHP_REF` |
+| `feature/owner-decisions` | after #14 | The owner's decisions R1 and R2 from the reviews (`DECISIONS.md`) |
 
-- Merge order: #15, then #14. Before #14 is merged, bring `main` (with #15) into `feature/new-features` so the pull
-  request only shows the feature changes.
-- New work: one branch per roadmap item (or a small group of dependent items), started from `feature/new-features`
-  for features or from `feature/node-complete` for port and release fixes. Merge back as one squash commit after the
-  tests pass, then update `STATUS.md`.
+- New work: one branch per roadmap item (or a small group of dependent items), started from `main`. Merge back as
+  one squash commit after the tests pass, then update `STATUS.md`.
 - Never force-push a shared branch, never push to `main` directly.
 
 ## How to build a roadmap item

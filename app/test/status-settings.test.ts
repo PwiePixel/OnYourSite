@@ -156,12 +156,14 @@ test('server facts from config.json: defaults and checked values', () => {
   }
 });
 
-test('limits until the shop unlock: fixed limits for the system page, nothing for users', async () => {
+test('limits: fixed limits for the system page, nothing for users without the unlock, the free plan for admins (included)', async () => {
   const system = await statusLimits(null);
   assert.deepEqual(system, { plan: 'system', checks: 40, components: 40, minInterval: 60, channels: 3, subscribers: 250, broadcastsDay: 3, until: null });
-  for (const uid of [3, 5, 999]) {
+  for (const uid of [5, 999]) {
     assert.deepEqual(await statusLimits(uid), { plan: 'none', checks: 0, components: 0, minInterval: 180, channels: 0, subscribers: 0, broadcastsDay: 0, until: null });
   }
+  // Konto 3 ist Admin: status_page ist für Admins dabei (ST-4, ROADMAP §3.2)
+  assert.deepEqual(await statusLimits(3), { plan: 'free', checks: 10, components: 40, minInterval: 180, channels: 3, subscribers: 50, broadcastsDay: 3, until: null });
   await statusSaveSettings({ components_max: 12, intervals: [120, 300] });
   try {
     const s = await statusLimits(null);

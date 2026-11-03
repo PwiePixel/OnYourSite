@@ -73,6 +73,8 @@ export async function register(ctx: Ctx): Promise<void> {
           session.regenerate();
           session.set('user_id', userId);
           session.set('page_id', pageId);
+          // Wie beim Login: keine Markierung aus „Log in as“ in der Sitzung des neuen Kontos
+          session.delete('original_admin_id');
           session.delete('old');
           flash(ctx, 'success', 'Welcome! Your page is live.');
           await sendMail(email, 'register', { full_name: e(fullname), subdomain: e(slug) });
@@ -131,6 +133,9 @@ export async function login(ctx: Ctx): Promise<void> {
       } else {
         session.regenerate();
         session.set('user_id', intval(user.id));
+        // Eigene Sitzung dieses Kontos: eine Markierung aus „Log in as“ (anderes Konto im selben Browser) bleibt nicht
+        // hängen – sonst führte „Back to admin panel“ in das Konto des Admins (Entscheidung R1)
+        session.delete('original_admin_id');
         await exec('UPDATE users SET last_ip = ? WHERE id = ?', [encryptData(ctx.ip) ?? null, user.id as Param]);
         ctx.redirect('/dashboard');
       }

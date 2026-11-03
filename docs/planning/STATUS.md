@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 14:08 (UTC+1).
+Last update: 2026-11-02 16:35 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -15,8 +15,9 @@ Last update: 2026-11-02 14:08 (UTC+1).
 | Request parsing in linear time on hostile bodies (parse_str, rawurldecode, mb_* helpers, multipart) | Done |
 | Remove PHP; branch `php-2.x` (pushed) keeps the last PHP version; parity tests read `OYS_PHP_REF` | Done |
 
-**Release 3.0 is merged into `main`** (PR #15, squash commit `2e6f6de`). `main` is merged into `feature/new-features`
-(`0a15a2e`, same tree as `feature/node-complete`), so PR #14 shows only the feature changes and merges cleanly.
+**Release 3.0 is merged into `main`** (PR #15, squash commit `2e6f6de`), and the new features followed (PR #14, squash
+commit `66207f6`). `main` holds everything below; the branches `feature/node-complete` and `feature/new-features` are
+done.
 
 Points to settle before or soon after 3.0:
 - Node checks only bcrypt password hashes (`$2y$`, `$2a$`, `$2b$`). Check production before the switch:
@@ -31,10 +32,9 @@ Points to settle before or soon after 3.0:
 - Slow but linear on 20 MB hostile input (follow-ups): `e()`/`xmlEscape` in html.ts, the NUL strip in css.ts, the raw
   e-mail kept in the session after a failed sign-up (cap its length), and the phone check in `cleanUrl` (V8 regex stack).
 
-## New features (PR #14, `feature/new-features`)
+## New features (PR #14, merged into `main`)
 
-Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests and merged into
-`feature/new-features`; "reviewed" = the fixes of an independent review are merged too; "security-reviewed" = covered
+Numbers and dependencies: `ROADMAP.md` §4.0. "Built" = implemented with tests and merged into `main`; "reviewed" = the fixes of an independent review are merged too; "security-reviewed" = covered
 by the shared security review of 2026-11-02 (dialogs, Discord, status page, Premium and domain worker, shop UI):
 every finding was reproduced with a failing test before it was fixed, and what stays open is listed under "How to
 continue" below.
@@ -61,41 +61,44 @@ continue" below.
 | 25 | CS-4 | Code slots: editor API (dark – page slots stay off until `max_on_pages` is raised) | Built and reviewed |
 | 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
+| 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
+| 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-- Status pages: ST-4 (status pages for users – all its dependencies are in now), ST-5, ST-7.
-- Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
+- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
+- Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
-1. **PR #15 is merged** (squash) and `main` is merged into `feature/new-features`. Deploy `main` with
-   `sudo bash server/install.sh --update` (see `server/README.md`); PR #14 is next.
-2. **Continue on `feature/new-features`** (PR #14). All built items above are merged there; 1012 tests pass
-   (`cd app && npx tsc --noEmit -p . && npm test`; with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
+1. **PR #15 and PR #14 are merged** (squash commits `2e6f6de` and `66207f6`). Deploy `main` with
+   `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
+2. **New work starts from `main`**: one branch per roadmap item, merged as one squash commit after the tests pass
+   (never push to `main` directly). On `main` 1012 tests pass (1035 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
+   `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
-   - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
-   - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
+   - Code pages: CS-5 (moderation), the rest of CS-6.
+   - Status pages: the rest of ST-4, then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
-4. **Owner decisions needed** (found in the reviews; nothing is built for them yet):
-   - An admin who uses "Log in as" on another *admin* account can then use the whole admin panel as that admin
-     (grants, refunds and prices are recorded under the other admin). Options: refuse "Log in as" for admin accounts,
-     or let `/admin` act only for the original admin.
-   - Blocked custom domains: the owner can remove and add again a domain an admin disabled (design §5.2 vs §2.8).
-     Decide before PD-5 (nothing sets `blocked` yet).
-   - Taken as read, please confirm: after a refund of `code_more`, the code pages above the free allowance go offline
-     only while `code_more` costs something (at price 0 it is free for everyone, CS-E13); "Give honeycombs" asks
-     before deductions and before gifts above 1,000 honeycombs (one constant, `GRANT_ASK_ABOVE`).
+4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
+   of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
+   blocked stays blocked for every account until an admin releases it. Both are built on the branch
+   `feature/owner-decisions` (pull request after #14): R1 checks `isAdminSession()` for `/admin`, `/admin/api` and
+   "Log in as" itself, and logging in or registering drops the "Log in as" marker; R2 keeps blocked hostnames in
+   `custom_domain_blocks` (schema step 17), and PD-5 releases them with `releaseBlock()` (its actions go behind
+   `/admin`). Both had an independent review; R2's hostname spellings (case, trailing dot, ports, Unicode, punycode)
+   are covered by a test.
+   R3 and R4 confirm what is built (`code_more` at price 0, the confirmation for honeycomb gifts above 1,000).
 5. **Before the 3.x deploy:** `sudo bash server/install.sh --update` also updates the Discord bot to 0.3.1 – it
    reports which channels everyone can see; team alerts of the status page are only sent to a channel an admin saved
    in *Editor → Status → Alerts* that is not public (until then they are skipped, with the reason in the editor).
@@ -128,6 +131,21 @@ records – new steps take the next free number when they are merged.
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
      sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
      status addresses; edits of messages already posted still go out while the page is offline.
+   - CS-6 (core built; owner decisions R5–R7): still open – in the Code tab "Where it lives", "Show the link page
+     again" and "Download files" in the dialogs; rows for code pages and "Turn into a code page" in Settings → Your
+     pages; the "Code page" card in the Create-a-new-page dialog; the state where every slot shows a code page (design
+     U13) and the preview pane without a link page; a browser test for moving the own-address code page onto a slot;
+     `tests/e2e/editor-dialogs.js` should clear the address registry in its reset so it can run twice on one database.
+   - ST-4 (first part built): still open – changing a status page's address (90-day redirect, cooldown), the brand
+     rule for page titles, the owner's alert settings (mail and bell are written by the core but not verified end to
+     end), the paused-module behaviour, incidents on user pages (the API exists, untested), subscribers, a test for
+     concurrent component adds, the remaining browser flows of the design, and the admin's switch between OnYourSite's
+     page and their own. `app/test/e2e/status-system.e2e.ts` test 1 (the incident isn't shown resolved after
+     "Resolve") fails on the base too.
+   - R1: while an admin works as another admin account, that account's bell can still show team notifications that
+     link to `/admin` (they lead back to the editor – a dead end, not a way into admin rights); `editorData.user.admin`
+     in the editor bootstrap still reflects `is_admin` (nothing reads it yet – switch it to `isAdminSession` before
+     anything does); sessions that got the marker before this change keep it until logout or "Back to admin panel".
    - Dialogs: password-protected link URLs still sit in editor drafts (blanking them needs merge logic on restore);
      the privacy page should say that unsaved work is kept on the device.
    - Discord: optional hourly clean-up of old dead jobs (only for installs that ran 3.x before the fix); optional notice
@@ -139,8 +157,6 @@ records – new steps take the next free number when they are merged.
      exist only in the ledger can't be removed (only during a deploy); the gift form reads `user_id[]` with PHP-style
      casts (pinned by the PHP comparison).
 
-Work in progress lives on branches of the current workspace and is pushed when it is merged into
-`feature/new-features`; this file says what is already in. Small fixes from other contributors arrive as pull
-requests into `feature/new-features` (for example #16, the weekly report's best link). #18 (per-checkout names in
-three tests) was already contained in `feature/new-features`; its branch is merged with it and changes nothing any
-more – merge or close it.
+Work in progress lives on branches of the current workspace and is pushed when it is ready; this file says what is
+already in `main`. Small fixes from other contributors arrive as pull requests into `main` (#16 and #17 were such
+fixes; #18 was already contained in #14).

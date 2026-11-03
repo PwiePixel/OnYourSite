@@ -53,7 +53,9 @@ async function resetRates(): Promise<void> {
   await q("DELETE FROM rate_limits WHERE rl_key LIKE 'slots:%'");
 }
 
-test('default max_on_pages 0: nothing on page slots is reachable, the own address still works', async () => {
+test('max_on_pages 0 (admin setting): nothing on page slots is reachable, the own address still works', async () => {
+  // Seit CS-6 ist der Standard 1; 0 bleibt als Einstellung des Teams
+  await saveCodeSettings({ max_on_pages: 0 });
   let r = await api(6, 'code-connect', { slot: await pageOf('tom'), title: 'X' });
   assert.deepEqual(r.body, { ok: false, error: 'Code pages can’t use your page addresses right now.' });
   r = await api(6, 'code-connect', { slot: 'new', slug: 'tom-new-code', title: 'X' });
