@@ -54,6 +54,8 @@ function fixture(): Array<[string, unknown[]]> {
     [file, [1, 'index.html', '<p>Mia</p>', t]],
     [file, [1, 'style.css', 'p{color:red}', t]],
     [file, [2, 'index.html', 'x'.repeat(1536), t]],
+    // Zähler wie im Betrieb (codeWrite pflegt sie; die Liste liest nur sie)
+    ['UPDATE code_sites s SET file_count = (SELECT COUNT(*) FROM code_files f WHERE f.site_id = s.id), bytes = (SELECT COALESCE(SUM(LENGTH(f.content)), 0) FROM code_files f WHERE f.site_id = s.id)', []],
   ];
 }
 
@@ -220,11 +222,15 @@ test('code_action: block, unblock and unlock answer with their message on #code-
   ctx = await request({ code_action: 'unlock', user_id: '7', item: 'code_page' });
   assert.equal(ctx.session!.data.admin_success, 'lea@test.de had already unlocked the code page.');
 
+  // Seit CS-5 lässt sich auch „More code pages“ schenken; ein unbekannter Eintrag nicht
   ctx = await request({ code_action: 'unlock', user_id: '10', item: 'code_more' });
+  assert.match(String(ctx.session!.data.admin_success), /^More code pages unlocked for /);
+  ctx = await request({ code_action: 'unlock', user_id: '10', item: 'nope' });
   assert.equal(ctx.session!.data.admin_error, 'Please choose what to unlock.');
   ctx = await request({ code_action: 'unlock', user_id: '999', item: 'code_page' });
   assert.equal(ctx.session!.data.admin_error, 'Please choose a user.');
-  assert.equal((await q("SELECT id FROM honeycomb_ledger WHERE user_id IN (10, 999) AND reason = 'unlock'")).length, 0);
+  // Nur die Freischaltung von „More code pages“ für 10, nichts für die unbekannten Einträge
+  assert.equal((await q("SELECT id FROM honeycomb_ledger WHERE user_id IN (10, 999) AND reason = 'unlock' AND ref <> 'code_more'")).length, 0);
 
   // Unbekannte Aktion: zurück zum Bereich, ohne Meldung
   ctx = await request({ code_action: 'nope' });
@@ -302,7 +308,7 @@ test('only admins reach /admin: a user is sent to the dashboard, a visitor to th
 
 // Datenbank-Zustand nach allen Tests: nur die erwarteten Freischaltungen
 test('ledger after the admin actions: one free unlock each, nothing paid', async () => {
-  const rows = await admin.query<RowDataPacket[]>(`SELECT user_id, amount, note FROM \`${DB}\`.honeycomb_ledger WHERE reason = 'unlock' ORDER BY user_id`);
+  const rows = await admin.query<RowDataPacket[]>(`SELECT user_id, amount, note FROM \`${DB}\`.honeycomb_ledger WHERE reason = 'unlock' AND ref = 'code_page' ORDER BY user_id`);
   assert.deepEqual(rows[0].map((r) => ({ ...r })), [
     { user_id: 5, amount: -100, note: '' },
     { user_id: 6, amount: 0, note: 'Unlocked by the team' },

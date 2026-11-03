@@ -154,7 +154,7 @@ async function confirmAndLoad(page) {
     await page.goto(B + '/admin#code-pages');
     await page.selectOption('#codeUser', '8');
     await page.click('#codeAccessForm button[type=submit]');
-    ok(await dialogTitle(page) === 'Unlock the code page for free?', 'unlock dialog');
+    ok(await dialogTitle(page) === 'Unlock for free?', 'unlock dialog');
     await confirmAndLoad(page);
     ok(count("SELECT COUNT(*) FROM honeycomb_ledger WHERE user_id = 8 AND reason = 'unlock'") === 1, 'unlocked for free');
 

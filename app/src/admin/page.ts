@@ -154,14 +154,18 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     ctx.write(err.html);
     ctx.halt();
   }
+  // Keine Herkunft an Code-Seiten der Nutzer: eine Seite soll einen Prüfer nicht erkennen und ihm anderes zeigen können
+  ctx.header('Referrer-Policy', 'no-referrer');
   ctx.write(page);
 }
 
 // Aktion im Bereich Code-Seiten: Meldung merken und zurück zum Bereich (beendet die Anfrage)
 async function codeAction(ctx: Ctx, session: Session, post: PhpArray): Promise<never> {
-  const result = await adminCodeHandle(post);
+  const result = await adminCodeHandle(post, intval(session.get('user_id')));
   if (result) flashResult(session, result);
-  ctx.redirect('/admin#code-pages');
+  // Aus dem Quelltext-Betrachter: dorthin zurück (die Code-Seite gibt es nach „Delete“ nicht mehr)
+  const viewer = intval(post.from_viewer ?? 0);
+  ctx.redirect('/admin' + (viewer > 0 && post.code_action !== 'delete' ? '?code_site=' + viewer : '') + '#code-pages');
 }
 
 // $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok']

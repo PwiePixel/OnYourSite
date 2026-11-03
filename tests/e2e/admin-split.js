@@ -152,14 +152,17 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     ok(sql("SELECT CONCAT(is_blocked, '|', blocked_reason) FROM code_sites WHERE slug = 'miacode'") === '1|Phishing', 'Blocked with the reason');
 
     const unblock = p.locator('#tab-code-pages form:has(input[name=code_action][value=unblock])').first();
-    await Promise.all([p.waitForNavigation(), unblock.locator('button[type=submit]').click()]);
+    // Auch „Unblock“ fragt zuerst (CS-5: jedes Formular der Moderation)
+    await unblock.locator('button[type=submit]').click();
+    await Promise.all([p.waitForNavigation(), confirmUi(p, dialogs)]);
+    ok(dialogs.includes('Unblock this code page?'), 'Unblock asks first (own dialog)');
     ok((await flash(p)).includes('is online again.') && sql("SELECT is_blocked FROM code_sites WHERE slug = 'miacode'") === '0', 'Unblock with flash');
 
     // Code-Zugang ohne Honigwaben
     await p.selectOption('#codeUser', '7');
     await p.click('#codeAccessForm button[type=submit]');
     await Promise.all([p.waitForNavigation(), confirmUi(p, dialogs)]);
-    ok(dialogs.includes('Unlock the code page for free?'), 'Give code access asks first (own dialog)');
+    ok(dialogs.includes('Unlock for free?'), 'Give code access asks first (own dialog)');
     ok((await flash(p)).includes('Code page unlocked for Lea.'), 'Give code access: flash');
     ok(sql("SELECT CONCAT(amount, '|', note) FROM honeycomb_ledger WHERE user_id = 7 AND reason = 'unlock' AND ref = 'code_page'") === '0|Unlocked by the team', 'Give code access: free unlock booked');
     ok((await p.locator('#codeAccessRows').innerText()).includes('lea@test.de'), 'Access table lists the new unlock');

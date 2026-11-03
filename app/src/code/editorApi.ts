@@ -25,7 +25,7 @@ import {
   CODE_MORE_TEXT, CODE_UNLOCK_TEXT, SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError,
   canCreate, canMove, codeBannedText, codeQuota, pageAllowance, slotRateKey, withSlotLock, type CodeDenied, type SlotUser,
 } from './slots.js';
-import { codeLimits, codeSettings } from './settings.js';
+import { CODE_MAX_FILES_BOUND, codeLimits, codeSettings } from './settings.js';
 import { CODE_TERMS_REQUIRED } from './shop.js';
 import { mustStayOffline } from './enforce.js';
 
@@ -353,7 +353,8 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
     const files: PhpArr = isArr(filesIn) ? filesIn : [];
     const deletedIn = inp('deleted') ?? null;
     const deleted = values(isArr(deletedIn) ? deletedIn : []).filter((x) => typeof x === 'string');
-    const max = (await codeSettings()).max_files;
+    // Feste Obergrenze (höchste einstellbare Dateizahl): die genaue Grenze prüft codeWrite, auch für Seiten über einer gesenkten
+    const max = CODE_MAX_FILES_BOUND;
     if (codeFileCount(files) > max * 2 || deleted.length > max * 2) ctx.json({ ok: false, error: 'Too many files.' }, 400);
     // array_key_exists(): auch ein null-Wert zählt als vorhanden
     const wantOnline = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : null;

@@ -63,13 +63,14 @@ continue" below.
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
+| 31 | CS-5 | Code pages moderation: limits (used when saving; a page above a lowered limit may only get smaller), block/unblock, delete with the typed address (own address held for nobody), ban/unban an account (optionally blocking all its code pages), More code pages for free, the moderation log, filters and search, the source viewer, `Referrer-Policy: no-referrer`; notices inside the slot-lock transaction; the editor's banned state (on `feature/cs5-moderation`; tests `app/test/code-moderation.http.test.ts`, browser flow `tests/e2e/code-moderation.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
-- Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
+- Code pages: the rest of CS-6 (see follow-ups); CS-5 is on `feature/cs5-moderation`.
 - Later (Stage C): `ROADMAP.md` §4.2.
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
@@ -87,7 +88,7 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
-   - Code pages: CS-5 (moderation), the rest of CS-6.
+   - Code pages: the rest of CS-6; CS-5 (moderation) is on `feature/cs5-moderation`.
    - Status pages: the rest of ST-4, then ST-5, ST-7.
    - Later: Stage C (`ROADMAP.md` §4.2).
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
@@ -107,10 +108,14 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      type-check the test files.
    - `status_outbox.class` (VARCHAR(8)) is too short for `broadcast` – widen it before ST-6.
    - The native-dialog check also matches regular-expression literals and comments.
-   - CS-4: saving still uses the fixed size limits (take them from the `code_pages` settings in `codeWrite`, with the
-     "page already over a lowered limit" rule); the terms page doesn't show the limits and both prices yet; nobody is
-     told when a refund takes code pages offline (needs notifications with `ref`, CS-5); the editor bootstrap still
+   - CS-4: saving uses the `code_pages` limits since CS-5; the terms page doesn't show the limits and both prices
+     yet; nobody is told when a refund takes code pages offline; the editor bootstrap still
      lacks `pages[].code` and the code summary (CS-6).
+   - CS-5: turning code pages back on for an account leaves its blocked pages blocked (the flash names how many);
+     the moderation log shows the last 30 entries without paging; a code page without an address (no slot points to it)
+     can't be deleted (the server refuses it), only blocked; the free unlocks and the limits write their log line after
+     their own commit (not in one transaction); the access table lists only `code_page` holders, not `code_more`; the
+     source viewer loads every file of the page to show one.
    - HC-6a: the free unlock in *Admin → Code pages* (`app/src/code/admin.ts`) still books through `hcAdd` (no audit
      line) – switch it to `grantFeature`. Not in HC-6a: bulk grants, the History tab with Reverse, freeze/unfreeze
      (HC-6b) and codes (HC-9).
