@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discordRequest } from '../src/updates/discord.js';
 import { PHP_SKIP, phpFile, phpRoot } from './support/phpRef.js';
+import { phpUserAgent } from './support/discordParity.js';
 
 // Antworten des Lauschers je Pfad (/r/<name>); null = nie antworten, 'close' = ohne Antwort schließen,
 // { partial } = nur den Anfang schicken und dann warten
@@ -172,7 +173,8 @@ test('Discord requests leave the server byte for byte like curl in PHP', { skip:
     const ours = await discordRequest(method, base + path, body as never, headers);
     assert.deepEqual(ours, theirs, path);
     assert.equal(captured.length, 2, path);
-    assert.deepEqual(raw(captured[1]), raw(captured[0]), path);
+    // captured[0] kam von PHP (zuerst gesendet): dort steht im User-Agent noch die feste Version 2.2
+    assert.deepEqual(raw(captured[1]), raw(phpUserAgent(captured[0])), path);
   }
 });
 

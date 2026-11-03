@@ -1,0 +1,29 @@
+# Neue Version auf main → Git-Tag und GitHub-Release mit den Notizen aus CHANGELOG.md und einem ZIP.
+# Fehlende Releases für ältere Versionen (mit vorhandenem Tag) werden dabei nachgeholt.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION, CHANGELOG.md]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    # Auch von Hand gestartet nur auf main (sonst bekäme ein anderer Branch das Tag)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish missing releases
+        run: bash scripts/publish-releases.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

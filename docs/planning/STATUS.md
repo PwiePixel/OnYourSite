@@ -76,30 +76,38 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- Everything in v1 of the roadmap is built: owner decisions (#19), CS-6, CS-5, ST-4, ST-5, ST-7, PD-5, PD-6, HC-8,
-  HC-7a, HC-6b, HC-9 and HC-7b are together on `feature/roadmap-v1` (one pull request). The single branches stay as
-  they were pushed.
-- After the merge: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of
+- Roadmap v1 is in `main` (PR #20, squash commit `e41af5b`). `feature/release-system-node` brings the release system
+  of the old PHP branch `feature/release-system` to Node (3.1.0, see the handoff, point 2).
+- After that: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of
   Stage C (`ROADMAP.md` §4.2).
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9), 21 shop mail (HC-7b) – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9), 21 shop mail (HC-7b), 22 update history (release system) – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
-1. **`main`** holds 3.0 and the new features (PR #15 and PR #14, squash commits `2e6f6de` and `66207f6`). Deploy with
-   `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
-2. **`feature/roadmap-v1`** combines every branch built after that, merged in this order: `feature/owner-decisions`
-   (#19), `test-seed`, `pd6-installer-domains`, `domains-admin-mode`, `cs6-rest`, `st4-rest`, `pd5-domains-admin`,
-   `cs5-moderation`, `hc8-streaks`, `hc7a-lifecycle`, `hc6b-admin`, `hc9-codes`, `hc7b-mails`, `st5-channels`,
-   `st7-addons`. Tests: `cd app && npx tsc --noEmit -p . && npm test` (with `OYS_PHP_REF=<php-2.x checkout>` the PHP
-   comparisons run too; `npm run test:seed` rebuilds the test database first). The only failing test in this container
-   is "profile handles keep exactly the letters and digits PHP keeps (all code points)" – the local PCRE has older
-   Unicode tables. The browser flows (`tests/e2e/*.js`) run on their own, each starting the site itself.
-   After the deploy: `onyoursite-jobs.timer` runs the background jobs every 5 minutes; switch on the Premium options
-   in *Admin → Honeycombs → Catalogue & prices* when Premium should go on sale; run `install.sh --domains` once before
-   custom domains go live.
+1. **`main`** holds 3.0, the new features and roadmap v1 (PR #15, #14 and #20, squash commits `2e6f6de`, `66207f6` and
+   `e41af5b`). Deploy with `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord
+   bot, see 5). After the deploy: `onyoursite-jobs.timer` runs the background jobs every 5 minutes; switch on the
+   Premium options in *Admin → Honeycombs → Catalogue & prices* when Premium should go on sale; run
+   `install.sh --domains` once before custom domains go live. Tests: `cd app && npx tsc --noEmit -p . && npm test`
+   (with `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too; `npm run test:seed` rebuilds the test database
+   first). The only failing test in this container is "profile handles keep exactly the letters and digits PHP keeps
+   (all code points)" – the local PCRE has older Unicode tables. The browser flows (`tests/e2e/*.js`) run on their own,
+   each starting the site itself.
+2. **`feature/release-system-node`** (on top of `main`): `VERSION` (3.1.0, the same number in `app/package.json` and
+   its lock file), `CHANGELOG.md` (2.0.0 – 3.1.0), `scripts/release.sh X.Y.Z`, `scripts/publish-releases.sh` with
+   `.github/workflows/release.yml` (tag and GitHub release with the notes and a source ZIP when `VERSION` or
+   `CHANGELOG.md` change on `main`; older versions only if their tag exists), the changelog check for pull requests
+   (label `no-changelog`), a pull request template, `.gitattributes`. The admin menu shows the version
+   (`app/src/version.ts`), Discord requests send it. Schema step 22 `updateHistory` publishes the unchanged 2.0 – 2.2
+   drafts, adds their "Shipped" milestones while the roadmap is empty and writes drafts for 3.0 and 3.1 (only 3.1
+   announces itself on Discord). Tests: `app/test/release.test.ts`, `schema.test.ts`, the version line in
+   `tests/e2e/admin-split.js`. The old branches were checked against `main`: `feature/cloudflare-tunnel` and
+   `fix/review-followups` are in `main` in their later form (`bc0cf0a`, `ca0e647`, `92ee8ba` and the Node port),
+   the third old branch holds an older state of PR #14 – nothing of them is missing. Older tags (v2.0.0 …
+   v3.0.0) can be set by hand on their commits; the workflow then publishes their releases too.
 3. **Open points** of the single items are listed under 6 (follow-ups). From PD-5: the globe badge for pages with a
    live domain in the admin user list (design §5.4 last bullet), "place in line" and "N waiting" in the list and the
    Hostnames row, a copy button for "Customers point to", the problem as text instead of its code, the Cloudflare docs

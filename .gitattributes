@@ -1,0 +1,7 @@
+# Nicht im ZIP eines Releases (nur für die Entwicklung)
+/.github export-ignore
+/scripts export-ignore
+/tests export-ignore
+/app/test export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore

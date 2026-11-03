@@ -48,6 +48,7 @@ export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeic
 export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_day, best_streak), aus den Tagesbuchungen nachgetragen
 export const V_SHOP_EVENT_CODES = 20; // Honigwaben: Event-Codes des Teams (hc_codes)
 export const V_SHOP_MAIL = 21; // Honigwaben: Mails „endet bald“/„beendet“ (hc_mail_outbox, hc_accounts.mail_reminders)
+export const V_UPDATE_HISTORY = 22; // Updates: Verlauf 2.0–2.2 veröffentlichen, Entwürfe für 3.0 und 3.1 anlegen
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -93,6 +94,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SHOP_STREAKS, name: 'shopStreaks', run: shopStreaks },
   { version: V_SHOP_EVENT_CODES, name: 'shopEventCodes', run: shopEventCodes },
   { version: V_SHOP_MAIL, name: 'shopMail', run: shopMail },
+  { version: V_UPDATE_HISTORY, name: 'updateHistory', run: updateHistory },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1244,6 +1246,10 @@ async function brandingLegacy(conn: PoolConnection): Promise<void> {
 }
 
 type Seed = [string | null, string, string, string, string];
+// Fertige Etappe je Seed (für „Shipped“ auf der Roadmap, V_UPDATE_HISTORY) – gleiche Reihenfolge wie UPDATE_SEEDS
+// Veröffentlichungszeit der Seeds ohne Datum (2.2 erschien am 29.10.2026)
+const SEED_RELEASED_AT = '2026-10-29 12:00:00';
+const SEED_MILESTONES = ['New editor, themes and blocks', 'Security review', 'English interface, new themes and phones', 'Updates page, roadmap and Discord'];
 const UPDATE_SEEDS: Seed[] = [
   ['2026-10-27 18:00:00', '2.0', 'new', 'OnYourSite 2.0 – rebuilt from the ground up',
     'Your page got a complete makeover:\n\n'
@@ -1574,4 +1580,80 @@ async function shopMail(conn: PoolConnection): Promise<void> {
     ) ${OPTS}`);
   // Schalter „Email me before an unlock ends“ (Standard an)
   await addColumn(conn, 'hc_accounts', 'mail_reminders', 'TINYINT(1) NOT NULL DEFAULT 1');
+}
+
+// Neue Einträge für /updates: als Entwürfe, damit der Admin sie liest und mit einem Klick veröffentlicht (und in
+// Discord ankündigt). Nur die neueste Version kündigt sich beim Veröffentlichen an – sonst zwei Pings auf einmal.
+const NEW_UPDATE_DRAFTS: Array<[string, string, string, string, boolean]> = [
+  ['3.0', 'improved', 'OnYourSite 3.0 – faster, with a status page and the honeycomb shop',
+    'OnYourSite was rebuilt on a new foundation – your pages, links and stats stay exactly as they were.\n\n'
+    + '- **Faster and more reliable** – the whole site runs on new technology; you only have to log in once more\n'
+    + '- **Our own dialogs** – confirmations and notices in the editor now match the design, no browser pop-ups\n'
+    + '- **Status page** – `status.on-your.site` shows whether everything works, with incidents and maintenance\n'
+    + '- **Honeycomb shop** – the new **Honeycombs** tab shows your balance and every booking, and you can spend honeycombs on extras\n'
+    + '- **Premium** – includes hiding the OnYourSite branding\n'
+    + '- **Suggestions** – the decided ideas of our Discord community on their own page', false],
+  ['3.1', 'new', 'Code pages on any page, your own status page and honeycomb streaks',
+    '- **Code pages on your page slots** – each of your pages can show a link page or your own HTML, CSS and JavaScript page; switch any time and download your files\n'
+    + '- **Your own status page** – get one in the shop, add your components and checks, and get alerts by email or webhook\n'
+    + '- **More checks** – add-ons for more and faster checks on your status page; Premium raises the limits\n'
+    + '- **Streaks** – +15 honeycombs for 7 days in a row, +50 for 30 days in a row\n'
+    + '- **Event codes** – redeem codes from the team for honeycombs\n'
+    + '- **Reminders** – an email before a time-limited extra ends (you can turn it off)\n'
+    + '- **Custom domains** – getting ready behind the scenes', true],
+];
+
+// Bisheriger Verlauf sofort auf /updates (aus feature/release-system, dort Migration 3 der PHP-Version): unveränderte
+// Entwürfe aus UPDATE_SEEDS veröffentlichen und – solange die Roadmap leer ist – die fertigen Etappen als „Shipped“
+// eintragen und verknüpfen. Was der Admin schon geändert hat, bleibt, wie es ist; hat er eine Version schon selbst
+// veröffentlicht, wird der Entwurf nicht doppelt veröffentlicht. Danach die Entwürfe für 3.0 und 3.1 (nur, wenn es
+// diese Version noch nicht gibt).
+async function updateHistory(conn: PoolConnection): Promise<void> {
+  // Alles oder nichts: bricht der Schritt ab, wiederholt ihn der nächste Start vollständig (sonst wäre die Roadmap
+  // dann nicht mehr leer, und den übrigen Einträgen fehlten ihre Etappen)
+  await conn.beginTransaction();
+  try {
+    await updateHistoryRows(conn);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  }
+}
+
+async function updateHistoryRows(conn: PoolConnection): Promise<void> {
+  const now = date('Y-m-d H:i:s');
+  const sameVersion = "TRIM(LEADING 'v' FROM LOWER(version))";
+  const emptyRoadmap = intval((await rows(conn, 'SELECT COUNT(*) AS n FROM milestones'))[0]?.n) === 0;
+  let position = 0;
+  for (let i = 0; i < UPDATE_SEEDS.length; i++) {
+    const [, version, , title] = UPDATE_SEEDS[i];
+    const found = await rows(conn, 'SELECT * FROM updates WHERE title = ? AND version = ? ORDER BY id LIMIT 1', [title, version]);
+    if (!found.length) continue;
+    let row = found[0];
+    // Gleiche Version, oder gleicher Titel ohne Version (ein Titel wie „Security improvements“ allein sagt nichts)
+    const own = await rows(conn, `SELECT id, published_at FROM updates WHERE is_published = 1 AND id <> ? AND (${sameVersion} = ? OR (title = ? AND (version IS NULL OR version = ''))) ORDER BY id LIMIT 1`,
+      [row.id, version, title]);
+    // Schon selbst eingetragen: der Meilenstein zeigt auf dieses Update, der Entwurf bleibt Entwurf
+    if (own.length) row = { ...own[0], is_published: 1, created_at: '', updated_at: '-' };
+    // Ohne Datum (2.2): der Tag des Releases, nicht der dieses Updates (CHANGELOG.md)
+    const shippedAt = phpTruthy(row.published_at) ? String(row.published_at) : SEED_RELEASED_AT;
+    let milestoneId: number | null = null;
+    if (emptyRoadmap) {
+      const res = await run(conn, "INSERT INTO milestones (title, description, status, target, position, is_public, started_at, done_at, created_at, updated_at) VALUES (?, '', 'done', '', ?, 1, ?, ?, ?, ?)",
+        [SEED_MILESTONES[i], ++position, shippedAt, shippedAt, now, now]);
+      milestoneId = res.insertId;
+    }
+    if (!phpTruthy(row.is_published) && String(row.created_at) === String(row.updated_at)) {
+      await run(conn, 'UPDATE updates SET is_published = 1, published_at = ?, milestone_id = ?, updated_at = ? WHERE id = ?', [shippedAt, milestoneId, now, row.id]);
+    } else if (milestoneId !== null) {
+      await run(conn, 'UPDATE updates SET milestone_id = ? WHERE id = ? AND milestone_id IS NULL', [milestoneId, row.id]);
+    }
+  }
+  for (const [version, category, title, body, announce] of NEW_UPDATE_DRAFTS) {
+    const have = await rows(conn, `SELECT id FROM updates WHERE ${sameVersion} IN (?, ?) OR title = ? LIMIT 1`, [version, version + '.0', title]);
+    if (have.length) continue;
+    await run(conn, 'INSERT INTO updates (title, body, version, category, is_published, published_at, discord_announce, created_at, updated_at) VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?)',
+      [title, body, version, category, announce ? 1 : 0, now, now]);
+  }
 }

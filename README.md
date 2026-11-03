@@ -100,7 +100,7 @@ Everything is managed in the admin panel (`/admin`):
 
   Whether an update gets announced is decided per update (“Announce on Discord when published” – the default is under *Defaults*); already published updates can be announced later with “Post to Discord”. Editing a published update also edits its Discord message (without pinging again); moving it back to drafts or deleting it removes the message. The **Discord posts** list shows every message with its state; if Discord can’t be reached, the website or the bot tries again and the list says what went wrong – nothing is lost, and “Remove from Discord” on the draft cleans up by hand. Webhook links are stored encrypted and never shown again. A bot token from the old setup gets its own card: switch to the bot or a webhook and the token is deleted from the website.
 
-Every update has a permanent link `/updates/<number>` – Discord posts and the feed use it, so it keeps working when older updates move to page 2. The roadmap has its own page at `/roadmap`, and `/suggestions` appears once the team turns it on under **Admin → Community**; the three pages link to each other. After the update, the release notes of versions 2.0 to 2.2 are already waiting as drafts – read through them and publish them with one click. Only 2.2 is announced on Discord when published; use “Post to Discord” if you want the older ones there too.
+Every update has a permanent link `/updates/<number>` – Discord posts and the feed use it, so it keeps working when older updates move to page 2. The roadmap has its own page at `/roadmap`, and `/suggestions` appears once the team turns it on under **Admin → Community**; the three pages link to each other. After the update to 3.1, the release notes of versions 2.0 to 2.2 are published on `/updates` and listed under “Shipped” while the roadmap is still empty (drafts you changed and versions you entered yourself stay as they are). The notes for 3.0 and 3.1 wait as drafts – read them and publish them with one click. Only 3.1 is announced on Discord when published; use “Post to Discord” if you want 3.0 there too.
 
 ## Development
 
@@ -182,7 +182,20 @@ static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 discord-bot/           Discord bot (Node.js): welcome, suggestions, support – see its README
 server/                Installer for your own server (one file does everything), backup, certificate check – see server/README.md
+CHANGELOG.md, VERSION  What changed in which version (GitHub releases are created from it)
+scripts/               release.sh (prepare a version), publish-releases.sh (used by GitHub Actions)
+.github/               Release workflow, changelog check, pull request template
 ```
+
+## Releases
+
+Every change is written down in [`CHANGELOG.md`](CHANGELOG.md) – first under **[Unreleased]**. To release a version:
+
+1. Run `scripts/release.sh 3.2.0` – it moves the entries from [Unreleased] into a new section `## [3.2.0] - YYYY-MM-DD` and writes the number into `VERSION`, `app/package.json` and `app/package-lock.json`.
+2. Commit and merge it into `main`.
+3. GitHub creates the tag `v3.2.0` and a release with exactly these notes and the source code as a ZIP (Actions → *Release*). The installed version is shown at the bottom of the admin menu.
+
+Pull requests without an entry in `CHANGELOG.md` get a failing *Changelog* check as a reminder (add the label `no-changelog` to skip it). The public `/updates` page is separate: it is written for visitors in the admin panel. After updating to 3.1, the release notes of 2.0 – 2.2 are published there and drafts for 3.0 and 3.1 are waiting in *Admin → Updates* – read them and publish them (only 3.1 is announced on Discord; use “Post to Discord” for 3.0 if you want it there too).
 
 ## Privacy
 

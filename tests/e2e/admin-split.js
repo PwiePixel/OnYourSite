@@ -107,6 +107,12 @@ const shot = async (p, name) => SHOTS && p.screenshot({ path: path.join(SHOTS, n
     await Promise.all([p.waitForNavigation(), p.click('button[type=submit]')]);
     await p.goto(BASE + '/admin', { waitUntil: 'networkidle' });
 
+    // Installierte Version unten im Menü (Datei VERSION)
+    const version = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim();
+    const versionLine = p.locator('aside p[title^="Installed version"]');
+    ok(await versionLine.isVisible(), 'the admin menu shows the installed version');
+    ok((await versionLine.innerText()).trim() === 'OnYourSite v' + version, 'the version line reads "OnYourSite v' + version + '"');
+
     // Zwei Einträge in der Navigation
     const hcNav = p.locator('#nav-honeycombs');
     const codeNav = p.locator('#nav-code-pages');
