@@ -98,8 +98,8 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.deepEqual(c.options, [{ item: 'code_page', label: 'Unlock', days: null, units: 1, listPrice: 100, price: 100, offer: null, availableUntil: null, affordable: true, note: '' }]);
   assert.deepEqual(st.owned, []);
   const rules = (st.earn as { rules: Array<{ key: string; amount: number; progress: unknown }> }).rules;
-  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['profile', 20], ['views', 10], ['gifts', 0]]);
-  assert.deepEqual(rules[2].progress, { value: 0, goal: 20 });
+  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['streak', 15], ['profile', 20], ['views', 10], ['gifts', 0]]);
+  assert.deepEqual(rules.find((r) => r.key === 'views')?.progress, { value: 0, goal: 20 });
   // POST geht genauso (z. B. aus einem Formular), und der Kontostand zählt für „affordable“
   const poor = jsonBody(await api('shop', { userId: 9, json: {} })).shop as State;
   assert.equal(poor.features[0].options[0].affordable, false);

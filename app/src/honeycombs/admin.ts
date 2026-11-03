@@ -2,6 +2,7 @@
 // ihre Aktionen (POST /admin mit hc_action). Jede Aktion schreibt eine Zeile in hc_audit (nur IDs, Beträge und
 // Schlüssel). Felder mit Arrays werden abgelehnt (kein Umwandeln wie in PHP). Admin = is_admin des angemeldeten Kontos;
 // CSRF und die Bestätigung (_confirmed) prüft der Verteiler (admin/page.ts) vorher.
+import { EARN_KEYS, clampEarn, earnLimitsFrom } from './earn.js';
 import { transaction, type Db } from '../db.js';
 import { intval, phpStr, type PhpArray } from '../php.js';
 import { phpJson } from '../html.js';
@@ -90,7 +91,7 @@ function storedObject(raw: string): Record<string, unknown> {
 // Was das Formular nicht schickt, bleibt; unbekannte Schlüssel (spätere Schritte) und der alte Preis der Code-Seite
 // bleiben stehen – der Preis gilt nur noch im Katalog.
 export async function saveRules(post: PhpArray, adminId: number): Promise<AdminResult> {
-  const f = textFields(post, RULE_KEYS);
+  const f = textFields(post, [...RULE_KEYS, ...EARN_KEYS]);
   if (!f) return { error: BAD };
   return transaction(async (_conn, db: Db) => {
     const raw = phpStr(await db.value("SELECT meta_value FROM oys_meta WHERE meta_key = 'honeycombs' FOR UPDATE"));
@@ -103,6 +104,14 @@ export async function saveRules(post: PhpArray, adminId: number): Promise<AdminR
       if (key === 'views_step') v = Math.max(1, v);
       next[key] = v;
       if (v !== before[key]) changed[key] = v;
+    }
+    // Serie und Tageslimit (HC-8): eigene Bereiche, das Limit mindestens 50
+    const beforeEarn = earnLimitsFrom(raw);
+    for (const key of EARN_KEYS) {
+      if (post[key] === undefined) continue;
+      const v = clampEarn(key, phpInt(f[key]));
+      next[key] = v;
+      if (v !== beforeEarn[key]) changed[key] = v;
     }
     await db.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [phpJson(next)]);
     if (Object.keys(changed).length) await audit(db, adminId, 'settings', null, 'honeycombs', changed);
