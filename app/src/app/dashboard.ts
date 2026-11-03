@@ -10,7 +10,8 @@ import { blockForEditor, loadBlocks, pageForEditor, userPages } from '../content
 import { DEFAULT_THEME, fontChoices, layouts, themes } from '../content/themes.js';
 import { brands, bxIcons } from '../content/social.js';
 import { uploadLimitMb } from '../content/uploads.js';
-import { hcEarn, hcForEditor } from '../honeycombs/honeycombs.js';
+import { hcForEditor } from '../honeycombs/honeycombs.js';
+import { earnOnVisit, streakOf } from '../honeycombs/earn.js';
 import { isPremiumRow, premiumState } from '../honeycombs/premium.js';
 import { BOOTSTRAP_NOTICES_MAX, notices } from '../notify/types.js';
 import { bellMarkup } from '../views/partials/ui.js';
@@ -71,7 +72,9 @@ export async function dashboard(ctx: Ctx, user: Row): Promise<void> {
   const original = ctx.session?.get('original_admin_id');
   const isImpersonating = original !== undefined && original !== null;
   // Honigwaben fürs Vorbeischauen (nicht, wenn ein Admin als Nutzer eingeloggt ist)
-  const honeycombs = await hcForEditor(userId, isImpersonating ? [] : await hcEarn(userId));
+  // Seit HC-8 mit Serie und Tageslimit (earn.ts); die Serie zusätzlich unter honeycombs.streak
+  const hcBase = await hcForEditor(userId, isImpersonating ? [] : await earnOnVisit(userId));
+  const honeycombs = { ...hcBase, streak: await streakOf(userId) };
   // Seitenplätze: max_pages, unbegrenzt nur für das Team (code/slots.ts)
   const allowance = await pageAllowance(ctx, user);
   // Echter Premium-Stand des Kontos aus der Datenbank (auch im Nutzer-Modus eines Admins der des Nutzers)

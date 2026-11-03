@@ -1,6 +1,7 @@
 // /dashboard/api/{aktion}: JSON-Schnittstelle des Editors (lib/routes_app.php, Abschnitt „Editor-API“).
 // Die Reihenfolge der Prüfungen ist die von PHP: CSRF vor dem JSON, Seiten-ID vor allem anderen (auch vor Code-Seite
 // und Upload), dann die Aktion. Jede Antwort endet mit ctx.json() (= oys_json(); exit).
+import { streakOf } from '../honeycombs/earn.js';
 import type { Ctx } from '../web/ctx.js';
 import { exec, transaction, type Db, type Param, type Row } from '../db.js';
 import { csrfCheck, csrfFromRequest, rateHit, rateLimit, rateOk } from '../web/security.js';
@@ -156,7 +157,7 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
 
   // Honigwaben und Code-Seite gehören zum Konto, nicht zu einer Profilseite
   if (action === 'honeycombs') {
-    ctx.json({ ok: true, honeycombs: await hcForEditor(userId) });
+    ctx.json({ ok: true, honeycombs: { ...await hcForEditor(userId), streak: await streakOf(userId) } });
   }
   // Glocke, Nachrichten und Termine ebenso (auch ohne gezeigte Profilseite)
   await accountApi(ctx, userId, action, isPost, input);

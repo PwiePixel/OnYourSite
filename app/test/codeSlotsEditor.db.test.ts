@@ -6,7 +6,7 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { makeTestCtx } from '../src/web/ctx.js';
 import { appRoutes } from '../src/app/dispatch.js';
 import { CODE_SETTINGS_DEFAULTS, codeSettings } from '../src/code/settings.js';
-import { ensureSchema, V_CODE_SLOTS_LIVE } from '../src/schema.js';
+import { ensureSchema, SCHEMA_VERSION, V_CODE_SLOTS_LIVE } from '../src/schema.js';
 import { CSRF, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 
 let t: TestDb;
@@ -70,7 +70,7 @@ test('schema step 18: a max_on_pages 0 saved while the feature was dark becomes 
   assert.equal((await codeSettings()).max_on_pages, 1);
   assert.equal(JSON.parse(await again('{"max_on_pages":2,"max_files":30}')).max_on_pages, 2);
   assert.equal(await again('{broken'), '{broken');
-  assert.equal(await n("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), V_CODE_SLOTS_LIVE);
+  assert.equal(await n("SELECT meta_value FROM oys_meta WHERE meta_key = 'schema_version'"), SCHEMA_VERSION);
   await q("DELETE FROM oys_meta WHERE meta_key = 'code_pages'");
 });
 

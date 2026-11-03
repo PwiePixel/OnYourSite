@@ -77,6 +77,13 @@ Next, as soon as their dependencies are in:
 - Premium and domains: PD-6 (installer: Cloudflare for SaaS, domain worker unit); PD-5 is on `feature/pd5-domains-admin`.
 - Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
 - Status pages: ST-5, ST-7 (the rest of ST-4 is on `feature/st4-rest`).
+| 34 | HC-8 | Streaks and the daily cap: `earnOnVisit()` (`app/src/honeycombs/earn.ts`) on `GET /dashboard` – +15 every 7 days and +50 every 30 days in a row (30 wins), daily cap 300 for profile and views under the account lock (NOWAIT), 10-second throttle, nothing while frozen or in admin mode; schema step 19 back-fills streaks from the last 60 days; `honeycombs.streak` in the bootstrap and the `honeycombs` API, `earn.streak`/`capLeft`/`cap` and the rule "Keep a streak" in the shop, the streak chip and the daily-limit hint in the editor, the new fields in *Admin → Honeycombs → Earning rules* (on `feature/hc8-streaks`; tests `app/test/hc-streaks.http.test.ts`, browser flow `tests/e2e/hc-streaks.js`) | Built and reviewed |
+| – | all others | | Open |
+
+Next, as soon as their dependencies are in:
+- Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
+- Shop: HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b (HC-8 is on `feature/hc8-streaks`).
+- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: the rest of CS-6 (see follow-ups); CS-5 is on `feature/cs5-moderation`.
@@ -84,7 +91,7 @@ Next, as soon as their dependencies are in:
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records, 17 domain blocks, 18 code slots live – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8, on its branch) – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
@@ -102,6 +109,7 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      not-set-up card; `removeDomain()` re-reads under REPEATABLE READ, so a takeover during an admin remove can end in
      "kept changing" (500) – read with a locking read in the retry.
    - Code pages: CS-5 (moderation), the rest of CS-6.
+   - Shop: HC-8 is on `feature/hc8-streaks`; then HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
    - Code pages: the rest of CS-6; CS-5 (moderation) is on `feature/cs5-moderation`.
@@ -150,6 +158,12 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
      can't be deleted (the server refuses it), only blocked; the free unlocks and the limits write their log line after
      their own commit (not in one transaction); the access table lists only `code_page` holders, not `code_more`; the
      source viewer loads every file of the page to show one.
+   - HC-8: `hcEarn()` stays for the PHP comparison only; a PHP rollback drops the new keys (`streak_week`,
+     `streak_month`, `daily_cap`) from the rules when an admin saves them there; the streak counts a day once the editor
+     opens, also when the daily reward is 0 (the design says "if the daily row was booked"; counting the day itself also
+     works with `daily` 0 and with daily rows a PHP rollback wrote); a profile or views reward above the daily limit is
+     never paid (the admin form doesn't warn yet); the back-fill (schema step 19) reads all daily rows of the last 62
+     days in one query and writes one row per user – fine for today's size, batch it for a much larger ledger.
    - HC-6a: the free unlock in *Admin → Code pages* (`app/src/code/admin.ts`) still books through `hcAdd` (no audit
      line) – switch it to `grantFeature`. Not in HC-6a: bulk grants, the History tab with Reverse, freeze/unfreeze
      (HC-6b) and codes (HC-9).

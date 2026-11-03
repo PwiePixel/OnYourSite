@@ -2770,7 +2770,11 @@
       html += shopBanner('warn', 'bx-pause-circle', 'Your honeycombs are on hold' + (st.frozenReason ? ': ' + st.frozenReason.replace(/[.\s]+$/, '') : '') +
         '. Earning and buying are paused – your unlocks keep working.');
     }
-    html += '<div class="panel shop-wallet"><div class="hc-big"><i class="bx bx-hive"></i><div><b>' + fmtNum(st.balance) + '</b><small>honeycombs</small></div></div>' +
+    var sk = st.earn && st.earn.streak;
+    // Serie: „Day 4 · best 12“ (nur, wenn es schon eine gab)
+    var chip = sk && (sk.days > 0 || sk.best > 0)
+      ? '<span class="block mt-1"><span class="bdg hc" id="shopStreak"><i class="bx bx-flame"></i> ' + (sk.days > 0 ? 'Day ' + fmtNum(sk.days) : 'No streak') + ' · best ' + fmtNum(sk.best) + '</span></span>' : '';
+    html += '<div class="panel shop-wallet"><div class="hc-big"><i class="bx bx-hive"></i><div class="min-w-0"><b>' + fmtNum(st.balance) + '</b><small>honeycombs</small>' + chip + '</div></div>' +
       '<div class="shop-wallet-actions"><button type="button" class="btn-ghost" data-shop-go="earn"><i class="bx bx-trending-up"></i> How to earn</button>' +
       '<button type="button" class="btn-ghost" data-shop-go="history"><i class="bx bx-history"></i> History</button></div></div>';
     html += '<h2 class="section-title mt-8">Unlock</h2>' + (st.features.length
@@ -2779,7 +2783,10 @@
     html += '<h2 class="section-title mt-8">Your unlocks</h2>' + (st.owned.length
       ? '<div class="panel"><div class="hc-rules">' + st.owned.map(ownedHtml).join('') + '</div></div>'
       : '<div class="panel"><p class="hint m-0">Nothing unlocked yet. Pick something above.</p></div>');
-    html += '<h2 class="section-title mt-8" id="shopEarn">Earn honeycombs</h2><div class="hc-rules">' + st.earn.rules.map(earnHtml).join('') + '</div>';
+    html += '<h2 class="section-title mt-8" id="shopEarn">Earn honeycombs</h2><div class="hc-rules">' + st.earn.rules.map(earnHtml).join('') + '</div>' +
+      (st.earn.cap ? '<p class="hint" id="shopCap">' + (st.earn.capLeft > 0
+        ? 'Daily limit: ' + fmtNum(st.earn.capLeft) + ' of ' + fmtNum(st.earn.cap) + ' left today – for the profile and visitor rewards. Active days and streaks always count.'
+        : 'Daily limit reached – the rest arrives tomorrow. Active days and streaks always count.') + '</p>' : '');
     html += '<h2 class="section-title mt-8" id="shopHistory">History</h2><div class="panel" id="shopHist">' + histHtml() + '</div>';
     root.innerHTML = html;
   }

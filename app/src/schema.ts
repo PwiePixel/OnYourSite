@@ -11,7 +11,7 @@
 // über notify(…, { db: conn }). Hintergrunddienste migrieren nie – sie warten mit schemaAtLeast(V_…) auf ihren Schritt.
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { withConnection } from './db.js';
-import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower } from './php.js';
+import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower, strtotime, time } from './php.js';
 import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
 import { cleanCss } from './css.js';
@@ -45,6 +45,7 @@ export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute a
 export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Cloudflare (Apex: Besitz-TXT, DCV) je Domain
 export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnamen bleiben gesperrt, auch nach „Entfernen“ (R2)
 export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeichertes max_on_pages 0 aus der dunklen Phase wird 1
+export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_day, best_streak), aus den Tagesbuchungen nachgetragen
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -87,6 +88,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_DOMAIN_RECORDS, name: 'domainRecords', run: domainRecords },
   { version: V_DOMAIN_BLOCKS, name: 'domainBlocks', run: domainBlocks },
   { version: V_CODE_SLOTS_LIVE, name: 'codeSlotsLive', run: codeSlotsLive },
+  { version: V_SHOP_STREAKS, name: 'shopStreaks', run: shopStreaks },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1488,4 +1490,44 @@ async function codeSlotsLive(conn: PoolConnection): Promise<void> {
   if (o.max_on_pages === undefined || Number(o.max_on_pages) !== 0) return;
   o.max_on_pages = 1;
   await run(conn, "UPDATE oys_meta SET meta_value = ? WHERE meta_key = 'code_pages'", [JSON.stringify(o)]);
+}
+
+// HC-8: Serie je Konto. Nachtragen aus den Tagesbuchungen der letzten 60 Tage (ref = Y-m-d): die Tage in Folge, die
+// heute oder gestern enden, werden die laufende Serie; die längste Folge in diesem Zeitraum die beste. Konten ohne
+// Zeile in hc_accounts bekommen eine. Läuft der Schritt noch einmal, bleibt eine Serie, die schon weiterlief.
+export async function shopStreaks(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'hc_accounts', 'streak', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn(conn, 'hc_accounts', 'streak_day', 'DATE NULL');
+  await addColumn(conn, 'hc_accounts', 'best_streak', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  const today = date('Y-m-d');
+  const from = date('Y-m-d', time() - 61 * 86400);
+  // created_at schränkt über idx_reason_time ein; ref ist der Tag der Buchung
+  const list = await rows(conn, `SELECT user_id, ref FROM honeycomb_ledger WHERE reason = 'daily' AND created_at >= ? AND ref >= ? AND ref <= ?
+      AND ref REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ORDER BY user_id, ref`, [date('Y-m-d', time() - 62 * 86400) + ' 00:00:00', from, today]);
+  const now0 = date('Y-m-d H:i:s');
+  await run(conn, `INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) SELECT DISTINCT l.user_id, ?, ? FROM honeycomb_ledger l
+      JOIN users u ON u.id = l.user_id WHERE l.reason = 'daily' AND l.created_at >= ?`, [now0, now0, date('Y-m-d', time() - 62 * 86400) + ' 00:00:00']);
+  const byUser = new Map<number, string[]>();
+  for (const r of list) {
+    const uid = Number(r.user_id);
+    const days = byUser.get(uid) ?? [];
+    days.push(String(r.ref));
+    byUser.set(uid, days);
+  }
+  const next = (d: string): string => date('Y-m-d', (strtotime(d + ' +1 day') as number));
+  const yesterday = date('Y-m-d', (strtotime(today + ' -1 day') as number));
+  for (const [uid, days] of byUser) {
+    let len = 0;
+    let best = 0;
+    let prev = '';
+    for (const d of days) {
+      len = prev !== '' && next(prev) === d ? len + 1 : 1;
+      best = Math.max(best, len);
+      prev = d;
+    }
+    const current = prev === today || prev === yesterday ? len : 0;
+    // Nur Konten ohne gezählte Serie (ein zweiter Lauf überschreibt nichts, was der Editor schon gezählt hat)
+    await run(conn, `UPDATE hc_accounts SET streak = ?, streak_day = ?, best_streak = GREATEST(best_streak, ?)
+        WHERE user_id = ? AND streak_day IS NULL`, [Math.min(65535, current), current > 0 ? prev : null, Math.min(65535, best), uid]);
+  }
 }
