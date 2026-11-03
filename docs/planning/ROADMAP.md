@@ -939,6 +939,20 @@ main host, the Discord mock, the per-page cap.
 | C5 · Shop L1–L5 | after v1 | Q14 = a: L2 visitor milestones and the anniversary bonus first, then L1 invite friends, then L3 the new purchasable designs; L4 (address passes, storage) and L5 (community rewards) later |
 | Follow-ups | after v1 | custom domains for status pages (D9), code pages on custom domains (D9). The free status tier is not planned (Q7 = a). |
 
+### 4.2a Stage D – the owner's asks of 2026-11-03
+
+Recorded, not built yet. Each item gets its own branch from `main`, its own tests and a browser flow for new editor
+surfaces (2.3). Suggested order: D1 (a bug), D2, D3 (Christmas is close), then D6, D4 and D5.
+
+| PR | What | Notes for the build |
+|---|---|---|
+| D1 · Fix block reordering | Blocks in the editor can no longer be dragged into a new order – neither on phones nor on a PC. | The list uses SortableJS from `cdn.jsdelivr.net` (`app/src/app/views/dashboard.ts`, `static/js/editor.js` `renderBlocks()`, handle `.blk-drag`). Check first: the script loads (CDN reachable, no CSP or blocker), the instance survives `renderBlocks()` re-renders and tab switches, touch on the handle (`touch-action`, `delay`/`delayOnTouchOnly`, `forceFallback` for iOS), the bottom navigation on phones covering the list. Prove it with a browser flow that drags a block on desktop and on a phone viewport, then fix. Consider serving SortableJS from `static/vendor/` like CodeMirror. |
+| D2 · Bigger block picker | The "choose a block" selection gets bigger: larger tiles with icon, name and a short line of what the block does, easy to tap on phones. | Same design (Tailwind classes, colours, components). |
+| D3 · Christmas themes | More themes, now in the direction of Christmas and winter (e.g. snowy night, candy cane, gingerbread, Christmas market, frost). | Themes live in `app/src/content/themes.ts` and `static/css/themes.css` (30 today); every theme needs its preview in the gallery and must pass the contrast checks of the render tests. The snow effect already exists and fits. |
+| D4 · Beta site `beta.on-your.site` | A beta area where only approved beta testers can log in; they need an account on the main website. | Admin: a beta tester switch per user (and a list) in *Admin → Users*. `beta.<domain>` runs the beta build (own service and code folder from a branch, set up by the installer) on the same database or a copy – decide before building. Login on beta checks the flag; everyone else sees "This area is for beta testers". Reserve `beta` as an address (`RESERVED` in `app/src/helpers.ts`) and check that no page owns it yet (like `status`). |
+| D5 · Docs site `docs.on-your.site` | A user guide on the web that explains everything about using OnYourSite (not GitHub, not for developers): getting started, editor, blocks, themes and layouts, addresses, stats, honeycombs and the shop, code pages, status pages, custom domains, account and privacy. | Rendered by the website itself from Markdown in the repository (like `/updates`), with a search and links from the editor ("?" help links). English. Reserve `docs`. |
+| D6 · Short domain `onys.me` | Short links: pages also at `name.onys.me` and `onys.me/name` (README already promises it). | Second base domain in `config.json` (e.g. `short_domain`), routing in `app/src/router.ts` for both hosts, redirects to the main address or serve directly (decide), cookies stay on the main domain. Installer: ask for the short domain on its own step and ask the admin to add the zone `onys.me` to the existing Cloudflare API token (Zone · DNS · Edit, Zone · Zone · Read, plus the tunnel); then DNS records, tunnel rules, certificate. `--update` asks once if it isn't set. |
+
 ### 4.3 Milestones (what the owner sees)
 
 | Milestone | Reached with | Complete with | Owner's ask |
