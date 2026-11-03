@@ -134,15 +134,15 @@ records, 17 domain blocks, 18 code slots live – new steps take the next free n
    - PD-4: the worker stores only problem codes, so the editor can't show "Found: …" values; the server's
      `fastUntil` has no time zone (the editor counts 15 minutes itself); browser flows still missing: claiming another
      account's domain, the root-domain choice, a live domain with the forwarding switch, the paused view, polling
-     stops; the "Checks are delayed" line has no test. An admin working as a user may change domains (the designs
-     exempt staff; only spending is refused). Small: Enter in the domain field doesn't check the busy flag; after a 404
+     stops; the "Checks are delayed" line has no test. An admin working as a user can no longer change domains (R8), and –
+     assumed in the spirit of R8 while the owner was away, easy to undo – can't delete a page that has a custom domain
+     either (`page-delete` answers 403 `admin_mode`; other pages are deleted as before). Small: Enter in the domain field doesn't check the busy flag; after a 404
      the section shows the old domain until it reloads; a takeover keeps the old owner's forwarding setting;
      `domain-check` has no 403 without Premium (the worker refuses it) and `domain-settings` has no rate limit.
    - Domain worker (premium review, left open on purpose – retry policy for the lead): send domain mails from their own
      loop with a time budget instead of the minute step; a deadline for unknown TXT results and backoff for failed
      creates; storing a hostname ID although the version moved, and not counting deleted orphans in the daily sweep.
-   - Branding hint: extending the save hint to sibling and universal selectors would also warn on normal CSS such as
-     `.oys-main > *` – decide first.
+   - Branding hint: stays as it is (R9) – no warning for sibling and universal selectors.
    - Status page: the bot's setup reuses an existing public #alerts (saving it is refused now; setup could create a
      private channel instead); the post of an incident is found by the page's current address – store the URL in
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between

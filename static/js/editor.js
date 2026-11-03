@@ -3588,7 +3588,11 @@
         if (d.blockedReason) body += '<p class="hint">' + esc(d.blockedReason) + '</p>';
       } else if (d.state !== 'removing') body += dnsTableHtml(d);
     }
+    // R8: im Admin-Modus nur ansehen – der Server lehnt jede Änderung ab
+    if (r && r.adminMode) body = '<p class="hint text-amber-400"><i class="bx bx-lock-alt"></i> Custom domains can’t be changed in admin mode.</p>' + body;
     sec.innerHTML = '<h2 class="section-title">Custom domain <small>Show this page on your own domain</small></h2><div class="panel space-y-4">' + body + '</div>';
+    // Kopieren der DNS-Werte und der Weg in den Shop (nur ansehen) bleiben möglich
+    if (r && r.adminMode) $$('button:not([data-copy]):not([data-dom="shop"]), input', sec).forEach(function (el) { el.disabled = true; });
   }
   function domainAdd(claim, apexOk) {
     var input = $('#domainInput');
