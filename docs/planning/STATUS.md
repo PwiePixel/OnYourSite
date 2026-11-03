@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-02 16:35 (UTC+1).
+Last update: 2026-11-03 (UTC+1).
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -62,84 +62,53 @@ continue" below.
 | 32 | PD-4 | Custom domain in the editor: DNS records, live state, extra records for root domains | Built and reviewed |
 | 36 | HC-6a | Shop admin II: user details, unlock grants, refunds, purchases tab | Built and reviewed |
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`); Where it lives, Download files, the Code page card for new pages and the all-code-pages state (on `feature/cs6-rest`) | Built (small rest below) |
-| 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
-| 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`); address change, name rule with review, owner alerts, admin switch (on `feature/st4-rest`) | Built (small rest below) |
-| 43 | ST-5 | Status alert channels: extra email addresses (confirmation link minted by the notifier, only its sha256 stored, `GET|POST /_/status/verify/<token>` on the main host – GET only shows a button –, 7 days valid, resend after 10 minutes, at most 10 confirmation mails a page a day) and Discord webhooks (checked and tested when added; alerts as embeds without mentions; 5 rejections (401/404) turn it off with the mail "Your Discord alerts for … stopped working"; *Incident updates*: one post per incident, edited on updates, deleted with the incident, sent by the notifier, not the bot), alerts fanned out to confirmed channels with the event (`alerts.ts`), *Test* (3 per 10 minutes), *Recent alerts* for user pages, the warning when nothing is on, limit 3 (`limits.channels`), refused in admin mode – `app/src/status/channels.ts`, templates `email/status_verify.json`, `email/status_channel_alert.json` (on `feature/st5-channels`, based on `feature/st4-rest`; tests `app/test/status-channels.test.ts`, browser flow `tests/e2e/status-channels.js`) | Built and reviewed |
-| 44 | ST-7 | Status add-ons and Premium limits: `status_more_checks` (+10 checks for 30 days, up to 2 packs, 60) and `status_fast_checks` (every minute for 30 days, 80) in the shop with their rules (a page, not blocked, checks not paused by the team, not with Premium for good); `statusLimits` reads the packs and Premium at run time (free 10/3 min, packs up to 30, Premium 30 and every minute with 250 subscribers – channels and broadcasts stay as free, DECISIONS Q1 = b; the admin role counts as Premium) with the earliest end; the Premium perk text; the reconcile step `refreshStatusLimits` (`app/src/status/limitsSync.ts`: bumps the page for the checker, one bell per change of paused checks in `status_pages.limit_paused`); *Hide “Made with OnYourSite”* for status pages (Premium only, `footerHidden`); the plan and its end in the Status tab (on `feature/st7-addons`, based on `feature/st5-channels`; timed packs go on sale with HC-7a's `LIFECYCLE_READY`; tests `app/test/status-addons.test.ts`, browser flow `tests/e2e/status-addons.js`) | Built and reviewed |
-| – | all others | | Open |
-
-Next, as soon as their dependencies are in:
-- Premium and domains: PD-5 (domains admin); PD-6 is on `feature/pd6-installer-domains`.
 | 33 | PD-5 | Custom domains admin: Admin → Custom domains with setup, settings (incl. the worker's mail budget), all domains with Check now / Disable with a reason / Enable / Remove and their history, blocked hostnames with Release (R2), hostnames not managed here (on `feature/pd5-domains-admin`) | Built |
+| 45 | PD-6 | Installer for custom domains: `--domains` / `step_domains` (website token in `/etc/onyoursite/cf-saas.token`, `origin`/`edge` DNS, fallback origin, merged tunnel rules that keep the admin's own rules, `config.json`), the `onyoursite-domains` unit, `ServerAlias *`, the quiet `--update` step, `--reset` deleting the hostnames at Cloudflare and the domain-change routine (tests with a stand-in Cloudflare API, `app/test/install-domains.test.ts`; not tried on a real zone yet) | Built and reviewed |
 | 31 | CS-5 | Code pages moderation: limits (used when saving; a page above a lowered limit may only get smaller), block/unblock, delete with the typed address (own address held for nobody), ban/unban an account (optionally blocking all its code pages), More code pages for free, the moderation log, filters and search, the source viewer, `Referrer-Policy: no-referrer`; notices inside the slot-lock transaction; the editor's banned state (on `feature/cs5-moderation`; tests `app/test/code-moderation.http.test.ts`, browser flow `tests/e2e/code-moderation.js`) | Built and reviewed |
-| – | all others | | Open |
-
-Next, as soon as their dependencies are in:
-- Premium and domains: PD-6 (installer: Cloudflare for SaaS, domain worker unit); PD-5 is on `feature/pd5-domains-admin`.
-- Shop: HC-8, HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-- Status pages: ST-5, ST-7 (the rest of ST-4 is on `feature/st4-rest`).
 | 34 | HC-8 | Streaks and the daily cap: `earnOnVisit()` (`app/src/honeycombs/earn.ts`) on `GET /dashboard` – +15 every 7 days and +50 every 30 days in a row (30 wins), daily cap 300 for profile and views under the account lock (NOWAIT), 10-second throttle, nothing while frozen or in admin mode; schema step 19 back-fills streaks from the last 60 days; `honeycombs.streak` in the bootstrap and the `honeycombs` API, `earn.streak`/`capLeft`/`cap` and the rule "Keep a streak" in the shop, the streak chip and the daily-limit hint in the editor, the new fields in *Admin → Honeycombs → Earning rules* (on `feature/hc8-streaks`; tests `app/test/hc-streaks.http.test.ts`, browser flow `tests/e2e/hc-streaks.js`) | Built and reviewed |
 | 39 | HC-7a | Time-limited lifecycle and jobs runner: `app/src/jobs/registry.ts` (`registerJob`, `registerNightly`, `GET_LOCK` per job, schema minimum, `oys_meta['jobs']` with `at`/`every` for the status page's `job:runner`), `cli.js jobs:tick [--force]` with its own pool of 3, the honeycomb job `app/src/honeycombs/job.ts` (reconcile retries after 30 s, bell reminders at 7/3/1 days with the loss-preview lines, expiry once per lot with bell, marker and reconcile, nightly entitlement repair), `LIFECYCLE_READY` on (admins can switch on timed options – Premium can be sold), expiry banners in the shop (ends within 3 days: hide for today; Premium ended within 14 days: dismiss), installer `onyoursite-jobs.service`/`.timer` (written and enabled by `write_timers`, stopped by `--reset`, removed when an update goes back to PHP) (on `feature/hc7a-lifecycle`, based on `feature/hc8-streaks`; tests `app/test/hc-jobs.db.test.ts`, `cli.test.ts`, `install-sh.test.ts`, browser flow `tests/e2e/hc-lifecycle.js`) | Built and reviewed |
 | 40 | HC-6b | Shop admin III: *Reverse* for rewards and gifts (`reversal/x<id>`, once, never below 0, bell, audit) in the user details and the new *Ledger* sub-tab (filters reason, user, dates; 50 per page), *Freeze*/*Unfreeze* with a reason the user sees (earning and buying stop, unlocks keep working), honeycombs for several users (email, `#id`, `@name` or page address; up to 200; preview from the session for 15 minutes with unclear/missing entries and “below 0” warnings; *Confirm* books once per account with the form's key) – `app/src/honeycombs/teamTools.ts`, `bulkAction.ts` (on `feature/hc6b-admin`, based on `feature/hc7a-lifecycle`; tests `app/test/hc-admin3.http.test.ts`, browser flow `tests/e2e/hc-admin3.js`) | Built and reviewed |
 | 41 | HC-9 | Event codes: schema step 20 (`hc_codes`), `app/src/honeycombs/codes.ts` (normalised codes, once per account `code/c<id>`, `max_uses` counted under the account lock – the last place goes to exactly one account, window, `disabled_at`, minimum account age, frozen accounts, 5 wrong tries per 15 minutes), `hc-redeem` in the editor API (403 in admin mode), the *Redeem a code* card and wallet button, the rule *Event codes*, *Admin → Honeycombs → Codes* (create, list with uses and status, *Disable* after the dialog, audit) (on `feature/hc9-codes`, based on `feature/hc6b-admin`; tests `app/test/hc-codes.http.test.ts`, browser flow `tests/e2e/hc-codes.js`) | Built and reviewed |
 | 42 | HC-7b | Reminder and "ended" emails: schema step 21 (`hc_mail_outbox`, `hc_accounts.mail_reminders`), `app/src/honeycombs/outbox.ts` (queued in the transaction of the change, once per ref – `rem2:<ent>:<end>` at reminder stage 2 for the last pack, `end:<ent>:<end>` on expiry, a full refund with *Also remove* and a revoke by the team, only when the loss preview has lines; sent by the honeycomb job, budget per run in *Admin → Honeycombs → Earning rules* (default 100), 5 tries, reminders older than 3 days dropped, rows older than 30 days removed at night), template `email/unlock_reminder.json`, the switch *Email me before an unlock ends* (`shop-reminders`, 403 in admin mode) (on `feature/hc7b-mails`, based on `feature/hc9-codes`; tests `app/test/hc-mails.db.test.ts`, browser flow `tests/e2e/hc-mails.js`) | Built and reviewed |
+| 43 | ST-5 | Status alert channels: extra email addresses (confirmation link minted by the notifier, only its sha256 stored, `GET|POST /_/status/verify/<token>` on the main host – GET only shows a button –, 7 days valid, resend after 10 minutes, at most 10 confirmation mails a page a day) and Discord webhooks (checked and tested when added; alerts as embeds without mentions; 5 rejections (401/404) turn it off with the mail "Your Discord alerts for … stopped working"; *Incident updates*: one post per incident, edited on updates, deleted with the incident, sent by the notifier, not the bot), alerts fanned out to confirmed channels with the event (`alerts.ts`), *Test* (3 per 10 minutes), *Recent alerts* for user pages, the warning when nothing is on, limit 3 (`limits.channels`), refused in admin mode – `app/src/status/channels.ts`, templates `email/status_verify.json`, `email/status_channel_alert.json` (on `feature/st5-channels`, based on `feature/st4-rest`; tests `app/test/status-channels.test.ts`, browser flow `tests/e2e/status-channels.js`) | Built and reviewed |
+| 44 | ST-7 | Status add-ons and Premium limits: `status_more_checks` (+10 checks for 30 days, up to 2 packs, 60) and `status_fast_checks` (every minute for 30 days, 80) in the shop with their rules (a page, not blocked, checks not paused by the team, not with Premium for good); `statusLimits` reads the packs and Premium at run time (free 10/3 min, packs up to 30, Premium 30 and every minute with 250 subscribers – channels and broadcasts stay as free, DECISIONS Q1 = b; the admin role counts as Premium) with the earliest end; the Premium perk text; the reconcile step `refreshStatusLimits` (`app/src/status/limitsSync.ts`: bumps the page for the checker, one bell per change of paused checks in `status_pages.limit_paused`); *Hide “Made with OnYourSite”* for status pages (Premium only, `footerHidden`); the plan and its end in the Status tab (on `feature/st7-addons`, based on `feature/st5-channels`; timed packs go on sale with HC-7a's `LIFECYCLE_READY`; tests `app/test/status-addons.test.ts`, browser flow `tests/e2e/status-addons.js`) | Built and reviewed |
 | – | all others | | Open |
 
-Next, as soon as their dependencies are in:
-- Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
-- Shop: done for v1 (HC-8, HC-7a, HC-6b, HC-9 and HC-7b are on their branches); auto-renewal (HC-7c) comes after the Premium sale has started.
-- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
-- Status pages: ST-7 (the rest of ST-4 is on `feature/st4-rest`, ST-5 on `feature/st5-channels`).
-- Status pages: done for v1 (ST-4 rest, ST-5 and ST-7 are on their branches); subscriptions (ST-6) are Stage C.
-- Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
-- Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
-- Code pages: the rest of CS-6 (see follow-ups); CS-5 is on `feature/cs5-moderation`.
-- Later (Stage C): `ROADMAP.md` §4.2.
+Next:
+- Everything in v1 of the roadmap is built: owner decisions (#19), CS-6, CS-5, ST-4, ST-5, ST-7, PD-5, PD-6, HC-8,
+  HC-7a, HC-6b, HC-9 and HC-7b are together on `feature/roadmap-v1` (one pull request). The single branches stay as
+  they were pushed.
+- After the merge: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of
+  Stage C (`ROADMAP.md` §4.2).
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
-records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9), 21 shop mail (HC-7b) (all on their branches) – new steps take the next free number when they are merged.
+records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event codes (HC-9), 21 shop mail (HC-7b) – new steps take the next free number when they are merged.
 
 ## How to continue (handoff)
 
-1. **PR #15 and PR #14 are merged** (squash commits `2e6f6de` and `66207f6`). Deploy `main` with
+1. **`main`** holds 3.0 and the new features (PR #15 and PR #14, squash commits `2e6f6de` and `66207f6`). Deploy with
    `sudo bash server/install.sh --update` (see `server/README.md`; it also updates the Discord bot, see 5).
-2. **New work starts from `main`**: one branch per roadmap item, merged as one squash commit after the tests pass
-   (never push to `main` directly). On `main` 1012 tests pass (1035 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
-   `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
-3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
-   - Shop: HC-8, HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-   - Premium and domains: PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain worker); PD-5 (domains
-     admin) is on `feature/pd5-domains-admin`. Still open from PD-5: the globe badge for pages with a live domain in the
-     admin user list (design §5.4 last bullet), "place in line" and "N waiting" in the list and the Hostnames row, a
-     copy button for "Customers point to", the problem as text instead of its code, the Cloudflare docs link in the
-     not-set-up card; `removeDomain()` re-reads under REPEATABLE READ, so a takeover during an admin remove can end in
-     "kept changing" (500) – read with a locking read in the retry.
-   - Code pages: CS-5 (moderation), the rest of CS-6.
-   - Shop: HC-8 is on `feature/hc8-streaks`; then HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-   - Shop: HC-8 is on `feature/hc8-streaks`, HC-7a on `feature/hc7a-lifecycle`; done there: HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
-   - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
-     worker).
-   - Code pages: the rest of CS-6; CS-5 (moderation) is on `feature/cs5-moderation`.
-   - Status pages: the rest of ST-4, then ST-5, ST-7.
-   - Premium and domains: PD-5 (domains admin). PD-6 (installer: Cloudflare for SaaS) is on
-     `feature/pd6-installer-domains`: `--domains` / `step_domains` (website token in `/etc/onyoursite/cf-saas.token`,
-     `origin`/`edge` DNS, fallback origin, merged tunnel rules – rules of the admin stay –, `config.json`), the
-     `onyoursite-domains` unit, `ServerAlias *` with custom domains, the quiet `--update` step, `--reset` deleting the
-     hostnames at Cloudflare and the domain-change routine; tests with a stand-in Cloudflare API
-     (`app/test/install-domains.test.ts`). Not tried on a real server and a real Cloudflare zone yet – do that once
-     before switching custom domains on. Not built: the local catch-all self-test of design §8.2 step 7; `--update`
-     filling in missing config keys (§8.3); `--reset` only deletes the hostnames in `custom_domains.cf_id` (orphans known
-     only from `custom_domain_log` stay); `tunnel_rules_json` drops rules without a hostname other than the catch-all
-     (e.g. path-only rules) and keeps the old domain's rules after a domain change; `CF_ERRFILE` of `--update`/`--reset`
-     stays in /tmp.
-   - Code pages: CS-5 (moderation), CS-6 (code slots in the editor, live).
-   - Status pages: ST-4 (status pages for users), then ST-5, ST-7.
-   - Status pages: ST-5, ST-7.
-   - Code pages: CS-5 (moderation), the rest of CS-6.
-   - Status pages: ST-5 is on `feature/st5-channels`, ST-7 on `feature/st7-addons`.
-   - Later: Stage C (`ROADMAP.md` §4.2).
+2. **`feature/roadmap-v1`** combines every branch built after that, merged in this order: `feature/owner-decisions`
+   (#19), `test-seed`, `pd6-installer-domains`, `domains-admin-mode`, `cs6-rest`, `st4-rest`, `pd5-domains-admin`,
+   `cs5-moderation`, `hc8-streaks`, `hc7a-lifecycle`, `hc6b-admin`, `hc9-codes`, `hc7b-mails`, `st5-channels`,
+   `st7-addons`. Tests: `cd app && npx tsc --noEmit -p . && npm test` (with `OYS_PHP_REF=<php-2.x checkout>` the PHP
+   comparisons run too; `npm run test:seed` rebuilds the test database first). The only failing test in this container
+   is "profile handles keep exactly the letters and digits PHP keeps (all code points)" – the local PCRE has older
+   Unicode tables. The browser flows (`tests/e2e/*.js`) run on their own, each starting the site itself.
+   After the deploy: `onyoursite-jobs.timer` runs the background jobs every 5 minutes; switch on the Premium options
+   in *Admin → Honeycombs → Catalogue & prices* when Premium should go on sale; run `install.sh --domains` once before
+   custom domains go live.
+3. **Open points** of the single items are listed under 6 (follow-ups). From PD-5: the globe badge for pages with a
+   live domain in the admin user list (design §5.4 last bullet), "place in line" and "N waiting" in the list and the
+   Hostnames row, a copy button for "Customers point to", the problem as text instead of its code, the Cloudflare docs
+   link in the not-set-up card; `removeDomain()` re-reads under REPEATABLE READ, so a takeover during an admin remove
+   can end in "kept changing" (500) – read with a locking read in the retry. From PD-6: not built – the local catch-all
+   self-test of design §8.2 step 7; `--update` filling in missing config keys (§8.3); `--reset` only deletes the
+   hostnames in `custom_domains.cf_id` (orphans known only from `custom_domain_log` stay); `tunnel_rules_json` drops
+   rules without a hostname other than the catch-all (e.g. path-only rules) and keeps the old domain's rules after a
+   domain change; `CF_ERRFILE` of `--update`/`--reset` stays in /tmp.
 4. **Owner decisions R1–R4** (`DECISIONS.md`, from the reviews): R1 – the admin panel and the site-wide admin parts
    of the editor work only in the admin's own session, never through "Log in as"; R2 – a custom domain an admin
    blocked stays blocked for every account until an admin releases it. Both are built on the branch
@@ -219,7 +188,7 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
      `status_incident_posts` (schema step) so a renamed page still finds old posts; a notifier restart between
      sending a mail and writing its result sends again (needs a claimed state); no per-client rate limit for unknown
      status addresses; edits of messages already posted still go out while the page is offline.
-   - CS-6 (built; owner decisions R5–R7; the rest on `feature/cs6-rest`): the Code tab's "Where it lives" (Move to
+   - CS-6 (built; owner decisions R5–R7): the Code tab's "Where it lives" (Move to
      one of your pages, Show link page again, Download files, Delete), "Download files" also in the Edit and delete
      dialogs (one JSON file with every file, unsaved edits included), the "Link page / Code page" cards in "Create a new
      page" (locked with the reason), and the state where every slot shows a code page (U13: own start box, Settings
@@ -233,18 +202,7 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8), 20 event 
      own address "stays reserved for you for 30 days", but an address used for less than 7 days is free at once
      (`HOLD_POLICY`) – say so or drop the sentence; deleting the open code page reloads to the Content tab, the design
      says `/dashboard#code`.
-   - ST-4 (first part built): still open – changing a status page's address (90-day redirect, cooldown), the brand
-     rule for page titles, the owner's alert settings (mail and bell are written by the core but not verified end to
-     end), the paused-module behaviour, incidents on user pages (the API exists, untested), subscribers, a test for
-     concurrent component adds, the remaining browser flows of the design, and the admin's switch between OnYourSite's
-     page and their own. `app/test/e2e/status-system.e2e.ts` test 1 (the incident isn't shown resolved after
-     "Resolve") fails on the base too.
-   - CS-6 (core built; owner decisions R5–R7): still open – in the Code tab "Where it lives", "Show the link page
-     again" and "Download files" in the dialogs; rows for code pages and "Turn into a code page" in Settings → Your
-     pages; the "Code page" card in the Create-a-new-page dialog; the state where every slot shows a code page (design
-     U13) and the preview pane without a link page; a browser test for moving the own-address code page onto a slot;
-     `tests/e2e/editor-dialogs.js` should clear the address registry in its reset so it can run twice on one database.
-   - ST-4 (built; the rest on `feature/st4-rest`): changing a status page's address (`status-address`: first change
+   - ST-4 (built): changing a status page's address (`status-address`: first change
      free, then once per 30 days, staff exempt; the old address forwards for 90 days through `status_slug_redirects`
      and stays held for the owner), the name rule (`status/names.ts`: the OnYourSite name is refused; a distinctive
      brand sets `review_note`, the page stays noindex until an admin approves it under Admin → Status pages → "Name
