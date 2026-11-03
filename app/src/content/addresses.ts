@@ -245,6 +245,73 @@ export function addressNameProblem(slug: string, kind: AddressKind): string | nu
   return null;
 }
 
+// ---------------------------------------------------------------- Namen in Texten (Namen von Statusseiten, ST-4)
+
+// Wörter, die auch Marken sind, aber in Namen meist das gewöhnliche Wort meinen („Live status“, „Office printers“) –
+// in Texten keine Marke. In Adressen gelten sie weiter (dort als ganzer Teil verboten).
+const WORD_LIKE = new Set(['x', 'ms', 'yt', 'live', 'office', 'prime', 'box', 'signal', 'teams', 'wise', 'visa', 'meta', 'zoom',
+  'steam', 'apple', 'notion', 'kraken', 'messenger', 'stripe', 'outlook']);
+// Schreibweise für die Meldung („Mentions PayPal“)
+const BRAND_LABEL: Readonly<Record<string, string>> = {
+  paypal: 'PayPal', youtube: 'YouTube', github: 'GitHub', gitlab: 'GitLab', linkedin: 'LinkedIn', tiktok: 'TikTok', whatsapp: 'WhatsApp',
+  openai: 'OpenAI', chatgpt: 'ChatGPT', icloud: 'iCloud', itunes: 'iTunes', digitalocean: 'DigitalOcean', onedrive: 'OneDrive',
+  gdrive: 'Google Drive', googledrive: 'Google Drive', googlemail: 'Google Mail', appstore: 'App Store', office365: 'Office 365',
+  hubspot: 'HubSpot', epicgames: 'Epic Games', riotgames: 'Riot Games', discordapp: 'Discord', aws: 'AWS', bitbucket: 'Bitbucket',
+};
+const labelOf = (brand: string): string => BRAND_LABEL[brand] ?? brand.charAt(0).toUpperCase() + brand.slice(1);
+// Muster der unverwechselbaren Marken ohne die Zusätze (?!…)/(?<!…) – für den Namen der Marke
+const CONTAINS_PLAIN = BRAND_CONTAINS.map((b) => b.replace(/\(\?<?[!=][^)]*\)/g, ''));
+
+// Buchstaben anderer Schriften, die wie lateinische aussehen (kyrillisch, griechisch, IPA) – in Namen sonst ein Weg
+// an den Regeln vorbei („OnYоurSite“ mit kyrillischem о)
+const LOOKALIKE: Readonly<Record<string, string>> = {
+  а: 'a', в: 'b', е: 'e', ё: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x', і: 'i', ї: 'i', ј: 'j', ѕ: 's',
+  ԁ: 'd', ԛ: 'q', ԝ: 'w', ӏ: 'l', ɡ: 'g', ɑ: 'a', ο: 'o', ό: 'o', α: 'a', ά: 'a', β: 'b', ε: 'e', έ: 'e', η: 'n', ι: 'i', ί: 'i', κ: 'k',
+  ν: 'v', ρ: 'p', τ: 't', υ: 'u', χ: 'x', ω: 'w', ϲ: 'c', ϳ: 'j',
+};
+const LOOKALIKE_RE = new RegExp('[' + Object.keys(LOOKALIKE).join('') + ']', 'g');
+
+// Buchstaben eines Textes klein, ohne Akzente, ähnliche Zeichen anderer Schriften als lateinische
+const plainLower = (text: string): string => text.toLowerCase().replace(LOOKALIKE_RE, (c) => LOOKALIKE[c] ?? c)
+  .normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
+// Schreibweisen eines Textes: wie eingegeben und mit Ziffern als Buchstaben – ohne die Fassung ohne doppelte
+// Buchstaben (in Wörtern machte sie aus „credit“ „Reddit“)
+function textVariants(text: string): string[] {
+  const base = plainLower(text);
+  const leet = (map: Readonly<Record<string, string>>) => base.replace(/[0-9]/g, (d) => map[d] ?? d);
+  return [...new Set([base, leet(LEET_I), leet(LEET_L)])];
+}
+
+// Nennt der Text den Namen von OnYourSite? In einem Wort („OnYourSite“, „0nY0urS1te“), als „oys“ oder über bis zu drei
+// Wörter nacheinander („On Your Site“, „on-your.site“, „O.Y.S.“) – aber nicht „Python Your Site“
+export function textUsesOurName(text: string): boolean {
+  return textVariants(text).some((v) => {
+    const t = tokensOf(v);
+    for (let i = 0; i < t.length; i++) {
+      if (t[i].includes('onyoursite') || t[i] === 'oys') return true;
+      for (let k = 2; k <= 3 && i + k <= t.length; k++) {
+        const joined = t.slice(i, i + k).join('');
+        if (joined === 'onyoursite' || joined === 'oys') return true;
+      }
+    }
+    return false;
+  });
+}
+
+// Alle Marken, die ein Text nennt (ein ganzes Wort, oder eine unverwechselbare Marke in einem Wort wie „MyDiscordBot“),
+// sortiert – leer, wenn keine. Wortähnliche Marken zählen in Texten nicht.
+export function brandsInText(text: string): string[] {
+  const found = new Set<string>();
+  for (const v of textVariants(text)) {
+    for (const token of tokensOf(v)) {
+      if (!WORD_LIKE.has(token) && BRAND_TOKENS.includes(token)) found.add(labelOf(token));
+      BRAND_CONTAINS_RE.forEach(([re], i) => { if (re.test(token)) found.add(labelOf(CONTAINS_PLAIN[i])); });
+    }
+  }
+  return [...found].sort((a, b) => a.localeCompare(b, 'en'));
+}
+
 // ---------------------------------------------------------------- Abgleich mit den Tabellen (sites:repair)
 
 export interface RepairReport {

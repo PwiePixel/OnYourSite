@@ -33,6 +33,7 @@
 .st-m-s-maintenance .st-m-dot { background: #3b82f6; }
 
 .st-m-tabs { margin-top: 4px; }
+.st-m-scope { margin-bottom: 12px; }
 
 /* ---------- Bestandteile ---------- */
 .st-m-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -118,3 +119,65 @@
 .st-m-check input { accent-color: #6366f1; width: 15px; height: 15px; }
 .st-m-recent { display: flex; flex-direction: column; gap: 6px; }
 .st-m-rec { margin: 0; font-size: 12.5px; color: #d4d4d8; display: flex; align-items: baseline; gap: 6px; overflow-wrap: anywhere; }
+
+/* ---------- Eigene Statusseite anlegen und löschen (ST-4) ---------- */
+.st-m-create { margin: 0 auto; width: 100%; }
+.st-m-create .section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+.st-m-hint { margin: 0; font-size: 13px; line-height: 1.5; color: var(--e-muted); }
+.st-m-addr { display: flex; align-items: center; gap: 0; }
+.st-m-addr .field { border-top-right-radius: 0; border-bottom-right-radius: 0; min-width: 0; }
+.st-m-suffix { padding: 0 12px; align-self: stretch; display: flex; align-items: center; font-size: 13px; color: var(--e-muted); white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, .1); border-left: 0; border-radius: 0 10px 10px 0; background: rgba(255, 255, 255, .03); }
+.st-m-err { margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; color: #fca5a5; background: rgba(239, 68, 68, .1); border: 1px solid rgba(239, 68, 68, .3); }
+.st-m-danger { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-color: rgba(239, 68, 68, .25); }
+.st-m-danger b { color: #fff; font-size: 14px; }
+.st-m-danger p { margin: 2px 0 0; font-size: 12.5px; color: var(--e-muted); }
+
+/* ---------- Aufgefrischte Bestandteile: Zustandsleiste, Zustandsabzeichen, ruhigere Abstände ---------- */
+.st-m-list { gap: 10px; }
+.st-m-row { position: relative; overflow: hidden; transition: border-color .15s, background-color .15s; }
+.st-m-row::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #3f3f46; }
+.st-m-row:hover { border-color: rgba(255, 255, 255, .14); }
+.st-m-r-ok::before { background: #22c55e; }
+.st-m-r-warn::before { background: #eab308; }
+.st-m-r-down::before { background: #ef4444; }
+.st-m-r-maint::before { background: #3b82f6; }
+.st-m-r-paused::before { background: #52525b; }
+.st-m-r-down { background: linear-gradient(90deg, rgba(239, 68, 68, .06), transparent 40%), var(--e-card); }
+.st-m-main { padding: 12px 14px 12px 16px; gap: 12px; }
+.st-m-state { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  background: rgba(255, 255, 255, .05); color: #a1a1aa; }
+.st-m-r-ok .st-m-state { background: rgba(34, 197, 94, .12); color: #4ade80; }
+.st-m-r-warn .st-m-state { background: rgba(234, 179, 8, .12); color: #facc15; }
+.st-m-r-down .st-m-state { background: rgba(239, 68, 68, .14); color: #f87171; }
+.st-m-r-maint .st-m-state { background: rgba(59, 130, 246, .14); color: #93c5fd; }
+.st-m-r-paused .st-m-state { background: rgba(255, 255, 255, .05); color: #a1a1aa; }
+.st-m-strip { height: 20px; gap: 2px; }
+.st-m-strip i { width: 4px; border-radius: 2px; }
+.st-m-strip i.ok { background: #22c55e; opacity: .85; }
+.st-m-strip i.bad { background: #ef4444; }
+.st-m-badges .bdg { border: 1px solid rgba(255, 255, 255, .06); }
+.st-m-pill { padding: 6px 12px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04); }
+.st-m-s-operational { box-shadow: inset 0 0 0 1px rgba(34, 197, 94, .25); }
+.st-m-s-degraded { box-shadow: inset 0 0 0 1px rgba(234, 179, 8, .25); }
+.st-m-s-partial { box-shadow: inset 0 0 0 1px rgba(249, 115, 22, .25); }
+.st-m-s-major { box-shadow: inset 0 0 0 1px rgba(239, 68, 68, .3); }
+.st-m-s-maintenance { box-shadow: inset 0 0 0 1px rgba(59, 130, 246, .3); }
+@media (max-width: 639px) {
+  .st-m-main { padding: 10px 12px 10px 14px; gap: 8px; }
+}
+.st-m-d-part { background: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .18); }
+.st-m-r-part::before { background: #f97316; }
+.st-m-r-part .st-m-state { background: rgba(249, 115, 22, .14); color: #fb923c; }
+#stmHead > .st-m-kpis { margin-top: 12px; }
+
+/* Zusätzliche Alarm-Kanäle (ST-5) */
+.st-m-channels { display: flex; flex-direction: column; gap: 8px; }
+.st-m-ch { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, .03); border: 1px solid rgba(255, 255, 255, .06); }
+.st-m-ch > i { font-size: 20px; color: #a1a1aa; }
+.st-m-ch-l { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; }
+.st-m-ch-l b { color: #fff; font-weight: 600; overflow-wrap: anywhere; }
+.st-m-ch-l small { color: #a1a1aa; font-size: 12px; overflow-wrap: anywhere; }
+.st-m-ch-a { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-m-warn { display: flex; align-items: center; gap: 10px; color: #fcd34d; border-color: rgba(245, 158, 11, .3); background: rgba(245, 158, 11, .08); }
+.st-m-check[hidden] { display: none; }

@@ -13,11 +13,15 @@ import { storageDownloadZip, storageMoveToDataDir, uploadsDir } from '../content
 import { adminCommunityPost } from '../community/admin.js';
 import { adminCommunityView } from '../community/adminView.js';
 import { adminHcHandle } from '../honeycombs/honeycombs.js';
+import { hcBulkAction } from '../honeycombs/bulkAction.js';
 import { adminHoneycombsView } from '../honeycombs/adminView.js';
 import { hcBackUrl } from '../honeycombs/admin.js';
 import { adminCodeHandle, legacyCodePost } from '../code/admin.js';
 import { adminCodePagesView } from '../code/adminView.js';
 import { adminStatusView } from '../status/adminView.js';
+import { statusAdminPost } from '../status/admin.js';
+import { adminDomainsView } from '../domains/adminView.js';
+import { domainAdminPost } from '../domains/admin.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
 import { adminUpdatesView } from '../updates/adminView.js';
 import { resetPassword, toggleAdmin } from './users.js';
@@ -68,7 +72,9 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     // Formulare der Code-Seiten von vor der Trennung (hc_action=code_*) gehen an den Bereich Code-Seiten
     const legacy = legacyCodePost(post);
     if (legacy) await codeAction(ctx, session, legacy);
-    const result = await adminHcHandle(post, intval(session.get('user_id')));
+    // Mehrere Nutzer: erst prüfen (Liste in der Sitzung, 15 Minuten), dann buchen – braucht die Sitzung, deshalb hier
+    const bulk = await hcBulkAction(session, post, intval(session.get('user_id')));
+    const result = bulk ?? await adminHcHandle(post, intval(session.get('user_id')));
     if (result) flashResult(session, result);
     // Zurück zum Unterbereich der Aktion (z. B. /admin?hc_tab=offers#honeycombs)
     ctx.redirect(hcBackUrl(post));
@@ -77,6 +83,16 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   // Code-Seiten sperren/entsperren, ohne Honigwaben freischalten
   if (isPost && post.code_action !== undefined) {
     await codeAction(ctx, session, post);
+  }
+
+  // Statusseiten der Nutzer: Namen freigeben (ST-4)
+  if (isPost && post.status_action !== undefined) {
+    await statusAdminPost(ctx, session, post);
+  }
+
+  // Eigene Domains (PD-5): Einstellungen, Aufträge an den Dienst, Domains prüfen, sperren, freigeben, entfernen
+  if (isPost && post.domain_action !== undefined) {
+    await domainAdminPost(ctx, session, post);
   }
 
   // Updates, Roadmap und Discord – nur weiterleiten, wenn die Aktion dorthin gehört
@@ -154,14 +170,18 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
     ctx.write(err.html);
     ctx.halt();
   }
+  // Keine Herkunft an Code-Seiten der Nutzer: eine Seite soll einen Prüfer nicht erkennen und ihm anderes zeigen können
+  ctx.header('Referrer-Policy', 'no-referrer');
   ctx.write(page);
 }
 
 // Aktion im Bereich Code-Seiten: Meldung merken und zurück zum Bereich (beendet die Anfrage)
 async function codeAction(ctx: Ctx, session: Session, post: PhpArray): Promise<never> {
-  const result = await adminCodeHandle(post);
+  const result = await adminCodeHandle(post, intval(session.get('user_id')));
   if (result) flashResult(session, result);
-  ctx.redirect('/admin#code-pages');
+  // Aus dem Quelltext-Betrachter: dorthin zurück (die Code-Seite gibt es nach „Delete“ nicht mehr)
+  const viewer = intval(post.from_viewer ?? 0);
+  ctx.redirect('/admin' + (viewer > 0 && post.code_action !== 'delete' ? '?code_site=' + viewer : '') + '#code-pages');
 }
 
 // $_SESSION[isset($result['error']) ? 'admin_error' : 'admin_success'] = $result['error'] ?? $result['ok']
@@ -234,6 +254,7 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     communityHtml: await adminCommunityView(ctx),
     honeycombsHtml: await adminHoneycombsView(ctx, allUsers),
     codePagesHtml: await adminCodePagesView(ctx, allUsers),
+    domainsHtml: await adminDomainsView(ctx),
     statusHtml: await adminStatusView(ctx),
     bellHtml: await bellMarkup(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),

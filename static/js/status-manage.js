@@ -1,6 +1,7 @@
 /* OnYourSite – Statusseite verwalten (Editor, Bereich „Status“). Der Editor lädt diese Datei erst beim ersten Öffnen
    des Bereichs und ruft OYS_STATUS.mount(root, opts) auf. Bis jedes Konto eine eigene Statusseite freischalten kann,
-   gibt es hier nur OnYourSites eigene Seite (scope system, nur für Admins): Bestandteile, Vorfälle und Wartungen,
+   gab es hier nur OnYourSites eigene Seite (scope system, nur für Admins); seit ST-4 auch die eigene Seite eines Kontos
+   (scope user), Admins schalten zwischen beiden um. Bestandteile, Vorfälle und Wartungen,
    Alarme und die Kanäle des Bots, Einstellungen. Dialoge und Hinweise kommen aus window.OYSUI – keine Browser-Popups.
    Jeder Text vom Server wird maskiert (esc) oder als textContent gesetzt. */
 (function () {
@@ -10,6 +11,8 @@
   var TABS = [['components', 'bx-list-ul', 'Components'], ['incidents', 'bx-error', 'Incidents'], ['alerts', 'bx-bell', 'Alerts'], ['settings', 'bx-cog', 'Settings']];
   var STATUS_TEXT = { operational: 'All systems operational', degraded: 'Degraded performance', partial: 'Partial outage', major: 'Major outage', maintenance: 'Maintenance in progress', unknown: 'No data yet' };
   var DOT = { up: 'ok', down: 'down', degraded: 'warn', unknown: 'none', paused: 'none', maintenance: 'maint' };
+  // Von Hand gesetzte Bestandteile: Farbe aus dem gewählten Zustand (Teilausfall orange)
+  var MANUAL_TONE = { operational: 'ok', degraded: 'warn', partial: 'part', major: 'down', maintenance: 'maint' };
   var TYPE_ICON = { http: 'bx-globe', heartbeat: 'bx-time-five', manual: 'bx-slider-alt', system: 'bx-server' };
   var INC_STATUS = [['investigating', 'Investigating'], ['identified', 'Identified'], ['monitoring', 'Monitoring'], ['resolved', 'Resolved']];
   var MAINT_STATUS = [['scheduled', 'Scheduled'], ['in_progress', 'In progress'], ['completed', 'Completed']];
@@ -86,6 +89,14 @@
     if (first) {
       root.innerHTML = '<div class="st-m"><div class="st-m-loading"><i class="bx bx-loader-alt bx-spin"></i></div></div>';
       root.addEventListener('click', onClick);
+      // Kanal hinzufügen: Platzhalter, Hinweis und „Incident updates“ (nur Discord) nach dem Typ
+      root.addEventListener('change', function (ev) {
+        if (!ev.target || ev.target.id !== 'stChType') return;
+        var discord = ev.target.value === 'discord';
+        $('#stChTarget', root).placeholder = discord ? 'https://discord.com/api/webhooks/…' : 'name@example.com';
+        $('#stChInc', root).hidden = !discord;
+        $('#stChHint', root).textContent = discord ? 'We check the link and post a test message – the channel works once Discord accepts it.' : 'We send a confirmation link to the address first.';
+      });
       document.addEventListener('visibilitychange', function () { if (!document.hidden && visible()) refreshMonitors(); });
     }
     loadAll();
@@ -93,29 +104,46 @@
   }
 
   function visible() { return S.root && !S.root.classList.contains('hidden'); }
+  // Eigene Statusseite eines Kontos (ST-4): ohne Alarme der Admins und Bot-Kanäle, mit Anlegen und Löschen
+  function userScope() { return S.opts && S.opts.scope === 'user'; }
 
   function loadAll() {
     if (S.loading) return;
     S.loading = true;
-    Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts')]).then(function (r) {
+    // Eigene Seite: erst fragen, ob es sie gibt (ohne Seite nur das Formular zum Anlegen, keine 404-Anfragen)
+    var first = userScope() ? api('status').then(function (st) {
+      if (!st.ok || !st.page) return [st];
+      return Promise.all([st, api('status-monitors'), api('status-incidents'), { ok: false }, api('status-channels')]);
+    }) : Promise.all([api('status'), api('status-monitors'), api('status-incidents'), api('status-alerts'), api('status-channels')]);
+    first.then(function (r) {
       S.loading = false;
       if (!r[0].ok) { showError(r[0].error); return; }
+      if (!r[0].page) { S.state = r[0]; renderCreate(); return; }
       S.state = r[0];
       S.mons = r[1].ok ? r[1] : null;
       S.incs = r[2].ok ? r[2] : null;
       S.alerts = r[3].ok ? r[3] : null;
+      S.chan = r[4] && r[4].ok ? r[4] : null;
       render();
     });
   }
 
   function refreshState() {
+    if (!S.state || !S.state.page) return Promise.resolve();
     return api('status').then(function (r) { if (r.ok) { S.state = r; renderHead(); } });
   }
+  function hasPage() { return !!(S.state && S.state.page); }
   function refreshMonitors() {
+    if (!hasPage()) return Promise.resolve();
     return api('status-monitors').then(function (r) { if (r.ok) { S.mons = r; if (S.tab === 'components') renderBody(); } });
   }
   function refreshIncidents() {
+    if (!S.state || !S.state.page) return Promise.resolve();
     return api('status-incidents').then(function (r) { if (r.ok) { S.incs = r; if (S.tab === 'incidents') renderBody(); } });
+  }
+  function refreshChannels() {
+    if (!hasPage()) return Promise.resolve();
+    return api('status-channels').then(function (r) { if (r.ok) { S.chan = r; if (S.tab === 'alerts') renderBody(); } });
   }
   function refreshAlerts() {
     return api('status-alerts').then(function (r) { if (r.ok) { S.alerts = r; if (S.tab === 'alerts') renderBody(); } });
@@ -131,7 +159,7 @@
   // ---------------------------------------------------------------- Zeichnen
 
   function render() {
-    S.root.innerHTML = '<div class="st-m"><div id="stmHead"></div><div class="chips st-m-tabs" role="tablist"></div><div id="stmBody"></div></div>';
+    S.root.innerHTML = '<div class="st-m">' + scopeSwitchHtml() + '<div id="stmHead"></div><div class="chips st-m-tabs" role="tablist"></div><div id="stmBody"></div></div>';
     var tabs = $('.st-m-tabs', S.root);
     TABS.forEach(function (t) {
       var b = h('<button type="button" class="chip" role="tab" data-stm-tab="' + t[0] + '"><i class="bx ' + t[1] + '"></i> ' + esc(t[2]) + '</button>');
@@ -139,6 +167,60 @@
     });
     renderHead();
     renderBody();
+  }
+
+  // Admins (ST-4): zwischen OnYourSites Seite und der eigenen Statusseite umschalten (für Admins ist sie dabei)
+  function scopeSwitchHtml() {
+    if (!S.opts || !S.opts.canSwitch) return '';
+    var cur = S.opts.scope;
+    return '<div class="chips st-m-scope" role="tablist" aria-label="Which status page">' +
+      [['system', 'bx-broadcast', 'OnYourSite status page'], ['user', 'bx-user', 'My status page']].map(function (x) {
+        return '<button type="button" class="chip' + (x[0] === cur ? ' on' : '') + '" role="tab" aria-selected="' + (x[0] === cur) + '" data-stm-scope="' + x[0] + '"><i class="bx ' + x[1] + '"></i> ' + esc(x[2]) + '</button>';
+      }).join('') + '</div>';
+  }
+
+  // Noch keine eigene Seite: Name und Adresse (eigene Subdomain) wählen
+  function renderCreate() {
+    var lim = (S.state && S.state.limits) || {};
+    S.root.innerHTML = '';
+    var box = h('<div class="st-m">' + scopeSwitchHtml() + '<div class="panel st-m-create space-y-4 max-w-xl">' +
+      '<div><h2 class="section-title"><i class="bx bx-pulse"></i> Create your status page</h2>' +
+      '<p class="st-m-hint"></p></div>' +
+      '<div><label class="lbl" for="stmNewTitle">Name</label><input class="field" id="stmNewTitle" name="title" maxlength="120" placeholder="Acme status"></div>' +
+      '<div><label class="lbl" for="stmNewSlug">Address</label><div class="st-m-addr"><input class="field" id="stmNewSlug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" placeholder="acme-status"><span class="st-m-suffix"></span></div></div>' +
+      '<p class="st-m-err" hidden></p>' +
+      '<div><button type="button" class="btn-primary" data-stm="create-page"><i class="bx bx-plus"></i> Create status page</button></div></div></div>');
+    $('.st-m-hint', box).textContent = 'Your page runs at its own address. You can check up to ' + fmtNum(lim.checks || 0) + ' websites and report incidents and maintenance.';
+    $('.st-m-suffix', box).textContent = '.' + (S.opts.baseHost || '');
+    S.root.appendChild(box);
+  }
+
+  function createPage(btn) {
+    var title = $('#stmNewTitle', S.root).value.trim(), slug = $('#stmNewSlug', S.root).value.trim().toLowerCase();
+    var err = $('.st-m-err', S.root);
+    btn.disabled = true;
+    api('status-create', { title: title, slug: slug }).then(function (r) {
+      btn.disabled = false;
+      if (!r.ok) { err.hidden = false; err.textContent = r.error || 'Something went wrong. Please try again.'; return; }
+      toast('Your status page is live.');
+      S.tab = 'components';
+      loadAll();
+    });
+  }
+
+  function deletePage() {
+    var p = S.state.page;
+    UI.confirm({ title: 'Delete ' + p.title + '?', text: 'Its components, checks, incidents and history are removed. The address stays reserved for you for 90 days. This can’t be undone.', ok: 'Delete status page', tone: 'danger' }).then(function (yes) {
+      if (!yes) return;
+      api('status-page-delete', {}).then(function (r) {
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        toast('Status page deleted.');
+        S.state = r;
+        S.mons = null;
+        S.incs = null;
+        renderCreate();
+      });
+    });
   }
 
   function pill(status) {
@@ -227,13 +309,23 @@
     return esc(t);
   }
 
+  // Plan der eigenen Seite (ST-7): Zusatzpakete oder Premium und das früheste Ende
+  function planText() {
+    var l = S.state && S.state.limits;
+    if (!userScope() || !l || !l.plan) return '';
+    var name = l.plan === 'premium' ? ' · Premium' : l.plan === 'addons' ? ' · with add-ons' : '';
+    var p = String(l.until || '').split(/\D/);
+    var until = l.until ? ' until ' + new Date(+p[0], p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return name + until + (l.minInterval <= 60 ? ' · every minute' : '');
+  }
+
   function componentsView() {
     var wrap = h('<div class="st-m-pane"></div>');
     var mons = S.mons;
     if (!mons) { wrap.innerHTML = '<div class="panel empty-state"><i class="bx bx-error-circle"></i>The components couldn’t be loaded.</div>'; return wrap; }
     var u = mons.usage;
     wrap.appendChild(h('<div class="st-m-toolbar"><button type="button" class="btn-primary" data-stm="add"><i class="bx bx-plus"></i> Add component</button>' +
-      '<span class="hint">' + esc(u.components + ' of ' + u.componentsMax + ' components · ' + u.checks + ' checks') + '</span></div>'));
+      '<span class="hint" id="stmUsage">' + esc(u.components + ' of ' + u.componentsMax + ' components · ' + u.checks + ' of ' + u.checksMax + ' checks' + planText()) + '</span></div>'));
     if (mons.gate && mons.gate.state === 'frozen') {
       wrap.appendChild(h('<p class="st-m-note"><i class="bx bx-error"></i> Checks are paused – a problem on our side since ' + esc(when(mons.gate.since)) + '. Nothing is counted as down meanwhile.</p>'));
     }
@@ -267,13 +359,14 @@
   }
 
   function monitorRow(m) {
-    var dot = DOT[m.state.status] || 'none';
+    var dot = m.type === 'manual' ? (MANUAL_TONE[m.manualStatus] || 'none') : (DOT[m.state.status] || 'none');
     var menu = '<button type="button" class="icon-btn" data-stm="edit" title="Edit" aria-label="Edit"><i class="bx bx-pencil"></i></button>';
     if (m.type === 'http' || m.type === 'system') menu += '<button type="button" class="icon-btn" data-stm="run" title="Check now" aria-label="Check now"><i class="bx bx-refresh"></i></button>';
     if (m.type !== 'manual') menu += '<button type="button" class="icon-btn" data-stm="pause" title="' + (m.paused ? 'Resume' : 'Pause') + '" aria-label="' + (m.paused ? 'Resume' : 'Pause') + '"><i class="bx ' + (m.paused ? 'bx-play' : 'bx-pause') + '"></i></button>';
     if (m.type === 'heartbeat') menu += '<button type="button" class="icon-btn" data-stm="hb" title="Heartbeat URL" aria-label="Heartbeat URL"><i class="bx bx-link"></i></button>';
     if (m.type !== 'system') menu += '<button type="button" class="icon-btn danger" data-stm="del" title="Delete" aria-label="Delete"><i class="bx bx-trash"></i></button>';
-    var row = h('<div class="st-m-row" data-id="' + m.id + '">' +
+    // Zustandsfarbe der Zeile (Leiste links, Zustandsabzeichen) – derselbe Schlüssel wie der Punkt
+    var row = h('<div class="st-m-row st-m-r-' + dot + (m.paused ? ' st-m-r-paused' : '') + '" data-id="' + m.id + '">' +
       '<div class="st-m-main"><span class="st-m-drag" title="Drag to reorder"><i class="bx bx-grid-vertical"></i></span>' +
       '<span class="st-m-dot st-m-d-' + dot + '"></span>' +
       '<button type="button" class="st-m-name" data-stm="toggle"><i class="bx ' + (TYPE_ICON[m.type] || 'bx-pulse') + '"></i> <span></span></button>' +
@@ -403,6 +496,13 @@
         });
       }
     });
+  }
+
+  // „Made with OnYourSite“ ausblenden: nur mit Premium (ohne: aus und der Hinweis)
+  function brandingSwitch(s) {
+    var premium = !!(S.state && S.state.page && S.state.page.premium);
+    var html = sw('hide_branding', 'Hide “Made with OnYourSite”', !!s.hide_branding, premium ? 'The footer keeps “Report this page”.' : 'Comes with Premium.');
+    return premium || s.hide_branding ? html : html.replace('<input type="checkbox"', '<input type="checkbox" disabled');
   }
 
   function sw(name, label, on, hint) {
@@ -675,6 +775,7 @@
   // ---------------------------------------------------------------- Alarme
 
   function alertsView() {
+    if (userScope()) return ownerAlertsView();
     var wrap = h('<div class="st-m-pane"></div>');
     var a = S.alerts;
     if (!a) { wrap.appendChild(h('<div class="panel empty-state"><i class="bx bx-error-circle"></i>The alerts couldn’t be loaded.</div>')); return wrap; }
@@ -686,6 +787,7 @@
       '<button type="button" class="btn-secondary" data-stm="save-alerts"><i class="bx bx-save"></i> Save</button></div>');
     wrap.appendChild(mail);
     wrap.appendChild(botCard(a.bot));
+    wrap.appendChild(channelsCard());
     var recent = h('<div class="panel"><h3 class="section-title">Recent alerts</h3><div class="st-m-recent"></div></div>');
     var list = $('.st-m-recent', recent);
     if (!a.recent.length) list.appendChild(h('<p class="hint">No alerts yet.</p>'));
@@ -697,6 +799,118 @@
     });
     wrap.appendChild(recent);
     return wrap;
+  }
+
+  // Eigene Seite: E-Mail an den Besitzer an oder aus, welche Ereignisse; die Glocke zeigt sie immer
+  function ownerAlertsView() {
+    var wrap = h('<div class="st-m-pane"></div>');
+    var a = (S.state.page && S.state.page.alerts) || { email: true, events: [] };
+    var events = {};
+    a.events.forEach(function (e) { events[e] = 1; });
+    var email = (S.opts.user && S.opts.user.email) || '';
+    wrap.appendChild(h('<div class="panel space-y-4"><h3 class="section-title">Email and bell</h3>' +
+      sw('owner_email', 'Email me' + (email ? ' at ' + email : ''), a.email, 'Your bell in the editor always shows them.') +
+      '<div class="st-m-events-pick">' + EVENTS.map(function (e) { return '<label class="st-m-check"><input type="checkbox" data-ev="' + e[0] + '"' + (events[e[0]] ? ' checked' : '') + '> ' + esc(e[1]) + '</label>'; }).join('') + '</div>' +
+      '<button type="button" class="btn-secondary" data-stm="save-owner-alerts"><i class="bx bx-save"></i> Save</button></div>'));
+    var working = S.chan ? S.chan.channels.filter(function (c) { return c.state === 'working'; }).length : 0;
+    if (!a.email && !working) wrap.insertBefore(h('<div class="panel st-m-warn"><i class="bx bx-bell-off"></i> You won’t be notified when something breaks.</div>'), wrap.firstChild);
+    wrap.appendChild(channelsCard());
+    if (S.chan) wrap.appendChild(recentCard(S.chan.recent));
+    return wrap;
+  }
+
+  // Zusätzliche Kanäle (ST-5): Liste mit Zustand und Aktionen, Formular zum Hinzufügen
+  var CH_STATE = { waiting: ['Waiting for confirmation', 'amber'], working: ['Working', 'green'], failing: ['Failing', 'red'], off: ['Off', ''] };
+  function evLabel(e) {
+    if (e === 'incident') return 'Incident updates';
+    var f = EVENTS.filter(function (x) { return x[0] === e; })[0];
+    return f ? f[1] : e;
+  }
+  function channelsCard() {
+    var c = S.chan;
+    var ro = !!(S.chan && S.chan.readOnly);
+    var card = h('<div class="panel space-y-4" id="stChannels"><h3 class="section-title">More alert channels</h3></div>');
+    if (!c) { card.appendChild(h('<p class="hint">The channels couldn’t be loaded.</p>')); return card; }
+    if (c.limit <= 0) { card.appendChild(h('<p class="hint">Extra alert channels aren’t available for this page.</p>')); return card; }
+    var list = h('<div class="st-m-channels"></div>');
+    if (!c.channels.length) list.appendChild(h('<p class="hint">No extra channels yet. Add an email address or a Discord webhook.</p>'));
+    c.channels.forEach(function (ch) {
+      var st = CH_STATE[ch.state] || ['', ''];
+      var row = h('<div class="st-m-ch" data-ch="' + ch.id + '"><i class="bx ' + (ch.type === 'discord' ? 'bxl-discord-alt' : 'bx-envelope') + '"></i>' +
+        '<span class="st-m-ch-l"><b></b><small></small></span><span class="bdg ' + st[1] + '"></span><span class="st-m-ch-a"></span></div>');
+      $('b', row).textContent = ch.label;
+      $('small', row).textContent = ch.events.map(evLabel).join(' · ') + (ch.state === 'failing' && ch.error ? ' – ' + ch.error : '');
+      $('.bdg', row).textContent = st[0];
+      var acts = $('.st-m-ch-a', row);
+      if (!ro) {
+        if (ch.verified && ch.enabled) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-test">Test</button>'));
+        if (ch.type === 'email' && !ch.verified) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-resend"' + (ch.canResend ? '' : ' disabled title="You can send it again 10 minutes after the last one."') + '>Resend</button>'));
+        if (ch.verified) acts.appendChild(h('<button type="button" class="btn-ghost" data-stm="ch-toggle">' + (ch.enabled ? 'Turn off' : 'Turn on') + '</button>'));
+        acts.appendChild(h('<button type="button" class="icon-btn danger" data-stm="ch-remove" aria-label="Remove channel" title="Remove"><i class="bx bx-trash"></i></button>'));
+      }
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+    if (!ro && c.channels.length < c.limit) {
+      card.appendChild(h('<div class="st-m-ch-add space-y-3"><div class="field-row cols-2"><div><label class="lbl" for="stChType">Type</label><select class="field" id="stChType"><option value="email">Email address</option><option value="discord">Discord webhook</option></select></div>' +
+        '<div><label class="lbl" for="stChTarget">Address or link</label><input class="field" id="stChTarget" maxlength="400" autocomplete="off" placeholder="name@example.com"></div></div>' +
+        '<div class="st-m-events-pick">' + EVENTS.map(function (e) { return '<label class="st-m-check"><input type="checkbox" data-chev="' + e[0] + '" checked> ' + esc(e[1]) + '</label>'; }).join('') +
+        '<label class="st-m-check" id="stChInc" hidden><input type="checkbox" data-chev="incident" checked> Incident updates</label></div>' +
+        '<p class="hint" id="stChHint">We send a confirmation link to the address first.</p>' +
+        '<button type="button" class="btn-secondary" data-stm="ch-add"><i class="bx bx-plus"></i> Add</button></div>'));
+    }
+    card.appendChild(h('<p class="hint m-0">' + c.channels.length + ' of ' + c.limit + ' channels used.</p>'));
+    return card;
+  }
+
+  function recentCard(items) {
+    var recent = h('<div class="panel"><h3 class="section-title">Recent alerts</h3><div class="st-m-recent"></div></div>');
+    var list = $('.st-m-recent', recent);
+    if (!items.length) list.appendChild(h('<p class="hint">No alerts yet.</p>'));
+    items.forEach(function (r) {
+      var row = h('<p class="st-m-rec"><span class="bdg ' + (r.state === 'sent' ? 'green' : r.state === 'failed' ? 'red' : '') + '"></span> <span class="st-m-rec-t"></span></p>');
+      $('.bdg', row).textContent = r.state === 'sent' ? 'Sent' : r.state === 'failed' ? 'Failed' : r.state === 'merged' ? 'Merged' : r.state === 'skipped' ? 'Skipped' : 'Waiting';
+      $('.st-m-rec-t', row).textContent = when(r.at) + ' · ' + r.title + ' · ' + r.to + (r.error ? ' – ' + r.error : '');
+      list.appendChild(row);
+    });
+    return recent;
+  }
+
+  function channelAction(act, btn) {
+    var row = btn.closest('[data-ch]');
+    var id = row ? Number(row.getAttribute('data-ch')) : 0;
+    var ch = S.chan && S.chan.channels.filter(function (c) { return c.id === id; })[0];
+    var done = function (msg) {
+      return function (r) {
+        btn.disabled = false;
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        S.chan = r;
+        if (msg) toast(msg);
+        renderBody();
+      };
+    };
+    if (act === 'ch-add') {
+      var type = $('#stChType', S.root).value;
+      var evs = $$('[data-chev]', S.root).filter(function (x) { return x.checked && (type === 'discord' || x.getAttribute('data-chev') !== 'incident'); }).map(function (x) { return x.getAttribute('data-chev'); });
+      btn.disabled = true;
+      api('status-channel-add', { type: type, target: $('#stChTarget', S.root).value, events: evs })
+        .then(done(type === 'email' ? 'Added – we sent a confirmation link to the address.' : 'Added – the test message is in Discord.'));
+      return;
+    }
+    if (!ch) return;
+    if (act === 'ch-test') { btn.disabled = true; api('status-channel-test', { id: id }).then(done('Test sent – it arrives in a moment.')); return; }
+    if (act === 'ch-resend') { btn.disabled = true; api('status-channel-resend', { id: id }).then(done('We sent the link again.')); return; }
+    if (act === 'ch-toggle') {
+      btn.disabled = true;
+      api('status-channel-edit', { id: id, enabled: !ch.enabled }).then(function (r) { btn.disabled = false; if (r.ok) refreshChannels(); else toast(r.error, 'err'); });
+      return;
+    }
+    if (act === 'ch-remove') {
+      UI.confirm({ title: 'Remove ' + ch.label + '?', text: 'No more alerts go there. Discord messages that were already posted stay.', ok: 'Remove', tone: 'danger' }).then(function (yes) {
+        if (!yes) return;
+        api('status-channel-remove', { id: id }).then(done('Channel removed.'));
+      });
+    }
   }
 
   function botCard(b) {
@@ -733,26 +947,76 @@
       '<div><label class="lbl">Description</label><input class="field" name="description" maxlength="300"></div></div>' +
       sw('online', 'Online', p.online, p.online ? 'Visitors see the page.' : 'Visitors get “This status page is offline”.') +
       sw('show_uptime', 'Show uptime', s.show_uptime) + sw('show_response', 'Show response times', s.show_response) +
+      (userScope() ? brandingSwitch(s) : '') +
       '<div class="field-row cols-2"><div><label class="lbl">Open an incident automatically</label><select class="field" name="auto_incident">' + options([['0', 'Off'], ['300', 'When a check is down for 5 min'], ['900', 'When a check is down for 15 min']], String(s.auto_incident)) + '</select></div>' +
       '<div><label class="lbl">Past incidents on the page (days)</label><input class="field" name="history_days" type="number" min="0" max="30" value="' + esc(s.history_days) + '"></div></div>' +
       '<div class="flex items-center gap-3 flex-wrap"><button type="button" class="btn-primary" data-stm="save-page"><i class="bx bx-save"></i> Save</button>' +
-      '<a class="btn-ghost" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> View page</a></div></div></div>');
+      '<a class="btn-ghost" target="_blank" rel="noopener"><i class="bx bx-link-external"></i> View page</a></div></div>' +
+      (userScope() ? addressPanelHtml(p) : '') +
+      (userScope() ? '<div class="panel st-m-danger"><div><b>Delete status page</b><p>Removes the page with all components and incidents.</p></div>' +
+        '<button type="button" class="btn-danger" data-stm="delete-page"><i class="bx bx-trash"></i> Delete</button></div>' : '') + '</div>');
     $('[name=title]', wrap).value = p.title;
     $('[name=description]', wrap).value = p.description;
     $('a.btn-ghost', wrap).href = p.online ? p.url : (p.preview || p.url);
     return wrap;
   }
 
+  // Adresse der eigenen Seite: die alte leitet 90 Tage weiter und bleibt so lange reserviert; danach Sperrfrist
+  function addressPanelHtml(p) {
+    var left = p.address ? p.address.daysLeft : 0;
+    return '<div class="panel space-y-3" id="stmAddress"><h3 class="section-title">Address</h3>' +
+      (p.review ? '<p class="st-m-note"><i class="bx bx-search-alt"></i> ' + esc('Your page’s name ' + p.review.replace(/^Mentions /, 'mentions ') + '. Search engines see the page once the team has checked the name.') + '</p>' : '') +
+      '<div class="st-m-addr"><input class="field" name="slug" maxlength="30" autocomplete="off" spellcheck="false" value="' + esc(p.slug) + '"' + (left > 0 ? ' readonly' : '') + '><span class="st-m-suffix">.' + esc(S.opts.baseHost || '') + '</span></div>' +
+      '<p class="hint">' + esc(left > 0 ? 'You can change the address again in ' + left + (left === 1 ? ' day.' : ' days.') : 'Your old address keeps forwarding here for 90 days and stays reserved for you.') + '</p>' +
+      '<p class="st-m-err" hidden></p>' +
+      (left > 0 ? '' : '<button type="button" class="btn-secondary" data-stm="change-address"><i class="bx bx-link"></i> Change address</button>') + '</div>';
+  }
+
+  function changeAddress(btn) {
+    var box = $('#stmAddress', S.root), input = $('[name=slug]', box), err = $('.st-m-err', box);
+    var slug = input.value.trim().toLowerCase();
+    if (!slug || slug === S.state.page.slug) return;
+    UI.confirm({ title: 'Change the address?', text: 'New address: ' + slug + '.' + (S.opts.baseHost || '') + '. The old one forwards visitors here for 90 days.', ok: 'Change address', tone: 'warn' }).then(function (yes) {
+      // Nach dem Dialog: dasselbe Feld mit derselben Eingabe
+      if (!yes || !box.isConnected || input.value.trim().toLowerCase() !== slug) return;
+      btn.disabled = true;
+      api('status-address', { slug: slug }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { err.hidden = false; err.textContent = r.error || 'Something went wrong. Please try again.'; return; }
+        S.state = r;
+        toast('Your status page is now at ' + r.page.url.replace(/^https?:\/\//, '').replace(/\/$/, '') + '.');
+        renderHead();
+        renderBody();
+      });
+    });
+  }
+
+  // Umschalten (Admins): alles der anderen Seite neu laden
+  function switchScope(scope) {
+    if (!S.opts.canSwitch || scope === S.opts.scope || S.loading) return;
+    S.opts.scope = scope;
+    S.state = null;
+    S.mons = null;
+    S.incs = null;
+    S.alerts = null;
+    S.tab = 'components';
+    S.root.innerHTML = '<div class="st-m"><div class="st-m-loading"><i class="bx bx-loader-alt bx-spin"></i></div></div>';
+    loadAll();
+  }
+
   // ---------------------------------------------------------------- Aktionen
 
   function onClick(ev) {
+    var scopeBtn = ev.target.closest('[data-stm-scope]');
+    if (scopeBtn) { switchScope(scopeBtn.getAttribute('data-stm-scope')); return; }
     var tabBtn = ev.target.closest('[data-stm-tab]');
     if (tabBtn) {
       S.tab = tabBtn.getAttribute('data-stm-tab');
       renderBody();
       if (S.tab === 'components') refreshMonitors();
       if (S.tab === 'incidents') refreshIncidents();
-      if (S.tab === 'alerts') refreshAlerts();
+      if (S.tab === 'alerts' && !userScope()) refreshAlerts();
+      if (S.tab === 'alerts') refreshChannels();
       return;
     }
     var btn = ev.target.closest('[data-stm]');
@@ -762,6 +1026,22 @@
     var m = row ? monitorById(Number(row.getAttribute('data-id'))) : null;
     var card = btn.closest('[data-inc]');
     var inc = card ? incidentById(Number(card.getAttribute('data-inc'))) : null;
+    if (act.indexOf('ch-') === 0) return channelAction(act, btn);
+    if (act === 'create-page') return createPage(btn);
+    if (act === 'change-address') return changeAddress(btn);
+    if (act === 'save-owner-alerts') {
+      var picked = $$('[data-ev]', S.root).filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-ev'); });
+      btn.disabled = true;
+      api('status-owner-alerts', { email: $('[name=owner_email]', S.root).checked, events: picked }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        S.state = r;
+        toast('Alerts saved.');
+        renderBody();
+      });
+      return;
+    }
+    if (act === 'delete-page') return deletePage();
     if (act === 'add') return componentDialog(null);
     if (act === 'edit' && m) return componentDialog(m);
     if (act === 'toggle' && m) {
@@ -821,6 +1101,7 @@
       api('status-page', {
         title: $('[name=title]', root).value, description: $('[name=description]', root).value, online: $('[name=online]', root).checked,
         show_uptime: $('[name=show_uptime]', root).checked, show_response: $('[name=show_response]', root).checked,
+        hide_branding: $('[name=hide_branding]', root) ? $('[name=hide_branding]', root).checked : undefined,
         auto_incident: Number($('[name=auto_incident]', root).value), history_days: Number($('[name=history_days]', root).value)
       }).then(function (r) {
         if (!r.ok) { toast(r.error, 'err'); return; }

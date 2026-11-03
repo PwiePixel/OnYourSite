@@ -2,6 +2,8 @@
 // Optionen und Preisen), was das Konto besitzt, wie man mehr verdient und der Verlauf. Nur lesen, eine Pool-Abfrage
 // nach der anderen (keine gehaltene Verbindung). Ob ein Kauf wirklich geht, entscheidet allein buy() unter der
 // Kontosperre – hier steht nur, was die Karte zeigt (Preis mit Angebot, Grund statt Kauf-Knopf).
+import { mailRemindersOn } from './outbox.js';
+import { cappedToday, earnLimits, streakOf, type EarnLimits, type StreakInfo } from './earn.js';
 import type { Row } from '../db.js';
 import { date, intval, numberFormat, phpStr, phpTruthy } from '../php.js';
 import { poolDb } from './util.js';
@@ -82,7 +84,8 @@ export interface ShopState {
   premium: { active: boolean; until: string | null; forever: boolean; source: string | null; buyable: boolean };
   features: ShopFeature[];
   owned: Owned[];
-  earn: { rules: EarnRule[] };
+  earn: { rules: EarnRule[]; streak: StreakInfo; capLeft: number; cap: number };
+  mailReminders: boolean; // „Email me before an unlock ends“ (HC-7b)
 }
 
 // Beendete Zeitpakete bleiben so lange in „Your unlocks“ (grau, mit „Renew“)
@@ -224,20 +227,41 @@ async function ownedList(uid: number, now: string): Promise<Owned[]> {
 }
 
 // Wie man mehr verdient (die Regeln von heute; abgeschaltete Belohnungen – Menge 0 – fehlen)
-async function earnRules(uid: number): Promise<EarnRule[]> {
+// Serie: „Day 4 – 3 more days to +15“; ohne laufende Serie die Regel selbst
+function streakRule(st: StreakInfo, lim: EarnLimits): EarnRule {
+  const week = lim.streak_week > 0 ? '+' + numberFormat(lim.streak_week) + ' every 7 days' : '';
+  const month = lim.streak_month > 0 ? '+' + numberFormat(lim.streak_month) + ' every 30 days' : '';
+  const rule = 'Open your editor every day: ' + [week, month].filter((x) => x !== '').join(', ') + ' in a row';
+  const left = st.nextAt !== null ? st.nextAt - st.days : 0;
+  const text = st.days > 0 && st.nextAt !== null && st.nextAmount !== null
+    ? 'Day ' + st.days + ' – ' + left + ' more day' + (left === 1 ? '' : 's') + ' to +' + numberFormat(st.nextAmount)
+    : rule;
+  return { key: 'streak', icon: 'bx-flame', title: 'Keep a streak', text, amount: st.nextAmount ?? 0, done: false, doneText: '', progress: null };
+}
+
+async function earnRules(uid: number, streak: StreakInfo, lim: EarnLimits): Promise<EarnRule[]> {
   const cfg = await hcSettings();
   const viewRewards = intval(await poolDb.value("SELECT COUNT(*) FROM honeycomb_ledger WHERE user_id = ? AND reason = 'views'", [uid]));
   const rules: EarnRule[] = [
     { key: 'daily', icon: 'bx-calendar-check', title: 'Be active', text: 'Open your editor – once a day', amount: cfg.daily,
       done: await hcHas(uid, 'daily', date('Y-m-d')), doneText: 'Collected today – come back tomorrow', progress: null },
+    streakRule(streak, lim),
     { key: 'profile', icon: 'bx-user-check', title: 'Complete your profile', text: 'A profile picture, a bio and at least 3 links', amount: cfg.profile,
       done: await hcHas(uid, 'profile', 'complete'), doneText: 'Done – thanks!', progress: null },
     { key: 'views', icon: 'bx-trending-up', title: 'Get visitors', text: 'For every ' + numberFormat(cfg.views_step) + ' views of your pages – one reward a day',
       amount: cfg.views, done: viewRewards >= HC_MAX_VIEW_REWARDS, doneText: 'All ' + HC_MAX_VIEW_REWARDS + ' rewards collected',
       progress: { value: Math.min(viewRewards, HC_MAX_VIEW_REWARDS), goal: HC_MAX_VIEW_REWARDS } },
+    { key: 'codes', icon: 'bx-purchase-tag-alt', title: 'Event codes', text: 'Codes from events and the team – redeem them below', amount: 0, done: false, doneText: '', progress: null },
     { key: 'gifts', icon: 'bx-gift', title: 'Gifts from the team', text: 'For great pages, events and helping others', amount: 0, done: false, doneText: '', progress: null },
   ];
-  return rules.filter((r) => r.key === 'gifts' || r.amount > 0);
+  return rules.filter((r) => r.key === 'gifts' || r.key === 'codes' || r.amount > 0);
+}
+
+// „Earn honeycombs“: Regeln, Serie und was vom Tageslimit heute noch übrig ist
+async function earnState(uid: number): Promise<ShopState['earn']> {
+  const lim = await earnLimits();
+  const streak = await streakOf(uid);
+  return { rules: await earnRules(uid, streak, lim), streak, capLeft: Math.max(0, lim.daily_cap - (await cappedToday(poolDb, uid))), cap: lim.daily_cap };
 }
 
 // Der ganze Stand für den Bereich im Editor. readOnly: Admin im Nutzer-Modus (kaufen ist dann aus).
@@ -264,7 +288,8 @@ export async function shopState(uid: number, readOnly: boolean): Promise<ShopSta
     premium: { active: prem.active, until: prem.until, forever: prem.forever, source: prem.source, buyable: !!premiumCard && premiumCard.state === 'buy' },
     features: cards,
     owned: await ownedList(uid, now),
-    earn: { rules: await earnRules(uid) },
+    earn: await earnState(uid),
+    mailReminders: await mailRemindersOn(uid),
   };
 }
 

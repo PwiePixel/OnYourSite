@@ -424,3 +424,31 @@ echo end`, 10_000);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /The status services weren’t set up – see above\. The website works without them\.[\s\S]*end/);
 });
+
+// ---------------------------------------------------------------- Hintergrundaufgaben (HC-7a)
+
+test('write_timers writes and enables the jobs timer (every 5 minutes, jobs:tick as the web user); without Node.js none', async () => {
+  for (const node of ['/usr/bin/node', '']) {
+    const units = join(dir, 'units-' + (node ? 'node' : 'none'));
+    mkdirSync(units, { recursive: true });
+    const r = await bash(`set -euo pipefail\n${fn('write_timers')}\ncfg_get() { echo Europe/Berlin; }\nsystemctl() { echo "systemctl $*" >> ${units}/calls; }\n`
+      + `UNITS=${units} NODE=${node} CODE=/opt/oys WEB=www-data ACME=/nonexistent\nwrite_timers\n`, 10000);
+    assert.equal(r.code, 0, r.out);
+    const calls = existsSync(join(units, 'calls')) ? readFileSync(join(units, 'calls'), 'utf8') : '';
+    if (node) {
+      const svc = readFileSync(join(units, 'onyoursite-jobs.service'), 'utf8');
+      assert.match(svc, /^ExecStart=\/usr\/bin\/node \/opt\/oys\/app\/dist\/cli\.js jobs:tick$/m);
+      assert.match(svc, /^User=www-data$/m);
+      assert.match(svc, /^Type=oneshot$/m);
+      assert.match(readFileSync(join(units, 'onyoursite-jobs.timer'), 'utf8'), /^OnUnitActiveSec=5min$/m);
+      assert.match(calls, /^systemctl enable --now onyoursite-jobs\.timer$/m);
+    } else {
+      assert.equal(existsSync(join(units, 'onyoursite-jobs.timer')), false);
+      assert.doesNotMatch(calls, /onyoursite-jobs/);
+    }
+  }
+  // Zurücksetzen hält die Aufgaben an, bevor die Datenbank gelöscht wird; zurück zu PHP schaltet sie ab
+  const reset = SCRIPT.slice(SCRIPT.indexOf('reset-keys') - 2000, SCRIPT.indexOf('reset-keys'));
+  assert.ok(reset.indexOf('systemctl stop onyoursite-jobs.timer') >= 0 && reset.indexOf('systemctl stop onyoursite-jobs.timer') < reset.indexOf('DROP DATABASE'), 'reset stops the jobs first');
+  assert.match(SCRIPT, /if \[ "\$MIGRATE" = 1 \]; then\n {4}systemctl disable --now onyoursite-web >\/dev\/null 2>&1\n {4}# [^\n]*\n {4}systemctl disable --now onyoursite-jobs\.timer/);
+});

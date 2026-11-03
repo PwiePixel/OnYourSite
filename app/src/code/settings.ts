@@ -18,8 +18,11 @@ export interface CodeSettings {
 export const CODE_SETTINGS_KEY = 'code_pages';
 
 export const CODE_SETTINGS_DEFAULTS: Readonly<CodeSettings> = Object.freeze({
-  max_on_pages: 0, max_files: 30, max_file_kb: 256, max_total_kb: 2048, paused: false,
+  max_on_pages: 1, max_files: 30, max_file_kb: 256, max_total_kb: 2048, paused: false,
 });
+
+// Höchste einstellbare Dateizahl je Code-Seite
+export const CODE_MAX_FILES_BOUND = 100;
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
 
@@ -40,7 +43,7 @@ export function codeSettingsFrom(raw: unknown, maxPages: number = intval(config(
   const maxFileKb = num(r, 'max_file_kb', 16, 1024);
   return {
     max_on_pages: num(r, 'max_on_pages', 0, Math.max(0, Math.min(3, maxPages))),
-    max_files: num(r, 'max_files', 1, 100),
+    max_files: num(r, 'max_files', 1, CODE_MAX_FILES_BOUND),
     max_file_kb: maxFileKb,
     max_total_kb: Math.max(maxFileKb, num(r, 'max_total_kb', 256, 5120)),
     paused: r.paused === true,

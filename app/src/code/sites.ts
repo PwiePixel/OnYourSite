@@ -15,6 +15,7 @@ import { pathExtension, poolDb } from '../honeycombs/util.js';
 import { claimAddress, duplicateKey, isTakenError, releaseAddress } from '../content/addresses.js';
 import './shop.js';
 import { codeBannedText } from './slots.js';
+import { codeLimits, codeSettings } from './settings.js';
 
 export const CODE_MAX_FILES = 30;
 export const CODE_MAX_FILE_BYTES = 262144; // 256 KB je Datei
@@ -250,6 +251,10 @@ export async function codeWrite(site: Row, files: CodeFileInput, deleted: unknow
   const siteId = intval(site.id);
   const current = await codeFiles(siteId, sql);
   const next = new Map(current);
+  // Grenzen aus den Einstellungen (Admin → Code pages). Liegt eine Seite schon über einer gesenkten Grenze, darf sie
+  // weiter gespeichert werden, solange sie dabei nicht größer wird (keine Datei mehr, nicht mehr Bytes)
+  const lim = codeLimits(await codeSettings(sql));
+  const kbText = (b: number): string => (b >= 1048576 && b % 1048576 === 0 ? b / 1048576 + ' MB' : b / 1024 + ' KB');
   for (const path of deleted) next.delete(phpStr(path));
   for (const [path, content] of entriesOf(files)) {
     const clean = codeValidPath(path);
@@ -257,13 +262,16 @@ export async function codeWrite(site: Row, files: CodeFileInput, deleted: unknow
       return '“' + mbSubstr(path, 0, 60) + '” isn’t an allowed file name. Use lowercase letters, numbers, - and _, and one of: ' + [...CODE_TYPES.keys()].join(', ') + '.';
     }
     if (typeof content !== 'string' || !validUtf8(content)) return clean + ': only text files (UTF-8) can be saved.';
-    if (strlen(content) > CODE_MAX_FILE_BYTES) return clean + ' is larger than ' + CODE_MAX_FILE_BYTES / 1024 + ' KB.';
+    const before = current.get(clean);
+    if (strlen(content) > lim.file && (before === undefined || strlen(content) > strlen(before))) return clean + ' is larger than ' + kbText(lim.file) + '.';
     next.set(clean, content.replaceAll('\0', ''));
   }
-  if (next.size > CODE_MAX_FILES) return 'A code page can have up to ' + CODE_MAX_FILES + ' files.';
+  if (next.size > lim.files && next.size > current.size) return 'A code page can have up to ' + lim.files + ' files.';
   let total = 0;
   for (const content of next.values()) total += strlen(content);
-  if (total > CODE_MAX_TOTAL_BYTES) return 'All files together may be up to ' + CODE_MAX_TOTAL_BYTES / 1048576 + ' MB.';
+  let totalBefore = 0;
+  for (const content of current.values()) totalBefore += strlen(content);
+  if (total > lim.total && total > totalBefore) return 'All files together may be up to ' + kbText(lim.total) + '.';
   if (!next.has('index.html')) return 'Your page needs an index.html – it’s the first file visitors see.';
   const now = date('Y-m-d H:i:s');
   for (const path of current.keys()) {
@@ -284,13 +292,14 @@ export async function codeWrite(site: Row, files: CodeFileInput, deleted: unknow
 // zeigt, zeigt wieder seine Link-Seite; eine eigene Adresse bleibt für den Besitzer reserviert. Gibt die Uploads zurück,
 // die ihre Dateien benutzt haben – der Aufrufer räumt sie nach seinem Commit mit cleanupFiles() auf.
 // Sperrreihenfolge: pages → code_sites → site_addresses.
-export async function codeDeleteRows(db: Db, site: Row): Promise<Set<string>> {
+// holdFor: für wen die eigene Adresse reserviert bleibt – den Besitzer, oder (vom Team gelöscht) niemanden
+export async function codeDeleteRows(db: Db, site: Row, holdFor: 'owner' | 'nobody' = 'owner'): Promise<Set<string>> {
   const id = intval(site.id);
   const used = usedUploadsIn((await codeFiles(id, db)).values(), intval(site.user_id));
   await db.exec('UPDATE pages SET code_site_id = NULL WHERE code_site_id = ?', [id]);
   await db.exec('DELETE FROM code_files WHERE site_id = ?', [id]);
   await db.exec('DELETE FROM code_sites WHERE id = ?', [id]);
-  if (phpTruthy(site.slug)) await releaseAddress(db, phpStr(site.slug), intval(site.user_id), 'owner', { kind: 'code', refId: id });
+  if (phpTruthy(site.slug)) await releaseAddress(db, phpStr(site.slug), intval(site.user_id), holdFor, { kind: 'code', refId: id });
   return used;
 }
 

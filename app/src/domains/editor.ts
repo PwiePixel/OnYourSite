@@ -14,7 +14,7 @@ import { quantity } from '../honeycombs/entitlements.js';
 import { SlotBusyError, withSlotLock } from '../code/slots.js';
 import { cnameTarget, domainsAvailable } from './config.js';
 import { displayHostname, looksLikeApex, normalizeHostname, recordHosts, relativeName, guessZone, TXT_PREFIX } from './hostname.js';
-import { createDomain, domainForTarget, logEvent, removeDomain, transition, type DomainRow } from './store.js';
+import { createDomain, domainForTarget, hostnameBlocked, logEvent, removeDomain, transition, type DomainRow } from './store.js';
 import { domainTarget } from './targets.js';
 import { domainSettings, workerState, type DomainSettings } from './settings.js';
 import { ownershipToken } from './tokens.js';
@@ -24,6 +24,7 @@ import { Doh, dohFromConfig, txtView, type TxtView } from './worker/dns.js';
 import { NOTICE_TITLES, domainLink, noticeText } from './notify.js';
 import { notify } from '../notify/notify.js';
 import { pausePoint } from '../honeycombs/ledger.js';
+import { adminMode } from '../honeycombs/shop.js';
 
 export const DOMAIN_ACTIONS: ReadonlySet<string> = new Set(['domain', 'domain-add', 'domain-check', 'domain-remove', 'domain-settings']);
 export const isDomainAction = (action: string): boolean => DOMAIN_ACTIONS.has(action);
@@ -168,6 +169,8 @@ const NOT_AVAILABLE = { ok: false, error: 'Custom domains aren’t available rig
 const NO_DOMAIN = { ok: false, error: 'This page has no custom domain.' };
 const TRY_AGAIN = { ok: false, error: 'Please try again.' };
 const LINK_ONLY = { ok: false, error: 'Custom domains work for link pages only.' };
+// Vom Team gesperrt (R2): für jedes Konto, auch das bisherige, bis ein Admin den Hostnamen freigibt
+export const BLOCKED = { ok: false, error: 'This domain was disabled by the OnYourSite team and can’t be connected. Please contact support.' };
 
 function premiumEnds(until: string): string {
   return date('M j', ts(until));
@@ -184,6 +187,9 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
   }
   if (!page || intval(page.user_id) !== uid) ctx.json({ ok: false, error: 'Please reload the editor.', reload: true }, 409);
   const pageId = intval(page.id);
+  // R8: ein Admin, der als dieser Nutzer arbeitet, sieht die Domain, ändert aber nichts (wie beim Kaufen)
+  const asAdmin = adminMode(ctx);
+  if (isPost && asAdmin) ctx.json({ ok: false, code: 'admin_mode', error: 'Custom domains can’t be changed in admin mode.' }, 403);
   const s = await domainSettings();
   const row = await domainForTarget('page', pageId);
   const inp = (k: string): unknown => own(input, k);
@@ -195,7 +201,7 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
     const workerAge = ws.worker_at ? time() - ts(ws.worker_at) : null;
     const cap = await domainsCapacity();
     ctx.json({
-      ok: true, available: true, enabled: s.enabled,
+      ok: true, available: true, enabled: s.enabled, adminMode: asAdmin,
       premium: { active: prem.active, until: prem.until, forever: prem.forever },
       target: cnameTarget(), linkPage: isShownLinkPage(page),
       limits: { perUser: staff ? null : s.per_user, used, slots: s.slots ? await quantity(uid, 'custom_domain') : null },
@@ -291,6 +297,8 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
   const norm = normalizeHostname(inp('hostname'), baseHost());
   if (!norm.ok) ctx.json({ ok: false, error: norm.error }, 400);
   const ascii = norm.ascii;
+  // 7a. Vom Team gesperrt (R2): auch nach „Entfernen“, für jedes Konto, auch mit TXT-Nachweis – bis ein Admin freigibt
+  if (await hostnameBlocked(ascii)) ctx.json(BLOCKED, 409);
   // 8. Wurzeldomain? Erst nachfragen
   const apex = looksLikeApex(ascii);
   if (apex && !phpTruthy(inp('apex_ok'))) {
@@ -307,7 +315,7 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
   const CHALLENGE = { ok: false, challenge, error: 'This domain is connected to or waiting in another account. To use it here, add this TXT record to prove it’s yours, then select “I’ve added it”.' };
   let claimVersion: number | null = null;
   if (existing && intval(existing.user_id) !== uid) {
-    if (existing.state === 'blocked') ctx.json({ ok: false, error: 'This domain can’t be connected right now. Please contact support.' }, 409);
+    if (existing.state === 'blocked') ctx.json(BLOCKED, 409);
     if (existing.state === 'removing') ctx.json({ ok: false, error: 'This domain is being disconnected from another page. Please try again in a few minutes.' }, 409);
     if (!phpTruthy(inp('claim'))) ctx.json(CHALLENGE, 409);
     const txt = await lookupTxt(TXT_PREFIX + ascii, token);
@@ -355,6 +363,9 @@ export async function domainEditorApi(ctx: Ctx, user: Row, action: string, isPos
         }
       }
       const cur = (await db.one('SELECT * FROM custom_domains WHERE hostname = ? FOR UPDATE', [ascii])) as DomainRow | null;
+      // Sperre erst nach der Zeile lesen (Reihenfolge custom_domains → custom_domain_blocks wie in removeDomain()):
+      // hat der Besitzer die gesperrte Domain eben entfernt, steht ihr Eintrag schon da
+      if (await hostnameBlocked(ascii, db, true)) return { status: 409, body: BLOCKED };
       if (claimVersion === null) {
         if (cur) return { status: 409, body: TRY_AGAIN };
         const id = await createDomain({ hostname: ascii, targetId: pageId, userId: uid, isApex: apex }, db);

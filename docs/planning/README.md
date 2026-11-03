@@ -25,15 +25,12 @@ change the plan, update `STATUS.md` (and the documents you changed) in the same 
 
 | Branch | Pull request | Content |
 |---|---|---|
-| `feature/node-complete` | #15 | Release 3.0: the complete Node.js port – merge first |
-| `feature/new-features` | #14 | The new features on top of the port; this folder lives here |
-| `main` | – | Release 2.x (PHP) plus the first part of the port |
+| `main` | – | Release 3.0 (Node.js only) with the new features – PR #15 (the port) and PR #14 (the features) are merged |
+| `php-2.x` | – | The last PHP version; the parity tests read it through `OYS_PHP_REF` |
+| `feature/owner-decisions` | after #14 | The owner's decisions R1 and R2 from the reviews (`DECISIONS.md`) |
 
-- Merge order: #15, then #14. Before #14 is merged, bring `main` (with #15) into `feature/new-features` so the pull
-  request only shows the feature changes.
-- New work: one branch per roadmap item (or a small group of dependent items), started from `feature/new-features`
-  for features or from `feature/node-complete` for port and release fixes. Merge back as one squash commit after the
-  tests pass, then update `STATUS.md`.
+- New work: one branch per roadmap item (or a small group of dependent items), started from `main`. Merge back as
+  one squash commit after the tests pass, then update `STATUS.md`.
 - Never force-push a shared branch, never push to `main` directly.
 
 ## How to build a roadmap item
@@ -63,9 +60,26 @@ change the plan, update `STATUS.md` (and the documents you changed) in the same 
 
 - Node.js 22, MariaDB 10.6+ (or MySQL 8), Chromium for the Playwright flows.
 - `cd app && npm ci`.
-- `config.json` in the repository root (or the path in `OYS_CONFIG`) with the same keys as `config.example.php` and
-  a test database whose name starts with `oys_test` (the browser flows refuse other names).
-- Until the PHP removal step is merged (see `STATUS.md`), the parity tests run the PHP version in the repository
-  (`php` 8 with PDO MySQL, GD and mbstring) and read `config.php` next to `config.json`
-  (`php app/scripts/config-from-php.php config.php > config.json` converts it). After that step they read a checkout
-  of the branch `php-2.x` from `OYS_PHP_REF` and are skipped without it.
+- `config.json` in the repository root (or the path in `OYS_CONFIG`) for the tests. It is never committed. This works
+  (the keys are the same as on a server, see `server/README.md`); the tests rely on `base_domain`, `scheme`,
+  `timezone`, `max_pages` and a `bot_secret` of at least 32 characters:
+
+  ```json
+  {
+    "db": { "host": "localhost", "name": "oys_test", "user": "…", "pass": "…" },
+    "aes_key": "<32 characters>", "app_secret": "<at least 32 characters>", "bot_secret": "<at least 32 characters>",
+    "cron_secret": "<any>", "base_domain": "oys.test:8080", "scheme": "http", "timezone": "Europe/Berlin",
+    "max_pages": 3, "debug": false
+  }
+  ```
+
+  The database name must start with `oys_test` (the seed and most browser flows refuse other names – never point the
+  tests at a real database); the database user needs the rights to create and drop databases named `<db.name>_…`,
+  because every test file works on its own copy. Several checkouts can share one server if each has its own `db.name`.
+- `cd app && npm run test:seed` builds the test database from scratch (it drops it first): old 2.x profiles that the
+  real migration turns into pages, so page and block numbers are the ones the tests name. `app/test/seed.ts` lists the
+  accounts. Run it again whenever a test run left the database in a strange state.
+- `npx tsc --noEmit -p . && npm test`. The PHP comparisons read a checkout of the branch `php-2.x` from `OYS_PHP_REF`
+  (`git worktree add ../php-2.x origin/php-2.x`; `php` 8 with PDO MySQL, GD and mbstring) and are skipped without it.
+  "profile handles keep exactly the letters and digits PHP keeps" also needs a PHP whose PCRE knows the same Unicode
+  version as Node (PCRE 10.42 of Ubuntu 24.04 is older and fails it on new letters only).

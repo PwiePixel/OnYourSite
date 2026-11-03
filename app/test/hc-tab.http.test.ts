@@ -66,6 +66,8 @@ const TEST_FEATURES: Feature[] = [
 ];
 
 before(async () => {
+  // Diese Abläufe prüfen zuerst den Stand vor HC-7a (zeitlich begrenzt gesperrt) und schalten es selbst ein
+  setLifecycleReadyForTests(false);
   t = await testDatabase('hctab', { empty: true });
   await ensureSchema();
   const user = 'INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, ?, ?)';
@@ -75,7 +77,7 @@ before(async () => {
 });
 
 after(async () => {
-  setLifecycleReadyForTests(false);
+  setLifecycleReadyForTests(true);
   for (const f of TEST_FEATURES) unregisterFeatureForTests(f.key);
   await t.done();
 });
@@ -85,11 +87,11 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.equal((await api('shop', { userId: 5, json: {}, csrf: 'x'.repeat(64) })).status, 419);
   await give(5, 150);
   const st = await shop(5);
-  assert.deepEqual(Object.keys(st), ['balance', 'frozen', 'frozenReason', 'readOnly', 'premium', 'features', 'owned', 'earn']);
+  assert.deepEqual(Object.keys(st), ['balance', 'frozen', 'frozenReason', 'readOnly', 'premium', 'features', 'owned', 'earn', 'mailReminders']);
   assert.equal(st.balance, 150);
   assert.deepEqual([st.frozen, st.frozenReason, st.readOnly], [false, '', false]);
   assert.deepEqual(st.premium, { active: false, until: null, forever: false, source: null, buyable: false });
-  assert.deepEqual(st.features.map((c) => c.feature), ['code_page'], 'Premium stays hidden until it is ready and timed options can be sold');
+  assert.deepEqual(st.features.map((c) => c.feature), ['code_page', 'status_page'], 'Premium stays hidden until it is ready and timed options can be sold (the status page card is in since ST-4)');
   const c = st.features[0];
   assert.deepEqual({ ...c, options: undefined }, {
     feature: 'code_page', title: 'Code page', icon: 'bx-code-alt', description: 'Your own website with HTML, CSS and JavaScript at its own address.', perks: [],
@@ -98,8 +100,8 @@ test('shop: login, CSRF and the state of an account (the code page card, no Prem
   assert.deepEqual(c.options, [{ item: 'code_page', label: 'Unlock', days: null, units: 1, listPrice: 100, price: 100, offer: null, availableUntil: null, affordable: true, note: '' }]);
   assert.deepEqual(st.owned, []);
   const rules = (st.earn as { rules: Array<{ key: string; amount: number; progress: unknown }> }).rules;
-  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['profile', 20], ['views', 10], ['gifts', 0]]);
-  assert.deepEqual(rules[2].progress, { value: 0, goal: 20 });
+  assert.deepEqual(rules.map((r) => [r.key, r.amount]), [['daily', 5], ['streak', 15], ['profile', 20], ['views', 10], ['codes', 0], ['gifts', 0]]);
+  assert.deepEqual(rules.find((r) => r.key === 'views')?.progress, { value: 0, goal: 20 });
   // POST geht genauso (z. B. aus einem Formular), und der Kontostand zählt für „affordable“
   const poor = jsonBody(await api('shop', { userId: 9, json: {} })).shop as State;
   assert.equal(poor.features[0].options[0].affordable, false);
@@ -305,7 +307,9 @@ test('hc-history: pages of 20 with next, before as query or JSON, bad input and 
 });
 
 test('unknown actions of the area answer 404 (GET and POST)', async () => {
-  for (const action of ['shop-redeem', 'hc-redeem', 'shop-auto-renew', 'shop-reminders', 'hc-foo']) {
+  // hc-redeem gibt es seit HC-9 (nur POST; GET bleibt 404, siehe hc-codes.http.test.ts)
+  // shop-reminders gibt es seit HC-7b (nur POST; GET bleibt 404, siehe hc-mails.db.test.ts)
+  for (const action of ['shop-redeem', 'shop-auto-renew', 'hc-foo']) {
     for (const method of ['GET', 'POST']) {
       const ctx = await api(action, { userId: 5, method });
       assert.equal(ctx.status, 404, action + ' ' + method);

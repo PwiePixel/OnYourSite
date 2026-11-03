@@ -66,6 +66,8 @@ function feat(f: Partial<Feature> & { key: string; title: string; items: Feature
 }
 
 before(async () => {
+  // Diese Abläufe prüfen zuerst den Stand vor HC-7a (zeitlich begrenzt gesperrt) und schalten es selbst ein
+  setLifecycleReadyForTests(false);
   t = await testDatabase('hc3', { empty: true });
   await ensureSchema();
   const user = 'INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, ?, ?)';
@@ -89,7 +91,7 @@ before(async () => {
 
 after(async () => {
   setPauseGateForTests(null);
-  setLifecycleReadyForTests(false);
+  setLifecycleReadyForTests(true);
   unregisterPerksForTests('premium-domains');
   for (const f of TEST_FEATURES) unregisterFeatureForTests(f.key);
   await t.done();

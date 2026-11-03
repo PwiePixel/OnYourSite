@@ -16,6 +16,7 @@ import { hcDeleteUser } from '../honeycombs/deletion.js';
 import { userUploadFiles } from '../content/uploads.js';
 import { uploadPath } from '../content/storage.js';
 import { releaseUserAddresses } from '../content/addresses.js';
+import { deleteUserStatus } from '../status/deletion.js';
 
 export interface DeletionRun {
   // Arbeit nach dem Commit (Dateien aufräumen …) – läuft nur, wenn das Konto wirklich gelöscht wurde
@@ -91,6 +92,13 @@ export async function deleteAccount(ctx: Ctx | null, uid: number): Promise<void>
 }
 
 // ---------------------------------------------------------------- Haken des Kerns
+
+// Statusseite des Kontos mit allem, was an ihr hängt (ST-4); die Adresse gibt der Haken „addresses“ frei
+registerUserDeletion({
+  name: 'status',
+  order: 20,
+  run: (db, uid) => deleteUserStatus(db, uid),
+});
 
 // Code-Seite mit Dateien
 registerUserDeletion({

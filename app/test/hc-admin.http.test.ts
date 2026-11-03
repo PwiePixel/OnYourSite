@@ -58,6 +58,8 @@ const TEST_FEATURES: Feature[] = [
 ];
 
 before(async () => {
+  // Diese Abläufe prüfen zuerst den Stand vor HC-7a (zeitlich begrenzt gesperrt) und schalten es selbst ein
+  setLifecycleReadyForTests(false);
   t = await testDatabase('hcadmin', { empty: true });
   await ensureSchema();
   const user = 'INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, ?, ?)';
@@ -70,14 +72,14 @@ before(async () => {
 });
 
 after(async () => {
-  setLifecycleReadyForTests(false);
+  setLifecycleReadyForTests(true);
   for (const f of TEST_FEATURES) unregisterFeatureForTests(f.key);
   await t.done();
 });
 
 test('sub-tabs: the tab from ?hc_tab, unknown values show the overview, and every action goes back to its tab', async () => {
-  assert.deepEqual(['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'x', '', undefined, ['users']].map(hcTab),
-    ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'overview', 'overview', 'overview', 'overview', 'overview']);
+  assert.deepEqual(['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'codes', 'x', '', undefined, ['users']].map(hcTab),
+    ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'codes', 'overview', 'overview', 'overview', 'overview']);
   assert.deepEqual(['settings', 'item_save', 'item_add', 'offer_create', 'offer_cancel', 'grant', 'code_block', 'nope'].map((a) => hcBackUrl({ hc_action: a })), [
     '/admin?hc_tab=rules#honeycombs', '/admin?hc_tab=catalogue#honeycombs', '/admin?hc_tab=catalogue#honeycombs', '/admin?hc_tab=offers#honeycombs',
     '/admin?hc_tab=offers#honeycombs', '/admin?hc_tab=users#honeycombs', '/admin#honeycombs', '/admin#honeycombs',
@@ -234,7 +236,7 @@ test('item_add: a duration or pack size for a ready feature, off until switched 
   assert.deepEqual((await rows("SELECT is_active, min_account_days, min_active_days FROM `DB`.hc_items WHERE item_key = 'premium_7'"))[0], { is_active: 0, min_account_days: 30, min_active_days: 10 });
   // Das Formular bietet nur Funktionen an, die weitere Optionen haben können
   const cat = section(await page('?hc_tab=catalogue'));
-  assert.match(cat, /<select id="hcAddFeature" name="feature"[^>]*><option value="premium">Premium \(days\)<\/option><option value="test_checks">Extra checks \(days\)<\/option><option value="test_passes">Address pass \(pack size\)<\/option><\/select>/);
+  assert.match(cat, /<select id="hcAddFeature" name="feature"[^>]*><option value="premium">Premium \(days\)<\/option><option value="status_more_checks">Extra checks \(days\)<\/option><option value="status_fast_checks">Fast checks \(days\)<\/option><option value="test_checks">Extra checks \(days\)<\/option><option value="test_passes">Address pass \(pack size\)<\/option><\/select>/);
 });
 
 test('offer_create and offer_cancel: checks, the double submit, the limit of 20, labels as text, the confirmation and the audit', async () => {

@@ -5,6 +5,7 @@
 //
 // Vertrag der Kauf-Routen (ROADMAP §3.2): request_id (32 hex, vom Browser beim Öffnen des Dialogs erzeugt) und
 // expected_price; ohne request_id → 409 mit reload; Admin-Modus → 403; anderer Preis → 200 mit code 'price_changed'.
+import { laterLots, queueEndedMail } from './outbox.js';
 import type { Ctx } from '../web/ctx.js';
 import type { Db, Row } from '../db.js';
 import { intval, mbSubstr, phpStr, phpTruthy } from '../php.js';
@@ -295,6 +296,7 @@ export async function purchaseUnlock(ctx: Ctx | null, uid: number, featureKey: s
 // ---------------------------------------------------------------- Erstatten (nur das Team)
 
 // amount: null = der erstattbare Wert; remove: auch wegnehmen, was gekauft wurde (Admin entscheidet ausdrücklich)
+
 export async function refund(adminId: number, purchaseId: number, amount: number | null, remove: boolean, note = ''): Promise<{ ok: string } | { error: string }> {
   const head = await poolDb.one('SELECT user_id FROM hc_purchases WHERE id = ?', [purchaseId]);
   if (!head) return { error: 'Purchase not found.' };
@@ -339,6 +341,8 @@ export async function refund(adminId: number, purchaseId: number, amount: number
             WHERE user_id = ? AND feature = ? AND lot = ? AND period_start >= ? AND id <> ? AND refunded_at IS NULL`,
         [cut, cut, uid, p.feature, intval(p.lot), p.period_end, intval(p.id)]);
         after = end > now ? ' ' + title + ' now ends on ' + dayLabel(end) + '.' : ' ' + title + ' has ended.';
+        // Durch die Erstattung beendet: dieselbe Mail wie beim Ablauf (wenn kein anderes Paket weiterläuft)
+        if (end <= now && (await laterLots(db, uid, p.feature, intval(p.lot), now, now, true)) === 0) await queueEndedMail(db, uid, intval(lot.id), p.feature, now);
       }
     } else if (remove && r.units > 0) {
       units = r.units;

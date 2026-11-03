@@ -7,6 +7,7 @@
 // Ohne Datenbank: die letzte gute Ansicht (höchstens 1 Stunde alt) mit rotem Hinweis und no-store; OnYourSites eigene
 // Seite zeigt dann Website und Datenbank als „Major outage“ (die Hauptseite antwortet 503). Ohne gespeicherte Ansicht:
 // OnYourSites Seite eine feste Notfall-Seite (200), eine Seite eines Nutzers 503 mit Retry-After.
+import { pageBranding } from '../content/branding.js';
 import type { Ctx } from '../web/ctx.js';
 import { DbUnavailableError, withConnection, type Db } from '../db.js';
 import { hmac, safeEqual, sha1Hex } from '../crypto.js';
@@ -225,7 +226,7 @@ async function build(db: Db, page: StatusPageRow, route: Route, preview: boolean
   const now = Math.floor(Date.now() / 1000);
   if (!(await exists(db, page, route))) return { at: Date.now(), status: 404, body: '', type: 'text/html; charset=UTF-8', noindex: true };
   const view = await loadPageView(db, page, now);
-  const links = page.isSystem ? await renderLinks() : { discord: '' };
+  const links = page.isSystem ? await renderLinks() : { discord: '', footerHidden: (await pageBranding({ user_id: page.userId }, settingsObject(page.settings), db)).footerHidden };
   if (!preview) lastViews.set(String(page.id), { at: Date.now(), view, links });
   const noindex = view.noindex || preview;
   const html = (body: string): Cached => ({ at: Date.now(), status: 200, body, type: 'text/html; charset=UTF-8', noindex });
@@ -293,8 +294,15 @@ export async function statusSubdomain(ctx: Ctx, slug: string): Promise<void> {
 
 // Hauptdomain on-your.site/<adresse>: eine Statusseite gibt es nur unter ihrer eigenen Subdomain
 export async function statusPathRedirect(ctx: Ctx, slug: string): Promise<void> {
-  const page = await withConnection((db) => statusPageBySlug(db, slug));
-  if (page) ctx.redirect(statusPageUrl(page.slug), 302);
+  const now = Math.floor(Date.now() / 1000);
+  const to = await withConnection(async (db) => {
+    const page = await statusPageBySlug(db, slug);
+    if (page) return page.slug;
+    // Eine alte Adresse (90 Tage nach dem Wechsel) leitet auch hier zur neuen
+    const r = await db.one('SELECT p.slug FROM status_slug_redirects r JOIN status_pages p ON p.id = r.page_id WHERE r.slug = ? AND r.until > ?', [slug, now]);
+    return r ? String(r.slug) : null;
+  });
+  if (to !== null) ctx.redirect(statusPageUrl(to), 302);
 }
 
 // Router: die Datenbank fehlt schon vor dem Abfragen der Adresse – bekannte Statusseiten bekommen ihre Notfall-Ausgabe
@@ -304,4 +312,14 @@ export function statusDbDownHost(ctx: Ctx, slug: string): void {
   const route = routeOf(ctx);
   if (route.kind === 'none') return;
   serveDown(ctx, slug, route);
+}
+
+// Gespeicherte Einstellungen einer Seite als Objekt (für das Branding; Kaputtes = leer)
+function settingsObject(raw: string | null): Record<string, unknown> {
+  try {
+    const v = raw ? JSON.parse(raw) as unknown : {};
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }

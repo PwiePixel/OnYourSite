@@ -6,6 +6,7 @@
 // Schutz gegen doppeltes Absenden (ROADMAP §3.2, XD-15): zeitlich begrenzte und gezählte Geschenke sowie jeder Entzug
 // brauchen formRef (16 hex) – eine 0-Buchung grant/g<adminId>-<formRef> bzw. revoke/v<adminId>-<formRef>; kommt sie
 // ein zweites Mal, wird nichts geändert. Dauerhafte Freischaltungen bleiben über die Buchung unlock/<feature> einmalig.
+import { laterLots, queueEndedMail } from './outbox.js';
 import type { Db } from '../db.js';
 import { intval, mbSubstr, phpStr, phpTruthy } from '../php.js';
 import { notify } from '../notify/notify.js';
@@ -171,6 +172,10 @@ export async function revokeFeature(adminId: number, uid: number, key: string, l
     for (const l of lots) {
       // Inaktiv, Ende gilt als verarbeitet: der Ablauf schickt keinen zweiten „ended“-Hinweis
       await setPeriod(db, uid, f.key, intval(l.lot), { quantity: 0, permanent: false, expiresAt: now, expiryDoneAt: now, note: text, grantedBy: adminId }, now);
+    }
+    // Zeitlich begrenztes vom Team entfernt: die Mail „beendet“ (nur wenn etwas wegfällt und das Konto sie will)
+    if (f.kind === 'timed' && (lot === null || (await laterLots(db, uid, f.key, lot, now, now, true)) === 0)) {
+      await queueEndedMail(db, uid, intval(lots[0].id), f.key, now);
     }
     await audit(db, adminId, 'feature_revoke', uid, f.key, { lots: lots.length, lot });
     await notify(uid, 'unlock', mbSubstr(f.title + ' was removed by the team.', 0, 190), text, '/dashboard#honeycombs/' + f.key, { db });

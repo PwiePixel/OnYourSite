@@ -453,3 +453,24 @@ test('weekly-report runs src/cli/weekly-report.ts – and says so clearly while 
   assert.match(err, /has no weeklyReportCli\(\)/);
   assert.equal(out, '');
 });
+
+// ---------------------------------------------------------------- jobs:tick (HC-7a)
+
+test('jobs:tick runs the due jobs once; an older schema skips them and still exits 0; unknown flags are refused', async () => {
+  await recreateWithSchema(DB.fresh);
+  let r = await node(['jobs:tick'], DB.fresh);
+  assert.equal(r.code, 0, r.err);
+  const [rows] = await admin.query<RowDataPacket[]>(`SELECT meta_value FROM \`${DB.fresh}\`.oys_meta WHERE meta_key = 'jobs'`);
+  assert.equal(JSON.parse(String(rows[0].meta_value)).honeycombs.ok, true);
+  // Gleich danach: nicht fällig, nichts gemeldet
+  r = await node(['jobs:tick'], DB.fresh);
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /honeycombs:/);
+  // Die neue Version ist gebaut, migrate lief noch nicht
+  await admin.query(`REPLACE INTO \`${DB.fresh}\`.oys_meta (meta_key, meta_value) VALUES ('schema_version', '1')`);
+  r = await node(['jobs:tick', '--force'], DB.fresh);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^honeycombs: schema too old – skipped$/m);
+  r = await node(['jobs:tick', '--now'], DB.fresh);
+  assert.deepEqual([r.code, r.err], [1, 'Usage: node app/dist/cli.js jobs:tick [--force]\n']);
+});

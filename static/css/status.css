@@ -141,6 +141,10 @@
 .st-notice { justify-content: center; }
 .st-notice-card { text-align: center; padding: 28px 22px; }
 .st-notice-card p { margin: 0; color: var(--muted); }
+.st-confirm { margin: 18px 0 0; }
+.st-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 22px; border-radius: 999px; border: 0; font: inherit; font-weight: 700; cursor: pointer; background: var(--accent, #6366f1); color: #fff; }
+.st-btn:hover { filter: brightness(1.1); }
+.st-btn:focus-visible { outline: 2px solid var(--accent, #6366f1); outline-offset: 3px; }
 
 .st-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 4px; }
 
@@ -155,3 +159,14 @@
 .st-main .md pre { padding: 10px 12px; border-radius: 10px; overflow-x: auto; background: color-mix(in srgb, var(--text) 8%, transparent); }
 .st-main .md blockquote { border-left: 3px solid var(--divider); padding-left: .9em; color: var(--muted); }
 .st-main .md-host { color: var(--muted); font-size: .85em; }
+
+/* ---------- Aufgefrischte Zustände: Abzeichen mit Fläche, klarere Punkte, ruhigere Zeilen ---------- */
+.st-pill { padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--divider) 55%, transparent); }
+.st-pill.st-s-ok { background: color-mix(in srgb, #22c55e 14%, transparent); }
+.st-pill.st-s-degraded { background: color-mix(in srgb, #eab308 15%, transparent); }
+.st-pill.st-s-partial { background: color-mix(in srgb, #f97316 15%, transparent); }
+.st-pill.st-s-major { background: color-mix(in srgb, #ef4444 15%, transparent); }
+.st-pill.st-s-maint { background: color-mix(in srgb, #3b82f6 15%, transparent); }
+.st-pill .st-dot { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
+.st-comp { padding: 14px 0; }
+.st-comp-head { gap: 10px; }

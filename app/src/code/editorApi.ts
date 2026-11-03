@@ -25,7 +25,7 @@ import {
   CODE_MORE_TEXT, CODE_UNLOCK_TEXT, SLOT_BUSY_TEXT, SLOT_GONE_TEXT, SLOT_RATE_MAX, SLOT_RATE_TEXT, SLOT_RATE_WINDOW, SlotBusyError, SlotGoneError,
   canCreate, canMove, codeBannedText, codeQuota, pageAllowance, slotRateKey, withSlotLock, type CodeDenied, type SlotUser,
 } from './slots.js';
-import { codeLimits, codeSettings } from './settings.js';
+import { CODE_MAX_FILES_BOUND, codeLimits, codeSettings } from './settings.js';
 import { CODE_TERMS_REQUIRED } from './shop.js';
 import { mustStayOffline } from './enforce.js';
 
@@ -138,6 +138,8 @@ export async function codeApiState(ctx: Ctx, user: Row, selectedId: number | nul
       onPages: { used: pages.filter((p) => p.code_site_id !== null && p.code_site_id !== undefined).length, max: settings.max_on_pages },
     },
     more: { unlocked: morePrice === 0 || (await has(uid, 'code_more')), cost: morePrice },
+    // Alle Code-Seiten des Kontos (auch ohne Adresse) – wie code.total im Start des Editors (Regel für More code pages)
+    total: sites.length,
     banned: phpTruthy(u.code_banned_at) ? { reason: phpStr(u.code_ban_reason ?? '') } : null,
     paused: settings.paused,
     pages: pages.map((p) => ({
@@ -146,6 +148,38 @@ export async function codeApiState(ctx: Ctx, user: Row, selectedId: number | nul
       code: p.code_site_id === null || p.code_site_id === undefined ? null : intval(p.code_site_id),
       custom_domain: domains.get(intval(p.id)) ?? false,
     })),
+  };
+}
+
+// Übersicht der Code-Seiten für den Start des Editors (OYS_EDITOR.code, CS-6): Seitenwechsler und Dialoge ohne Anfrage.
+// Nur Zeilen dieses Kontos; Dateien werden nicht gelesen.
+export async function codeSummary(user: Row): Promise<Record<string, unknown>> {
+  const uid = intval(user.id);
+  const settings = await codeSettings();
+  const sites = await codeSites(uid);
+  const pages = await q('SELECT id, slug, code_site_id FROM pages WHERE user_id = ?', [uid]);
+  const slotFor = (site: Row): Row | null => pages.find((p) => intval(p.code_site_id) === intval(site.id)) ?? null;
+  const morePrice = await shopPrice('code_more', uid);
+  const list = sites.filter((s) => phpTruthy(s.slug) || slotFor(s)).map((s) => {
+    const slot = slotFor(s);
+    const slug = phpTruthy(s.slug) ? phpStr(s.slug) : phpStr(slot?.slug ?? '');
+    return {
+      id: intval(s.id), kind: phpTruthy(s.slug) ? 'own' : 'page', slug, url: codeUrl(slug), title: phpStr(s.title),
+      online: phpTruthy(s.is_published), blocked: phpTruthy(s.is_blocked), slot: slot ? intval(slot.id) : null,
+    };
+  });
+  return {
+    unlocked: await has(uid, 'code_page'),
+    more: { unlocked: morePrice === 0 || (await has(uid, 'code_more')), cost: morePrice },
+    cost: await shopPrice('code_page', uid),
+    terms: phpTruthy(user.code_terms_at),
+    banned: phpTruthy(user.code_banned_at) ? { reason: phpStr(user.code_ban_reason ?? '') } : null,
+    paused: settings.paused,
+    own: list.filter((s) => s.kind === 'own').length,
+    onPages: pages.filter((p) => p.code_site_id !== null && p.code_site_id !== undefined).length,
+    maxOnPages: settings.max_on_pages,
+    total: sites.length,
+    sites: list,
   };
 }
 
@@ -321,7 +355,8 @@ export async function codeApi(ctx: Ctx, user: Row, action: string, isPost: boole
     const files: PhpArr = isArr(filesIn) ? filesIn : [];
     const deletedIn = inp('deleted') ?? null;
     const deleted = values(isArr(deletedIn) ? deletedIn : []).filter((x) => typeof x === 'string');
-    const max = (await codeSettings()).max_files;
+    // Feste Obergrenze (höchste einstellbare Dateizahl): die genaue Grenze prüft codeWrite, auch für Seiten über einer gesenkten
+    const max = CODE_MAX_FILES_BOUND;
     if (codeFileCount(files) > max * 2 || deleted.length > max * 2) ctx.json({ ok: false, error: 'Too many files.' }, 400);
     // array_key_exists(): auch ein null-Wert zählt als vorhanden
     const wantOnline = Object.hasOwn(input, 'online') ? phpTruthy(inp('online')) : null;

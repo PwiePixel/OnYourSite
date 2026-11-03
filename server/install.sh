@@ -135,6 +135,10 @@ save_conf() {
     echo "TUNNEL=$TUNNEL"
     echo "TUNNEL_ID=$TUNNEL_ID"
     echo "BACKUP_DAYS=$BACKUP_DAYS"
+    # Eigene Domains (--domains): ohne diese Zeilen ginge die Einrichtung beim nächsten Lauf verloren
+    echo "CUSTOM_DOMAINS=${CUSTOM_DOMAINS:-}"
+    echo "SAAS_ORIGIN=${SAAS_ORIGIN:-}"
+    echo "SAAS_TARGET=${SAAS_TARGET:-}"
   } > "$tmp"
   mv "$tmp" "$CONF"
 }
@@ -448,7 +452,7 @@ ErrorLogFormat "[%{cu}t] [%-m:%l] %7F: %E: %M"
 
 <VirtualHost *:443>
     ServerName $DOMAIN
-    ServerAlias www.$DOMAIN *.$DOMAIN
+    ServerAlias www.$DOMAIN *.$DOMAIN$( [ "${CUSTOM_DOMAINS:-}" = yes ] && printf '\n    # Custom domains of premium users come through the tunnel with their own name (Cloudflare for SaaS)\n    ServerAlias *' )
     Protocols h2 http/1.1
     # Uploads are at most 16 MB – bigger requests never reach the website
     LimitRequestBody 26214400
@@ -1328,6 +1332,9 @@ step_tunnel() {
   # Alte Tunnel: nur solche, die ausschließlich diese Website bedienen – oder Reste dieses Servers ohne Regeln.
   # Tunnel, die auch andere Namen bedienen (z. B. nas.$DOMAIN), bleiben – der Installer weist nur darauf hin.
   mine=$(jq -nc --arg d "$DOMAIN" '[$d, "www." + $d, "*." + $d]')
+  # Mit eigenen Domains zeigt auch die Rückfall-Adresse auf den Tunnel – ein neuer Tunnel nimmt sie mit, statt sie als
+  # „tot“ zu löschen
+  if [ "${CUSTOM_DOMAINS:-}" = yes ] && [ -n "${SAAS_ORIGIN:-}" ]; then mine=$(jq -c --arg o "$SAAS_ORIGIN.$DOMAIN" '. + [$o]' <<< "$mine"); fi
   ours_prefix="onyoursite-$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
   while IFS=$'\t' read -r t tname tsrc; do
     if [ -z "$t" ] || [ "$t" = "$tid" ]; then continue; fi
@@ -1394,8 +1401,8 @@ step_tunnel() {
   while IFS= read -r line; do
     if [ -n "$line" ]; then info "  - delete DNS  $line"; changes=1; fi
   done < <(jq -r '.[] | "\(.type)  \(.name)  \(.content)"' <<< "$repl$dead")
-  if [ "$(jq -r --arg c "${tid:-none}.cfargotunnel.com" --argjson m "$mine" '[.[] | select(.type == "CNAME" and .content == $c and .proxied == true and (.name as $n | $m | index($n)))] | length' <<< "$allrecs")" != 3 ]; then
-    info "  + DNS  $DOMAIN, www.$DOMAIN and *.$DOMAIN → the tunnel (through Cloudflare)"
+  if [ "$(jq -r --arg c "${tid:-none}.cfargotunnel.com" --argjson m "$mine" '[.[] | select(.type == "CNAME" and .content == $c and .proxied == true and (.name as $n | $m | index($n)))] | length' <<< "$allrecs")" != "$(jq 'length' <<< "$mine")" ]; then
+    info "  + DNS  $(jq -r 'join(", ")' <<< "$mine") → the tunnel (through Cloudflare)"
     changes=1
   fi
   for i in "${!del_ids[@]}"; do
@@ -1458,13 +1465,11 @@ step_tunnel() {
   fi
   install -d -m 700 "$CONF_DIR"
   if printf 'TUNNEL_TOKEN=%s\n' "$tok" | write_if_changed "$TUNNEL_ENV" 600; then restart=1; fi
-  TUNNEL_ID=$tid
 
-  # 2. Regeln: alle drei Namen gehen an Apache auf diesem Server – mit der Domain als SNI, damit der richtige vhost antwortet
-  cf PUT "/accounts/$ACC_ID/cfd_tunnel/$tid/configurations" "$(jq -nc --arg d "$DOMAIN" '{config: {ingress:
-      (([$d, "www." + $d, "*." + $d] | map({hostname: ., service: "https://127.0.0.1:443",
-        originRequest: {originServerName: $d, noTLSVerify: true}})) + [{service: "http_status:404"}])}}')" >/dev/null \
-    || cf_fail "The tunnel rules couldn’t be saved"
+  # 2. Regeln: alle drei Namen gehen an Apache auf diesem Server – mit der Domain als SNI, damit der richtige vhost
+  #    antwortet. Zusammengeführt: Regeln, die der Admin selbst eingetragen hat, bleiben (tunnel_rules_json)
+  TUNNEL_ID=$tid
+  tunnel_rules_sync || cf_fail "The tunnel rules couldn’t be saved"
 
   # 3. cloudflared starten und warten, bis Cloudflare den Tunnel als verbunden meldet
   tunnel_local "$restart"
@@ -1478,7 +1483,7 @@ step_tunnel() {
   dels=$(jq -c -s 'add | map({id})' <<< "$repl$dead")
   posts=$(jq -c --argjson m "$mine" --arg c "$tid.cfargotunnel.com" \
     '[$m[] as $n | select(([.[] | select(.name == $n and .type == "CNAME" and .content == $c and .proxied == true)] | length) == 0)
-      | {type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: "OnYourSite tunnel"}]' <<< "$allrecs")
+      | {type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: (if ($n == $m[0] or $n == $m[1] or $n == $m[2]) then "OnYourSite tunnel" else "OnYourSite custom domains: fallback origin" end)}]' <<< "$allrecs")
   # „degraded“: verbunden, nur noch nicht über alle vier Leitungen – reicht für Besucher
   if [ "$st" != healthy ] && [ "$st" != degraded ]; then
     problem="Cloudflare doesn’t report the tunnel as connected yet (status: ${st:-unknown}). Log: journalctl -u onyoursite-tunnel"
@@ -1547,6 +1552,368 @@ step_tunnel() {
 }
 
 # ---------------------------------------------------------------
+# Eigene Domains der Premium-Nutzer (Cloudflare for SaaS, PD-6). Die Webseite bekommt ein zweites, eigenes Token
+# (Zone · SSL and Certificates · Edit) – es liegt nur in $CONF_DIR/cf-saas.token (root, 0600) und erreicht den
+# Domain-Dienst als systemd-Credential, nie config.json oder eine Befehlszeile.
+
+# Wert in config.json setzen (app/scripts/config.mjs, atomar, root:www-data 0640)
+config_set() {
+  OYS_VALUE=$2 "$NODE" "$CONFIG_MJS" set "$1" --file "$CODE/config.json" || fail "config.json couldn’t be changed – see above."
+}
+
+# Tunnel-Regeln zusammenführen: alles, was der Admin selbst eingetragen hat (Regeln und andere Schlüssel), bleibt; die
+# drei Namen dieser Website stehen darin (bestehende unverändert); nur der letzte Eintrag ohne Namen wird ersetzt – mit
+# eigenen Domains geht er an die Webseite (Cloudflare schickt Kunden-Domains an die Rückfall-Adresse, cloudflared
+# findet für sie nur diesen Eintrag), sonst 404. tunnel_rules_json AKTUELLE_KONFIGURATION (die Antwort der API)
+tunnel_rules_json() {
+  jq -c --arg d "$DOMAIN" --arg cd "${CUSTOM_DOMAINS:-}" '
+    (if type == "object" then . else {} end) as $cur
+    | ($cur.config // {}) as $c
+    | {service: "https://127.0.0.1:443", originRequest: {originServerName: $d, noTLSVerify: true}} as $site
+    | ([($c.ingress // [])[] | select(.hostname != null)]) as $named
+    | ([$d, "www." + $d, "*." + $d] | map(. as $h | select(($named | map(.hostname) | index($h)) == null) | {hostname: $h} + $site)) as $missing
+    | $c + {ingress: ($named + $missing + [if $cd == "yes" then $site else {service: "http_status:404"} end])}
+    | {config: .}' <<< "${1:-{\}}"
+}
+
+# Regeln des Tunnels lesen, zusammenführen und nur bei einem Unterschied speichern; 1 = Fehler (Meldung in cf_err)
+tunnel_rules_sync() {
+  local cur new
+  # Nicht lesbar: nichts schreiben – sonst gingen Regeln verloren, die der Admin selbst eingetragen hat
+  cur=$(cf GET "/accounts/$ACC_ID/cfd_tunnel/$TUNNEL_ID/configurations") || return 1
+  new=$(tunnel_rules_json "$cur")
+  if [ "$(jq -cS '.config // {}' <<< "$cur")" = "$(jq -cS '.config' <<< "$new")" ]; then return 0; fi
+  cf PUT "/accounts/$ACC_ID/cfd_tunnel/$TUNNEL_ID/configurations" "$new" >/dev/null
+}
+
+# Das Token der Webseite prüfen (Kontingent der Kunden-Hostnamen): 0 = in Ordnung, 2 = fehlendes Recht, 3 = Cloudflare
+# for SaaS ist für die Zone nicht eingeschaltet, 1 = sonst ein Fehler. saas_token_check TOKEN
+saas_token_check() {
+  local saved=${CF_TOKEN:-} e rc=0
+  CF_TOKEN=$1
+  cf GET "/zones/$ZONE_ID/custom_hostnames/quota" >/dev/null || rc=1
+  CF_TOKEN=$saved
+  if [ "$rc" = 0 ]; then return 0; fi
+  e=$(cf_err)
+  if grep -qiE 'saas|entitle|not enabled|subscription' <<< "$e"; then return 3; fi
+  if grep -qiE 'authenticat|permission|unauthori|forbidden|\(10000\)|\(9109\)' <<< "$e"; then return 2; fi
+  return 1
+}
+
+# Benutzt schon eine Link-, Code- oder Statusseite diesen Namen als Adresse? saas_name_taken NAME
+saas_name_taken() {
+  local n
+  n=$(mariadb -N -B "$DB_NAME" <<SQL 2>/dev/null || echo 0
+SELECT (SELECT COUNT(*) FROM pages WHERE slug = '$1') + (SELECT COUNT(*) FROM code_sites WHERE slug = '$1')
+  + (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'site_addresses');
+SQL
+)
+  # site_addresses gibt es (fast) immer – dort genau nachsehen
+  if [ "${n:-0}" -gt 0 ] && [ "$n" != 1 ]; then return 0; fi
+  n=$(mariadb -N -B "$DB_NAME" <<SQL 2>/dev/null || echo 0
+SELECT COUNT(*) FROM site_addresses WHERE slug = '$1';
+SQL
+)
+  [ "${n:-0}" -gt 0 ]
+}
+
+# Namen von Rückfall-Adresse und Ziel fragen: a–z, 0–9 und Bindestriche, nicht von einer Seite benutzt.
+# saas_ask_name VARIABLE "Frage" VORGABE
+saas_ask_name() {
+  local __v
+  while true; do
+    prompt __v "$2 [$3]:"
+    __v=$(printf '%s' "${__v:-$3}" | tr '[:upper:]' '[:lower:]')
+    if ! [[ $__v =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then info "  Use a–z, 0–9 and hyphens."; continue; fi
+    # Namen, die die Website selbst braucht (www, Adressen der App, status/health), und der andere der beiden Namen
+    if in_list "$__v" www mail smtp imap autoconfig autodiscover login logout register dashboard admin challenge imprint privacy terms api static \
+      track-click kalender cron email install robots sitemap favicon index config go demo updates roadmap changelog news feed suggestions status health \
+      || { [ -n "${4:-}" ] && [ "$__v" = "$4" ]; }; then
+      info "  $__v.$DOMAIN is needed by the website – choose another name."; continue
+    fi
+    if saas_name_taken "$__v"; then info "  $__v.$DOMAIN is used by a page – choose another name."; continue; fi
+    printf -v "$1" '%s' "$__v"
+    return 0
+  done
+}
+
+# Abgebrochen in der normalen Einrichtung: nicht bei jedem Lauf wieder fragen (--domains fragt immer)
+domains_not_now() {
+  if [ -z "${1:-}" ] && [ -z "${CUSTOM_DOMAINS:-}" ]; then CUSTOM_DOMAINS=no; conf_set CUSTOM_DOMAINS no; fi
+}
+
+step_domains() {
+  local force=${1:-} tok="" rc allrecs want plan="" dels="[]" posts="[]" name content i st fb saved
+  bold "Custom domains"
+  if [ "$TUNNEL" != yes ]; then
+    info "Custom domains need the Cloudflare tunnel – set it up first: ${SUDO_HINT}bash $CODE/server/install.sh --tunnel"
+    return 0
+  fi
+  if [ -z "$force" ] && [ -n "${CUSTOM_DOMAINS:-}" ]; then return 0; fi
+  info "Premium users can show their page on their own domain (links.theirname.com). Cloudflare issues the certificates"
+  info "(Cloudflare for SaaS: 100 domains included, each further one \$0.10 per month)."
+  case "$(choose "Let premium users show their page on their own domain? [y/N]" n)" in
+    [yY]*) ;;
+    *) if [ -z "${CUSTOM_DOMAINS:-}" ]; then CUSTOM_DOMAINS=no; conf_set CUSTOM_DOMAINS no; fi
+       info "No custom domains. Later: ${SUDO_HINT}bash $CODE/server/install.sh --domains"; return 0 ;;
+  esac
+  apt_install jq curl
+  cf_login || { warn "Without the Cloudflare token nothing was changed."; return 0; }
+  info "The website needs its own API token: My Profile → API Tokens → Create Token → Create Custom Token with"
+  info "  Zone · SSL and Certificates · Edit – Zone Resources: Specific zone → $DOMAIN."
+  info "It is typed in hidden and stays on this server ($CONF_DIR/cf-saas.token, only root)."
+  while true; do
+    prompt tok "Website API token (Enter = cancel):" hidden
+    tok=$(printf '%s' "$tok" | tr -d '[:space:]')
+    if [ -z "$tok" ]; then info "Nothing was changed. Later: ${SUDO_HINT}bash $CODE/server/install.sh --domains"; domains_not_now "$force"; return 0; fi
+    rc=0
+    saas_token_check "$tok" || rc=$?
+    case $rc in
+      0) break ;;
+      2) info "  This token can’t manage custom hostnames – it needs Zone · SSL and Certificates · Edit for $DOMAIN." ;;
+      3) info "  Cloudflare for SaaS isn’t enabled for $DOMAIN yet: Cloudflare → $DOMAIN → SSL/TLS → Custom Hostnames → Enable"
+         info "  (Cloudflare asks for a payment method; 100 domains are free, each further one \$0.10 per month)."
+         info "  Then run: ${SUDO_HINT}bash $CODE/server/install.sh --domains"
+         return 0 ;;
+      *) info "  Cloudflare says: $(cf_err)" ;;
+    esac
+  done
+  saas_ask_name SAAS_ORIGIN "Name of the fallback origin" "${SAAS_ORIGIN:-origin}"
+  saas_ask_name SAAS_TARGET "Name customers point their CNAME to" "${SAAS_TARGET:-edge}" "$SAAS_ORIGIN"
+
+  # Plan: die beiden DNS-Einträge (fremde mit anderem Inhalt werden ersetzt), Rückfall-Adresse, Tunnel-Regeln
+  allrecs=$(cf GET "/zones/$ZONE_ID/dns_records?per_page=5000") || cf_fail "Cloudflare DNS"
+  echo
+  info "Plan for custom domains on $DOMAIN:"
+  for i in origin target; do
+    if [ "$i" = origin ]; then name="$SAAS_ORIGIN.$DOMAIN"; content="$TUNNEL_ID.cfargotunnel.com"; else name="$SAAS_TARGET.$DOMAIN"; content="$SAAS_ORIGIN.$DOMAIN"; fi
+    want=$(jq -c --arg n "$name" --arg c "$content" '[.[] | select(.name == $n)] as $r
+      | {same: ($r | any(.type == "CNAME" and .content == $c and .proxied == true)), other: [$r[] | select((.type == "CNAME" and .content == $c and .proxied == true) | not) | {id}]}' <<< "$allrecs")
+    if [ "$(jq -r '.same' <<< "$want")" = true ]; then continue; fi
+    if [ "$(jq '.other | length' <<< "$want")" -gt 0 ]; then
+      info "  * replace DNS  $name (it points somewhere else now)"
+      dels=$(jq -c --argjson a "$dels" --argjson b "$(jq -c '.other' <<< "$want")" -n '$a + $b')
+    fi
+    if [ "$i" = origin ]; then info "  + DNS  $name → the tunnel (fallback origin for custom domains)"; else info "  + DNS  $name → $SAAS_ORIGIN.$DOMAIN (customers point their CNAME here)"; fi
+    posts=$(jq -c --argjson a "$posts" --arg n "$name" --arg c "$content" --arg k "$i" -n \
+      '$a + [{type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: (if $k == "origin" then "OnYourSite custom domains: fallback origin" else "OnYourSite custom domains: customers point here" end)}]')
+    plan=1
+  done
+  info "  * Fallback origin for custom hostnames: $SAAS_ORIGIN.$DOMAIN"
+  info "  * Tunnel: names it doesn’t know go to the website (needed for custom domains)"
+  case "$(choose "Do it now? [y/N]" n)" in
+    [yY]*) ;;
+    *) info "Nothing was changed. Later: ${SUDO_HINT}bash $CODE/server/install.sh --domains"; domains_not_now "$force"; return 0 ;;
+  esac
+
+  install -d -m 700 "$CONF_DIR"
+  (umask 077 && printf '%s\n' "$tok" > "$CONF_DIR/cf-saas.token")
+  if [ -n "$plan" ]; then
+    cf POST "/zones/$ZONE_ID/dns_records/batch" "$(jq -nc --argjson d "$dels" --argjson p "$posts" '{deletes: $d, posts: $p}')" >/dev/null \
+      || cf_fail "The DNS records couldn’t be created (nothing was changed)"
+  fi
+  # Rückfall-Adresse mit dem Token der Webseite; „active“ dauert meist ein paar Minuten
+  saved=${CF_TOKEN:-}
+  CF_TOKEN=$tok
+  fb=$(jq -nc --arg o "$SAAS_ORIGIN.$DOMAIN" '{origin: $o}')
+  # Fehler mit dem Token der Webseite: dessen Meldung – nie cf_fail (das vergäße das Token des Installers)
+  cf PUT "/zones/$ZONE_ID/custom_hostnames/fallback_origin" "$fb" >/dev/null \
+    || { CF_TOKEN=$saved; fail "The fallback origin couldn’t be set: $(cf_err). The website token needs Zone · SSL and Certificates · Edit for $DOMAIN."; }
+  st=""
+  for i in $(seq 1 24); do
+    st=$(cf GET "/zones/$ZONE_ID/custom_hostnames/fallback_origin" | jq -r '.status // empty' 2>/dev/null || true)
+    if [ "$st" = active ]; then break; fi
+    sleep 5
+  done
+  CF_TOKEN=$saved
+  if [ "$st" != active ]; then info "The fallback origin is ${st:-pending_deployment} – it usually takes a few minutes, the admin page shows the status."; fi
+  CUSTOM_DOMAINS=yes
+  tunnel_rules_sync || cf_fail "The tunnel rules couldn’t be saved"
+  config_set cloudflare.zone_id "$ZONE_ID"
+  config_set custom_domains.cname_target "$SAAS_TARGET.$DOMAIN"
+  config_set custom_domains.fallback_origin "$SAAS_ORIGIN.$DOMAIN"
+  conf_set CUSTOM_DOMAINS yes
+  conf_set SAAS_ORIGIN "$SAAS_ORIGIN"
+  conf_set SAAS_TARGET "$SAAS_TARGET"
+  info "Custom domains: on – customers point their CNAME to $SAAS_TARGET.$DOMAIN. Switch them on for users in the admin area (Custom domains)."
+}
+
+# Der Domain-Dienst (prüft Domains, spricht mit Cloudflare, räumt auf) – nur mit eigenen Domains; sonst wird eine alte
+# Unit abgeschaltet und entfernt. 0 = geändert
+write_domain_worker() {
+  local unit=$UNITS/onyoursite-domains.service restart=${1:-}
+  if [ "${CUSTOM_DOMAINS:-}" != yes ]; then
+    if [ -f "$unit" ]; then
+      systemctl disable --now onyoursite-domains >/dev/null 2>&1 || true
+      rm -f "$unit"
+      systemctl daemon-reload
+    fi
+    return 1
+  fi
+  if ! write_if_changed "$unit" <<UNIT
+# onyoursite-domains.service – written by server/install.sh
+[Unit]
+Description=OnYourSite custom domains (checks, Cloudflare, clean-up)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+SupplementaryGroups=www-data
+LoadCredential=cf_saas_token:$CONF_DIR/cf-saas.token
+WorkingDirectory=$CODE/app
+Environment=NODE_ENV=production
+ExecStart=$NODE $CODE/app/dist/cli.js domains:worker
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  then
+    systemctl enable --now onyoursite-domains >/dev/null 2>&1 || true
+    # Nach einem Update läuft sonst noch der alte Code
+    if [ "$restart" = restart ]; then systemctl restart onyoursite-domains >/dev/null 2>&1 || true; fi
+    return 1
+  fi
+  systemctl daemon-reload
+  systemctl enable --now onyoursite-domains >/dev/null 2>&1 || warn "The custom domain service didn’t start – see: journalctl -u onyoursite-domains"
+  systemctl restart onyoursite-domains >/dev/null 2>&1 || true
+  return 0
+}
+
+# Das gespeicherte Token des Installers ohne Rückfrage laden und die Zone finden (für --update); 1 = geht nicht
+cf_token_quiet() {
+  local z
+  CF_TOKEN=$(sed -n 's/^CF_API_TOKEN=//p' "$CF_ENV" 2>/dev/null | tail -n 1)
+  [ -n "$CF_TOKEN" ] || return 1
+  z=$(cf GET "/zones?name=$DOMAIN") || return 1
+  ZONE_ID=$(jq -r '.[0].id // empty' <<< "$z")
+  ACC_ID=$(jq -r '.[0].account.id // empty' <<< "$z")
+  [ -n "$ZONE_ID" ] && [ -n "$ACC_ID" ]
+}
+
+# Beim Update, ohne Rückfrage: Token der Webseite, Rückfall-Adresse, DNS, Tunnel-Regeln, Unit. Jeder Fehler ist nur
+# eine Warnung – das Update hält deswegen nie an.
+domains_update() {
+  local tok saved fb allrecs posts
+  if [ "${CUSTOM_DOMAINS:-}" != yes ]; then
+    if [ "$TUNNEL" = yes ] && [ -z "${CUSTOM_DOMAINS:-}" ]; then
+      info "New: premium users can show their page on their own domain – set it up with: ${SUDO_HINT}bash $CODE/server/install.sh --domains"
+    fi
+    write_domain_worker || true
+    return 0
+  fi
+  bold "Custom domains"
+  apt_install jq curl
+  if [ -z "$CF_ERRFILE" ]; then CF_ERRFILE=$(mktemp); fi
+  ZONE_ID=${ZONE_ID:-$(cfg_get cloudflare.zone_id)}
+  tok=$(head -n 1 "$CONF_DIR/cf-saas.token" 2>/dev/null || true)
+  if [ -z "$tok" ] || [ -z "$ZONE_ID" ]; then warn "The custom-domain settings are incomplete – run ${SUDO_HINT}bash $CODE/server/install.sh --domains"; write_domain_worker restart || true; return 0; fi
+  if ! saas_token_check "$tok"; then
+    warn "The custom-domain token no longer works – run ${SUDO_HINT}bash $CODE/server/install.sh --domains"
+    write_domain_worker restart || true
+    return 0
+  fi
+  # Rückfall-Adresse: fehlt sie oder zeigt woanders hin, wird sie neu gesetzt
+  saved=${CF_TOKEN:-}
+  CF_TOKEN=$tok
+  fb=$(cf GET "/zones/$ZONE_ID/custom_hostnames/fallback_origin" | jq -r '.origin // empty' 2>/dev/null || true)
+  if [ "$fb" != "$SAAS_ORIGIN.$DOMAIN" ]; then
+    cf PUT "/zones/$ZONE_ID/custom_hostnames/fallback_origin" "$(jq -nc --arg o "$SAAS_ORIGIN.$DOMAIN" '{origin: $o}')" >/dev/null \
+      && info "The fallback origin is set again ($SAAS_ORIGIN.$DOMAIN)." || warn "The fallback origin couldn’t be set: $(cf_err)"
+  fi
+  CF_TOKEN=$saved
+  # DNS und Tunnel mit dem Token des Installers
+  if ! cf_token_quiet; then
+    warn "The Cloudflare token in $CF_ENV doesn’t work any more – custom domains were not checked. Run ${SUDO_HINT}bash $CODE/server/install.sh --domains"
+    write_domain_worker restart || true
+    return 0
+  fi
+  if allrecs=$(cf GET "/zones/$ZONE_ID/dns_records?per_page=5000"); then
+    posts=$(jq -c --arg o "$SAAS_ORIGIN.$DOMAIN" --arg t "$SAAS_TARGET.$DOMAIN" --arg tun "$TUNNEL_ID.cfargotunnel.com" '
+      . as $all | [[$o, $tun, "OnYourSite custom domains: fallback origin"], [$t, $o, "OnYourSite custom domains: customers point here"]]
+      | map(. as [$n, $c, $m] | select(($n as $x | [$all[] | select(.name == $x)] | length) == 0)
+        | {type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1, comment: $m})' <<< "$allrecs")
+    if [ "$posts" != "[]" ]; then
+      cf POST "/zones/$ZONE_ID/dns_records/batch" "$(jq -nc --argjson p "$posts" '{posts: $p}')" >/dev/null \
+        && info "Missing DNS records for custom domains are back." || warn "The DNS records for custom domains couldn’t be created: $(cf_err)"
+    fi
+    if jq -e --arg o "$SAAS_ORIGIN.$DOMAIN" --arg t "$SAAS_TARGET.$DOMAIN" --arg tun "$TUNNEL_ID.cfargotunnel.com" \
+      'any(.[]; (.name == $o and .content != $tun) or (.name == $t and .content != $o))' <<< "$allrecs" >/dev/null; then
+      warn "$SAAS_ORIGIN.$DOMAIN or $SAAS_TARGET.$DOMAIN points somewhere else in the DNS – custom domains may not work. Run --domains."
+    fi
+  else
+    warn "The DNS couldn’t be read: $(cf_err)"
+  fi
+  tunnel_rules_sync || warn "The tunnel rules couldn’t be checked: $(cf_err)"
+  write_domain_worker restart || true
+}
+
+# --reset: die Kunden-Hostnamen bei Cloudflare löschen, bevor die Datenbank weg ist (sonst halten sie die Domains der
+# Kunden fest). Fehler sind Warnungen.
+reset_custom_hostnames() {
+  local tok saved id n=0 bad=0
+  tok=$(head -n 1 "$CONF_DIR/cf-saas.token" 2>/dev/null || true)
+  ZONE_ID=${ZONE_ID:-$(cfg_get cloudflare.zone_id)}
+  if [ -z "$tok" ] || [ -z "$ZONE_ID" ]; then return 0; fi
+  if [ -z "$CF_ERRFILE" ]; then CF_ERRFILE=$(mktemp); fi
+  saved=${CF_TOKEN:-}
+  CF_TOKEN=$tok
+  while IFS= read -r id; do
+    if [ -z "$id" ]; then continue; fi
+    if cf DELETE "/zones/$ZONE_ID/custom_hostnames/$id" >/dev/null; then n=$((n + 1)); else bad=$((bad + 1)); fi
+  done < <(mariadb -N -B "$DB_NAME" -e "SELECT cf_id FROM custom_domains WHERE cf_id IS NOT NULL" 2>/dev/null || true)
+  CF_TOKEN=$saved
+  if [ "$n" -gt 0 ]; then info "Deleted $n custom hostname$([ "$n" = 1 ] || echo s) at Cloudflare."; fi
+  if [ "$bad" -gt 0 ]; then warn "$bad custom hostname$([ "$bad" = 1 ] || echo s) couldn’t be deleted – delete $([ "$bad" = 1 ] && echo it || echo them) in Cloudflare → $DOMAIN → SSL/TLS → Custom Hostnames."; fi
+  return 0
+}
+
+# Neue Domain der Website: die Kunden-Hostnamen der alten Zone löschen (sie hielten die Domains der Kunden sonst fest),
+# die Domains in der Datenbank zurücksetzen (Besitzer bekommen vom Dienst einen Hinweis mit dem neuen Ziel), und
+# eigene Domains für die neue Zone neu einrichten (--domains)
+domains_domain_change() {
+  local n
+  if [ "${CUSTOM_DOMAINS:-}" != yes ] || [ -z "$OLD_DOMAIN" ] || [ "$OLD_DOMAIN" = "$DOMAIN" ]; then return 0; fi
+  systemctl stop onyoursite-domains >/dev/null 2>&1 || true
+  local keep=$DOMAIN
+  DOMAIN=$OLD_DOMAIN
+  reset_custom_hostnames
+  DOMAIN=$keep
+  # Die Hostnamen der alten Zone sind weg (cf_id leer). Domains, die zu sehen waren, werden „broken“ – mit neuem
+  # state_at, damit ihre Besitzer die üblichen 7 Tage zum Umstellen haben; gesperrte, pausierte, fehlgeschlagene und
+  # noch nicht eingerichtete bleiben, was sie sind
+  mariadb "$DB_NAME" -e "UPDATE custom_domains SET cf_id = NULL, version = version + 1, updated_at = NOW();
+    UPDATE custom_domains SET state = 'broken', state_at = NOW(), problem = 'target_changed', version = version + 1 WHERE state IN ('pending', 'active', 'broken');
+    UPDATE pages SET custom_domain = NULL WHERE custom_domain IS NOT NULL;" 2>/dev/null || true
+  n=$(mariadb -N -B "$DB_NAME" -e "SELECT COUNT(*) FROM custom_domains WHERE state = 'broken' AND problem = 'target_changed'" 2>/dev/null || echo 0)
+  if [ "${n:-0}" -gt 0 ]; then warn "$n custom domain$([ "$n" = 1 ] || echo s) pointed to $SAAS_TARGET.$OLD_DOMAIN. Their owners must change the CNAME to $SAAS_TARGET.$DOMAIN."; fi
+  CUSTOM_DOMAINS=""
+  sed -i '/^CUSTOM_DOMAINS=/d' "$CONF" 2>/dev/null || true
+  # Die Einstellungen der alten Zone gelten nicht mehr: ohne sie bietet die Website keine eigenen Domains an
+  config_set cloudflare.zone_id ""
+  config_set custom_domains.cname_target ""
+  config_set custom_domains.fallback_origin ""
+  ZONE_ID=""
+  info "Set up custom domains for $DOMAIN again: ${SUDO_HINT}bash $CODE/server/install.sh --domains"
+}
+
+# ---------------------------------------------------------------
 write_timers() {
   local tz
   tz=$(cfg_get timezone)
@@ -1570,6 +1937,42 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+EOF
+  fi
+  # Hintergrundaufgaben (cli.js jobs:tick, alle 5 Minuten): Erinnerungen und Ende zeitlich begrenzter Freischaltungen,
+  # Abgleiche, nächtliche Prüfungen. Ein Lauf auf einmal (oneshot); jede Aufgabe sperrt sich zusätzlich selbst.
+  if [ -n "$NODE" ]; then
+    cat > "$UNITS/onyoursite-jobs.service" <<EOF
+# OnYourSite – written by server/install.sh
+[Unit]
+Description=OnYourSite background jobs (honeycombs: reminders, ends, checks)
+After=mariadb.service
+
+[Service]
+Type=oneshot
+User=$WEB
+Group=$WEB
+WorkingDirectory=$CODE/app
+Environment=NODE_ENV=production
+ExecStart=$NODE $CODE/app/dist/cli.js jobs:tick
+TimeoutStartSec=10min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+EOF
+    cat > "$UNITS/onyoursite-jobs.timer" <<EOF
+# OnYourSite – written by server/install.sh
+[Unit]
+Description=OnYourSite background jobs every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
 EOF
   fi
   cat > "$UNITS/onyoursite-weekly-report.timer" <<EOF
@@ -1638,6 +2041,7 @@ EOF
   systemctl daemon-reload
   systemctl enable --now onyoursite-weekly-report.timer onyoursite-backup.timer >/dev/null 2>&1
   if [ -x "$ACME" ]; then systemctl enable --now onyoursite-certs.timer >/dev/null 2>&1; fi
+  if [ -f "$UNITS/onyoursite-jobs.timer" ]; then systemctl enable --now onyoursite-jobs.timer >/dev/null 2>&1; fi
 }
 
 # write_if_changed DATEI [RECHTE] – nur schreiben, wenn sich der Inhalt ändert (Inhalt über stdin); 0 = geändert
@@ -1793,6 +2197,7 @@ step_services() {
   step_ssh
   write_timers
   status_services
+  write_domain_worker || true
   info "Weekly report: Mondays at 8:00 · Backup: every night to $BACKUPS (kept $BACKUP_DAYS days)"
 }
 
@@ -2379,6 +2784,9 @@ revert_release() {
   rm -rf "$WEB_UNIT.d"
   if [ "$MIGRATE" = 1 ]; then
     systemctl disable --now onyoursite-web >/dev/null 2>&1
+    # Zurück zu PHP: die Hintergrundaufgaben gehören zur Node-Version
+    systemctl disable --now onyoursite-jobs.timer >/dev/null 2>&1 || true
+    rm -f "${UNITS:-/etc/systemd/system}/onyoursite-jobs.service" "${UNITS:-/etc/systemd/system}/onyoursite-jobs.timer"
     echo
     info "The log of the new version (journalctl -u onyoursite-web):"
     web_log 20
@@ -2489,6 +2897,8 @@ update_finish() {
   step_protect
   write_timers
   status_services update
+  # Eigene Domains: nur Warnungen, das Update hält deswegen nie an
+  domains_update || true
   save_conf
   step_bot
   bold "Checking the website"
@@ -2562,12 +2972,13 @@ while [ $# -gt 0 ]; do
     --https) MODE=https ;;
     --tunnel) MODE=tunnel ;;
     --reset) MODE=reset ;;
+    --domains) MODE=domains ;;
     --branch)
       [[ ${2:-} =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || fail "--branch needs the name of a branch."
       BRANCH=$2
       BRANCH_GIVEN=1
       shift ;;
-    *) fail "Unknown option: $1 (use --update, --https, --tunnel, --reset, --branch NAME or nothing)" ;;
+    *) fail "Unknown option: $1 (use --update, --https, --tunnel, --domains, --reset, --branch NAME or nothing)" ;;
   esac
   shift
 done
@@ -2580,6 +2991,10 @@ CONFIG_MJS=$CODE/app/scripts/config.mjs
 SSH_KEYONLY=$(conf_get SSH_KEYONLY)
 TUNNEL=$(conf_get TUNNEL)
 TUNNEL_ID=$(conf_get TUNNEL_ID)
+CUSTOM_DOMAINS=$(conf_get CUSTOM_DOMAINS)
+SAAS_ORIGIN=$(conf_get SAAS_ORIGIN)
+SAAS_TARGET=$(conf_get SAAS_TARGET)
+ZONE_ID="" ACC_ID="" CF_TOKEN=""
 # Eingerichtet ist der Server erst mit einer Domain in server.conf – ein abgebrochener erster Lauf kann dort schon
 # die Tunnel-ID gespeichert haben
 OLD_DOMAIN=$(conf_get DOMAIN)
@@ -2614,8 +3029,17 @@ case $MODE in
     step_packages
     step_settings
     step_database
+    # Neue Domain der Website: die Kunden-Domains der alten Zone loslassen
+    domains_domain_change
     step_website
     step_tunnel
+    step_domains
+    # Eigene Domains eben eingeschaltet: Apache nimmt jeden Host an (Kunden-Domains kommen durch den Tunnel)
+    if [ "${CUSTOM_DOMAINS:-}" = yes ]; then
+      if write_apache; then apache_check || fail "The Apache configuration doesn’t work – see above."; systemctl reload apache2; fi
+      # Die Webseite liest config.json nur beim Start
+      systemctl restart onyoursite-web
+    fi
     step_https
     step_services
     if [ "$PROBE_TUNNEL" = 1 ]; then tunnel_probe; fi
@@ -2656,6 +3080,25 @@ case $MODE in
     check_site
     status_window 0
     ;;
+  domains)
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
+    DOMAIN=$(conf_get DOMAIN)
+    [ -n "$NODE" ] || fail "Node.js is missing – run the installer without --domains."
+    CF_ERRFILE=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$CF_ERRFILE'" EXIT
+    step_domains force
+    if [ "${CUSTOM_DOMAINS:-}" = yes ]; then
+      # Apache nimmt jetzt jeden Host an (die Kunden-Domains kommen durch den Tunnel), die Webseite liest die neuen
+      # Einstellungen, der Domain-Dienst startet
+      if write_apache; then apache_check || fail "The Apache configuration doesn’t work – see above."; systemctl reload apache2; fi
+      systemctl restart onyoursite-web
+      write_domain_worker restart || true
+      save_conf
+      bold "Checking the website"
+      check_site
+    fi
+    ;;
   reset)
     [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server – there is nothing to reset."
     DOMAIN=$(conf_get DOMAIN)
@@ -2677,8 +3120,14 @@ case $MODE in
     # Die Webseite und die Dienste der Statusseiten halten Verbindungen und Einstellungen – sie starten gleich mit den
     # neuen wieder
     systemctl stop onyoursite-web >/dev/null 2>&1 || true
+    # Keine Hintergrundaufgabe gegen die Datenbank, die gleich gelöscht wird (die Neuinstallation startet sie wieder)
+    systemctl stop onyoursite-jobs.timer onyoursite-jobs.service >/dev/null 2>&1 || true
     status_load
     if declare -F status_units_stop >/dev/null; then status_units_stop; fi
+    # Kunden-Hostnamen bei Cloudflare zuerst (sie hielten sonst die Domains der Kunden fest); eigene Domains bleiben
+    # eingerichtet (Token, Einstellungen)
+    systemctl stop onyoursite-domains >/dev/null 2>&1 || true
+    if [ "${CUSTOM_DOMAINS:-}" = yes ]; then reset_custom_hostnames; fi
     mariadb -e "DROP DATABASE IF EXISTS \`$DB_NAME\`"
     find "$UPLOADS" -mindepth 1 -delete
     # Neue Schlüssel: der Installer legt sie gleich neu an. bot_secret bleibt – den hat der Bot auch.

@@ -2,6 +2,7 @@
 // ihre Aktionen (POST /admin mit hc_action). Jede Aktion schreibt eine Zeile in hc_audit (nur IDs, Beträge und
 // Schlüssel). Felder mit Arrays werden abgelehnt (kein Umwandeln wie in PHP). Admin = is_admin des angemeldeten Kontos;
 // CSRF und die Bestätigung (_confirmed) prüft der Verteiler (admin/page.ts) vorher.
+import { EARN_KEYS, clampEarn, earnLimitsFrom } from './earn.js';
 import { transaction, type Db } from '../db.js';
 import { intval, phpStr, type PhpArray } from '../php.js';
 import { phpJson } from '../html.js';
@@ -15,19 +16,23 @@ import { cleanText } from '../helpers.js';
 import { audit, type AuditDetails } from './audit.js';
 import { grantFeature, revokeFeature } from './grants.js';
 import { refund } from './shop.js';
+import { reverseEntry, setFrozen } from './teamTools.js';
+import { createCode, disableCode } from './codes.js';
+import { mailBudgetFrom } from './outbox.js';
 import { UNCONFIRMED_MESSAGE } from '../views/partials/ui.js';
 
 export type AdminResult = { ok: string } | { error: string };
 
-// Unterbereiche (die übrigen – ledger, codes – kommen mit HC-6b/HC-9)
-export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases'] as const;
+// Unterbereiche
+export const HC_TABS = ['overview', 'catalogue', 'offers', 'rules', 'users', 'purchases', 'ledger', 'codes'] as const;
 export type HcTab = (typeof HC_TABS)[number];
 const ACTION_TAB: Readonly<Record<string, HcTab>> = {
   settings: 'rules', item_save: 'catalogue', item_add: 'catalogue', offer_create: 'offers', offer_cancel: 'offers', grant: 'users',
-  feature_grant: 'users', feature_revoke: 'users', refund: 'users',
+  feature_grant: 'users', feature_revoke: 'users', refund: 'users', reverse: 'users', freeze: 'users', unfreeze: 'users',
+  grant_preview: 'users', grant_bulk: 'users', grant_bulk_cancel: 'users', code_create: 'codes', code_disable: 'codes',
 };
 // Aktionen aus den Details eines Nutzers: zurück zu diesen Details
-const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund']);
+const USER_ACTIONS: ReadonlySet<string> = new Set(['feature_grant', 'feature_revoke', 'refund', 'reverse', 'freeze', 'unfreeze']);
 
 // ?hc_tab=… → Unterbereich (Unbekanntes: Übersicht)
 export function hcTab(v: unknown): HcTab {
@@ -37,7 +42,8 @@ export function hcTab(v: unknown): HcTab {
 // Zurück zum Unterbereich der Aktion (nach dem Speichern und wenn die Bestätigung fehlt)
 export function hcBackUrl(post: PhpArray): string {
   const action = typeof post.hc_action === 'string' ? post.hc_action : '';
-  const tab = Object.hasOwn(ACTION_TAB, action) ? ACTION_TAB[action] : 'overview';
+  // Zurücknehmen geht auch aus dem Unterbereich „Ledger“ – dann dorthin zurück
+  const tab = action === 'reverse' && post.from_tab === 'ledger' ? 'ledger' : Object.hasOwn(ACTION_TAB, action) ? ACTION_TAB[action] : 'overview';
   const uid = USER_ACTIONS.has(action) && typeof post.user_id === 'string' && /^[1-9][0-9]{0,9}$/.test(post.user_id) ? Number(post.user_id) : 0;
   return '/admin' + (tab === 'overview' ? '' : '?hc_tab=' + tab) + (uid > 0 && uid <= 2147483647 ? '&hc_user=' + uid : '') + '#honeycombs';
 }
@@ -90,7 +96,7 @@ function storedObject(raw: string): Record<string, unknown> {
 // Was das Formular nicht schickt, bleibt; unbekannte Schlüssel (spätere Schritte) und der alte Preis der Code-Seite
 // bleiben stehen – der Preis gilt nur noch im Katalog.
 export async function saveRules(post: PhpArray, adminId: number): Promise<AdminResult> {
-  const f = textFields(post, RULE_KEYS);
+  const f = textFields(post, [...RULE_KEYS, ...EARN_KEYS, 'mail_per_run']);
   if (!f) return { error: BAD };
   return transaction(async (_conn, db: Db) => {
     const raw = phpStr(await db.value("SELECT meta_value FROM oys_meta WHERE meta_key = 'honeycombs' FOR UPDATE"));
@@ -103,6 +109,20 @@ export async function saveRules(post: PhpArray, adminId: number): Promise<AdminR
       if (key === 'views_step') v = Math.max(1, v);
       next[key] = v;
       if (v !== before[key]) changed[key] = v;
+    }
+    // Serie und Tageslimit (HC-8): eigene Bereiche, das Limit mindestens 50
+    const beforeEarn = earnLimitsFrom(raw);
+    for (const key of EARN_KEYS) {
+      if (post[key] === undefined) continue;
+      const v = clampEarn(key, phpInt(f[key]));
+      next[key] = v;
+      if (v !== beforeEarn[key]) changed[key] = v;
+    }
+    // Mails je Lauf der Hintergrundaufgabe (HC-7b): 1–1000
+    if (post.mail_per_run !== undefined) {
+      const v = Math.min(1000, Math.max(1, phpInt(f.mail_per_run)));
+      if (v !== mailBudgetFrom(raw)) changed.mail_per_run = v;
+      next.mail_per_run = v;
     }
     await db.exec("REPLACE INTO oys_meta (meta_key, meta_value) VALUES ('honeycombs', ?)", [phpJson(next)]);
     if (Object.keys(changed).length) await audit(db, adminId, 'settings', null, 'honeycombs', changed);
@@ -295,6 +315,37 @@ export async function adminShopHandle(post: PhpArray, adminId: number): Promise<
       return featureRevokeAction(post, adminId);
     case 'refund':
       return refundAction(post, adminId);
+    case 'reverse': {
+      // Geld bewegt sich: nur nach dem eigenen Dialog (wie das Abziehen)
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['ledger_id', 'note']);
+      if (!f) return { error: BAD };
+      const id = wholeNumber(f.ledger_id, 1, 2147483647);
+      if (id === null) return { error: 'This entry no longer exists.' };
+      return reverseEntry(adminId, id, f.note);
+    }
+    case 'code_create': {
+      const f = textFields(post, ['code', 'amount', 'note', 'starts_at', 'ends_at', 'max_uses', 'min_account_days']);
+      if (!f) return { error: BAD };
+      return createCode(adminId, f);
+    }
+    case 'code_disable': {
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['code_id']);
+      if (!f) return { error: BAD };
+      const id = wholeNumber(f.code_id, 1, 2147483647);
+      if (id === null) return { error: 'This code no longer exists.' };
+      return disableCode(adminId, id);
+    }
+    case 'freeze':
+    case 'unfreeze': {
+      if (post._confirmed !== '1') return { error: UNCONFIRMED_MESSAGE };
+      const f = textFields(post, ['user_id', 'reason']);
+      if (!f) return { error: BAD };
+      const uid = wholeNumber(f.user_id, 1, 2147483647);
+      if (uid === null) return { error: 'Please choose a user.' };
+      return setFrozen(adminId, uid, post.hc_action === 'freeze', f.reason);
+    }
   }
   return null;
 }

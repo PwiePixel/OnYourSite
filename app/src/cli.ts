@@ -8,6 +8,7 @@
 //   node app/dist/cli.js weekly-report            Wochenbericht (src/cli/weekly-report.ts)
 //   node app/dist/cli.js domains:worker           Domain-Dienst für eigene Domains (onyoursite-domains.service)
 //   node app/dist/cli.js domains:check <domain>   Diagnose einer eigenen Domain (liest nur, ändert nichts)
+//   node app/dist/cli.js jobs:tick [--force]      Hintergrundaufgaben, die fällig sind (onyoursite-jobs.timer, alle 5 Minuten)
 // Rückgabe 0 = in Ordnung, 1 = Fehler (mit Meldung auf stderr). Entwicklung: node --import tsx src/cli.ts …
 import { existsSync, readFileSync } from 'node:fs';
 import { ConfigMissingError, ROOT_DIR, loadConfig } from './config.js';
@@ -42,10 +43,11 @@ export async function runCli(argv: string[], io: CliIo = processIo()): Promise<n
     'weekly-report': () => weeklyReport(io),
     'domains:worker': async () => (await import('./domains/worker/main.js')).domainsWorkerCommand(io),
     'domains:check': async () => (await import('./domains/worker/main.js')).domainsCheckCommand(args, io),
+    'jobs:tick': () => jobsTick(args, io),
   };
   if (!command || !Object.hasOwn(commands, command)) {
     io.err('Usage: node app/dist/cli.js migrate [--pending] | check --native | check --crypto | create-admin | cert-alert <days> | weekly-report'
-      + ' | domains:worker | domains:check <domain>\n');
+      + ' | domains:worker | domains:check <domain> | jobs:tick [--force]\n');
     return 1;
   }
   // Wie der Server: ohne config.json geht nichts (Meldung, Rückgabe 1). check --native prüft nur die Pakete – das geht
@@ -62,6 +64,8 @@ export async function runCli(argv: string[], io: CliIo = processIo()): Promise<n
   }
   // Der Domain-Dienst hat einen eigenen kleinen Pool (4 Verbindungen plus die der Leitsperre)
   if (command === 'domains:worker') process.env.OYS_DB_POOL_SIZE ??= '4';
+  // Der Hintergrund-Läufer: eigener Pool mit 3 Verbindungen (Sperre, Arbeit, Schema-Stand)
+  if (command === 'jobs:tick') process.env.OYS_DB_POOL_SIZE ??= '3';
   try {
     return await commands[command]();
   } finally {
@@ -340,4 +344,21 @@ export async function weeklyReport(io: CliIo, url = new URL(['.', 'cli', 'weekly
 const isMain = process.argv[1] && /cli\.(js|ts)$/.test(process.argv[1]);
 if (isMain) {
   process.exitCode = await runCli(process.argv.slice(2));
+}
+
+// ---------------------------------------------------------------- jobs:tick
+
+async function jobsTick(args: string[], io: CliIo): Promise<number> {
+  if (args.some((a) => a !== '--force')) {
+    io.err('Usage: node app/dist/cli.js jobs:tick [--force]\n');
+    return 1;
+  }
+  // Wie der Web-Prozess: alle Bereiche melden ihre Funktionen, Abgleiche und Hinweise beim Laden an
+  await import('./router.js');
+  const { registerHoneycombJobs } = await import('./honeycombs/job.js');
+  const { tick } = await import('./jobs/registry.js');
+  registerHoneycombJobs();
+  // Ein älteres Schema (Version gebaut, migrate noch nicht): jede Aufgabe meldet es und es endet mit 0
+  const res = await tick({ force: args.includes('--force'), log: (line) => io.out(line + '\n') });
+  return res.some((r) => r.outcome === 'failed') ? 1 : 0;
 }

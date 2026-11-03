@@ -6,11 +6,15 @@
 // „Unlock status pages with honeycombs first.“.
 // Jede Änderung an Seite, Bestandteilen oder Vorfällen läuft in einer Transaktion mit gesperrter Seite und erhöht
 // rev/status_rev (der Prüfdienst gleicht dann binnen 5 s ab, die öffentliche Seite zeigt es sofort).
+import { ownerPremium } from '../content/branding.js';
+import './limitsSync.js';
 import type { Ctx } from '../web/ctx.js';
 import { transaction, withConnection, type Db, type Row } from '../db.js';
 import { rateLimit } from '../web/security.js';
 import { adminMode } from '../honeycombs/shop.js';
-import { intval, phpTruthy } from '../php.js';
+import { date, intval, phpTruthy } from '../php.js';
+import { isStaff } from '../app/context.js';
+import { statusTitleProblem } from './names.js';
 import { cleanText } from '../helpers.js';
 import { report } from '../discord/botReport.js';
 import { INDICATOR_TEXT } from './aggregate.js';
@@ -18,7 +22,14 @@ import { ALERT_EVENTS, statusPageSettings, statusServerConfig, statusSettings, t
 import { statusLimits } from './limits.js';
 import { runtimePolicy } from './policy.js';
 import { PublicResolver } from './resolver.js';
-import { bumpRev, lockStatusPage, metaJson, numOrNull, slugTaken, statusPageUrl, systemStatusPage, type StatusPageRow } from './model.js';
+import {
+  bumpGlobalRev, bumpRev, lockStatusPage, metaJson, numOrNull, slugTaken, statusPageById, statusPageForUser, statusPageUrl, systemStatusPage, type StatusPageRow,
+} from './model.js';
+import { has } from '../honeycombs/entitlements.js';
+import { slugProblem } from '../helpers.js';
+import { claimAddress, isTakenError, releaseAddress } from '../content/addresses.js';
+import { SlotBusyError, withSlotLock } from '../code/slots.js';
+import { STATUS_FEATURE_KEY } from './shop.js';
 import {
   capacityProblem, checkDns, checkMonitorInput, checkSite, loadMonitorRows, maintenanceMonitors, monitorViews, newHeartbeatToken, stamp, MANUAL_STATUSES,
 } from './monitors.js';
@@ -29,12 +40,14 @@ import {
 import { alertsChannelProblem, botChannels, pagePostable, postableChannel, removeIncidentPosts, syncIncidentPosts, STATUS_FEATURE } from './posts.js';
 import { statusPreviewToken } from './routes.js';
 import { alertMessage, type AlertPayload } from './alerts.js';
+import { addChannel, editChannel, listChannels, removeChannel, resendVerify, testChannel } from './channels.js';
 import { loadPageView } from './view.js';
 
 type Input = Record<string, unknown>;
 const NOT_ALLOWED = { ok: false, error: 'Not allowed.' };
 const LOCKED = { ok: false, error: 'Unlock status pages with honeycombs first.' };
 const GONE = { ok: false, error: 'This component no longer exists. Please reload.' };
+const PAGE_GONE = { ok: false, error: 'This status page no longer exists. Please reload.' };
 
 // Öffentliche Resolver für die Probe beim Speichern (Tests setzen einen eigenen)
 let resolver: PublicResolver | null = null;
@@ -57,23 +70,61 @@ export function statusAdmin(ctx: Ctx, user: Row): boolean {
   return phpTruthy(user.is_admin) && !adminMode(ctx);
 }
 
+// Eigene Statusseite freigeschaltet? (Shop: status_page; für Admins immer dabei)
+export const statusUnlocked = (uid: number): Promise<boolean> => has(uid, STATUS_FEATURE_KEY);
+
+// Grenzen genau dieser Seite: OnYourSites Seite fest, Seiten von Nutzern nach der Freischaltung ihres Besitzers
+const limitsOf = (page: StatusPageRow, db?: Db): ReturnType<typeof statusLimits> => statusLimits(page.isSystem ? null : page.userId, db);
+
+// Aktionen, die nur OnYourSites eigene Seite kennt (Bot-Kanäle, Alarme an alle Admins)
+const SYSTEM_ONLY = new Set(['status-alerts', 'status-alerts-owner', 'status-bot-channels']);
+// Nur für die eigene Seite eines Kontos: OnYourSites Seite behält ihre Adresse und hat die Alarme der Admins
+const USER_ONLY = new Set(['status-address', 'status-owner-alerts']);
+// Das Team hat keine Sperrfrist beim Adresswechsel (wie bei Link-Seiten); je Anfrage gemerkt für den Zustand
+const staffOf = new WeakMap<Ctx, boolean>();
+const SLUG_COOLDOWN = 30 * 86400;
+const SLUG_REDIRECT = 90 * 86400;
+const NO_PAGE = { ok: false, error: 'Create your status page first.' };
+// OnYourSites eigene Seite: feste Zahl zusätzlicher Kanäle (neben Admins und Bot)
+const SYSTEM_CHANNELS = 5;
+
 export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPost: boolean, raw: unknown): Promise<void> {
   const input: Input = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Input) : {};
   const scope = scopeOf(ctx, input);
-  if (scope !== 'system') ctx.json(LOCKED, 403);
-  if (!statusAdmin(ctx, user)) ctx.json(NOT_ALLOWED, 403);
-  const page = await withConnection((db) => systemStatusPage(db));
-  if (!page) ctx.json({ ok: false, error: 'OnYourSite’s status page doesn’t exist yet – the database update hasn’t run.' }, 404);
   const uid = intval(user.id);
+  staffOf.set(ctx, isStaff(ctx, user));
+  let page: StatusPageRow | null;
+  if (scope === 'system') {
+    if (!statusAdmin(ctx, user)) ctx.json(NOT_ALLOWED, 403);
+    if (USER_ONLY.has(action)) ctx.json(NOT_ALLOWED, 403);
+    page = await withConnection((db) => systemStatusPage(db));
+    if (!page) ctx.json({ ok: false, error: 'OnYourSite’s status page doesn’t exist yet – the database update hasn’t run.' }, 404);
+  } else {
+    // Eigene Seite des Kontos (ST-4): nur mit der Freischaltung, immer über user_id – nie OnYourSites oder eine fremde
+    if (!(await statusUnlocked(uid))) ctx.json(LOCKED, 403);
+    if (SYSTEM_ONLY.has(action)) ctx.json(NOT_ALLOWED, 403);
+    page = await withConnection((db) => statusPageForUser(db, uid));
+    if (!page) {
+      if (action === 'status') return emptyState(ctx, uid);
+      if (action === 'status-create' && isPost) return createPage(ctx, uid, input);
+      ctx.json(NO_PAGE, 404);
+    }
+    if (action === 'status-create') ctx.json({ ok: false, error: 'You already have a status page.' });
+    if (action === 'status-page-delete' && isPost) return deletePage(ctx, uid, page);
+  }
+  if (!page) ctx.json(NO_PAGE, 404);
   const reads: Record<string, () => Promise<never>> = {
     'status': () => stateOf(ctx, page),
     'status-monitors': () => monitorsOf(ctx, page),
     'status-monitor': () => monitorDetail(ctx, page, intval(ctx.get.id ?? 0)),
     'status-incidents': () => incidentsOf(ctx, page, intval(ctx.get.before ?? 0)),
     'status-alerts': () => alertsOf(ctx, page),
+    'status-channels': () => channelsOf(ctx, page),
   };
   if (Object.hasOwn(reads, action)) await reads[action]();
   if (!isPost) ctx.json({ ok: false, error: 'Unknown action.' }, 404);
+  // Fremde Adressen und Webhooks eines Kontos ändert das Team nicht (Admin-Modus: nur ansehen)
+  if (action.startsWith('status-channel-') && adminMode(ctx)) ctx.json({ ok: false, code: 'admin_mode', error: 'Alert channels can’t be changed in admin mode.' }, 403);
   switch (action) {
     case 'status-page': return savePage(ctx, page, input);
     case 'status-monitor-save': return saveMonitor(ctx, page, uid, input);
@@ -89,6 +140,34 @@ export async function statusEditorApi(ctx: Ctx, user: Row, action: string, isPos
     case 'status-incident-delete': return deleteIncident(ctx, page, intval(input.id ?? 0));
     case 'status-alerts-owner': return saveAlerts(ctx, page, input);
     case 'status-bot-channels': return saveBotChannels(ctx, page, input);
+    case 'status-address': return changeAddress(ctx, page, uid, input);
+    case 'status-owner-alerts': return saveOwnerAlerts(ctx, page, input);
+    case 'status-channel-add': {
+      const limit = (await limitsOf(page)).channels;
+      const r = await addChannel(page.id, uid, page.isSystem ? SYSTEM_CHANNELS : limit, input);
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page, { channel: r.channel });
+    }
+    case 'status-channel-edit': {
+      const r = await editChannel(page.id, intval(input.id ?? 0), input);
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page, { channel: r.channel });
+    }
+    case 'status-channel-remove': {
+      const r = await removeChannel(page.id, intval(input.id ?? 0));
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
+    case 'status-channel-test': {
+      const r = await testChannel(page.id, intval(input.id ?? 0), { slug: page.slug, title: page.title, system: page.isSystem, owner: page.userId });
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
+    case 'status-channel-resend': {
+      const r = await resendVerify(page.id, intval(input.id ?? 0));
+      if (!r.ok) ctx.json(r);
+      return channelsOf(ctx, page);
+    }
   }
   ctx.json({ ok: false, error: 'Unknown action.' }, 404);
 }
@@ -99,9 +178,9 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
   const t = now();
   const out = await withConnection(async (db) => {
     const view = await loadPageView(db, page, t);
-    const settings = statusPageSettings({ settings: page.settings, is_system: 1 });
+    const settings = statusPageSettings({ settings: page.settings, is_system: page.isSystem ? 1 : 0 });
     const module = await statusSettings(db);
-    const limits = await statusLimits(null, db);
+    const limits = await limitsOf(page, db);
     const ids = view.components.map((c) => c.id);
     let uptime30: number | null = null;
     let avgMs: number | null = null;
@@ -120,16 +199,25 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
     const clash = await slugTaken(db, page.slug);
     return {
       ok: true,
-      scope: 'system',
+      scope: page.isSystem ? 'system' : 'user',
       page: {
         id: page.id, slug: page.slug, title: page.title, description: page.description, url: statusPageUrl(page.slug), online: page.published,
         preview: page.published ? '' : statusPageUrl(page.slug, '/?preview=' + statusPreviewToken(page)),
         clash,
         status: view.indicator, statusText: INDICATOR_TEXT[view.indicator],
-        settings: { show_uptime: settings.show_uptime, show_response: settings.show_response, history_days: settings.history_days, auto_incident: settings.auto_incident },
+        settings: { show_uptime: settings.show_uptime, show_response: settings.show_response, history_days: settings.history_days, auto_incident: settings.auto_incident,
+          ...(page.isSystem ? {} : { hide_branding: hideBranding(page.settings) }) },
+        // Premium des Besitzers (Schalter „Made with OnYourSite“, Grenzen)
+        ...(page.isSystem ? {} : { premium: await ownerPremium({ user_id: page.userId }, db) }),
+        // Name mit einer Marke, noch nicht vom Team freigegeben (die Seite bleibt so lange noindex)
+        review: page.reviewNote !== '' && page.reviewedAt === null ? page.reviewNote : '',
+        // Adresswechsel: Tage bis zum nächsten (0 = jetzt möglich; das Team ohne Sperrfrist)
+        address: { daysLeft: slugDaysLeft(page, staffOf.get(ctx) === true, t) },
+        // Eigene Seite: E-Mail an den Besitzer und die Ereignisse (die Glocke gibt es immer)
+        ...(page.isSystem ? {} : { alerts: { email: settings.alerts.owner, events: settings.alerts.events } }),
         kpis: { uptime30, avgMs, openIncidents: view.active.filter((i) => i.kind === 'incident').length, components: view.components.length },
       },
-      limits: { checks: limits.checks, components: limits.components, minInterval: limits.minInterval, intervals: module.intervals, timeoutMax: module.timeout_max },
+      limits: { plan: limits.plan, until: limits.until, checks: limits.checks, components: limits.components, minInterval: limits.minInterval, intervals: module.intervals, timeoutMax: module.timeout_max },
       gate: view.gate,
       worker: { ok: !view.checker.stale, at: numOrNull(worker?.at) },
       notifier: { ok: numOrNull(notifier?.at) !== null && t - Number(notifier?.at) <= 180, at: numOrNull(notifier?.at) },
@@ -141,7 +229,7 @@ async function stateOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
 async function monitorsOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
   const out = await withConnection(async (db) => {
     const rows = await loadMonitorRows(db, page.id);
-    const limits = await statusLimits(null, db);
+    const limits = await limitsOf(page, db);
     const monitors = await monitorViews(db, rows, limits, await maintenanceMonitors(db, page.id));
     const worker = await metaJson(db, 'status_worker');
     const gate = await metaJson(db, 'status_gate');
@@ -162,7 +250,7 @@ async function monitorDetail(ctx: Ctx, page: StatusPageRow, id: number): Promise
     const rows = await loadMonitorRows(db, page.id);
     const row = rows.find((r) => Number(r.id) === id);
     if (!row) return null;
-    const limits = await statusLimits(null, db);
+    const limits = await limitsOf(page, db);
     const [monitor] = (await monitorViews(db, rows, limits, await maintenanceMonitors(db, page.id))).filter((m) => m.id === id);
     const t = now();
     const checks = (await db.q('SELECT at, ok, ms, code, error FROM status_checks WHERE monitor_id = ? ORDER BY at DESC LIMIT 50', [id]))
@@ -215,6 +303,29 @@ async function incidentsOf(ctx: Ctx, page: StatusPageRow, before: number): Promi
   ctx.json(out);
 }
 
+// Zusätzliche Kanäle, die letzten 20 Zustellungen und die Grenze (beide Bereiche)
+async function channelsOf(ctx: Ctx, page: StatusPageRow, extra: Record<string, unknown> = {}): Promise<never> {
+  const limit = page.isSystem ? SYSTEM_CHANNELS : (await limitsOf(page)).channels;
+  ctx.json(await withConnection(async (db) => {
+    const channels = await listChannels(db, page.id);
+    const label = new Map(channels.map((c) => ['channel:' + c.id, c.label]));
+    const recent = (await db.q("SELECT id, channel, event, kind, state, error, payload, created_at, sent_at FROM status_outbox WHERE page_id = ? AND kind IN ('alert', 'muted', 'test', 'channel_broken') ORDER BY id DESC LIMIT 20", [page.id]))
+      .map((r) => {
+        let title = String(r.event);
+        try {
+          const p = JSON.parse(String(r.payload)) as AlertPayload;
+          title = r.kind === 'test' ? 'Test alert' : r.kind === 'channel_broken' ? 'Discord alerts stopped working' : r.kind === 'muted' ? 'Alerts are muted until tomorrow' : alertMessage(p).title;
+        } catch {
+          title = String(r.event);
+        }
+        const ch = String(r.channel);
+        const to = ch === 'owner' ? 'email to you' : ch === 'bell' ? 'bell' : ch === 'admins' ? 'email to admins' : ch === 'bot' ? 'Discord #alerts' : label.get(ch) ?? 'a removed channel';
+        return { id: Number(r.id), to, state: String(r.state), error: String(r.error ?? ''), title, at: Number(r.created_at), sentAt: numOrNull(r.sent_at) };
+      });
+    return { ok: true, channels, recent, limit, readOnly: adminMode(ctx), ...extra };
+  }));
+}
+
 async function alertsOf(ctx: Ctx, page: StatusPageRow): Promise<never> {
   ctx.json(await withConnection((db) => alertsState(db, page)));
 }
@@ -253,13 +364,25 @@ async function alertsState(db: Db, page: StatusPageRow): Promise<Record<string, 
 async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<never> {
   const res = await transaction(async (_conn, db) => {
     if (!(await lockStatusPage(db, page.id))) return { ok: false, error: 'This status page no longer exists.' };
-    const cur = (await systemStatusPage(db))!;
+    const cur = (await statusPageById(db, page.id))!;
     const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
     let title = cur.title;
     let description = cur.description;
+    let reviewNote = cur.reviewNote;
+    let reviewedAt = cur.reviewedAt;
     if (input.title !== undefined) {
       title = cleanText(input.title, 120);
       if (title === '') return { ok: false, error: 'Please give the page a name.', field: 'title' };
+      if (!cur.isSystem) {
+        const tp = statusTitleProblem(title);
+        if (tp.error) return { ok: false, error: tp.error, field: 'title' };
+        // Eine neue Marke im Namen markiert wieder zur Prüfung; dieselbe Marke bleibt freigegeben
+        const note = tp.review ?? '';
+        if (note !== cur.reviewNote) {
+          reviewNote = note;
+          reviewedAt = null;
+        }
+      }
     }
     if (input.description !== undefined) description = cleanText(input.description, 300);
     const bool = (k: 'show_uptime' | 'show_response'): void => {
@@ -271,6 +394,13 @@ async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<ne
       const d = Number(input.history_days);
       if (!Number.isInteger(d) || d < 0 || d > 30) return { ok: false, error: 'Past incidents can show 0 to 30 days.', field: 'history_days' };
       raw.history_days = d;
+    }
+    // „Made with OnYourSite“ ausblenden (ST-7): nur mit Premium des Besitzers; ausschalten geht immer
+    if (input.hide_branding !== undefined) {
+      if (typeof input.hide_branding !== 'boolean' || cur.isSystem) return { ok: false, error: 'Not all of the data arrived. Please try again.', field: 'hide_branding' };
+      // Einschalten braucht Premium; ein schon gespeichertes „an“ (Premium inzwischen beendet) wirkt nicht und hält nichts auf
+      if (input.hide_branding && raw.hide_branding !== true && !(await ownerPremium({ user_id: cur.userId }, db))) return { ok: false, error: 'Hiding “Made with OnYourSite” comes with Premium.', field: 'hide_branding' };
+      raw.hide_branding = input.hide_branding;
     }
     if (input.auto_incident !== undefined) {
       const a = Number(input.auto_incident);
@@ -284,13 +414,159 @@ async function savePage(ctx: Ctx, page: StatusPageRow, input: Input): Promise<ne
       }
       published = input.online;
     }
-    await db.exec('UPDATE status_pages SET title = ?, description = ?, settings = ?, is_published = ? WHERE id = ?',
-      [title, description, JSON.stringify(raw), published ? 1 : 0, cur.id]);
+    await db.exec('UPDATE status_pages SET title = ?, description = ?, settings = ?, is_published = ?, review_note = ?, reviewed_at = ? WHERE id = ?',
+      [title, description, JSON.stringify(raw), published ? 1 : 0, reviewNote, reviewedAt, cur.id]);
     await bumpRev(db, cur.id);
     return { ok: true };
   });
   if (!res.ok) ctx.json(res);
-  const fresh = await withConnection((db) => systemStatusPage(db));
+  const fresh = await withConnection((db) => statusPageById(db, page.id));
+  return stateOf(ctx, fresh ?? page);
+}
+
+// ---------------------------------------------------------------- Eigene Seite anlegen und löschen (ST-4)
+
+// Freigeschaltet, aber noch ohne Seite: was der Editor zum Anlegen braucht
+async function emptyState(ctx: Ctx, uid: number): Promise<never> {
+  const limits = await statusLimits(uid);
+  ctx.json({ ok: true, scope: 'user', page: null, limits: { checks: limits.checks, components: limits.components, minInterval: limits.minInterval } });
+}
+
+const takenText = (slug: string): string => `Sorry, the address “${slug}” is already taken.`;
+const BUSY = { ok: false, error: 'Your pages are busy right now – please try again in a moment.' };
+
+// Neue Seite: Name und Adresse (eigene Subdomain) – unter der Sperre der Plätze des Kontos, Adresse über die Liste
+// aller Adressen (claimAddress); höchstens eine Seite je Konto (uq_user)
+async function createPage(ctx: Ctx, uid: number, input: Input): Promise<never> {
+  if (!(await rateLimit('statuscreate:' + uid, 10, 3600))) ctx.json({ ok: false, error: 'You’re doing this very often – please wait a bit.' });
+  const title = cleanText(input.title, 120);
+  if (title === '') ctx.json({ ok: false, error: 'Please give the page a name.', field: 'title' });
+  const tp = statusTitleProblem(title);
+  if (tp.error) ctx.json({ ok: false, error: tp.error, field: 'title' });
+  const slug = (typeof input.slug === 'string' ? input.slug : '').trim().toLowerCase();
+  let res: { ok: boolean; error?: string; field?: string };
+  try {
+    res = await withSlotLock(uid, async (db) => {
+      if (await statusPageForUser(db, uid)) return { ok: false, error: 'You already have a status page.' };
+      const problem = await slugProblem(slug, null, null, { userId: uid, db, kind: 'status' });
+      if (problem !== null) return { ok: false, error: problem, field: 'slug' };
+      if (await db.one('SELECT id FROM status_pages WHERE slug = ?', [slug])) return { ok: false, error: takenText(slug), field: 'slug' };
+      const t = now();
+      const ins = await db.exec(`INSERT INTO status_pages (user_id, is_system, slug, title, description, settings, is_published, review_note, changed_at, created_at, updated_at)
+          VALUES (?, 0, ?, ?, '', NULL, 1, ?, ?, ?, ?)`, [uid, slug, title, tp.review ?? '', t, stamp(t), stamp(t)]);
+      await claimAddress(db, slug, 'status', ins.insertId, uid);
+      await bumpRev(db, ins.insertId, t);
+      return { ok: true };
+    });
+  } catch (err) {
+    if (isTakenError(err)) ctx.json({ ok: false, error: takenText(slug), field: 'slug' });
+    if (err instanceof SlotBusyError) ctx.json(BUSY);
+    throw err;
+  }
+  if (!res.ok) ctx.json(res);
+  const page = await withConnection((db) => statusPageForUser(db, uid));
+  if (!page) ctx.json(NO_PAGE, 404);
+  return stateOf(ctx, page);
+}
+
+// Seite löschen: Bestandteile, Vorfälle und Kanäle sofort; Zustand, Summen, Ausgang und Weiterleitungen räumt der
+// Prüfdienst über status_purge weg. Die Adresse bleibt 90 Tage für den Besitzer reserviert (HOLD_POLICY.status).
+async function deletePage(ctx: Ctx, uid: number, page: StatusPageRow): Promise<never> {
+  try {
+    await withSlotLock(uid, async (db) => {
+      if (!(await lockStatusPage(db, page.id))) return;
+      const t = now();
+      for (const inc of await db.q('SELECT id FROM status_incidents WHERE page_id = ?', [page.id])) {
+        await db.exec('DELETE FROM status_incident_posts WHERE incident_id = ?', [Number(inc.id)]);
+        await deleteIncidentRows(db, Number(inc.id));
+      }
+      for (const m of await db.q('SELECT id FROM status_monitors WHERE page_id = ?', [page.id])) {
+        await db.exec('DELETE FROM status_run_requests WHERE monitor_id = ?', [Number(m.id)]);
+        await db.exec("INSERT INTO status_purge (kind, ref_id, created_at) VALUES ('monitor', ?, ?)", [Number(m.id), t]);
+      }
+      await db.exec('DELETE FROM status_monitors WHERE page_id = ?', [page.id]);
+      await db.exec('DELETE FROM status_channels WHERE page_id = ?', [page.id]);
+      await db.exec("INSERT INTO status_purge (kind, ref_id, created_at) VALUES ('page', ?, ?)", [page.id, t]);
+      await db.exec('DELETE FROM status_pages WHERE id = ? AND user_id = ? AND is_system = 0', [page.id, uid]);
+      await releaseAddress(db, page.slug, uid, 'owner', { kind: 'status', refId: page.id });
+      await bumpGlobalRev(db);
+    });
+  } catch (err) {
+    if (err instanceof SlotBusyError) ctx.json(BUSY);
+    throw err;
+  }
+  return emptyState(ctx, uid);
+}
+
+// ---------------------------------------------------------------- Adresse und Benachrichtigungen der eigenen Seite (ST-4)
+
+// Tage bis zum nächsten Adresswechsel: der erste ist frei, danach einmal in 30 Tagen; das Team ohne Sperrfrist
+function slugDaysLeft(page: StatusPageRow, staff: boolean, t: number): number {
+  if (staff || page.slugChangedAt === null) return 0;
+  return Math.max(0, Math.ceil((page.slugChangedAt + SLUG_COOLDOWN - t) / 86400));
+}
+
+// Neue Adresse: unter der Sperre der Plätze des Kontos; die neue über die Liste aller Adressen, die alte bleibt 90 Tage
+// für den Besitzer reserviert und leitet so lange weiter (status_slug_redirects; eine Weiterleitung, die auf der neuen
+// Adresse lag, endet)
+async function changeAddress(ctx: Ctx, page: StatusPageRow, uid: number, input: Input): Promise<never> {
+  const slug = (typeof input.slug === 'string' ? input.slug : '').trim().toLowerCase();
+  if (slug === page.slug) return stateOf(ctx, page);
+  if (!(await rateLimit('statusaddr:' + uid, 10, 3600))) ctx.json({ ok: false, error: 'You’re doing this very often – please wait a bit.' });
+  const staff = staffOf.get(ctx) === true;
+  let res: { ok: boolean; error?: string; field?: string };
+  try {
+    res = await withSlotLock(uid, async (db) => {
+      if (!(await lockStatusPage(db, page.id))) return PAGE_GONE;
+      const cur = (await statusPageById(db, page.id))!;
+      if (slug === cur.slug) return { ok: true };
+      const t = now();
+      if (slugDaysLeft(cur, staff, t) > 0) {
+        return { ok: false, error: `You can change the address again on ${date('M j, Y', (cur.slugChangedAt ?? t) + SLUG_COOLDOWN)}.`, field: 'slug' };
+      }
+      const problem = await slugProblem(slug, null, null, { userId: uid, db, kind: 'status' });
+      if (problem !== null) return { ok: false, error: problem, field: 'slug' };
+      if (await db.one('SELECT id FROM status_pages WHERE slug = ?', [slug])) return { ok: false, error: takenText(slug), field: 'slug' };
+      await claimAddress(db, slug, 'status', cur.id, uid);
+      await db.exec('UPDATE status_pages SET slug = ?, slug_changed_at = ? WHERE id = ?', [slug, t, cur.id]);
+      await releaseAddress(db, cur.slug, uid, 'owner', { kind: 'status', refId: cur.id });
+      await db.exec('DELETE FROM status_slug_redirects WHERE slug = ?', [slug]);
+      await db.exec('INSERT INTO status_slug_redirects (slug, page_id, until) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE page_id = VALUES(page_id), until = VALUES(until)',
+        [cur.slug, cur.id, t + SLUG_REDIRECT]);
+      await bumpRev(db, cur.id, t);
+      await bumpGlobalRev(db);
+      return { ok: true };
+    });
+  } catch (err) {
+    if (isTakenError(err)) ctx.json({ ok: false, error: takenText(slug), field: 'slug' });
+    if (err instanceof SlotBusyError) ctx.json(BUSY);
+    throw err;
+  }
+  if (!res.ok) ctx.json(res);
+  const fresh = await withConnection((db) => statusPageById(db, page.id));
+  return stateOf(ctx, fresh ?? page);
+}
+
+// Benachrichtigungen des Besitzers: E-Mail an oder aus und welche Ereignisse; die Glocke bekommt sie immer
+async function saveOwnerAlerts(ctx: Ctx, page: StatusPageRow, input: Input): Promise<never> {
+  const events = input.events;
+  if (events !== undefined && (!Array.isArray(events) || !events.every((x) => typeof x === 'string' && (ALERT_EVENTS as readonly string[]).includes(x)))) {
+    ctx.json({ ok: false, error: 'Please choose the events again.', field: 'events' });
+  }
+  const res = await transaction(async (_conn, db) => {
+    if (!(await lockStatusPage(db, page.id))) return PAGE_GONE;
+    const cur = (await statusPageById(db, page.id))!;
+    const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
+    const alerts = raw.alerts && typeof raw.alerts === 'object' && !Array.isArray(raw.alerts) ? { ...(raw.alerts as Record<string, unknown>) } : {};
+    if (typeof input.email === 'boolean') alerts.owner = input.email;
+    if (Array.isArray(events)) alerts.events = ALERT_EVENTS.filter((ev) => (events as AlertEvent[]).includes(ev));
+    raw.alerts = alerts;
+    await db.exec('UPDATE status_pages SET settings = ? WHERE id = ?', [JSON.stringify(raw), cur.id]);
+    await bumpRev(db, cur.id);
+    return { ok: true };
+  });
+  if (!res.ok) ctx.json(res);
+  const fresh = await withConnection((db) => statusPageById(db, page.id));
   return stateOf(ctx, fresh ?? page);
 }
 
@@ -300,7 +576,7 @@ async function saveMonitor(ctx: Ctx, page: StatusPageRow, uid: number, input: In
   if (!(await rateLimit('statussave:' + uid, 60, 3600))) ctx.json({ ok: false, error: 'You’re changing checks very often – please wait a bit.' });
   const id = intval(input.id ?? 0);
   const settings = await statusSettings();
-  const limits = await statusLimits(null);
+  const limits = await limitsOf(page);
   const policy = runtimePolicy(settings, statusServerConfig());
   const existing = id > 0 ? (await withConnection((db) => db.one('SELECT * FROM status_monitors WHERE id = ? AND page_id = ?', [id, page.id]))) : null;
   if (id > 0 && !existing) ctx.json(GONE, 404);
@@ -337,8 +613,8 @@ async function saveMonitor(ctx: Ctx, page: StatusPageRow, uid: number, input: In
       const hb = w.type === 'heartbeat' ? newHeartbeatToken() : null;
       const ins = await db.exec(`INSERT INTO status_monitors (page_id, user_id, type, name, description, group_name, position, is_public, target, target_host, target_domain,
           config, interval_s, manual_status, manual_since, hb_token_hash, hb_token_enc, changed_at, created_at, updated_at)
-          VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [page.id, w.type, w.name, w.description, w.group, pos, w.isPublic ? 1 : 0, w.target, w.host, w.domain, JSON.stringify(w.config), w.interval, w.manualStatus,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [page.id, page.isSystem ? null : page.userId, w.type, w.name, w.description, w.group, pos, w.isPublic ? 1 : 0, w.target, w.host, w.domain, JSON.stringify(w.config), w.interval, w.manualStatus,
         w.manualStatus === null ? null : t, hb?.hash ?? null, hb?.enc ?? null, t, stamp(t), stamp(t)]);
       monitorId = ins.insertId;
     }
@@ -352,7 +628,7 @@ async function saveMonitor(ctx: Ctx, page: StatusPageRow, uid: number, input: In
 async function monitorResult(ctx: Ctx, page: StatusPageRow, id: number, warning?: string): Promise<never> {
   const out = await withConnection(async (db) => {
     const rows = await loadMonitorRows(db, page.id);
-    const [monitor] = (await monitorViews(db, rows.filter((r) => Number(r.id) === id), await statusLimits(null, db), await maintenanceMonitors(db, page.id), { strip: false }));
+    const [monitor] = (await monitorViews(db, rows.filter((r) => Number(r.id) === id), await limitsOf(page, db), await maintenanceMonitors(db, page.id), { strip: false }));
     return monitor ?? null;
   });
   if (!out) ctx.json(GONE, 404);
@@ -582,7 +858,7 @@ async function saveAlerts(ctx: Ctx, page: StatusPageRow, input: Input): Promise<
   }
   const res = await transaction(async (_conn, db) => {
     if (!(await lockStatusPage(db, page.id))) return GONE;
-    const cur = (await systemStatusPage(db))!;
+    const cur = (await statusPageById(db, page.id))!;
     const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
     const alerts = raw.alerts && typeof raw.alerts === 'object' && !Array.isArray(raw.alerts) ? { ...(raw.alerts as Record<string, unknown>) } : {};
     if (typeof input.admins === 'boolean') alerts.admins = input.admins;
@@ -611,7 +887,7 @@ async function saveBotChannels(ctx: Ctx, page: StatusPageRow, input: Input): Pro
     if (alertsId !== '' && alertsId === (rep?.status_channel_id ?? '')) return { ok: false, error: 'Team alerts can’t go to the public #status channel – choose a private channel.', field: 'alerts_channel_id' };
     const problem = alertsChannelProblem(rep, alertsId);
     if (problem !== '') return { ok: false, error: problem, field: 'alerts_channel_id' };
-    const cur = (await systemStatusPage(db))!;
+    const cur = (await statusPageById(db, page.id))!;
     const raw: Record<string, unknown> = cur.settings ? (JSON.parse(cur.settings) as Record<string, unknown>) : {};
     raw.bot = { status_channel_id: statusId, alerts_channel_id: alertsId, saved: true };
     await db.exec('UPDATE status_pages SET settings = ? WHERE id = ?', [JSON.stringify(raw), cur.id]);
@@ -623,3 +899,13 @@ async function saveBotChannels(ctx: Ctx, page: StatusPageRow, input: Input): Pro
 }
 
 export { STATUS_FEATURE, MANUAL_STATUSES };
+
+// Gespeicherter Schalter „Made with OnYourSite“ aus (ohne Premium wirkt er nicht – siehe footerHidden)
+function hideBranding(raw: string | null): boolean {
+  try {
+    const v = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    return v !== null && typeof v === 'object' && v.hide_branding === true;
+  } catch {
+    return false;
+  }
+}

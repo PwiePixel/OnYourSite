@@ -11,7 +11,7 @@
 // über notify(…, { db: conn }). Hintergrunddienste migrieren nie – sie warten mit schemaAtLeast(V_…) auf ihren Schritt.
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { withConnection } from './db.js';
-import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower } from './php.js';
+import { date, intval, mbSubstr, phpStr, phpTrim, phpTruthy, strtolower, strtotime, time } from './php.js';
 import { phpJson } from './html.js';
 import { decryptData } from './crypto.js';
 import { cleanCss } from './css.js';
@@ -43,6 +43,11 @@ export const V_DISCORD_DELIVERY = 13; // Discord: Beiträge je Ziel, Aufträge d
 export const V_PUBLIC_PAGES = 14; // Öffentliche Vorschlagsseite: Sichtbarkeit je Vorschlag, Adresse „suggestions“ reserviert
 export const V_BRANDING_LEGACY = 15; // Premium: Seiten, die den Hinweis heute ausblenden, behalten das (Q9)
 export const V_DOMAIN_RECORDS = 16; // Eigene Domains: Zusatz-Einträge von Cloudflare (Apex: Besitz-TXT, DCV) je Domain
+export const V_DOMAIN_BLOCKS = 17; // Eigene Domains: vom Team gesperrte Hostnamen bleiben gesperrt, auch nach „Entfernen“ (R2)
+export const V_CODE_SLOTS_LIVE = 18; // Code-Seiten-Plätze live (CS-6): gespeichertes max_on_pages 0 aus der dunklen Phase wird 1
+export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_day, best_streak), aus den Tagesbuchungen nachgetragen
+export const V_SHOP_EVENT_CODES = 20; // Honigwaben: Event-Codes des Teams (hc_codes)
+export const V_SHOP_MAIL = 21; // Honigwaben: Mails „endet bald“/„beendet“ (hc_mail_outbox, hc_accounts.mail_reminders)
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -83,6 +88,11 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_PUBLIC_PAGES, name: 'publicPages', run: publicPages },
   { version: V_BRANDING_LEGACY, name: 'brandingLegacy', run: brandingLegacy },
   { version: V_DOMAIN_RECORDS, name: 'domainRecords', run: domainRecords },
+  { version: V_DOMAIN_BLOCKS, name: 'domainBlocks', run: domainBlocks },
+  { version: V_CODE_SLOTS_LIVE, name: 'codeSlotsLive', run: codeSlotsLive },
+  { version: V_SHOP_STREAKS, name: 'shopStreaks', run: shopStreaks },
+  { version: V_SHOP_EVENT_CODES, name: 'shopEventCodes', run: shopEventCodes },
+  { version: V_SHOP_MAIL, name: 'shopMail', run: shopMail },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -541,6 +551,18 @@ async function notificationsIndex(conn: PoolConnection): Promise<void> {
 // unter „Additional records“.
 async function domainRecords(conn: PoolConnection): Promise<void> {
   await addColumn(conn, 'custom_domains', 'extra_records', 'TEXT NULL');
+}
+
+// V_DOMAIN_BLOCKS (braucht custom_domains aus V_CUSTOM_DOMAINS): vom Team gesperrte Hostnamen (Entscheidung R2).
+// Solange die gesperrte Domain an ihrer Seite hängt, sperrt ihre Zeile (Zustand blocked) den Hostnamen. Entfernt der
+// Besitzer sie (oder gehen Seite oder Konto), verschwindet die Zeile wie sonst – die Sperre bleibt hier stehen, für
+// jedes Konto, bis ein Admin sie aufhebt (releaseBlock in domains/store.ts).
+async function domainBlocks(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS custom_domain_blocks (
+        hostname VARCHAR(253) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+        reason VARCHAR(200) NULL,
+        created_at DATETIME NOT NULL
+    ) ${OPTS}`);
 }
 
 // V_CUSTOM_DOMAINS (braucht nur pages aus V_PAGES): eigene Domains (Premium). Eine Zeile je Domain, Ziel ist (vorerst)
@@ -1267,7 +1289,8 @@ const LAYOUT_MAP: Record<string, string> = {
 // Übernimmt alte Profile (users + user_links) als erste Seite mit Blöcken
 async function migrateLegacyUsers(conn: PoolConnection): Promise<void> {
   const now = date('Y-m-d H:i:s');
-  const users = await rows(conn, "SELECT * FROM users WHERE username IS NOT NULL AND username <> ''");
+  // Feste Reihenfolge (nach id): sonst hinge die Nummer jeder Seite und jedes Blocks vom Plan der Datenbank ab
+  const users = await rows(conn, "SELECT * FROM users WHERE username IS NOT NULL AND username <> '' ORDER BY id");
 
   for (const user of users) {
     // Alte Installationen haben evtl. nicht alle Spalten – daher defensiv lesen
@@ -1455,4 +1478,100 @@ export async function reserveSuggestions(conn: PoolConnection): Promise<void> {
     await conn.rollback();
     throw err;
   }
+}
+
+// V_CODE_SLOTS_LIVE (CS-6): Einstellungen der Code-Seiten, die in der dunklen Phase gespeichert wurden, enthalten
+// max_on_pages 0 – damals der feste Standard, keine Wahl des Teams. Einmal auf 1 heben (der Standard ab CS-6), damit
+// „More code pages“ einen nutzbaren Platz gibt; alle anderen Werte bleiben. Ohne gespeicherte Einstellungen gilt der
+// neue Standard ohnehin. Kaputtes JSON bleibt unverändert (codeSettingsFrom liest dann die Standards).
+async function codeSlotsLive(conn: PoolConnection): Promise<void> {
+  const r = await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'code_pages'");
+  if (!r.length) return;
+  let obj: unknown;
+  try { obj = JSON.parse(String(r[0].meta_value)); } catch { return; }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return;
+  const o = obj as Record<string, unknown>;
+  if (o.max_on_pages === undefined || Number(o.max_on_pages) !== 0) return;
+  o.max_on_pages = 1;
+  await run(conn, "UPDATE oys_meta SET meta_value = ? WHERE meta_key = 'code_pages'", [JSON.stringify(o)]);
+}
+
+// HC-8: Serie je Konto. Nachtragen aus den Tagesbuchungen der letzten 60 Tage (ref = Y-m-d): die Tage in Folge, die
+// heute oder gestern enden, werden die laufende Serie; die längste Folge in diesem Zeitraum die beste. Konten ohne
+// Zeile in hc_accounts bekommen eine. Läuft der Schritt noch einmal, bleibt eine Serie, die schon weiterlief.
+export async function shopStreaks(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'hc_accounts', 'streak', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn(conn, 'hc_accounts', 'streak_day', 'DATE NULL');
+  await addColumn(conn, 'hc_accounts', 'best_streak', 'SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+  const today = date('Y-m-d');
+  const from = date('Y-m-d', time() - 61 * 86400);
+  // created_at schränkt über idx_reason_time ein; ref ist der Tag der Buchung
+  const list = await rows(conn, `SELECT user_id, ref FROM honeycomb_ledger WHERE reason = 'daily' AND created_at >= ? AND ref >= ? AND ref <= ?
+      AND ref REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ORDER BY user_id, ref`, [date('Y-m-d', time() - 62 * 86400) + ' 00:00:00', from, today]);
+  const now0 = date('Y-m-d H:i:s');
+  await run(conn, `INSERT IGNORE INTO hc_accounts (user_id, created_at, updated_at) SELECT DISTINCT l.user_id, ?, ? FROM honeycomb_ledger l
+      JOIN users u ON u.id = l.user_id WHERE l.reason = 'daily' AND l.created_at >= ?`, [now0, now0, date('Y-m-d', time() - 62 * 86400) + ' 00:00:00']);
+  const byUser = new Map<number, string[]>();
+  for (const r of list) {
+    const uid = Number(r.user_id);
+    const days = byUser.get(uid) ?? [];
+    days.push(String(r.ref));
+    byUser.set(uid, days);
+  }
+  const next = (d: string): string => date('Y-m-d', (strtotime(d + ' +1 day') as number));
+  const yesterday = date('Y-m-d', (strtotime(today + ' -1 day') as number));
+  for (const [uid, days] of byUser) {
+    let len = 0;
+    let best = 0;
+    let prev = '';
+    for (const d of days) {
+      len = prev !== '' && next(prev) === d ? len + 1 : 1;
+      best = Math.max(best, len);
+      prev = d;
+    }
+    const current = prev === today || prev === yesterday ? len : 0;
+    // Nur Konten ohne gezählte Serie (ein zweiter Lauf überschreibt nichts, was der Editor schon gezählt hat)
+    await run(conn, `UPDATE hc_accounts SET streak = ?, streak_day = ?, best_streak = GREATEST(best_streak, ?)
+        WHERE user_id = ? AND streak_day IS NULL`, [Math.min(65535, current), current > 0 ? prev : null, Math.min(65535, best), uid]);
+  }
+}
+
+// HC-9: Event-Codes. code in Großbuchstaben, Ziffern, Bindestrich; uses zählt die Einlösungen (unter der Kontosperre)
+async function shopEventCodes(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_codes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(32) NOT NULL,
+        amount INT UNSIGNED NOT NULL,
+        note VARCHAR(150) NOT NULL DEFAULT '',
+        starts_at DATETIME NULL,
+        ends_at DATETIME NULL,
+        max_uses INT UNSIGNED NULL,
+        uses INT UNSIGNED NOT NULL DEFAULT 0,
+        min_account_days SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+        disabled_at DATETIME NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uq_code (code)
+    ) ${OPTS}`);
+}
+
+// HC-7b: Mails des Honigwaben-Jobs – in derselben Transaktion wie die Glocke geschrieben, danach in Ruhe verschickt.
+// ref ist je Anlass eindeutig (rem2:<Berechtigung>:<Ende>, end:<Berechtigung>:<Ende>); vars = JSON mit Rohwerten.
+async function shopMail(conn: PoolConnection): Promise<void> {
+  await run(conn, `CREATE TABLE IF NOT EXISTS hc_mail_outbox (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        template VARCHAR(40) NOT NULL,
+        ref VARCHAR(80) NOT NULL,
+        subject VARCHAR(200) NOT NULL,
+        vars TEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        sent_at DATETIME NULL,
+        tries TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        last_error VARCHAR(200) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_ref (user_id, ref),
+        KEY idx_pending (sent_at, id)
+    ) ${OPTS}`);
+  // Schalter „Email me before an unlock ends“ (Standard an)
+  await addColumn(conn, 'hc_accounts', 'mail_reminders', 'TINYINT(1) NOT NULL DEFAULT 1');
 }

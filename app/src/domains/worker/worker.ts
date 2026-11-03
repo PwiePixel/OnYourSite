@@ -14,7 +14,7 @@ import { reconcileUser } from '../lifecycle.js';
 import { poolDb } from '../../honeycombs/util.js';
 import { isPremiumRow } from '../../honeycombs/premium.js';
 import { cnameTarget } from '../config.js';
-import { domainById, logEvent, removeDomain, transition, type DomainRow, type DomainState } from '../store.js';
+import { domainById, hostnameBlocked, logEvent, removeDomain, transition, type DomainRow, type DomainState } from '../store.js';
 import { ownershipToken, probeAnswer } from '../tokens.js';
 import { TXT_PREFIX } from '../hostname.js';
 import {
@@ -241,6 +241,8 @@ export class DomainWorker {
   // Hostname anlegen – nacheinander (nie zwei gleichzeitig: Plätze und „eine Domain je Konto in pending“ stimmen so)
   private create(row: DomainRow, d: Decision, s: DomainSettings, now: number, obs: Obs, manual: boolean): Promise<Decision> {
     const run = async (): Promise<Decision> => {
+      // Vom Team gesperrter Hostname (R2): nie bei Cloudflare anlegen – auch nicht für eine Zeile am Editor vorbei
+      if (await hostnameBlocked(row.hostname)) return { ...d, state: row.state, cfAction: 'none', event: null, notice: null, set: { checked_at: at(now) } };
       // Nur mit Premium (oder als Admin): „Check again“ auf einer gescheiterten Domain prüft den TXT-Eintrag auch ohne
       // Premium – dann bleibt alles, wie es ist, und kein Hostname entsteht
       const owner = await one('SELECT id, is_admin, premium_until FROM users WHERE id = ?', [row.user_id]);

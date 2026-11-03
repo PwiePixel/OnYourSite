@@ -2,8 +2,8 @@
 // Hier steht nur die Reihenfolge – genau wie in PHP. Jede Aufgabe steckt in ihrer eigenen Datei.
 import type { Ctx } from '../web/ctx.js';
 import { Session, SESSION_COOKIE } from '../web/session.js';
-import { intval, phpTruthy } from '../php.js';
-import { currentUser } from './context.js';
+import { intval } from '../php.js';
+import { currentUser, isAdminSession } from './context.js';
 import { staticPage, type StaticPage } from './staticPages.js';
 import { landing } from './landing.js';
 import { login, logout, register } from './auth.js';
@@ -60,8 +60,9 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   }
   // JSON des Admin-Bereichs: ohne Admin-Rechte 403 als JSON statt der Weiterleitung
   if (path.startsWith('/admin/api/')) return adminApi(ctx, user);
+  // Admin-Bereich nur in der eigenen Sitzung eines Admins – im Nutzer-Modus („Log in as“) wie für jeden Nutzer
   if (path === '/admin') {
-    if (!phpTruthy(user.is_admin)) ctx.redirect('/dashboard');
+    if (!isAdminSession(ctx, user)) ctx.redirect('/dashboard');
     return adminPage(ctx, user);
   }
   if (path.startsWith('/dashboard/api/')) return editorApi(ctx, user);

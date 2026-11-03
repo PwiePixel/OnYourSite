@@ -3,6 +3,7 @@
 // letzte Buchungen), Katalog & Preise, Angebote, Regeln zum Verdienen und Nutzer (Honigwaben vergeben, Kontostände).
 // Gezeigt wird nur der gewählte Unterbereich (seine Abfragen laufen nur dann). Aussehen wie die übrigen Karten des
 // Admin-Bereichs; Honigwaben-Symbole gelb. Jeder Text aus der Datenbank geht durch e().
+import { earnLimits, type EarnLimits } from './earn.js';
 import type { Ctx } from '../web/ctx.js';
 import { q, one, value, type Row } from '../db.js';
 import { date, intval, numberFormat, phpStr, strtolower, strtotime, ucfirst } from '../php.js';
@@ -20,6 +21,11 @@ import { LIFECYCLE_READY } from './features.js';
 import { isActive, type EntRow } from './entitlements.js';
 import { refundableValue, type PurchaseRow } from './shop.js';
 import { premiumReady } from './premium.js';
+import { REVERSIBLE, reversedIds } from './teamTools.js';
+import { CODE_MAX_AMOUNT, codeStatus, type CodeRow } from './codes.js';
+import { mailBudget } from './outbox.js';
+import { bulkFromSession } from './bulkAction.js';
+import { Session } from '../web/session.js';
 
 const IN = 'w-full bg-inputbg border border-bordercolor rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-sm';
 const LBL = 'block text-sm font-medium text-gray-300 mb-1.5';
@@ -36,6 +42,8 @@ const TAB_LABELS: Readonly<Record<HcTab, [string, string]>> = {
   rules: ['Earning rules', 'bx-slider-alt'],
   users: ['Users', 'bx-group'],
   purchases: ['Purchases', 'bx-receipt'],
+  ledger: ['Ledger', 'bx-list-ul'],
+  codes: ['Codes', 'bx-purchase-tag-alt'],
 };
 
 // $userName: Name, sonst E-Mail (null und '' zählen als leer)
@@ -124,6 +132,8 @@ export async function adminHoneycombsView(ctx: Ctx, allUsers: Row[]): Promise<st
   else if (tab === 'offers') o += await offers(csrf, now);
   else if (tab === 'rules') o += await rules(csrf);
   else if (tab === 'purchases') o += await purchasesTab(ctx, csrf, now);
+  else if (tab === 'ledger') o += await ledgerTab(ctx, csrf);
+  else if (tab === 'codes') o += await codesTab(csrf, now);
   else o += await users(ctx, csrf, allUsers, now);
   o += '            </div>\n';
   return o;
@@ -376,18 +386,22 @@ async function offers(csrf: string, now: string): Promise<string> {
 // ---------------------------------------------------------------- Regeln zum Verdienen
 
 async function rules(csrf: string): Promise<string> {
-  const settings: HcSettings = await hcSettings();
-  const ruleFields: Array<[keyof HcSettings, [string, string]]> = [
+  const settings: HcSettings & EarnLimits & { mail_per_run: number } = { ...await hcSettings(), ...await earnLimits(), mail_per_run: await mailBudget() };
+  const ruleFields: Array<[keyof (HcSettings & EarnLimits) | 'mail_per_run', [string, string]]> = [
     ['daily', ['Active day', 'For opening the editor (once a day)']],
     ['profile', ['Complete profile', 'Once: profile picture, bio and at least 3 links']],
     ['views', ['Visitors', 'Per step of page views (one step a day, up to ' + HC_MAX_VIEW_REWARDS + ' times)']],
     ['views_step', ['Views per step', 'How many page views make one step']],
+    ['streak_week', ['7-day streak', 'Bonus every 7 days in a row']],
+    ['streak_month', ['30-day streak', 'Bonus every 30 days in a row (instead of the 7-day bonus that day)']],
+    ['daily_cap', ['Daily limit', 'Most honeycombs one user can get per day from automatic rewards (not daily, streaks, gifts or codes)']],
+    ['mail_per_run', ['Emails per run', 'Most “ends soon” and “has ended” emails the background job sends every 15 minutes']],
   ];
   let o = `                <div class="${CARD} p-5 sm:p-6 max-w-2xl">\n                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4">\n                        <i class='bx bx-slider-alt text-2xl text-brand-400'></i>\n                        <h2 class="text-base font-semibold text-white">How users earn them</h2>\n                    </div>\n`;
   o += '                    <form action="/admin" method="POST" class="space-y-3" id="hcRulesForm">\n                        ' + csrf + '                        <input type="hidden" name="hc_action" value="settings">\n';
   for (const [key, [title, hint]] of ruleFields) {
     o += `                        <div class="flex items-center gap-3">\n                            <label class="flex-1 min-w-0" for="hcRule-${key}"><span class="block text-sm text-white">${e(title)}</span><span class="block text-xs text-gray-500">${e(hint)}</span></label>\n`
-      + `                            <input id="hcRule-${key}" type="number" name="${key}" min="${key === 'views_step' ? 1 : 0}" max="100000" step="1" value="${intval(settings[key])}" class="${IN} !w-28 text-right">\n                        </div>\n`;
+      + `                            <input id="hcRule-${key}" type="number" name="${key}" min="${key === 'views_step' || key === 'mail_per_run' ? 1 : key === 'daily_cap' ? 50 : 0}" max="${key === 'mail_per_run' ? 1000 : 100000}" step="1" value="${intval(settings[key])}" class="${IN} !w-28 text-right">\n                        </div>\n`;
   }
   o += '                        <p class="text-xs text-gray-500 pt-1">0 switches a reward off. Changes count from now on – nobody loses honeycombs they already have. Prices are set under <a href="/admin?hc_tab=catalogue#honeycombs" class="text-brand-400 hover:text-brand-300">Catalogue &amp; prices</a>.</p>\n'
     + `                        <button type="submit" class="${SUBMIT}"><i class='bx bx-save'></i> Save</button>\n                    </form>\n                </div>\n`;
@@ -444,6 +458,7 @@ async function users(ctx: Ctx, csrf: string, allUsers: Row[], now: string): Prom
   let o = '';
   const uidDetail = detailUser(ctx.get.hc_user);
   if (uidDetail > 0) o += await userDetails(csrf, uidDetail, now);
+  const bulk = bulkFromSession(await Session.start(ctx));
   o += "                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl p-5 sm:p-6\">\n                    <div class=\"flex items-center gap-3 mb-5 border-b border-bordercolor pb-4\">\n                        <i class='bx bx-hive text-2xl text-yellow-400'></i>\n                        <h2 class=\"text-base font-semibold text-white\">Give honeycombs</h2>\n                    </div>\n                    <form action=\"/admin\" method=\"POST\" class=\"space-y-4\" id=\"hcGrantForm\" data-hc-ask-above=\"" + GRANT_ASK_ABOVE + "\""
     + confirmAttrs({ title: 'Send these honeycombs?', text: 'Please check the user and the amount. A negative amount takes honeycombs away.', ok: 'Send', tone: 'warn' }) + ">\n                        ";
   o += csrf.trimEnd() + confirmField() + '\n';
@@ -454,6 +469,7 @@ async function users(ctx: Ctx, csrf: string, allUsers: Row[], now: string): Prom
     o += '                                <option value="' + intval(u.id) + '" data-name="' + e(userName(u)) + '">' + e(userName(u)) + ' · ' + e(u.email) + ' (' + intval(balances.get(intval(u.id))?.balance ?? 0) + ')</option>\n';
   }
   o += "                            </select>\n                        </div>\n                        <div class=\"grid grid-cols-1 sm:grid-cols-3 gap-4\">\n                            <div>\n                                <label class=\"" + LBL + "\" for=\"hcAmount\">Amount</label>\n                                <input id=\"hcAmount\" type=\"number\" name=\"amount\" required min=\"-100000\" max=\"100000\" step=\"1\" placeholder=\"50\" class=\"" + IN + "\">\n                            </div>\n                            <div class=\"sm:col-span-2\">\n                                <label class=\"" + LBL + "\" for=\"hcNote\">Note <span class=\"text-gray-500 font-normal\">(the user sees it)</span></label>\n                                <input id=\"hcNote\" type=\"text\" name=\"note\" maxlength=\"150\" placeholder=\"e.g. Thanks for your feedback!\" class=\"" + IN + "\">\n                            </div>\n                        </div>\n                        <p class=\"text-xs text-gray-500\">A negative amount takes honeycombs away (e.g. −20). The balance can’t go below 0.</p>\n                        <button type=\"submit\" class=\"" + SUBMIT + "\"><i class='bx bx-gift'></i> Send</button>\n                    </form>\n                </div>\n\n";
+  o += bulkCard(csrf, bulk);
   o += "                <div class=\"bg-card border border-bordercolor rounded-xl shadow-xl overflow-hidden\">\n                    <div class=\"flex flex-wrap items-center justify-between gap-3 p-5 sm:p-6 border-b border-bordercolor\">\n                        <h2 class=\"text-base font-semibold text-white flex items-center gap-2\"><i class='bx bx-wallet text-xl text-brand-400'></i> Balances</h2>\n                        <form action=\"/admin#honeycombs\" method=\"GET\" class=\"m-0 flex gap-2\" role=\"search\"><input type=\"hidden\" name=\"hc_tab\" value=\"users\"><input type=\"search\" id=\"hcFilter\" name=\"hc_q\" maxlength=\"100\" value=\"" + e(query) + "\" placeholder=\"Search users …\" class=\"" + IN + " sm:!w-64\"><button type=\"submit\" class=\"" + BTN + "\"><i class='bx bx-search'></i> Search</button></form>\n                    </div>\n                    <div class=\"overflow-x-auto\">\n                        <table class=\"w-full text-sm text-left\">\n                            <thead class=\"text-xs text-gray-500 uppercase bg-inputbg\">\n                                <tr><th class=\"px-5 py-3 font-medium\">User</th><th class=\"px-4 py-3 font-medium text-right\">Balance</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Earned</th><th class=\"px-4 py-3 font-medium text-right hidden sm:table-cell\">Spent</th><th class=\"px-4 py-3 font-medium hidden sm:table-cell\">Premium</th><th class=\"px-5 py-3\"></th></tr>\n                            </thead>\n                            <tbody class=\"divide-y divide-bordercolor\" id=\"hcRows\">\n";
   for (const u of hcUsers) {
     const uid = intval(u.id);
@@ -585,6 +601,150 @@ async function purchasesTab(ctx: Ctx, csrf: string, now: string): Promise<string
   return o;
 }
 
+// ---------------------------------------------------------------- Buchungen zurücknehmen (HC-6b)
+
+// Knopf „Reverse“ einer Buchung (nur Belohnungen und Gaben, je einmal); fromTab: wohin es danach zurückgeht
+function reverseForm(csrf: string, l: Row, name: string, reversed: ReadonlySet<number>, fromTab: '' | 'ledger'): string {
+  const id = intval(l.id);
+  const amount = intval(l.amount);
+  if (!REVERSIBLE.includes(phpStr(l.reason)) || amount === 0) return '';
+  if (reversed.has(id)) return `<span class="${BADGE} bg-white/5 text-gray-400">Reversed</span>`;
+  const text = (amount > 0 ? 'Take ' + numberFormat(amount) + ' honeycombs back from ' : 'Give ' + numberFormat(-amount) + ' honeycombs back to ') + name + '?';
+  return `<form action="/admin" method="POST" class="m-0 shrink-0"${confirmAttrs({ title: 'Reverse this entry?', text: text + ' They see it in their history.', ok: 'Reverse', tone: 'danger' })}>`
+    + csrf.trim() + confirmField() + `<input type="hidden" name="hc_action" value="reverse"><input type="hidden" name="ledger_id" value="${id}"><input type="hidden" name="user_id" value="${intval(l.user_id)}">`
+    + (fromTab ? `<input type="hidden" name="from_tab" value="${fromTab}">` : '')
+    + `<button type="submit" class="${BTN} !py-1 !min-h-0 hover:text-red-400"><i class='bx bx-undo'></i> Reverse</button></form>`;
+}
+
+const LEDGER_REASONS: ReadonlyArray<[string, string]> = [['admin', 'Gifts from the team'], ['daily', 'Active days'], ['profile', 'Completed profiles'], ['views', 'Page views'],
+  ['streak', 'Streaks'], ['code', 'Codes'], ['purchase', 'Purchases'], ['unlock', 'Unlocks'], ['refund', 'Refunds'], ['reversal', 'Reversals'], ['grant', 'Unlocks from the team'], ['revoke', 'Removed by the team']];
+
+// Unterbereich „Ledger“: alle Buchungen mit Filtern (Grund ?hc_reason=, Nutzer ?hc_q=, Zeitraum ?hc_from=/?hc_to=)
+async function ledgerTab(ctx: Ctx, csrf: string): Promise<string> {
+  const reasonIn = typeof ctx.get.hc_reason === 'string' ? ctx.get.hc_reason : '';
+  const reason = LEDGER_REASONS.some(([k]) => k === reasonIn) ? reasonIn : '';
+  const query = searchText(ctx.get.hc_q);
+  const day = (v: unknown): string => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '');
+  const from = day(ctx.get.hc_from);
+  const to = day(ctx.get.hc_to);
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (reason !== '') { where.push('l.reason = ?'); params.push(reason); }
+  if (query !== '') {
+    const like = '%' + query.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+    where.push('(u.full_name LIKE ? OR u.email LIKE ? OR u.username LIKE ?)');
+    params.push(like, like, like);
+  }
+  if (from !== '') { where.push('l.created_at >= ?'); params.push(from + ' 00:00:00'); }
+  if (to !== '') { where.push('l.created_at <= ?'); params.push(to + ' 23:59:59'); }
+  const cond = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const total = intval(await value(`SELECT COUNT(*) FROM honeycomb_ledger l JOIN users u ON u.id = l.user_id ${cond}`, params));
+  const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+  const pageNow = Math.min(pageNo(ctx.get.hc_p), pages);
+  const rows = await q(`SELECT l.*, u.full_name, u.email, a.full_name AS admin_name, a.email AS admin_email FROM honeycomb_ledger l JOIN users u ON u.id = l.user_id
+      LEFT JOIN users a ON a.id = l.actor_id ${cond} ORDER BY l.id DESC LIMIT ${PER_PAGE} OFFSET ${(pageNow - 1) * PER_PAGE}`, params);
+  const reversed = await reversedIds(rows.map((r) => intval(r.id)));
+  let o = `                <div class="${CARD} overflow-hidden" id="hcLedger">\n` + cardHead('bx-list-ul', 'Ledger')
+    + `                    <form action="/admin#honeycombs" method="GET" class="p-5 sm:p-6 border-b border-bordercolor grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">`
+    + '<input type="hidden" name="hc_tab" value="ledger">\n'
+    + `                        <div><label class="${SMALL}" for="hcLReason">Reason</label><select id="hcLReason" name="hc_reason" class="${IN}"><option value="">All</option>`
+    + LEDGER_REASONS.map(([k, label]) => `<option value="${k}"${k === reason ? ' selected' : ''}>${e(label)}</option>`).join('') + '</select></div>\n'
+    + `                        <div><label class="${SMALL}" for="hcLUser">User</label><input id="hcLUser" type="search" name="hc_q" maxlength="100" value="${e(query)}" placeholder="Name or email" class="${IN}"></div>\n`
+    + `                        <div><label class="${SMALL}" for="hcLFrom">From</label><input id="hcLFrom" type="date" name="hc_from" value="${e(from)}" class="${IN}"></div>\n`
+    + `                        <div><label class="${SMALL}" for="hcLTo">To</label><input id="hcLTo" type="date" name="hc_to" value="${e(to)}" class="${IN}"></div>\n`
+    + `                        <div><button type="submit" class="${BTN}"><i class='bx bx-filter-alt'></i> Filter</button></div>\n`
+    + '                    </form>\n';
+  if (!rows.length) {
+    o += '                    <p class="p-5 sm:p-6 text-sm text-gray-500">No entries found.</p>\n';
+  } else {
+    o += '                    <ul class="divide-y divide-bordercolor text-sm px-5 sm:px-6" id="hcLedgerRows">\n';
+    for (const l of rows) {
+      const name = phpStr(userName(l));
+      const by = l.actor_id !== null ? ' · by ' + phpStr(phpStr(l.admin_name ?? '') !== '' ? l.admin_name : (l.admin_email ?? '#' + intval(l.actor_id))) : '';
+      o += `                        <li class="py-2.5 flex flex-wrap items-center justify-between gap-3" data-ledger="${intval(l.id)}"><span class="min-w-0"><a href="/admin?hc_tab=users&amp;hc_user=${intval(l.user_id)}#honeycombs" class="text-white hover:underline">${e(name)}</a> · <span class="text-gray-300">${e(hcDescribe(l))}</span>`
+        + `<span class="block text-xs text-gray-500">${e(when(l.created_at))}${e(by)}</span></span><span class="flex items-center gap-3">${amountHtml(intval(l.amount))}${reverseForm(csrf, l, name, reversed, 'ledger')}</span></li>\n`;
+    }
+    o += '                    </ul>\n';
+  }
+  if (pages > 1) {
+    const qs = (n: number): string => '/admin?hc_tab=ledger' + (reason ? '&amp;hc_reason=' + reason : '') + (query ? '&amp;hc_q=' + encodeURIComponent(query) : '')
+      + (from ? '&amp;hc_from=' + from : '') + (to ? '&amp;hc_to=' + to : '') + '&amp;hc_p=' + n + '#honeycombs';
+    o += `                    <div class="flex items-center justify-between gap-3 p-4 border-t border-bordercolor text-xs text-gray-500"><span>Page ${pageNow} of ${pages} · ${numberFormat(total)} entries</span><span class="flex gap-1.5">`
+      + (pageNow > 1 ? `<a href="${qs(pageNow - 1)}" class="${BTN}">Previous</a>` : '') + (pageNow < pages ? `<a href="${qs(pageNow + 1)}" class="${BTN}">Next</a>` : '') + '</span></div>\n';
+  }
+  return o + '                </div>\n';
+}
+
+// ---------------------------------------------------------------- Event-Codes (HC-9)
+
+const CODE_BADGES: Readonly<Record<ReturnType<typeof codeStatus>, string>> = {
+  running: 'bg-emerald-500/15 text-emerald-400', scheduled: 'bg-sky-500/15 text-sky-400', ended: 'bg-white/5 text-gray-400', off: 'bg-white/5 text-gray-400', 'used up': 'bg-white/5 text-gray-400',
+};
+
+// Anlegen (Code, Betrag, Zeitraum, höchstens so oft, Mindestalter, Notiz) und Liste mit „Disable“
+async function codesTab(csrf: string, now: string): Promise<string> {
+  let o = `                <div class="${CARD} p-5 sm:p-6" id="hcCodeCreate">\n` + `                    <div class="flex items-center gap-3 mb-5 border-b border-bordercolor pb-4"><i class='bx bx-purchase-tag-alt text-2xl text-yellow-400'></i><h2 class="text-base font-semibold text-white">Create a code</h2></div>\n`
+    + `                    <form action="/admin" method="POST" class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="hcCodeForm">` + csrf.trim() + '<input type="hidden" name="hc_action" value="code_create">\n'
+    + `                        <div><label class="${LBL}" for="hcCode">Code</label><input id="hcCode" type="text" name="code" minlength="4" maxlength="32" pattern="[A-Za-z0-9\\-]{4,32}" title="4–32 letters, digits or dashes – empty: a random code" placeholder="Empty: a random code" autocomplete="off" class="${IN} uppercase"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeAmount">Amount</label><input id="hcCodeAmount" type="number" name="amount" required min="1" max="${CODE_MAX_AMOUNT}" step="1" placeholder="50" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeNote">Note <span class="text-gray-500 font-normal">(in their history)</span></label><input id="hcCodeNote" type="text" name="note" maxlength="150" placeholder="Halloween 2026" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeFrom">From <span class="text-gray-500 font-normal">(optional)</span></label><input id="hcCodeFrom" type="datetime-local" name="starts_at" class="${IN}"></div>\n`
+    + `                        <div><label class="${LBL}" for="hcCodeTo">Until <span class="text-gray-500 font-normal">(optional)</span></label><input id="hcCodeTo" type="datetime-local" name="ends_at" class="${IN}"></div>\n`
+    + `                        <div class="grid grid-cols-2 gap-3"><div><label class="${LBL}" for="hcCodeMax">Max. uses</label><input id="hcCodeMax" type="number" name="max_uses" min="1" step="1" placeholder="No limit" class="${IN}"></div>`
+    + `<div><label class="${LBL}" for="hcCodeAge">Min. age (days)</label><input id="hcCodeAge" type="number" name="min_account_days" min="0" max="3650" step="1" value="0" class="${IN}"></div></div>\n`
+    + `                        <div class="sm:col-span-3"><button type="submit" class="${SUBMIT}"><i class='bx bx-plus'></i> Create code</button><p class="text-xs text-gray-500 mt-2">Each account can redeem a code once. Codes don’t count towards the daily limit.</p></div>\n`
+    + '                    </form>\n                </div>\n';
+  const rows = await q<CodeRow>('SELECT * FROM hc_codes ORDER BY id DESC LIMIT 200');
+  o += `                <div class="${CARD} overflow-hidden" id="hcCodes">\n` + cardHead('bx-list-ul', 'Codes');
+  if (!rows.length) return o + '                    <p class="p-5 sm:p-6 text-sm text-gray-500">No codes yet.</p>\n                </div>\n';
+  o += '                    <ul class="divide-y divide-bordercolor text-sm px-5 sm:px-6" id="hcCodeRows">\n';
+  for (const c of rows) {
+    const st = codeStatus(c, now);
+    const win = (c.starts_at ? 'from ' + date('M j, Y H:i', stamp(c.starts_at)) : '') + (c.ends_at ? (c.starts_at ? ' ' : '') + 'until ' + date('M j, Y H:i', stamp(c.ends_at)) : '');
+    o += `                        <li class="py-3 flex flex-wrap items-center justify-between gap-3" data-code="${intval(c.id)}"><span class="min-w-0"><span class="font-mono text-white">${e(c.code)}</span> <span class="${BADGE} ${CODE_BADGES[st]}">${e(st)}</span>`
+      + `<span class="block text-xs text-gray-500">${numberFormat(intval(c.amount))} honeycombs · ${numberFormat(intval(c.uses))}${c.max_uses !== null ? ' / ' + numberFormat(intval(c.max_uses)) : ''} uses${win ? ' · ' + e(win) : ''}${intval(c.min_account_days) > 0 ? ' · accounts ≥ ' + intval(c.min_account_days) + ' days' : ''}${phpStr(c.note) ? ' · ' + e(c.note) : ''}</span></span>`;
+    if (c.disabled_at === null && st !== 'ended') {
+      o += `<form action="/admin" method="POST" class="m-0"${confirmAttrs({ title: 'Turn off the code ' + phpStr(c.code) + '?', text: 'Nobody can redeem it any more. Honeycombs already given stay.', ok: 'Turn off', tone: 'danger' })}>`
+        + csrf.trim() + confirmField() + `<input type="hidden" name="hc_action" value="code_disable"><input type="hidden" name="code_id" value="${intval(c.id)}"><button type="submit" class="${BTN} hover:text-red-400"><i class='bx bx-block'></i> Disable</button></form>`;
+    }
+    o += '</li>\n';
+  }
+  return o + '                    </ul>\n                </div>\n';
+}
+
+// Honigwaben an mehrere Nutzer: Formular mit der Liste und – nach „Check list“ – die Vorschau aus der Sitzung
+function bulkCard(csrf: string, preview: ReturnType<typeof bulkFromSession>): string {
+  let o = `                <details class="${CARD} p-5 sm:p-6" id="hcBulk"${preview ? ' open' : ''}><summary class="cursor-pointer text-sm font-semibold text-white flex items-center gap-2"><i class='bx bx-group text-xl text-yellow-400'></i> Give honeycombs to several users</summary>\n`
+    + `                    <form action="/admin" method="POST" class="space-y-4 mt-4" id="hcBulkForm">` + csrf.trim() + `<input type="hidden" name="hc_action" value="grant_preview"><input type="hidden" name="grant_ref" value="${randomHex(8)}">\n`
+    + `                        <div><label class="${LBL}" for="hcBulkList">Users</label><textarea id="hcBulkList" name="user_list" rows="5" required maxlength="20000" class="${IN} font-mono" placeholder="mia@example.com&#10;#42&#10;@tom">${preview ? e([...preview.found.map((f) => f.email), ...preview.unclear, ...preview.missing].join('\n')) : ''}</textarea>`
+    + `<p class="text-xs text-gray-500 mt-1">One per line: an email, #id or @name. Up to 200.</p></div>\n`
+    + `                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4"><div><label class="${LBL}" for="hcBulkAmount">Amount</label><input id="hcBulkAmount" type="number" name="amount" required min="-100000" max="100000" step="1" placeholder="50" value="${preview ? preview.amount : ''}" class="${IN}"></div>`
+    + `<div class="sm:col-span-2"><label class="${LBL}" for="hcBulkNote">Note <span class="text-gray-500 font-normal">(the users see it)</span></label><input id="hcBulkNote" type="text" name="note" maxlength="150" value="${preview ? e(preview.note) : ''}" class="${IN}"></div></div>\n`
+    + `                        <button type="submit" class="${BTN}"><i class='bx bx-list-check'></i> Check list</button>\n                    </form>\n`;
+  if (preview) {
+    const ok = preview.found.filter((f) => !f.belowZero);
+    const sign = preview.amount > 0 ? '+' : '−';
+    o += `                    <div class="mt-5 border-t border-bordercolor pt-5 space-y-3" id="hcBulkPreview"><h3 class="text-sm font-semibold text-white">${sign}${numberFormat(Math.abs(preview.amount))} honeycombs for ${ok.length} user${ok.length === 1 ? '' : 's'}</h3>\n`;
+    if (preview.found.length) {
+      o += '                        <ul class="divide-y divide-bordercolor text-sm">\n';
+      for (const f of preview.found) {
+        o += `                            <li class="py-2 flex flex-wrap items-center justify-between gap-2"><span class="min-w-0"><span class="text-white">${e(f.name)}</span> <span class="text-gray-500 break-all">${e(f.email)}</span></span>`
+          + `<span class="text-xs ${f.belowZero ? 'text-red-400' : 'text-gray-400'}">Balance ${numberFormat(f.balance)}${f.belowZero ? ' – would go below 0, skipped' : ''}</span></li>\n`;
+      }
+      o += '                        </ul>\n';
+    }
+    if (preview.unclear.length) o += `                        <p class="text-xs text-amber-400">Not clear – use #id, @name or an email: ${e(preview.unclear.join(', '))}</p>\n`;
+    if (preview.missing.length) o += `                        <p class="text-xs text-amber-400">Not found: ${e(preview.missing.join(', '))}</p>\n`;
+    o += '                        <div class="flex flex-wrap gap-2">';
+    if (ok.length) {
+      o += `<form action="/admin" method="POST" class="m-0"${confirmAttrs({ title: 'Send ' + sign + numberFormat(Math.abs(preview.amount)) + ' honeycombs to ' + ok.length + ' user' + (ok.length === 1 ? '' : 's') + '?', text: 'Each of them gets a notification' + (preview.note ? ' with your note' : '') + '.', ok: 'Send', tone: preview.amount < 0 ? 'danger' : 'warn' })}>`
+        + csrf.trim() + confirmField() + `<input type="hidden" name="hc_action" value="grant_bulk"><input type="hidden" name="grant_ref" value="${e(preview.ref)}"><button type="submit" class="${SUBMIT}"><i class='bx bx-check'></i> Confirm</button></form>`;
+    }
+    o += `<form action="/admin" method="POST" class="m-0">` + csrf.trim() + `<input type="hidden" name="hc_action" value="grant_bulk_cancel"><button type="submit" class="${BTN}"><i class='bx bx-x'></i> Cancel</button></form></div>\n                    </div>\n`;
+  }
+  return o + '                </details>\n';
+}
+
 // ---------------------------------------------------------------- Details eines Nutzers (HC-6a)
 
 // Kontostand, Freischaltungen (mit „Give unlock“ und „Remove“), Käufe (mit „Refund“), Buchungen und Protokoll
@@ -601,6 +761,15 @@ async function userDetails(csrf: string, uid: number, now: string): Promise<stri
     + `                    <div class="p-5 sm:p-6 space-y-6">\n`
     + `                        <p class="text-sm text-gray-400"><span class="break-all">${e(user.email)}</span> · #${uid} · Balance <span class="font-bold text-white">${numberFormat(balance)}</span> <i class='bx bx-hive text-yellow-400'></i>`
     + (acc && acc.frozen_at !== null ? ` <span class="${BADGE} bg-sky-500/15 text-sky-400">Frozen</span>` : '') + '</p>\n';
+  // Anhalten (mit Grund, den der Nutzer sieht) oder wieder freigeben
+  if (acc && acc.frozen_at !== null) {
+    o += `                        <form action="/admin" method="POST" class="flex flex-wrap items-center gap-3 text-sm" id="hcFreeze"${confirmAttrs({ title: 'Let ' + name + ' use honeycombs again?', ok: 'Unfreeze' })}>` + base + confirmField() + hidden('hc_action', 'unfreeze')
+      + `<span class="text-gray-400">On hold since ${e(when(acc.frozen_at))}: ${e(acc.frozen_reason ?? '')}</span><button type="submit" class="${BTN}"><i class='bx bx-play-circle'></i> Unfreeze</button></form>\n`;
+  } else {
+    o += `                        <form action="/admin" method="POST" class="flex flex-wrap items-end gap-3" id="hcFreeze"${confirmAttrs({ title: 'Put ' + name + '’s honeycombs on hold?', text: 'Earning and buying stop until you unfreeze them. Their unlocks keep working.', ok: 'Put on hold', tone: 'danger' })}>` + base + confirmField() + hidden('hc_action', 'freeze')
+      + `<div class="flex-1 min-w-[12rem]"><label class="${SMALL}" for="hcFreezeReason">Put on hold <span class="text-gray-500 font-normal">(the user sees the reason)</span></label><input id="hcFreezeReason" type="text" name="reason" required maxlength="200" placeholder="e.g. We’re checking unusual activity." class="${IN}"></div>`
+      + `<button type="submit" class="${BTN} hover:text-red-400"><i class='bx bx-pause-circle'></i> Put on hold</button></form>\n`;
+  }
 
   // Freischaltungen
   const ents = await q<EntRow>('SELECT * FROM hc_entitlements WHERE user_id = ? ORDER BY feature, lot', [uid]);
@@ -674,8 +843,9 @@ async function userDetails(csrf: string, uid: number, now: string): Promise<stri
     o += '                            <p class="text-sm text-gray-500">No entries yet.</p>\n';
   } else {
     o += '                            <ul class="divide-y divide-bordercolor text-sm" id="hcUserLedger">\n';
+    const reversed = await reversedIds(ledger.map((l) => intval(l.id)));
     for (const l of ledger) {
-      o += `                                <li class="py-2 flex items-center justify-between gap-3"><span class="min-w-0"><span class="text-gray-300">${e(hcDescribe(l))}</span><span class="block text-xs text-gray-500">${e(when(l.created_at))}</span></span>${amountHtml(intval(l.amount))}</li>\n`;
+      o += `                                <li class="py-2 flex items-center justify-between gap-3" data-ledger="${intval(l.id)}"><span class="min-w-0"><span class="text-gray-300">${e(hcDescribe(l))}</span><span class="block text-xs text-gray-500">${e(when(l.created_at))}</span></span><span class="flex items-center gap-3">${amountHtml(intval(l.amount))}${reverseForm(csrf, l, name, reversed, '')}</span></li>\n`;
     }
     o += '                            </ul>\n';
   }

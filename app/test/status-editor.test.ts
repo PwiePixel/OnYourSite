@@ -94,8 +94,10 @@ test('who may: 401 without login, 419 without CSRF, 403 for users, in admin mode
   ctx = await api('status', { userId: USER, method: 'GET', query: '' });
   assert.equal(ctx.status, 403);
   assert.deepEqual(body(ctx), { ok: false, error: 'Unlock status pages with honeycombs first.' });
+  // Ein Admin ohne scope=system ist ein Nutzer – mit eingeschlossener Freischaltung, aber (noch) ohne eigene Seite
   ctx = await api('status-monitors', { userId: ADMIN, method: 'GET', query: '' });
-  assert.equal(ctx.status, 403, 'an admin without scope=system is a user too');
+  assert.equal(ctx.status, 404, 'an admin without scope=system is a user too');
+  assert.deepEqual(body(ctx), { ok: false, error: 'Create your status page first.' });
   assert.equal((await sql('SELECT title FROM `DB`.status_pages WHERE id = ?', [pageId]))[0].title, 'OnYourSite status');
   // Unbekannte Aktion, falsche Methode
   ctx = await get('status-nope');
