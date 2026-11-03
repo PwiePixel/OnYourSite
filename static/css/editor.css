@@ -468,6 +468,9 @@ input[type=range].range { width: 100%; accent-color: var(--e-brand); }
 .shop-banner { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; margin-bottom: 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
 .shop-banner > i { font-size: 20px; flex: none; }
 .shop-banner.warn { background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .3); color: #fcd34d; }
+.shop-banner.ended { background: rgba(255, 255, 255, .03); border: 1px solid var(--e-line, rgba(255, 255, 255, .1)); color: #d4d4d8; }
+.shop-end { align-items: center; flex-wrap: wrap; }
+.shop-end-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .shop-banner.info { background: rgba(99, 102, 241, .08); border: 1px solid rgba(99, 102, 241, .3); color: #c7d2fe; }
 .hc-rule.soon small { color: #fbbf24; }
 .hc-rule.ended { opacity: .65; }

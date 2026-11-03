@@ -217,6 +217,18 @@ export async function dbReachable(): Promise<void> {
   throw new DbUnavailableError(`database unavailable (${lastCode})`);
 }
 
+// Eine Verbindung, die nicht als „laufender Abschnitt“ gilt: Abfragen in fn über den Pool nehmen eigene Verbindungen.
+// Nur für die Sperre des Hintergrund-Läufers (jobs/registry.ts, eigener kleiner Pool): sie hält GET_LOCK, während die
+// Aufgabe über den Pool arbeitet – die eine erlaubte Ausnahme von der Regel „nie zwei Verbindungen zugleich“.
+export async function withLockConnection<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  const conn = await acquire();
+  try {
+    return await holding.exit(() => pinned.exit(() => fn(facade(conn))));
+  } finally {
+    conn.release();
+  }
+}
+
 // Bewusst außerhalb des laufenden Abschnitts arbeiten (eigene Verbindung), z. B. um eine fremde Sperre zu prüfen
 export function outsidePinned<T>(fn: () => Promise<T>): Promise<T> {
   return pinned.exit(fn);

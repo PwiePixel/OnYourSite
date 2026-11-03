@@ -64,11 +64,12 @@ continue" below.
 | 37 | CS-6 | Code slots in the editor, live: Your pages lists code pages, add and delete them, Edit switches a slot between link page and code page, Subdomain sections (on `feature/owner-decisions`) | Built (core; rest below) |
 | 38 | ST-4 | Status pages for users: `status_page` in the shop (150), the Status tab, one page with components, deleted with the account; refreshed components (on `feature/owner-decisions`) | Built (first part; rest below) |
 | 34 | HC-8 | Streaks and the daily cap: `earnOnVisit()` (`app/src/honeycombs/earn.ts`) on `GET /dashboard` – +15 every 7 days and +50 every 30 days in a row (30 wins), daily cap 300 for profile and views under the account lock (NOWAIT), 10-second throttle, nothing while frozen or in admin mode; schema step 19 back-fills streaks from the last 60 days; `honeycombs.streak` in the bootstrap and the `honeycombs` API, `earn.streak`/`capLeft`/`cap` and the rule "Keep a streak" in the shop, the streak chip and the daily-limit hint in the editor, the new fields in *Admin → Honeycombs → Earning rules* (on `feature/hc8-streaks`; tests `app/test/hc-streaks.http.test.ts`, browser flow `tests/e2e/hc-streaks.js`) | Built and reviewed |
+| 39 | HC-7a | Time-limited lifecycle and jobs runner: `app/src/jobs/registry.ts` (`registerJob`, `registerNightly`, `GET_LOCK` per job, schema minimum, `oys_meta['jobs']` with `at`/`every` for the status page's `job:runner`), `cli.js jobs:tick [--force]` with its own pool of 3, the honeycomb job `app/src/honeycombs/job.ts` (reconcile retries after 30 s, bell reminders at 7/3/1 days with the loss-preview lines, expiry once per lot with bell, marker and reconcile, nightly entitlement repair), `LIFECYCLE_READY` on (admins can switch on timed options – Premium can be sold), expiry banners in the shop (ends within 3 days: hide for today; Premium ended within 14 days: dismiss), installer `onyoursite-jobs.service`/`.timer` (written and enabled by `write_timers`, stopped by `--reset`, removed when an update goes back to PHP) (on `feature/hc7a-lifecycle`, based on `feature/hc8-streaks`; tests `app/test/hc-jobs.db.test.ts`, `cli.test.ts`, `install-sh.test.ts`, browser flow `tests/e2e/hc-lifecycle.js`) | Built and reviewed |
 | – | all others | | Open |
 
 Next, as soon as their dependencies are in:
 - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, domain worker unit).
-- Shop: HC-7a (switches on Premium and timed options), HC-6b, HC-9, HC-7b (HC-8 is on `feature/hc8-streaks`).
+- Shop: HC-6b, HC-9, HC-7b (HC-8 is on `feature/hc8-streaks`, HC-7a on `feature/hc7a-lifecycle`).
 - Status pages: the rest of ST-4 (see follow-ups), then ST-5, ST-7.
 - Code pages: CS-5 (moderation) and the rest of CS-6 (see follow-ups).
 - Later (Stage C): `ROADMAP.md` §4.2.
@@ -85,7 +86,7 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8, on its bra
    (never push to `main` directly). On `main` 1012 tests pass (1035 with `feature/owner-decisions`) (`cd app && npx tsc --noEmit -p . && npm test`; with
    `OYS_PHP_REF=<php-2.x checkout>` the PHP comparisons run too).
 3. **Next roadmap items, in dependency order** (`ROADMAP.md` §4.0/§4.1):
-   - Shop: HC-8 is on `feature/hc8-streaks`; then HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
+   - Shop: HC-8 is on `feature/hc8-streaks`, HC-7a on `feature/hc7a-lifecycle`; done there: HC-7a (time-limited lifecycle – switches on Premium and timed options), HC-6b, HC-9, HC-7b.
    - Premium and domains: PD-5 (domains admin), PD-6 (installer: Cloudflare for SaaS, systemd unit for the domain
      worker).
    - Code pages: CS-5 (moderation), the rest of CS-6.
@@ -112,6 +113,14 @@ records, 17 domain blocks, 18 code slots live, 19 shop streaks (HC-8, on its bra
      "page already over a lowered limit" rule); the terms page doesn't show the limits and both prices yet; nobody is
      told when a refund takes code pages offline (needs notifications with `ref`, CS-5); the editor bootstrap still
      lacks `pages[].code` and the code summary (CS-6).
+   - HC-7a: not built – the integrity checks and watch rules of §3.5 (`hc_watch`) in the nightly run, the admin
+     overview of the job runs (the status page's `job:runner` reads `oys_meta['jobs']`), auto-renew (HC-7c) and the
+     reminder/ended mails (HC-7b). Reminders and ends are bell notifications only. The domains worker and the
+     notification retention still run on their own (they may register in the runner later). Known limits: a failed
+     nightly run waits for the next day; entries of jobs that no longer exist stay in `oys_meta['jobs']` (the status
+     page would show them as late – remove the key by hand after renaming a job); the reconcile step has no backoff for
+     accounts that keep failing (200 per run, oldest first); the bell body is cut at 255 characters, so long loss-preview
+     lines can be shortened.
    - HC-8: `hcEarn()` stays for the PHP comparison only; a PHP rollback drops the new keys (`streak_week`,
      `streak_month`, `daily_cap`) from the rules when an admin saves them there; the streak counts a day once the editor
      opens, also when the daily reward is 0 (the design says "if the daily row was booked"; counting the day itself also

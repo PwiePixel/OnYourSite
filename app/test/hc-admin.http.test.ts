@@ -58,6 +58,8 @@ const TEST_FEATURES: Feature[] = [
 ];
 
 before(async () => {
+  // Diese Abläufe prüfen zuerst den Stand vor HC-7a (zeitlich begrenzt gesperrt) und schalten es selbst ein
+  setLifecycleReadyForTests(false);
   t = await testDatabase('hcadmin', { empty: true });
   await ensureSchema();
   const user = 'INSERT INTO `DB`.users (id, email, password, full_name, is_admin, created_at) VALUES (?, ?, \'x\', ?, ?, ?)';
@@ -70,7 +72,7 @@ before(async () => {
 });
 
 after(async () => {
-  setLifecycleReadyForTests(false);
+  setLifecycleReadyForTests(true);
   for (const f of TEST_FEATURES) unregisterFeatureForTests(f.key);
   await t.done();
 });
