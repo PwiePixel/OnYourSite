@@ -1,0 +1,51 @@
+/* =============================================================
+   Saison-Thema „Winter“ für OnYourSites eigene Seiten (Admin → Seasons)
+   Nur Deko über der Seite: fallender Schnee in zwei Ebenen, ein frostiger
+   Schein und eine Eislinie oben, eisblaue Akzente. Nichts fängt Klicks ab,
+   und ohne Bewegung (prefers-reduced-motion) bleibt der Schnee stehen.
+   ============================================================= */
+.oys-season { position: fixed; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; }
+.oys-season > span { position: absolute; display: block; pointer-events: none; }
+
+/* Schnee: kleine weiße Punkte, die langsam schräg fallen. Jede Bewegung endet auf einer ganzen Kachel (sonst springt
+   der Schnee beim Neustart der Schleife); über dem Inhalt, unter Navigation und Hinweisen der Seiten (z-50) */
+.oys-season-1, .oys-season-2 { inset: 0; }
+.oys-season-1 {
+  background-image:
+    radial-gradient(4px 4px at 30px 40px, rgba(255, 255, 255, .95) 45%, transparent 60%),
+    radial-gradient(3px 3px at 120px 150px, rgba(255, 255, 255, .9) 45%, transparent 60%),
+    radial-gradient(5px 5px at 210px 70px, rgba(232, 241, 255, .9) 45%, transparent 60%),
+    radial-gradient(3px 3px at 260px 230px, rgba(255, 255, 255, .85) 45%, transparent 60%),
+    radial-gradient(4px 4px at 80px 260px, rgba(255, 255, 255, .9) 45%, transparent 60%);
+  background-size: 300px 300px;
+  opacity: .75;
+  animation: oys-season-snow 20s linear infinite;
+}
+.oys-season-2 {
+  background-image:
+    radial-gradient(2.5px 2.5px at 50px 90px, rgba(255, 255, 255, .85) 45%, transparent 60%),
+    radial-gradient(2px 2px at 160px 30px, rgba(219, 234, 254, .85) 45%, transparent 60%),
+    radial-gradient(3px 3px at 200px 180px, rgba(255, 255, 255, .8) 45%, transparent 60%),
+    radial-gradient(2px 2px at 110px 210px, rgba(255, 255, 255, .8) 45%, transparent 60%);
+  background-size: 230px 230px;
+  opacity: .55;
+  animation: oys-season-snow-2 13s linear infinite;
+}
+
+/* Frostiger Schein und eine feine Eislinie am oberen Rand */
+.oys-season-3 { left: 0; right: 0; top: 0; height: 260px; background: radial-gradient(70% 100% at 50% 0%, rgba(147, 197, 253, .24), rgba(147, 197, 253, .06) 55%, transparent 75%); }
+.oys-season-3::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, transparent, rgba(191, 219, 254, .85) 30%, rgba(255, 255, 255, .95) 50%, rgba(191, 219, 254, .85) 70%, transparent); }
+
+@keyframes oys-season-snow { from { background-position: 0 0; } to { background-position: 300px 300px; } }
+@keyframes oys-season-snow-2 { from { background-position: 0 0; } to { background-position: -230px 230px; } }
+
+/* Eisblaue Akzente: Fokusrahmen und markierter Text */
+.season-winter ::selection { background: rgba(147, 197, 253, .35); color: #fff; }
+.season-winter a:focus-visible, .season-winter button:focus-visible, .season-winter input:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .oys-season-1, .oys-season-2 { animation: none; }
+}
+@media print {
+  .oys-season { display: none; }
+}

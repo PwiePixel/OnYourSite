@@ -76,14 +76,17 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- D1 and D2 are in `main` (PR #22, #23; release 3.2.0). D3 (Christmas themes) and release 3.3.0 are on
-  `feature/d3-christmas-themes`: five themes in the new group `seasonal` (`app/src/content/themes.ts`, end of
-  `static/css/themes.css`: Snowy Night, Candy Cane, Gingerbread, Christmas Market, Frost), the editor filter
-  "Winter & Christmas" with a "Winter" tag. PHP never knew them: the PHP comparisons use `test/support/phpThemes.ts`
-  (the 30 old themes), and `test/themes-seasonal.test.ts` checks data, colours and contrast (text 7:1, muted, buttons,
-  accent on the icon background for initials and countdown numbers), demo pages and minis; browser flow
-  `tests/e2e/themes-winter.js`. Release notes for /updates: `app/src/updates/releaseNotes.ts`. Next: D6 (`onys.me`),
-  then D5 (docs site) and D4 (beta site).
+- D1–D3 are in `main` (PR #22–#24; releases 3.2.0 and 3.3.0). The owner's next ask came first: *Admin → Seasons* and
+  release 3.4.0 are on `feature/seasons`. `app/src/seasons/seasons.ts` holds the season themes (first: `winter`,
+  CSS in `static/css/season-winter.css`), the settings in `oys_meta['site_seasons']` (Off / On / Automatic with
+  month-day dates, also across the new year; winter starts as Automatic 12-01 to 01-06 until the admin saves; cached
+  15 s per process) and `applySeason()`, which adds the stylesheet,
+  the class `season-<key>` on `<body>` and the decoration. Routes mark OnYourSite's own pages with
+  `ctx.seasonPage` (`isSeasonPath()` in `app/src/app/dispatch.ts`, the 404 page in `public/notFound.ts`), and
+  `server.ts` calls `seasonalBody()` after every request; `?season_preview=<key>` shows a theme while it is off. Users'
+  pages, the editor and the admin never get it; with no theme active every page stays byte for byte as before (the
+  PHP comparisons are untouched). Admin section: `app/src/seasons/admin.ts` (`season_action=save`). Tests:
+  `app/test/seasons.test.ts`, browser flow `tests/e2e/seasons.js`. Next: D6 (`onys.me`), then D5 (docs) and D4 (beta).
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the

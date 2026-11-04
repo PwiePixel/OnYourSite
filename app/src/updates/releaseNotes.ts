@@ -19,6 +19,11 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '3.4.0', category: 'improved', title: 'OnYourSite gets ready for winter', announce: true,
+    body: '- **A winter look for OnYourSite** – gently falling snow and a frosty glow on our home page, the log in page, updates and roadmap during the holidays\n'
+      + '- Your own page stays exactly as you made it – pick one of the five winter themes in the editor under **Design → Winter & Christmas** if you like',
+  },
+  {
     version: '3.3.0', category: 'new', title: 'Five new themes for winter and Christmas', announce: true,
     body: 'Get your page ready for the holidays:\n\n'
       + '- **Snowy Night** – falling snow under the moon\n'

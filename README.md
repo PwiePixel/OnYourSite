@@ -102,6 +102,10 @@ Everything is managed in the admin panel (`/admin`):
 
 Every update has a permanent link `/updates/<number>` – Discord posts and the feed use it, so it keeps working when older updates move to page 2. The roadmap has its own page at `/roadmap`, and `/suggestions` appears once the team turns it on under **Admin → Community**; the three pages link to each other. After the update to 3.1, the release notes of versions 2.0 to 2.2 are published on `/updates` and listed under “Shipped” while the roadmap is still empty (drafts you changed and versions you entered yourself stay as they are). The notes for 3.0 and 3.1 wait as drafts – read them and publish them with one click. Only 3.1 is announced on Discord when published; use “Post to Discord” if you want 3.0 there too.
 
+## Seasons
+
+*Admin → Seasons* decorates OnYourSite’s own pages for a season – the home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page; users’ pages, the editor and the admin panel stay as they are. Each theme is **Off**, **On** or **Automatic** (every year between two dates, e.g. `12-01` to `01-06`), and *Preview* opens the home page with the theme without turning it on. The first theme is **Winter** (falling snow, a frosty glow, icy blue accents; CSS only in `static/css/season-winter.css`); it starts as Automatic from December 1 to January 6. New themes are added in `app/src/seasons/seasons.ts`.
+
 ## Development
 
 You need Node.js 22 and MariaDB (or MySQL).
@@ -167,6 +171,7 @@ app/                   The website (Node.js 22, TypeScript, Fastify)
   src/honeycombs/      Honeycombs: earning, giving, ledger, shop, offers, refunds, Premium
   src/code/            Code pages: files, limits, slots, delivery in the sandbox, Code Page Terms
   src/status/          Status pages: checker, notifier, incidents and maintenance, the public page
+  src/seasons/         Season themes for OnYourSite’s own pages and Admin → Seasons
   src/domains/         Custom domains (Premium): host routing, records and the domain worker (Cloudflare for SaaS)
   src/notify/          Notifications for the bell
   src/community/       Discord bot connection: suggestions, support tickets, queue for the bot

@@ -14,6 +14,7 @@ import { adminApi } from '../admin/api.js';
 import { roadmapPage, updateLink, updatesFeed, updatesPage } from '../updates/pages.js';
 import { notFound } from '../public/notFound.js';
 import { suggestionLink, suggestionsPage } from '../community/suggestionsPage.js';
+import { isSeasonPath } from '../seasons/seasons.js';
 
 // Startseite und Updates setzen für Besucher kein Cookie
 const COOKIELESS = new Set(['/', '/updates', '/updates/feed.xml', '/roadmap', '/suggestions']);
@@ -25,6 +26,9 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
   const path = ctx.path;
   const cookieless = COOKIELESS.has(path) || /^\/(updates|suggestions)\/\d+$/.test(path);
   if (!cookieless || ctx.cookie(SESSION_COOKIE) !== undefined) await Session.start(ctx);
+
+  // Saison-Thema (Admin → Seasons) für die eigenen Seiten; nur auf der Hauptseite, nie auf einer eigenen Domain
+  if (!ctx.customDomain && isSeasonPath(path)) ctx.seasonPage = true;
 
   const page = STATIC.get(path);
   if (page) return staticPage(ctx, page);

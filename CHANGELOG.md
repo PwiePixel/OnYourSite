@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-04
+
+### Added
+- *Admin → Seasons*: season themes for OnYourSite’s own pages (home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page). Each theme is Off, On or Automatic between two dates every year (also across the new year), with a preview. Users’ pages, the editor and the admin panel stay as they are.
+- The first season theme, **Winter**: gently falling snow, a frosty glow at the top and icy blue accents – CSS only, it lets every click through and stands still when the device asks for less motion. It starts as Automatic from December 1 to January 6 – switch it off or change the dates in *Admin → Seasons*.
+
 ## [3.3.0] - 2026-11-04
 
 ### Added
