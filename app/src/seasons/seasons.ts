@@ -22,7 +22,7 @@ export interface SeasonSetting { mode: SeasonMode; from: string; to: string }
 
 export const SEASONS: Readonly<Record<string, SeasonTheme>> = Object.freeze({
   winter: Object.freeze({
-    name: 'Winter', desc: 'Gently falling snow, a frosty glow at the top and icy blue accents.',
+    name: 'Winter', desc: 'Falling snow, fairy lights along the top, a Santa hat on the logo and a frosty glow.',
     css: '/static/css/season-winter.css', mode: 'auto', from: '12-01', to: '01-06', swatch: '#bfdbfe',
   }),
 });
@@ -106,7 +106,9 @@ export function applySeason(html: string, key: string): string {
   let body = bodyMatch[0];
   const cls = /\sclass="([^"]*)"/i.exec(body);
   body = cls ? body.replace(cls[0], ' class="' + (cls[1] ? cls[1] + ' ' : '') + 'season-' + key + '"') : body.replace(/>$/, ' class="season-' + key + '">');
-  const deco = '<div class="oys-season" aria-hidden="true"><span class="oys-season-1"></span><span class="oys-season-2"></span><span class="oys-season-3"></span></div>';
+  // Deko unter der Navigation (Schnee, Schein) und – als eigenes Element darüber – die Lichterkette am oberen Rand
+  const deco = '<div class="oys-season" aria-hidden="true"><span class="oys-season-1"></span><span class="oys-season-2"></span><span class="oys-season-3"></span></div>'
+    + '<div class="oys-season-lights" aria-hidden="true"></div>';
   const link = '<link rel="stylesheet" href="' + asset(theme.css) + '">';
   const afterBody = bodyMatch.index + bodyMatch[0].length;
   return html.slice(0, head) + link + html.slice(head, bodyMatch.index) + body + deco + html.slice(afterBody);

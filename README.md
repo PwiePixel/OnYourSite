@@ -104,7 +104,7 @@ Every update has a permanent link `/updates/<number>` – Discord posts and the 
 
 ## Seasons
 
-*Admin → Seasons* decorates OnYourSite’s own pages for a season – the home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page; users’ pages, the editor and the admin panel stay as they are. Each theme is **Off**, **On** or **Automatic** (every year between two dates, e.g. `12-01` to `01-06`), and *Preview* opens the home page with the theme without turning it on. The first theme is **Winter** (falling snow, a frosty glow, icy blue accents; CSS only in `static/css/season-winter.css`); it starts as Automatic from December 1 to January 6. New themes are added in `app/src/seasons/seasons.ts`.
+*Admin → Seasons* decorates OnYourSite’s own pages for a season – the home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page; users’ pages, the editor and the admin panel stay as they are. Each theme is **Off**, **On** or **Automatic** (every year between two dates, e.g. `12-01` to `01-06`), and *Preview* opens the home page with the theme without turning it on. The first theme is **Winter** (falling snow, fairy lights along the top, a Santa hat on the logo, a frosty glow, icy blue accents; CSS only in `static/css/season-winter.css`); it starts as Automatic from December 1 to January 6. New themes are added in `app/src/seasons/seasons.ts`.
 
 ## Development
 

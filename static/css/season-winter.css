@@ -1,7 +1,8 @@
 /* =============================================================
    Saison-Thema „Winter“ für OnYourSites eigene Seiten (Admin → Seasons)
    Nur Deko über der Seite: fallender Schnee in zwei Ebenen, ein frostiger
-   Schein und eine Eislinie oben, eisblaue Akzente. Nichts fängt Klicks ab,
+   Schein und eine Eislinie oben, eine Lichterkette, eine Weihnachtsmütze auf
+   dem Logo, eisblaue Akzente. Nichts fängt Klicks ab,
    und ohne Bewegung (prefers-reduced-motion) bleibt der Schnee stehen.
    ============================================================= */
 .oys-season { position: fixed; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; }
@@ -39,13 +40,50 @@
 @keyframes oys-season-snow { from { background-position: 0 0; } to { background-position: 300px 300px; } }
 @keyframes oys-season-snow-2 { from { background-position: 0 0; } to { background-position: -230px 230px; } }
 
+/* Weihnachtsmütze auf dem OnYourSite-Logo (Kopfzeile, Anmelden, Registrieren) – nicht auf den Honigwaben im Text */
+.season-winter .bx-hive.text-brand-500, .season-winter .bx-hive.text-white { position: relative; }
+.season-winter .bx-hive.text-brand-500::after, .season-winter .bx-hive.text-white::after {
+  content: ''; position: absolute; left: .34em; top: -.46em; width: .82em; height: .72em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 56'%3E%3Cpath d='M8 42 C12 24 24 8 42 6 C52 5 58 12 58 22 C52 17 45 17 41 22 C37 27 38 35 40 42 Z' fill='%23dc2626'/%3E%3Cpath d='M41 22 C45 17 52 17 58 22 C57 18 54 14 50 13 C46 13 43 17 41 22 Z' fill='%23b91c1c'/%3E%3Cpath d='M18 40 C21 28 28 18 38 13' stroke='%23ef4444' stroke-width='3' stroke-linecap='round' fill='none' opacity='.7'/%3E%3Crect x='3' y='38' width='42' height='13' rx='6.5' fill='%23f8fafc'/%3E%3Crect x='3' y='44' width='42' height='7' rx='3.5' fill='%23e2e8f0'/%3E%3Ccircle cx='57' cy='24' r='6.5' fill='%23f8fafc'/%3E%3Ccircle cx='55.5' cy='26' r='3.5' fill='%23e2e8f0'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: rotate(16deg); transform-origin: 30% 90%;
+  filter: drop-shadow(0 .04em .06em rgba(0, 0, 0, .45));
+  pointer-events: none;
+}
+
+/* Lichterkette am oberen Rand: über der Navigation, so schmal, dass sie nichts verdeckt */
+.oys-season-lights {
+  position: fixed; left: 0; right: 0; top: 0; height: 22px; z-index: 55; pointer-events: none;
+  background:
+    radial-gradient(circle at 20px 13px, #f87171 0 3.5px, rgba(248, 113, 113, .45) 4px, transparent 9px),
+    radial-gradient(circle at 60px 16px, #fcd34d 0 3.5px, rgba(252, 211, 77, .45) 4px, transparent 9px),
+    radial-gradient(circle at 100px 13px, #4ade80 0 3.5px, rgba(74, 222, 128, .45) 4px, transparent 9px),
+    radial-gradient(circle at 140px 16px, #e0f2fe 0 3.5px, rgba(224, 242, 254, .45) 4px, transparent 9px);
+  background-size: 160px 22px;
+  background-repeat: repeat-x;
+  animation: oys-season-lights 3.2s ease-in-out infinite alternate;
+}
+/* Der Draht, an dem die Lichter hängen */
+.oys-season-lights::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 18px;
+  background: radial-gradient(ellipse 22px 9px at 20px 4px, transparent 8px, rgba(15, 23, 42, .9) 8.5px, rgba(15, 23, 42, .9) 9.5px, transparent 10px);
+  background-size: 40px 18px; background-repeat: repeat-x; opacity: .7;
+}
+@keyframes oys-season-lights { from { opacity: .7; filter: saturate(.85); } to { opacity: 1; filter: saturate(1.15); } }
+
+/* Warmer roter und grüner Schimmer in den unteren Ecken */
+.oys-season::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(40% 30% at 0% 100%, rgba(220, 38, 38, .12), transparent 70%), radial-gradient(40% 30% at 100% 100%, rgba(22, 163, 74, .1), transparent 70%);
+}
+
 /* Eisblaue Akzente: Fokusrahmen und markierter Text */
 .season-winter ::selection { background: rgba(147, 197, 253, .35); color: #fff; }
 .season-winter a:focus-visible, .season-winter button:focus-visible, .season-winter input:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .oys-season-1, .oys-season-2 { animation: none; }
+  .oys-season-1, .oys-season-2, .oys-season-lights { animation: none; }
 }
 @media print {
-  .oys-season { display: none; }
+  .oys-season, .oys-season-lights { display: none; }
+  .season-winter .bx-hive::after { display: none; }
 }

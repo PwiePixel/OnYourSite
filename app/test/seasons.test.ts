@@ -52,7 +52,7 @@ test('applying a theme: stylesheet before </head>, a class on <body>, the decora
   const out = applySeason(html, 'winter');
   assert.match(out, /<link rel="stylesheet" href="\/static\/css\/season-winter\.css\?v=[0-9a-f]{8}"><\/head>/);
   assert.match(out, /<body class="bg-black text-white season-winter"><div class="oys-season" aria-hidden="true">/);
-  assert.equal(out.replace(/<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>/, '').replace(' season-winter', '').replace(/<div class="oys-season"[^]*?<\/div>/, ''), html);
+  assert.equal(out.replace(/<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>/, '').replace(' season-winter', '').replace(/<div class="oys-season"[^]*?<\/div><div class="oys-season-lights" aria-hidden="true"><\/div>/, ''), html);
   // <body> ohne Klasse, mit anderen Attributen
   assert.match(applySeason('<html><head></head><body id="b" data-x="1"></body></html>', 'winter'), /<body id="b" data-x="1" class="season-winter"><div class="oys-season"/);
   // Ohne <head> oder <body>, oder ein unbekanntes Thema: unverändert
@@ -66,7 +66,7 @@ test('the snow loops without jumping: every animation ends on a whole tile', () 
   const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8');
   const frames = new Map([...css.matchAll(/@keyframes ([a-z0-9-]+) \{ from \{ background-position: 0 0; \} to \{ background-position: (-?\d+)px (-?\d+)px; \} \}/g)]
     .map((m) => [m[1], [Number(m[2]), Number(m[3])]]));
-  const layers = [...css.matchAll(/background-size: (\d+)px (\d+)px;[\s\S]*?animation: ([a-z0-9-]+) /g)];
+  const layers = [...css.matchAll(/background-size: (\d+)px (\d+)px;[\s\S]*?animation: (oys-season-snow[a-z0-9-]*) /g)];
   assert.equal(layers.length, 2, 'two snow layers');
   for (const [, w, h, name] of layers) {
     const end = frames.get(name);
@@ -76,6 +76,23 @@ test('the snow loops without jumping: every animation ends on a whole tile', () 
   }
   // Unter der Navigation und den Hinweisen der Seiten (z-50), über dem Inhalt
   assert.match(css, /\.oys-season \{ position: fixed; inset: 0; z-index: 40;/);
+});
+
+test('the Santa hat on the logo: a working SVG (no raw “#” in the data address), only on the logo icons, and the fairy lights', () => {
+  const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8');
+  const uris = [...css.matchAll(/url\("data:image\/svg\+xml,([^"]*)"\)/g)].map((m) => m[1]);
+  assert.equal(uris.length, 1, 'one hat');
+  // Ein rohes # beendet die Adresse (Rest = Fragment): die Mütze wäre unsichtbar
+  assert.doesNotMatch(uris[0], /#/);
+  const svg = decodeURIComponent(uris[0]);
+  assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 64 56'>[\s\S]*<\/svg>$/);
+  assert.match(svg, /fill='#dc2626'/);
+  // Nur das Logo (Kopfzeile: text-brand-500, Anmelden/Registrieren: text-white) – nicht die gelben Honigwaben im Text
+  assert.match(css, /\.season-winter \.bx-hive\.text-brand-500::after, \.season-winter \.bx-hive\.text-white::after \{/);
+  assert.doesNotMatch(css, /text-yellow/);
+  // Die Lichterkette liegt über der Navigation (z-50), fängt aber nichts ab und steht still ohne Bewegung
+  assert.match(css, /\.oys-season-lights \{\n {2}position: fixed; left: 0; right: 0; top: 0; height: 22px; z-index: 55; pointer-events: none;/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\n {2}\.oys-season-1, \.oys-season-2, \.oys-season-lights \{ animation: none; \}/);
 });
 
 test('the pages that get a theme', () => {

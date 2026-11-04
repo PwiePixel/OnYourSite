@@ -78,7 +78,8 @@ continue" below.
 Next:
 - D1–D3 are in `main` (PR #22–#24; releases 3.2.0 and 3.3.0). The owner's next ask came first: *Admin → Seasons* and
   release 3.4.0 are on `feature/seasons`. `app/src/seasons/seasons.ts` holds the season themes (first: `winter`,
-  CSS in `static/css/season-winter.css`), the settings in `oys_meta['site_seasons']` (Off / On / Automatic with
+  CSS in `static/css/season-winter.css`: snow, frost glow, fairy lights `.oys-season-lights` above the nav, a Santa hat
+  as an SVG data address on the logo icons `.bx-hive.text-brand-500` / `.bx-hive.text-white`), the settings in `oys_meta['site_seasons']` (Off / On / Automatic with
   month-day dates, also across the new year; winter starts as Automatic 12-01 to 01-06 until the admin saves; cached
   15 s per process) and `applySeason()`, which adds the stylesheet,
   the class `season-<key>` on `<body>` and the decoration. Routes mark OnYourSite's own pages with
