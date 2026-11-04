@@ -8,16 +8,18 @@ import { demoPage, miniHtml } from '../src/content/demo.js';
 import { renderPage as renderPageRaw } from '../src/content/render.js';
 import { withoutDialogs } from './support/dialogParity.js';
 import { phpBranding, withoutPinnedFooter } from './support/brandingParity.js';
-import { layouts, themes } from '../src/content/themes.js';
+import { layouts } from '../src/content/themes.js';
 import { enc, jsonText } from './modelHarness.js';
 import { firstDiff, runPhpList } from './renderHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
+import { phpThemeKeys } from './support/phpThemes.js';
 
 // Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz
 const renderPage = (...a: Parameters<typeof renderPageRaw>): string =>
   withoutPinnedFooter(withoutDialogs(renderPageRaw(a[0], a[1], { ...a[2], branding: phpBranding(a[0]) })));
 
-const THEMES = [...Object.keys(themes()), 'unknown', '', 'TRS', 'constructor', '__proto__', 'Deep-Dark'];
+// Nur die Designs, die PHP kannte (die für Winter prüft themes-seasonal.test.ts)
+const THEMES = [...phpThemeKeys(), 'unknown', '', 'TRS', 'constructor', '__proto__', 'Deep-Dark'];
 const LAYOUTS = [...Object.keys(layouts()), 'zigzag', '"x'];
 
 test('demo page data matches oys_demo_page() for every theme', { skip: PHP_SKIP }, () => {
@@ -28,7 +30,7 @@ test('demo page data matches oys_demo_page() for every theme', { skip: PHP_SKIP 
 test('demo pages render like /_/demo/{theme} in PHP – every theme with its own and with every other layout', { skip: PHP_SKIP }, () => {
   const now = Math.floor(Date.now() / 1000);
   const cases: Array<{ theme: string; layout: string | null }> = [];
-  for (const theme of Object.keys(themes())) {
+  for (const theme of phpThemeKeys()) {
     cases.push({ theme, layout: null });
     for (const layout of Object.keys(layouts())) cases.push({ theme, layout });
   }

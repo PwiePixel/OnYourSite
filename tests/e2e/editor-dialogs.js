@@ -694,6 +694,9 @@ const sessionId = async (ctx) => ((await ctx.cookies()).find((c) => c.name === '
       resetContent();
       sql(`DELETE FROM honeycomb_ledger WHERE user_id = ${U1} AND reason = 'daily'`);
       const { ctx, page } = await newPage();
+      // Die Seite prüft Belohnungen je Konto höchstens alle 10 Sekunden (honeycombs/earn.ts, THROTTLE_MS) – der Schritt
+      // davor hat den Editor mit demselben Konto geöffnet; ohne die Pause käme die Tagesbelohnung je nach Tempo nicht
+      await sleep(10_500);
       // Das erste Öffnen nach dem Anmelden bringt die Tagesbelohnung
       await login(page, 'ed-one@test.de');
       const earned = page.locator('.ui-toast.hc', { hasText: 'for being active today' });

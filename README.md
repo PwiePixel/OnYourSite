@@ -8,7 +8,7 @@ Your own link-in-bio page at `name.on-your.site` or `on-your.site/name` (soon al
 |---|---|
 | **Links & social icons** | As many links as you like, each with a matching icon, plus icons for Instagram, TikTok, YouTube, Twitch, Discord and 20+ more. |
 | **Videos, music & images** | YouTube, Twitch and Spotify right on your page, plus images, headings and text. |
-| **30 themes** | Deep Dark (default), Glass, Brutal, Candy, Zen, Code, Café, Noir, Holo, Dune and more – plus special templates like Galaxy, Notebook, Comic, Ocean, Midnight, Blueprint, Chalkboard or Sakura. |
+| **35 themes** | Deep Dark (default), Glass, Brutal, Candy, Zen, Code, Café, Noir, Holo, Dune and more – for winter Snowy Night, Candy Cane, Gingerbread, Christmas Market and Frost – plus special templates like Galaxy, Notebook, Comic, Ocean, Midnight, Blueprint, Chalkboard or Sakura. |
 | **Profile picture editor** | Every new profile picture opens in a crop window: drag, zoom (slider, mouse wheel or two fingers), rotate, “Show all” for wide logos, a background color for logos with a transparent background and the shape (circle, rounded, square). SVG logos are turned into a picture, animated GIFs stay as they are. “Adjust” re-opens the current picture. |
 | **Live preview** | On the right side of the editor you instantly see how your page looks on a phone – rendered by the same code as the real page. Themes and layouts preview as soon as you hover over them. |
 | **Stats without cookies** | Views and clicks per link – no cookies, no IP addresses, no cookie banner for your visitors. |
@@ -175,7 +175,7 @@ app/                   The website (Node.js 22, TypeScript, Fastify)
   scripts/config.mjs   Reads and writes config.json for the installer
   test/                Tests (npm test)
 email/                 Email templates; the mail server settings (smtp.json) are written by the admin panel
-static/css/            page.css (structure & layouts), themes.css (30 themes), editor.css
+static/css/            page.css (structure & layouts), themes.css (35 themes), editor.css
 static/js/             page.js (profile page), editor.js (editor), share.js (QR code & sharing), ui.js (dialogs), bell.js (notifications), status.js / status-manage.js (status pages)
 static/vendor/qrcode/  QR code generator (qrcode-generator, MIT)
 static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)

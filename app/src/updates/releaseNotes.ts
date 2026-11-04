@@ -19,6 +19,16 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '3.3.0', category: 'new', title: 'Five new themes for winter and Christmas', announce: true,
+    body: 'Get your page ready for the holidays:\n\n'
+      + '- **Snowy Night** – falling snow under the moon\n'
+      + '- **Candy Cane** – red and white stripes, sweet and festive\n'
+      + '- **Gingerbread** – cookie brown with white icing\n'
+      + '- **Christmas Market** – fairy lights on a winter evening\n'
+      + '- **Frost** – icy blue and frosted glass\n\n'
+      + 'Find them in the editor under **Design → Winter & Christmas**.',
+  },
+  {
     version: '3.2.0', category: 'improved', title: 'A bigger block picker – and dragging blocks works again', announce: true,
     body: '- **Bigger block picker** – large tiles with a short description of every block, and a search: type “video” or “countdown” and press Enter\n'
       + '- **Reorder your blocks again** – drag them by the handle on the left, on your phone and on your computer, also after changing your profile picture\n'

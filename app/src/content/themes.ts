@@ -1,10 +1,11 @@
-// Die 30 Designs (lib/themes.php). Das Aussehen steht in static/css/themes.css (Klasse .t-<schlüssel>),
+// Die 35 Designs (die ersten 30 aus lib/themes.php, dazu 5 für Winter und Weihnachten seit 3.3). Das Aussehen steht in static/css/themes.css (Klasse .t-<schlüssel>),
 // hier nur die Daten für Editor, Vorschau und Landingpage. Die Listen sind eingefroren (wie Konstanten).
 import { phpStr } from '../php.js';
 
 export interface Theme {
   name: string;
-  group: 'standard' | 'special';
+  // seasonal: Winter und Weihnachten (nur in Node; die PHP-Version kannte sie nicht)
+  group: 'standard' | 'special' | 'seasonal';
   dark: boolean;
   accent: string;
   font: string;
@@ -57,6 +58,13 @@ const THEMES: Record<string, Theme> = deepFreeze({
   blueprint: { name: 'Blueprint', group: 'special', dark: true, accent: '#ffd166', font: 'fira-code', desc: 'Technical drawing on blue paper' },
   chalkboard: { name: 'Chalkboard', group: 'special', dark: true, accent: '#ffe27a', font: 'patrick-hand', desc: 'Chalk on a green board' },
   sakura: { name: 'Sakura', group: 'special', dark: false, accent: '#e75480', font: 'quicksand', desc: 'Falling cherry blossoms' },
+
+  // --- Winter und Weihnachten ---
+  'snowy-night': { name: 'Snowy Night', group: 'seasonal', dark: true, accent: '#bfdbfe', font: 'quicksand', desc: 'Falling snow under the moon' },
+  'candy-cane': { name: 'Candy Cane', group: 'seasonal', dark: false, accent: '#d6202f', font: 'fredoka', desc: 'Red and white stripes, sweet and festive' },
+  gingerbread: { name: 'Gingerbread', group: 'seasonal', dark: true, accent: '#fff3e0', font: 'patrick-hand', desc: 'Cookie brown with white icing' },
+  'christmas-market': { name: 'Christmas Market', group: 'seasonal', dark: true, accent: '#f5c451', font: 'outfit', desc: 'Fairy lights on a winter evening' },
+  frost: { name: 'Frost', group: 'seasonal', dark: false, accent: '#0e7ab8', font: 'outfit', desc: 'Icy blue and frosted glass' },
 });
 
 // oys_themes()

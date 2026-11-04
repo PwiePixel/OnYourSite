@@ -4,7 +4,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { q, closePool } from '../src/db.js';
-import { fontChoices, themes, layouts } from '../src/content/themes.js';
+import { fontChoices, layouts } from '../src/content/themes.js';
 import {
   defaultSettings, pageSettings, settingsNormalize, loadBlocks, blockFromRow, blockForEditor, pageForEditor, pageFiles, userPages, type Block,
 } from '../src/content/pages.js';
@@ -13,6 +13,7 @@ import { jsonDecode, type PhpArr } from '../src/content/util.js';
 import { runPhp, PHP_EACH, nodeEach, diffs, jsonText, rng, O, Raw, enc, jsFloats } from './modelHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
 import { storedHidden } from './support/brandingParity.js';
+import { phpThemeKeys } from './support/phpThemes.js';
 
 after(() => closePool());
 
@@ -133,7 +134,7 @@ function pageRow(r: R): O {
     ['position', 0], ['title', r.pick(TEXTS)], ['subtitle', r.pick(TEXTS)], ['bio', r.chance(0.3) ? null : r.pick(TEXTS)],
     ['avatar', r.pick([null, '', 'avatar_5_1700000000_abcdef12.png', 'avatar_5_1.webp', '0', 'x_6_1.png'] as unknown[])],
     ['bg_image', r.pick([null, '', 'bg_5_1.jpg', 'avatar_5_1700000000_abcdef12.png'] as unknown[])],
-    ['theme', r.pick([...Object.keys(themes()), 'unknown', '', null, 'constructor'] as unknown[])],
+    ['theme', r.pick([...phpThemeKeys(), 'unknown', '', null, 'constructor'] as unknown[])],
     ['layout', r.pick([...Object.keys(layouts()), 'unknown', '', null, 'toString'] as unknown[])],
     ['address_mode', r.pick(['subdomain', 'path', 'PATH', '', null] as unknown[])], ['settings', storedSettings(r)],
     ['views', 3], ['slug_changed_at', null], ['created_at', '2026-11-01 20:23:13'], ['updated_at', '2026-11-01 20:23:14'],

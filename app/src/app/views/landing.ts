@@ -132,6 +132,9 @@ export function landingView(d: LandingViewData): string {
       o += " <span class=\"text-[11px] font-bold uppercase tracking-wide text-[#ff7a1a]\">Default</span>";
     } else if (t.group === 'special') {
       o += " <span class=\"text-[11px] font-bold uppercase tracking-wide text-brand-400\">Template</span>";
+    } else if (t.group === 'seasonal') {
+      // Designs für Winter und Weihnachten (seit 3.3; PHP kannte sie nicht)
+      o += " <span class=\"text-[11px] font-bold uppercase tracking-wide text-sky-300\">Winter</span>";
     }
     o += "                            <small class=\"block text-xs text-gray-500\">";
     o += e(t.desc);
