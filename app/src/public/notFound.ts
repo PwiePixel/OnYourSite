@@ -36,6 +36,9 @@ export async function notFound(ctx: Ctx): Promise<void> {
   // Auf einer eigenen Domain (Premium) nie die OnYourSite-Seite, sondern die neutrale 404
   if (ctx.customDomain) neutralNotFound(ctx);
   const d = await notFoundData(ctx);
+  // OnYourSites eigene 404-Seite bekommt das Saison-Thema (Admin → Seasons) – nur unter der eigenen Domain; ein fremder
+  // Hostname bleibt ohne Datenbank-Abfrage
+  if (ctx.host === baseHost() || ctx.host.endsWith('.' + baseHost())) ctx.seasonPage = true;
   ctx.send(notFoundView(d), 404);
 }
 

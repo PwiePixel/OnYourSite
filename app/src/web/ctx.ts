@@ -59,6 +59,8 @@ export class Ctx {
   apacheStatic = false;
   // Anfrage auf einer eigenen Domain (Premium), gesetzt von domains/host.ts – sonst null
   customDomain: CustomHost | null = null;
+  // Eigene Seite von OnYourSite, die ein Saison-Thema bekommen darf (seasons/seasons.ts, gesetzt von den Routen)
+  seasonPage = false;
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];

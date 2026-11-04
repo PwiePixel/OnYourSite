@@ -7,6 +7,7 @@ import { phpMultipart, rfc1867Boundary } from './web/multipart.js';
 import { DbUnavailableError } from './db.js';
 import { setupErrorPage, DB_FAILED_TEXT, DB_FAILED_TITLE } from './web/setupError.js';
 import { dispatch } from './router.js';
+import { seasonalBody } from './seasons/seasons.js';
 import { parseFormBody, strtolower } from './php.js';
 import { configInt, loadConfig, ConfigMissingError } from './config.js';
 import { timeZone } from './db.js';
@@ -104,6 +105,8 @@ export async function buildServer(opts: { dispatch?: (ctx: Ctx) => Promise<void>
       } finally {
         if (ctx.session) await ctx.session.close().catch((e) => console.error('session save failed:', e));
       }
+      // Saison-Thema für OnYourSites eigene Seiten (Admin → Seasons); ohne aktives Thema bleibt alles, wie es ist
+      await seasonalBody(ctx).catch((e) => console.error('season theme failed:', e));
       // Ein Status, den Node nicht senden kann, wäre ein Fehler beim Senden: dann wie bei jedem Fehler 500
       reply.code(Number.isInteger(ctx.status) && ctx.status >= 100 && ctx.status <= 999 ? ctx.status : 500);
       for (const [name, rawValue] of ctx.headersOut()) {
