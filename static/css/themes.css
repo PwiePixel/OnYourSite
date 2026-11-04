@@ -1,5 +1,5 @@
 /* =============================================================
-   OnYourSite – 30 Designs
+   OnYourSite – 35 Designs
    Jedes Design setzt Variablen (Farben, Schriften, Knöpfe) und
    optional Deko über .oys-deco-1/2/3 im festen Hintergrund.
    Keine vw/vh-Angaben, damit die Mini-Vorschauen im Editor stimmen.
@@ -1246,3 +1246,197 @@
 .t-sakura .oys-deco-3 { display: block; width: 240px; height: 240px; right: -70px; top: -60px; border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .9), rgba(255, 214, 228, .4) 55%, transparent 70%); }
 @keyframes oys-petals { from { background-position: 0 0; } to { background-position: 260px 600px; } }
 @keyframes oys-petals-2 { from { background-position: 0 0; } to { background-position: -190px 460px; } }
+
+/* =============================================================
+   Winter & Weihnachten (Gruppe „seasonal“, seit 3.3)
+   ============================================================= */
+
+/* ============ 31. Snowy Night ============ */
+.t-snowy-night {
+  --bg: radial-gradient(60% 40% at 80% 0%, rgba(147, 197, 253, .22), transparent 70%), linear-gradient(180deg, #0b1630 0%, #0f1f45 55%, #1b2d5c 100%);
+  --bg-solid: #0f1f45;
+  --text: #f1f5ff;
+  --muted: rgba(226, 232, 255, .72);
+  --accent: #bfdbfe;
+  --on-accent: #0b1630;
+  --font: 'Quicksand', 'Inter', sans-serif;
+  --font-head: 'Cormorant Garamond', Georgia, serif;
+  --head-weight: 700;
+  --name-size: 2.2em;
+  --btn-bg: rgba(255, 255, 255, .09);
+  --btn-text: #f1f5ff;
+  --btn-border: 1px solid rgba(191, 219, 254, .28);
+  --btn-radius: 16px;
+  --btn-blur: blur(10px);
+  --btn-hover-bg: rgba(255, 255, 255, .17);
+  --btn-hover-border: 1px solid rgba(191, 219, 254, .6);
+  --btn-hover-shadow: 0 10px 30px -12px rgba(147, 197, 253, .55);
+  --icon-bg: rgba(191, 219, 254, .14);
+  --icon-fg: #e0ecff;
+  --surface: #13254f;
+  --card-bg: rgba(255, 255, 255, .07);
+  --card-border: 1px solid rgba(191, 219, 254, .2);
+  --card-blur: blur(10px);
+  --input-bg: rgba(255, 255, 255, .08);
+  --input-border: 1px solid rgba(191, 219, 254, .3);
+  --avatar-border: 3px solid rgba(241, 245, 255, .85);
+  --divider: rgba(191, 219, 254, .25);
+  --overlay-rgb: 15, 31, 69;
+}
+.t-snowy-night .oys-avatar-inner { box-shadow: 0 0 0 6px rgba(191, 219, 254, .12), 0 14px 40px -12px rgba(147, 197, 253, .6); }
+/* Schneeflocken in zwei Ebenen (langsam und schneller) und ein Mond hinter Wolken */
+.t-snowy-night .oys-deco-1, .t-snowy-night .oys-deco-2 { display: block; inset: 0; }
+.t-snowy-night .oys-deco-1 { background-image: radial-gradient(3px 3px at 20px 30px, #fff 50%, transparent 52%), radial-gradient(2px 2px at 90px 120px, #fff 50%, transparent 52%), radial-gradient(3px 3px at 160px 60px, #e0ecff 50%, transparent 52%), radial-gradient(2px 2px at 220px 180px, #fff 50%, transparent 52%), radial-gradient(4px 4px at 60px 220px, #fff 50%, transparent 52%); background-size: 260px 260px; opacity: .9; animation: oys-snow 18s linear infinite; }
+.t-snowy-night .oys-deco-2 { background-image: radial-gradient(2px 2px at 40px 80px, #fff 50%, transparent 52%), radial-gradient(1.5px 1.5px at 130px 20px, #dbeafe 50%, transparent 52%), radial-gradient(2px 2px at 180px 150px, #fff 50%, transparent 52%), radial-gradient(1.5px 1.5px at 100px 190px, #fff 50%, transparent 52%); background-size: 200px 200px; opacity: .6; animation: oys-snow-2 11s linear infinite; }
+.t-snowy-night .oys-deco-3 { display: block; width: 86px; height: 86px; right: 7%; top: 3%; border-radius: 50%; background: radial-gradient(circle at 38% 36%, #fffdf5, #e8edf8 60%, #c7d2fe); box-shadow: 0 0 60px rgba(224, 236, 255, .45); opacity: .95; }
+@keyframes oys-snow { from { background-position: 0 0; } to { background-position: 40px 260px; } }
+@keyframes oys-snow-2 { from { background-position: 0 0; } to { background-position: -30px 200px; } }
+
+/* ============ 32. Candy Cane ============ */
+.t-candy-cane {
+  --bg: repeating-linear-gradient(135deg, #fff 0 26px, #fde2e4 26px 52px);
+  --bg-solid: #fff5f6;
+  --text: #4a0d12;
+  --muted: #8a3a42;
+  --accent: #d6202f;
+  --on-accent: #fff;
+  --font: 'Fredoka', 'Inter', sans-serif;
+  --font-head: 'Fredoka', 'Inter', sans-serif;
+  --head-weight: 700;
+  --name-size: 2em;
+  --btn-bg: #fff;
+  --btn-text: #4a0d12;
+  --btn-border: 2px solid #d6202f;
+  --btn-radius: 999px;
+  --btn-shadow: 0 5px 0 #a3121f;
+  --btn-hover-bg: #fff0f1;
+  --btn-hover-border: 2px solid #a3121f;
+  --btn-hover-shadow: 0 3px 0 #a3121f;
+  --icon-bg: #fde2e4;
+  --icon-fg: #d6202f;
+  --surface: #fff;
+  --card-bg: #fff;
+  --card-border: 2px solid rgba(214, 32, 47, .35);
+  --input-bg: #fff;
+  --input-border: 2px solid rgba(214, 32, 47, .35);
+  --avatar-border: 5px solid #fff;
+  --divider: rgba(214, 32, 47, .35);
+  --overlay-rgb: 255, 245, 246;
+}
+.t-candy-cane .oys-avatar-inner { box-shadow: 0 0 0 4px #d6202f, 0 12px 26px -10px rgba(163, 18, 31, .55); }
+/* Ein rot-weiß gestreifter Rand oben und unten und ein heller Schein in der Mitte */
+.t-candy-cane .oys-deco-1, .t-candy-cane .oys-deco-2 { display: block; left: 0; right: 0; height: 14px; background: repeating-linear-gradient(45deg, #d6202f 0 14px, #fff 14px 28px); }
+.t-candy-cane .oys-deco-1 { top: 0; }
+.t-candy-cane .oys-deco-2 { bottom: 0; }
+.t-candy-cane .oys-deco-3 { display: block; inset: 0; background: radial-gradient(60% 45% at 50% 30%, rgba(255, 255, 255, .85), transparent 75%); }
+
+/* ============ 33. Gingerbread ============ */
+.t-gingerbread {
+  --bg: radial-gradient(70% 50% at 50% 0%, rgba(255, 214, 165, .35), transparent 70%), linear-gradient(180deg, #855027 0%, #6f3f1b 60%, #5c3416 100%);
+  --bg-solid: #6f3f1b;
+  --text: #fff8ef;
+  --muted: rgba(255, 240, 222, .8);
+  --accent: #fff3e0;
+  --on-accent: #5c3416;
+  --font: 'Patrick Hand', 'Quicksand', sans-serif;
+  --font-head: 'Patrick Hand', 'Quicksand', sans-serif;
+  --head-weight: 400;
+  --head-spacing: .02em;
+  --name-size: 2.4em;
+  --btn-bg: #7e4a22;
+  --btn-text: #fff8ef;
+  --btn-border: 3px dashed rgba(255, 248, 239, .9);
+  --btn-radius: 18px;
+  --btn-shadow: 0 6px 0 #4a2911;
+  --btn-hover-bg: #8a5228;
+  --btn-hover-border: 3px dashed #fff;
+  --btn-hover-shadow: 0 4px 0 #4a2911;
+  --icon-bg: rgba(255, 243, 224, .14);
+  --icon-fg: #fff3e0;
+  --surface: #62381a;
+  --card-bg: rgba(94, 52, 22, .45);
+  --card-border: 3px dashed rgba(255, 248, 239, .6);
+  --input-bg: #fff8ef;
+  --input-text: #4a2911;
+  --input-border: 2px solid rgba(94, 52, 22, .4);
+  --avatar-border: 5px dashed #fff8ef;
+  --divider: rgba(255, 248, 239, .45);
+  --overlay-rgb: 111, 63, 27;
+}
+.t-gingerbread .oys-name { text-shadow: 0 3px 0 rgba(94, 52, 22, .55); }
+/* Zuckerguss-Wellen am oberen Rand und Streusel */
+.t-gingerbread .oys-deco-1 { display: block; left: 0; right: 0; top: 0; height: 26px; background: radial-gradient(circle at 13px 0, #fff8ef 13px, transparent 14px); background-size: 26px 26px; background-repeat: repeat-x; }
+.t-gingerbread .oys-deco-2 { display: block; inset: 0; background-image: radial-gradient(3px 1.5px at 30px 50px, #ff6b6b 50%, transparent 52%), radial-gradient(1.5px 3px at 120px 140px, #8be28b 50%, transparent 52%), radial-gradient(3px 1.5px at 200px 80px, #fff8ef 50%, transparent 52%), radial-gradient(1.5px 3px at 70px 210px, #ffd166 50%, transparent 52%); background-size: 240px 240px; opacity: .7; }
+
+/* ============ 34. Christmas Market ============ */
+.t-christmas-market {
+  --bg: radial-gradient(80% 45% at 50% 100%, rgba(251, 191, 36, .16), transparent 70%), linear-gradient(180deg, #0c1f17 0%, #10291e 55%, #153526 100%);
+  --bg-solid: #10291e;
+  --text: #fdf6e3;
+  --muted: rgba(253, 246, 227, .7);
+  --accent: #f5c451;
+  --on-accent: #2b1a05;
+  --font: 'Outfit', 'Inter', sans-serif;
+  --font-head: 'Playfair Display', Georgia, serif;
+  --head-weight: 700;
+  --name-size: 2.1em;
+  --btn-bg: rgba(180, 35, 45, .85);
+  --btn-text: #fff7ea;
+  --btn-border: 1px solid rgba(245, 196, 81, .55);
+  --btn-radius: 12px;
+  --btn-shadow: 0 10px 24px -14px rgba(0, 0, 0, .8);
+  --btn-hover-bg: #c22b36;
+  --btn-hover-border: 1px solid #f5c451;
+  --btn-hover-shadow: 0 0 24px -6px rgba(245, 196, 81, .55);
+  --icon-bg: rgba(245, 196, 81, .16);
+  --icon-fg: #f5c451;
+  --surface: #163a2a;
+  --card-bg: rgba(255, 255, 255, .05);
+  --card-border: 1px solid rgba(245, 196, 81, .25);
+  --input-bg: rgba(255, 255, 255, .06);
+  --input-border: 1px solid rgba(245, 196, 81, .35);
+  --avatar-border: 3px solid #f5c451;
+  --divider: rgba(245, 196, 81, .3);
+  --overlay-rgb: 16, 41, 30;
+}
+.t-christmas-market .oys-avatar-inner { box-shadow: 0 0 0 6px rgba(245, 196, 81, .15), 0 0 40px -8px rgba(245, 196, 81, .45); }
+/* Eine Lichterkette oben, die sanft funkelt, und warme Lichter in der Unschärfe */
+.t-christmas-market .oys-deco-1 { display: block; left: 0; right: 0; top: 10px; height: 26px; background-image: radial-gradient(5px 5px at 15px 16px, #ffd76a 60%, transparent 62%), radial-gradient(5px 5px at 45px 20px, #ff7b7b 60%, transparent 62%), radial-gradient(5px 5px at 75px 16px, #fff3c4 60%, transparent 62%), radial-gradient(5px 5px at 105px 20px, #8fe3a8 60%, transparent 62%); background-size: 120px 26px; background-repeat: repeat-x; filter: drop-shadow(0 0 6px rgba(255, 215, 106, .8)); animation: oys-twinkle-soft 2.6s ease-in-out infinite alternate; }
+.t-christmas-market .oys-deco-1::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 14px; border-bottom: 1px solid rgba(253, 246, 227, .25); border-radius: 0 0 50% 50%; }
+.t-christmas-market .oys-deco-2 { display: block; inset: 0; background-image: radial-gradient(circle at 15% 85%, rgba(251, 191, 36, .22) 0 40px, transparent 41px), radial-gradient(circle at 80% 75%, rgba(244, 63, 94, .16) 0 54px, transparent 55px), radial-gradient(circle at 60% 95%, rgba(251, 191, 36, .14) 0 70px, transparent 71px); filter: blur(6px); }
+@keyframes oys-twinkle-soft { from { opacity: .7; } to { opacity: 1; } }
+
+/* ============ 35. Frost ============ */
+.t-frost {
+  --bg: radial-gradient(60% 45% at 15% 0%, rgba(255, 255, 255, .9), transparent 70%), radial-gradient(60% 45% at 100% 100%, rgba(186, 230, 253, .8), transparent 70%), linear-gradient(160deg, #eaf6ff 0%, #d6ecfb 50%, #c3e1f7 100%);
+  --bg-solid: #e2f1fc;
+  --text: #0c2a43;
+  --muted: #3f6382;
+  --accent: #0e7ab8;
+  --on-accent: #fff;
+  --font: 'Outfit', 'Inter', sans-serif;
+  --btn-bg: rgba(255, 255, 255, .55);
+  --btn-text: #0c2a43;
+  --btn-border: 1px solid rgba(255, 255, 255, .9);
+  --btn-radius: 14px;
+  --btn-shadow: 0 8px 24px -14px rgba(14, 122, 184, .45);
+  --btn-blur: blur(14px);
+  --btn-hover-bg: rgba(255, 255, 255, .8);
+  --btn-hover-border: 1px solid #fff;
+  --btn-hover-shadow: 0 12px 28px -12px rgba(14, 122, 184, .5);
+  --icon-bg: rgba(14, 122, 184, .12);
+  --icon-fg: #0e7ab8;
+  --surface: #fff;
+  --card-bg: rgba(255, 255, 255, .5);
+  --card-border: 1px solid rgba(255, 255, 255, .85);
+  --card-blur: blur(14px);
+  --input-bg: rgba(255, 255, 255, .8);
+  --input-border: 1px solid rgba(14, 122, 184, .25);
+  --avatar-border: 4px solid rgba(255, 255, 255, .9);
+  --divider: rgba(14, 122, 184, .2);
+  --overlay-rgb: 226, 241, 252;
+}
+/* Eisblumen in den Ecken */
+.t-frost .oys-deco-1, .t-frost .oys-deco-2 { display: block; width: 220px; height: 220px; border-radius: 50%; background: repeating-conic-gradient(from 0deg, rgba(255, 255, 255, .75) 0 4deg, transparent 4deg 30deg); -webkit-mask: radial-gradient(circle, #000 0 30%, transparent 70%); mask: radial-gradient(circle, #000 0 30%, transparent 70%); opacity: .7; }
+.t-frost .oys-deco-1 { left: -80px; top: -80px; }
+.t-frost .oys-deco-2 { right: -90px; bottom: -90px; transform: rotate(15deg); }

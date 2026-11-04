@@ -15,12 +15,13 @@ import { closePool, one } from '../src/db.js';
 import { ensureSchema } from '../src/schema.js';
 import { makeTestCtx, isHalt } from '../src/web/ctx.js';
 import { ogClean, ogContrast, ogFit, ogFont, ogHash, ogLoadImage, ogMix, ogRender, ogRgb, ogServe, ogWidth, ogWrap } from '../src/content/share.js';
-import { themes } from '../src/content/themes.js';
+
 import { uploadsDir } from '../src/content/storage.js';
 import { jsonDecode } from '../src/content/util.js';
 import { jsonText, rng, runPhp } from './modelHarness.js';
 import { PHP_SKIP, phpRoot } from './support/phpRef.js';
 import { storedHidden } from './support/brandingParity.js';
+import { phpThemes } from './support/phpThemes.js';
 
 after(() => closePool());
 
@@ -78,7 +79,7 @@ test('cleaning, colours, mixing and contrast match PHP', { skip: PHP_SKIP }, () 
     'ok', '0', 'a\u0085b', 'a᠎b', 'mixed \u{1F600}\u{1F64F}\u{1FAFF} end', '☀➿⬀⯿'];
   assert.deepEqual(clean.map(ogClean), php('foreach ($in as $s) { $out[] = oys_og_clean($s); }', clean));
 
-  const hex = ['#aabbcc', 'AABBCC', '##aabbcc', '#aabbcc\n', '#abc', '#aabbccdd', '', '#GGGGGG', ' #aabbcc', '#AaBbCc', '#a1a1aa', ...Object.values(themes()).map((t) => t.accent)];
+  const hex = ['#aabbcc', 'AABBCC', '##aabbcc', '#aabbcc\n', '#abc', '#aabbccdd', '', '#GGGGGG', ' #aabbcc', '#AaBbCc', '#a1a1aa', ...Object.values(phpThemes()).map((t) => t.accent)];
   assert.deepEqual(hex.map(ogRgb), php('foreach ($in as $s) { $out[] = oys_og_rgb($s); }', hex));
 
   const r = rng(5);
@@ -89,7 +90,7 @@ test('cleaning, colours, mixing and contrast match PHP', { skip: PHP_SKIP }, () 
 
   // Kontrast: Schwelle 2.2 entscheidet über die Farbe der Adresse
   const pairs: Array<[number[], number[]]> = [];
-  for (const t of Object.values(themes())) for (const base of [[11, 11, 15], [248, 248, 251]]) pairs.push([ogRgb(t.accent), base]);
+  for (const t of Object.values(phpThemes())) for (const base of [[11, 11, 15], [248, 248, 251]]) pairs.push([ogRgb(t.accent), base]);
   for (let i = 0; i < 3000; i++) pairs.push([[r.next(256), r.next(256), r.next(256)], r.chance(0.5) ? [11, 11, 15] : [248, 248, 251]]);
   const contrast = php('foreach ($in as [$a, $b]) { $out[] = oys_og_contrast($a, $b); }', pairs) as number[];
   const node = pairs.map(([a, b]) => ogContrast(a, b));

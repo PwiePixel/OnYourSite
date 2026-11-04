@@ -11,10 +11,12 @@ import { OG_WIDTH, OG_HEIGHT, shareLinks, ogFont, ogSupported } from '../src/con
 import { jsonDecode } from '../src/content/util.js';
 import { runPhp, enc, FLAGS, PHP_EACH, nodeEach, diffs, jsonText, Raw, O, rng } from './modelHarness.js';
 import { PHP_SKIP, fromPhpTree } from './support/phpRef.js';
+import { phpThemeKeys, phpThemes } from './support/phpThemes.js';
 
 test('registries have their sizes; the JSON decoder keeps -0, big numbers, key order and the prototype', () => {
-  // 30 Designs, 13 Anordnungen, 27 Plattformen, 12 Blocktypen, 64 Boxicons
-  assert.deepEqual([Object.keys(themes()).length, Object.keys(layouts()).length, Object.keys(brands()).length, Object.keys(blockTypes()).length, bxIcons().length], [30, 13, 27, 12, 64]);
+  // 35 Designs (30 aus PHP und 5 für Winter), 13 Anordnungen, 27 Plattformen, 12 Blocktypen, 64 Boxicons
+  assert.equal(Object.keys(phpThemes()).length, 30);
+  assert.deepEqual([Object.keys(themes()).length, Object.keys(layouts()).length, Object.keys(brands()).length, Object.keys(blockTypes()).length, bxIcons().length], [35, 13, 27, 12, 64]);
   assert.ok(Object.is(jsonDecode('-0.0'), -0) && Object.is(jsonDecode('-0'), 0));
   assert.equal(jsonDecode('12345678901234567890'), 12345678901234567890);
   // Ein einzelnes rohes Ersatzzeichen wäre in PHP ungültiges UTF-8
@@ -40,7 +42,7 @@ test('registries and constants are identical to PHP', { skip: PHP_SKIP }, () => 
   ]));`, 'null')) as string[];
   // Die Schriften liegen in PHP unter dem eigenen Code-Ordner – umgeschrieben auf den dieses Repositorys
   php.forEach((v, i) => (php[i] = fromPhpTree(v)));
-  const node = [DEFAULT_THEME, themes(), fontChoices(), layouts(), brands(), blockTypes(), EFFECTS, PROTECTIONS,
+  const node = [DEFAULT_THEME, phpThemes(), fontChoices(), layouts(), brands(), blockTypes(), EFFECTS, PROTECTIONS,
     LINK_PASSWORD_MIN, IMAGE_EXTS, bxIcons(), defaultSettings(), OG_WIDTH, OG_HEIGHT, ogFont(true), ogFont(false), ogSupported()].map(enc);
   assert.deepEqual(node, php);
 });

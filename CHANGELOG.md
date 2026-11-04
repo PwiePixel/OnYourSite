@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-04
+
+### Added
+- Five themes for winter and Christmas: **Snowy Night** (falling snow under the moon), **Candy Cane** (red and white stripes), **Gingerbread** (cookie brown with white icing), **Christmas Market** (fairy lights on a winter evening) and **Frost** (icy blue and frosted glass) – 35 themes in total, with their own “Winter & Christmas” filter in the editor.
+
 ## [3.2.0] - 2026-11-04
 
 ### Added

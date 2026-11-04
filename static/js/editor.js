@@ -2324,11 +2324,11 @@
     var root = $('#tab-design');
     var p = state.page, s = p.settings;
     var themes = E.themes;
-    var counts = { all: 0, standard: 0, special: 0, dark: 0, light: 0 };
+    var counts = { all: 0, seasonal: 0, standard: 0, special: 0, dark: 0, light: 0 };
     Object.keys(themes).forEach(function (k) {
       counts.all++; counts[themes[k].group]++; counts[themes[k].dark ? 'dark' : 'light']++;
     });
-    var filters = { all: 'All', standard: 'Standard', special: 'Special templates', dark: 'Dark', light: 'Light' };
+    var filters = { all: 'All', seasonal: 'Winter & Christmas', standard: 'Standard', special: 'Special templates', dark: 'Dark', light: 'Light' };
 
     root.innerHTML =
       '<section><h2 class="section-title">Theme <small>' + counts.all + ' themes · <span class="hover-only">Hover over one to see it in the preview right away</span><span class="touch-only">Tap one to try it – check it with Preview</span></small></h2>' +
@@ -2501,7 +2501,7 @@
     });
     grid.innerHTML = keys.map(function (k) {
       var t = E.themes[k];
-      var tag = k === E.defaultTheme ? '<span class="theme-tag std">Default</span>' : t.group === 'special' ? '<span class="theme-tag">Template</span>' : '';
+      var tag = k === E.defaultTheme ? '<span class="theme-tag std">Default</span>' : t.group === 'special' ? '<span class="theme-tag">Template</span>' : t.group === 'seasonal' ? '<span class="theme-tag winter">Winter</span>' : '';
       return '<button type="button" class="theme-card' + (state.page.theme === k ? ' on' : '') + '" data-theme="' + k + '">' +
         '<div class="mini-frame">' + tag + '<span class="theme-check"><i class="bx bx-check"></i></span>' + miniHTML(k, 'buttons') + '</div>' +
         '<div class="theme-meta"><span class="min-w-0"><b>' + esc(t.name) + '</b><small>' + esc(t.desc) + '</small></span><span class="theme-swatch" style="background:' + t.accent + '"></span></div></button>';

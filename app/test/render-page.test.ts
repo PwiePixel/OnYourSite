@@ -14,13 +14,14 @@ import { formatText, renderPage as renderPageRaw, renderSimple as renderSimpleRa
 import { withoutDialogs } from './support/dialogParity.js';
 import { phpBranding, withoutPinnedFooter } from './support/brandingParity.js';
 import { loadBlocks, loadPage } from '../src/content/pages.js';
-import { layouts, themes, fontChoices } from '../src/content/themes.js';
+import { layouts, fontChoices } from '../src/content/themes.js';
 import { brands } from '../src/content/social.js';
 import { jsonDecode } from '../src/content/util.js';
 import { phpJsonFloat, phpNumber, phpRound } from '../src/content/phpValues.js';
 import { jsonText, rng, O, Raw } from './modelHarness.js';
 import { firstDiff, normalizeTokens, runPhpList } from './renderHarness.js';
 import { PHP_SKIP } from './support/phpRef.js';
+import { phpThemeKeys } from './support/phpThemes.js';
 
 // Die eigenen Dialoge fügen ui.js hinzu (custom-dialogs) – verglichen wird ohne diesen Zusatz. Branding wie in PHP
 // (gespeicherter Schalter), die Fußzeile ohne ihre festen Stile (premium-domains PD-1).
@@ -50,7 +51,8 @@ const EMBED_URLS: unknown[] = ['', 'https://youtu.be/dQw4w9WgXcQ?t=1m30s', 'http
   'https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG', 'https://twitch.tv/somechannel', 'https://www.twitch.tv/videos/12345',
   'https://clips.twitch.tv/SomeClip-abc', 'https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC', 'https://open.spotify.com/episode/4uLU6hMCjMI75M1A2tKUQC',
   'https://open.spotify.com/album/4uLU6hMCjMI75M1A2tKUQC', 'spotify:playlist:37i9dQZF1DXcBWIGoYBM5M', 'https://vimeo.com/1', 'not a url'];
-const THEME_KEYS: unknown[] = [...Object.keys(themes()), 'unknown', '', null, 'TRS'];
+// Nur die Designs, die PHP kannte (die für Winter prüft themes-seasonal.test.ts)
+const THEME_KEYS: unknown[] = [...phpThemeKeys(), 'unknown', '', null, 'TRS'];
 const LAYOUT_KEYS: unknown[] = [...Object.keys(layouts()), 'zigzag', '', null];
 const BRAND_KEYS = Object.keys(brands());
 
