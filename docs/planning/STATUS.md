@@ -77,10 +77,14 @@ continue" below.
 
 Next:
 - The release system is in `main` (PR #21, squash commit `6403dfb`).
+- D1 (block reordering) is built on `feature/d1-block-reorder` (it also holds the Stage D plan): `renderBlocks()`
+  re-creates SortableJS when `renderInhalte()` rebuilt the list, SortableJS comes from `static/vendor/sortablejs/`, the
+  handle has `touch-action: none` and touch devices use Sortable's own dragging; browser flow
+  `tests/e2e/block-reorder.js`. Next: D2.
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the
-  Cloudflare token). Start with D1.
+  Cloudflare token).
 - Later: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of Stage C
   (`ROADMAP.md` §4.2).
 

@@ -1736,9 +1736,16 @@
       list.innerHTML = '<div class="empty-state panel"><i class="bx bx-layer-plus"></i>No blocks yet. Paste a link above or choose a block.</div>';
     }
     state.blocks.forEach(function (b) { list.appendChild(blockCard(b)); });
+    // renderInhalte() baut die Liste neu: dann hängt das alte Sortable an einer Liste, die es nicht mehr gibt
+    if (sortable && sortable.el !== list) { sortable.destroy(); sortable = null; }
     if (window.Sortable && !sortable) {
       sortable = new Sortable(list, {
         handle: '.blk-drag', animation: 160, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen',
+        // Geräte mit Touch: eigenes Ziehen statt Drag & Drop des Browsers (iOS Safari bricht das sonst oft ab);
+        // ein paar Pixel Spielraum, damit ein Tipp auf den Griff kein Ziehen startet
+        forceFallback: ('ontouchstart' in window) || navigator.maxTouchPoints > 0, fallbackTolerance: 3,
+        // Beim Ziehen an den Rand scrollt der Editor mit
+        scroll: true, scrollSensitivity: 80, bubbleScroll: true,
         onEnd: function () {
           var order = $$('.blk', list).map(function (el) { return el.dataset.id; });
           state.blocks.sort(function (a, b) { return order.indexOf(String(a.id)) - order.indexOf(String(b.id)); });
