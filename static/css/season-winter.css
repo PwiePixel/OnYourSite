@@ -67,7 +67,7 @@
 @keyframes oys-season-blink { 0%, 30% { opacity: 1; } 100% { opacity: .25; } }
 
 /* Schnee, der unten liegt: auf dem Fuß der Seite (im Footer) oder – ohne Footer – unten am Fenster */
-.season-winter footer.oys-season-footer { position: relative; padding-bottom: 84px; }
+.season-winter footer.oys-season-footer { position: relative; padding-bottom: 160px; }
 .season-winter footer.oys-season-footer::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 12px; pointer-events: none; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 12' width='120' height='12' preserveAspectRatio='none'%3E%3Cpath d='M0 6 C10 2 22 1 34 4 C46 7 54 2 66 2 C80 2 88 7 100 5 C108 4 114 3 120 6 L120 12 L0 12 Z' fill='%23e8eef8'/%3E%3Cpath d='M0 8 C12 5 24 4 36 6 C48 8 56 5 68 5 C82 5 90 9 102 7 C110 6 116 6 120 8 L120 12 L0 12 Z' fill='%23ffffff'/%3E%3C/svg%3E") 0 0 / 120px 12px repeat-x; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)); }
 .oys-season-drift { position: absolute; left: 0; right: 0; bottom: 0; height: 60px; pointer-events: none; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 60' width='240' height='60' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='s' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23ffffff'/%3E%3Cstop offset='1' stop-color='%23dbe7f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M0 34 C22 18 44 16 66 28 C86 39 104 22 128 20 C154 18 170 36 192 32 C210 29 226 22 240 34 L240 60 L0 60 Z' fill='%23c7d7ee'/%3E%3Cpath d='M0 40 C26 26 50 24 72 34 C92 43 112 30 136 28 C160 26 178 42 200 39 C218 36 230 32 240 40 L240 60 L0 60 Z' fill='url(%23s)'/%3E%3Ccircle cx='30' cy='38' r='1' fill='%23ffffff' opacity='.9'/%3E%3Ccircle cx='88' cy='40' r='1' fill='%23ffffff' opacity='.9'/%3E%3Ccircle cx='150' cy='36' r='1' fill='%23ffffff' opacity='.9'/%3E%3Ccircle cx='206' cy='42' r='1' fill='%23ffffff' opacity='.9'/%3E%3Ccircle cx='118' cy='48' r='1' fill='%23ffffff' opacity='.9'/%3E%3C/svg%3E") 0 100% / 240px 60px repeat-x; }
 .oys-season-drift.is-fixed { position: fixed; z-index: 40; height: 44px; background-size: 200px 44px; opacity: .95; }
@@ -78,12 +78,28 @@
   background: radial-gradient(40% 30% at 0% 100%, rgba(220, 38, 38, .12), transparent 70%), radial-gradient(40% 30% at 100% 100%, rgba(22, 163, 74, .1), transparent 70%);
 }
 
+/* Bea, die Biene von OnYourSite, sitzt mit Mütze und Schal rechts auf dem Schnee (im Footer; ohne Footer unten am
+   Fenster, am Handy dort nicht, damit sie nichts verdeckt). Sie wippt ganz leicht und fängt keine Klicks ab */
+.oys-season-drift::after {
+  content: ''; position: absolute; right: max(16px, 6%); bottom: 20px; width: 128px; height: 128px; pointer-events: none;
+  background: url("../images/mascot/bea-winter.svg") center / contain no-repeat;
+  animation: oys-season-bea 3.6s ease-in-out infinite alternate;
+}
+.oys-season-drift.is-fixed::after { width: 96px; height: 96px; bottom: 12px; }
+@keyframes oys-season-bea { from { transform: translateY(0) rotate(-2deg); } to { transform: translateY(-5px) rotate(2deg); } }
+@media (max-width: 639px) {
+  /* Im Footer mehr Platz darunter, damit Bea neben dem Text sitzt und ihn nicht verdeckt */
+  .season-winter footer.oys-season-footer { padding-bottom: 136px; }
+  .oys-season-drift::after { width: 100px; height: 100px; }
+  .oys-season-drift.is-fixed::after { display: none; }
+}
+
 /* Eisblaue Akzente: Fokusrahmen und markierter Text */
 .season-winter ::selection { background: rgba(147, 197, 253, .35); color: #fff; }
 .season-winter a:focus-visible, .season-winter button:focus-visible, .season-winter input:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .oys-season-1, .oys-season-2, .oys-season-lights::before, .oys-season-lights::after { animation: none; }
+  .oys-season-1, .oys-season-2, .oys-season-lights::before, .oys-season-lights::after, .oys-season-drift::after { animation: none; }
 }
 @media print {
   .oys-season, .oys-season-lights, .oys-season-drift { display: none; }

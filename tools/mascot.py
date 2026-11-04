@@ -1,7 +1,10 @@
-"""Hexi, die Biene von OnYourSite: erzeugt die Posen als SVG. Aufruf: python3 tools/mascot.py static/images/mascot
+"""Bea, die Biene von OnYourSite: erzeugt die Posen als SVG. Aufruf: python3 tools/mascot.py static/images/mascot
 Aufbau (viewBox 400 × 400): Bodenschatten, Flügel (hinten), Hinterleib mit Streifen und Stachel, Beine, Kopf mit Gesicht,
 Fühler mit Waben-Enden, Arme; je Pose Zubehör (Mütze und Schal, Konfetti)."""
 import math, os, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from santa_hat import hat_svg  # dieselbe Mütze wie auf dem Logo im Winter-Look
 
 INK = '#3a2312'      # Umriss und Streifen
 VIOLET = '#6366f1'   # Markenfarbe (Waben an den Fühlern, Flügelrand)
@@ -18,7 +21,7 @@ DEFS = """<defs>
 <radialGradient id='belly' cx='38%' cy='28%' r='85%'><stop offset='0' stop-color='#ffe9a3'/><stop offset='.5' stop-color='#fbbf24'/><stop offset='1' stop-color='#d47f0a'/></radialGradient>
 <linearGradient id='wing' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#ffffff' stop-opacity='.95'/><stop offset='.5' stop-color='#dfe3ff' stop-opacity='.8'/><stop offset='1' stop-color='#a5b4fc' stop-opacity='.65'/></linearGradient>
 <radialGradient id='eye' cx='45%' cy='40%' r='65%'><stop offset='0' stop-color='#4b3a6b'/><stop offset='.6' stop-color='#241a35'/><stop offset='1' stop-color='#120c1c'/></radialGradient>
-<linearGradient id='hexi' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#a5b4fc'/><stop offset='1' stop-color='#4f46e5'/></linearGradient>
+<linearGradient id='cell' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#a5b4fc'/><stop offset='1' stop-color='#4f46e5'/></linearGradient>
 <linearGradient id='red' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#f25555'/><stop offset='.55' stop-color='#d61f2c'/><stop offset='1' stop-color='#9f1239'/></linearGradient>
 <radialGradient id='fur' cx='40%' cy='35%' r='75%'><stop offset='0' stop-color='#ffffff'/><stop offset='1' stop-color='#dbe3ef'/></radialGradient>
 <linearGradient id='knit' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#22c55e'/><stop offset='1' stop-color='#15803d'/></linearGradient>
@@ -79,7 +82,7 @@ def antennae():
     for side in (-1, 1):
         x0, x1 = 200 + side * 40, 200 + side * 78
         s += f"<path d='M{x0} 74 C{x0 + side * 6} 52 {x1 - side * 10} 36 {x1} 24' stroke='{INK}' stroke-width='8' stroke-linecap='round' fill='none'/>"
-        s += hexagon(x1 + side * 4, 20, 17, 'url(#hexi)', '#3730a3', 4)
+        s += hexagon(x1 + side * 4, 20, 17, 'url(#cell)', '#3730a3', 4)
         s += f"<circle cx='{x1 + side * 4 - 5}' cy='14' r='4' fill='#ffffff' opacity='.8'/>"
     return s
 
@@ -119,23 +122,12 @@ def arm(side, pose='down'):
 
 
 def santa_hat():
-    # Sitzt auf dem Kopf: der Fellrand folgt der Kopfrundung, die Spitze fällt nach links neben den Kopf, der Bommel
-    # hängt links unten gut sichtbar
-    s = "<g transform='rotate(-3 200 100)'>"
-    s += ("<path d='M292 110 C298 76 286 40 256 24 C226 10 186 12 158 30 C132 48 112 76 100 108 C94 126 90 148 92 166 "
-          "C102 150 114 132 130 116 C134 112 138 108 142 104 Z' fill='url(#red)'/>")
-    s += ("<path d='M104 104 C114 76 130 56 148 44' stroke='#ffffff' stroke-width='5' opacity='.25' fill='none' stroke-linecap='round'/>"
-          "<path d='M130 116 C160 80 206 62 252 64' stroke='#7f1d1d' stroke-width='4' opacity='.4' fill='none' stroke-linecap='round'/>")
-    # Fellrand: Wolke aus Kreisen entlang eines Bogens über der Stirn
-    for i in range(9):
-        t = i / 8
-        x = 116 + t * 170
-        y = 116 - math.sin(t * math.pi) * 22 + (6 if i in (0, 8) else 0)
-        s += f"<circle cx='{x:.1f}' cy='{y:.1f}' r='{19 if i not in (0, 8) else 16}' fill='url(#fur)'/>"
-    s += "<path d='M122 128 C170 110 236 108 284 124' stroke='#b6c2d4' stroke-width='4' fill='none' opacity='.7' stroke-linecap='round'/>"
-    # Bommel an der herabhängenden Spitze
-    s += "<circle cx='90' cy='172' r='21' fill='url(#fur)'/><circle cx='83' cy='164' r='6.5' fill='#ffffff'/>"
-    return s + '</g>'
+    # Die Mütze vom Logo (tools/santa_hat.py), groß auf dem Kopf: der Fellrand liegt auf der Stirn über den Augen, Spitze
+    # und Bommel fallen links neben den Kopf
+    inner = hat_svg().replace("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 64'>", '').replace('</svg>', '')
+    inner = inner.replace("id='r'", "id='hatR'").replace("id='f'", "id='hatF'").replace('url(#r)', 'url(#hatR)').replace('url(#f)', 'url(#hatF)')
+    return ("<g transform='rotate(-5 200 110)'><svg x='97' y='-6' width='200' height='160' viewBox='0 0 80 64' overflow='visible'>"
+            + inner + "</svg></g>")
 
 
 def scarf():
@@ -167,15 +159,15 @@ def svg(title, parts):
 
 
 POSES = {
-    'hello': ('Hexi, the OnYourSite bee, waving', lambda: [shadow(), wings(), legs(), belly(), arm(-1), arm(1, 'wave'), head(), tuft(), antennae(), face()]),
-    'winter': ('Hexi, the OnYourSite bee, in a Santa hat and scarf', lambda: [shadow(), wings(), legs(), belly(), arm(-1), arm(1), head(), face(), scarf(), santa_hat()]),
-    'celebrate': ('Hexi, the OnYourSite bee, celebrating', lambda: [confetti(), shadow(), wings(8), legs(), belly(), arm(-1, 'up'), arm(1, 'up'), head(), tuft(), antennae(), face('joy')]),
+    'hello': ('Bea, the OnYourSite bee, waving', lambda: [shadow(), wings(), legs(), belly(), arm(-1), arm(1, 'wave'), head(), tuft(), antennae(), face()]),
+    'winter': ('Bea, the OnYourSite bee, in a Santa hat and scarf', lambda: [shadow(), wings(), legs(), belly(), arm(-1), arm(1), head(), face(), scarf(), santa_hat()]),
+    'celebrate': ('Bea, the OnYourSite bee, celebrating', lambda: [confetti(), shadow(), wings(8), legs(), belly(), arm(-1, 'up'), arm(1, 'up'), head(), tuft(), antennae(), face('joy')]),
 }
 
 if __name__ == '__main__':
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     for name, (title, parts) in POSES.items():
-        with open(os.path.join(out, f'hexi-{name}.svg'), 'w') as f:
+        with open(os.path.join(out, f'bea-{name}.svg'), 'w') as f:
             f.write(svg(title, parts()))
     print('ok', list(POSES))

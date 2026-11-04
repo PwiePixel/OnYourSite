@@ -19,6 +19,12 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '3.4.2', category: 'new', title: 'Say hello to Bea', announce: true,
+    body: 'Meet **Bea**, the OnYourSite bee:\n\n'
+      + '- This winter she sits in the snow at the bottom of our pages – with a Santa hat and a warm scarf\n'
+      + '- She wears the same hat as our logo',
+  },
+  {
     version: '3.4.1', category: 'improved', title: 'More winter on OnYourSite', announce: false,
     body: '- The fairy lights along the top now hang on one wire and twinkle gently, and our logo wears a new Santa hat\n'
       + '- Snow has settled at the bottom of our pages',

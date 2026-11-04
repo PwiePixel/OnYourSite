@@ -76,17 +76,12 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- Seasons and release 3.4.0 are in `main` (PR #25). Release 3.4.1 is on `feature/winter-lights`: the fairy lights
-  are SVG tiles (wire, sockets, bulbs; two glow groups in `::before`/`::after` blinking in turn) and snow lies at the
-  bottom – `applySeason()` gives the first `<footer>` the class `oys-season-footer` and puts `.oys-season-drift` in
-  it; pages without a footer get `.oys-season-drift.is-fixed` at the bottom of the window. The SVGs come from
-  `static/css/season-winter.css` only (no raw "#" in any data address – `seasons.test.ts` checks it).
-- Mascot draft on the same branch: Hexi the bee, three poses in `static/images/mascot/` (SVG from `tools/mascot.py`, PNG from
-  `tools/mascot-png.js`),
-  the design and the owner's open decisions in `docs/planning/designs/mascot.md` (not used on the site yet). 3.4.1
-  also has a new Santa hat (bobble on the left) that sits on top of the lights: in a fixed `<nav>` the lights are
-  its first child with `z-index: -1` (`.in-nav`), the logo icon is positioned above them. Then D6 (`onys.me`), D5
-  (docs), D4 (beta).
+- 3.4.1 is in `main` (PR #26). Release 3.4.2 is on `feature/bea`: the mascot is called **Bea** (the owner's choice;
+  `static/images/mascot/bea-*.svg` / `.png` from `tools/mascot.py` and `tools/mascot-png.js`), wears the logo's Santa
+  hat (one source: `tools/santa_hat.py`; `seasons.test.ts` checks that the CSS hat and Bea's hat are that SVG) and
+  sits in the winter theme on the snow: `.oys-season-drift::after` in `static/css/season-winter.css` (footer bottom
+  right; fixed drift bottom right, hidden below 640px). Design and open decisions: `docs/planning/designs/mascot.md`.
+- Then D6 (`onys.me`), D5 (docs), D4 (beta).
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the
