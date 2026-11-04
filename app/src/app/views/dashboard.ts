@@ -37,7 +37,10 @@ export function dashboardView(d: DashboardViewData): string {
   const user = d.userData;
   o += "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <!-- Die Seite ist schon dunkel: kein Nachtmodus des Browsers darüber (z. B. Brave, Dark Reader) -->\n    <meta name=\"color-scheme\" content=\"dark\">\n    <meta name=\"darkreader-lock\">\n    <title>Editor | OnYourSite</title>\n    <meta name=\"robots\" content=\"noindex\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap\" rel=\"stylesheet\">\n    <link rel=\"stylesheet\" href=\"";
   o += e(asset('/static/vendor/boxicons/css/boxicons.min.css'));
-  o += "\">\n    <link rel=\"icon\" type=\"image/png\" href=\"/static/images/favicon.png\">\n    <script src=\"https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js\"></script>\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n    <script>\n        tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'], }, colors: { background: '#000000', card: '#0a0a0a', inputbg: '#121212', bordercolor: '#27272a', brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', } } } } }\n    </script>\n    <link rel=\"stylesheet\" href=\"";
+  o += "\">\n    <link rel=\"icon\" type=\"image/png\" href=\"/static/images/favicon.png\">\n    <script src=\"";
+  // SortableJS (Blöcke verschieben) kommt von der eigenen Seite: ein blockiertes CDN machte das Verschieben unmöglich
+  o += e(asset('/static/vendor/sortablejs/Sortable.min.js'));
+  o += "\"></script>\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n    <script>\n        tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'], }, colors: { background: '#000000', card: '#0a0a0a', inputbg: '#121212', bordercolor: '#27272a', brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', } } } } }\n    </script>\n    <link rel=\"stylesheet\" href=\"";
   o += e(asset('/static/css/fonts.css'));
   o += "\">\n    <link rel=\"stylesheet\" href=\"";
   o += e(asset('/static/css/themes.css'));

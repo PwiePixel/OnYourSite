@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Fixed
+- Blocks in the editor can be dragged into a new order again – on phones and on a PC, also after changing the profile picture. The drag library now comes from OnYourSite itself, so content blockers can’t switch it off, and on phones the handle no longer scrolls the page instead.
+
 ## [3.1.0] - 2026-11-03
 
 ### Added

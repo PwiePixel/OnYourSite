@@ -179,6 +179,7 @@ static/css/            page.css (structure & layouts), themes.css (30 themes), e
 static/js/             page.js (profile page), editor.js (editor), share.js (QR code & sharing), ui.js (dialogs), bell.js (notifications), status.js / status-manage.js (status pages)
 static/vendor/qrcode/  QR code generator (qrcode-generator, MIT)
 static/vendor/codemirror/  Code editor for code pages (CodeMirror 5, MIT)
+static/vendor/sortablejs/  Drag and drop for the block list (SortableJS 1.15.2, MIT)
 static/fonts/          Self-hosted fonts (no Google requests on profile pages)
 discord-bot/           Discord bot (Node.js): welcome, suggestions, support – see its README
 server/                Installer for your own server (one file does everything), backup, certificate check – see server/README.md

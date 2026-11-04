@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-11-03 (UTC+1).
+Last update: 2026-11-03 (UTC+1), Stage D recorded.
 
 ## Release 3.0 – Node.js only (PR #15, merged into `main`)
 
@@ -76,10 +76,17 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- Roadmap v1 is in `main` (PR #20, squash commit `e41af5b`). `feature/release-system-node` brings the release system
-  of the old PHP branch `feature/release-system` to Node (3.1.0, see the handoff, point 2).
-- After that: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of
-  Stage C (`ROADMAP.md` §4.2).
+- The release system is in `main` (PR #21, squash commit `6403dfb`).
+- D1 (block reordering) is built on `feature/d1-block-reorder` (it also holds the Stage D plan): `renderBlocks()`
+  re-creates SortableJS when `renderInhalte()` rebuilt the list, SortableJS comes from `static/vendor/sortablejs/`, the
+  handle has `touch-action: none` and touch devices use Sortable's own dragging; browser flow
+  `tests/e2e/block-reorder.js`. Next: D2.
+- The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
+  bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
+  guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the
+  Cloudflare token).
+- Later: auto-renewal (HC-7c) once the Premium sale has started; status subscriptions (ST-6) and the rest of Stage C
+  (`ROADMAP.md` §4.2).
 
 Schema steps in order: 1–5 (2.x), 6 notifications index, 7 custom domains, 8 site addresses, 9 code slots,
 10 status tables, 11 shop core, 12 shop catalogue, 13 Discord delivery, 14 public pages, 15 branding legacy, 16 domain
