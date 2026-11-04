@@ -192,9 +192,10 @@ scripts/               release.sh (prepare a version), publish-releases.sh (used
 
 Every change is written down in [`CHANGELOG.md`](CHANGELOG.md) – first under **[Unreleased]**. To release a version:
 
-1. Run `scripts/release.sh 3.2.0` – it moves the entries from [Unreleased] into a new section `## [3.2.0] - YYYY-MM-DD` and writes the number into `VERSION`, `app/package.json` and `app/package-lock.json`.
-2. Commit and merge it into `main`.
-3. GitHub creates the tag `v3.2.0` and a release with exactly these notes and the source code as a ZIP (Actions → *Release*). The installed version is shown at the bottom of the admin menu.
+1. Run `scripts/release.sh 3.3.0` – it moves the entries from [Unreleased] into a new section `## [3.3.0] - YYYY-MM-DD` and writes the number into `VERSION`, `app/package.json` and `app/package-lock.json`.
+2. Write the text for visitors: an entry for the version in `app/src/updates/releaseNotes.ts`. A few minutes after the update, it waits as a draft in *Admin → Updates* – publish it there (it is announced on Discord if the entry says so).
+3. Commit and merge it into `main`.
+4. GitHub creates the tag `v3.3.0` and a release with exactly these notes and the source code as a ZIP (Actions → *Release*). The installed version is shown at the bottom of the admin menu.
 
 Pull requests without an entry in `CHANGELOG.md` get a failing *Changelog* check as a reminder (add the label `no-changelog` to skip it). The public `/updates` page is separate: it is written for visitors in the admin panel. After updating to 3.1, the release notes of 2.0 – 2.2 are published there and drafts for 3.0 and 3.1 are waiting in *Admin → Updates* – read them and publish them (only 3.1 is announced on Discord; use “Post to Discord” for 3.0 if you want it there too).
 

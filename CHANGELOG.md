@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-04
+
+### Added
+- Every new version brings its text for `/updates`: a few minutes after the update it waits as a draft in *Admin → Updates* (from `app/src/updates/releaseNotes.ts`; a deleted draft doesn’t come back).
+
+### Changed
+- A bigger block picker: large tiles with an icon, the name and a short description, up to four columns on a computer and two on a phone, and a search that filters while you type (Enter adds the first match).
+
 ### Fixed
 - Blocks in the editor can be dragged into a new order again – on phones and on a PC, also after changing the profile picture. The drag library now comes from OnYourSite itself, so content blockers can’t switch it off, and on phones the handle no longer scrolls the page instead.
 

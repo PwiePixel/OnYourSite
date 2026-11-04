@@ -11,6 +11,7 @@ import { ROOT_DIR, loadConfig, setConfigForTests, configString, type ConfigData 
 import { closePool } from '../src/db.js';
 import { ensureSchema, V_UPDATE_HISTORY } from '../src/schema.js';
 import { appVersion } from '../src/version.js';
+import { RELEASE_NOTES, seedReleaseNotes, shortVersion } from '../src/updates/releaseNotes.js';
 
 const BASE = loadConfig();
 const DB = configString('db.name', 'oys_test') + '_release';
@@ -156,4 +157,57 @@ test('history: a step that fails half way leaves nothing behind, and the next st
 test('the Release workflow only publishes from main, also when started by hand', () => {
   const wf = readFileSync(join(ROOT_DIR, '.github', 'workflows', 'release.yml'), 'utf8');
   assert.match(wf, /^\s+if: github\.ref == 'refs\/heads\/main'$/m);
+});
+
+// Jede Version ab 3.2 bringt ihren Text für /updates mit (updates/releaseNotes.ts)
+test('every version from 3.2 on has its text for /updates, and VERSION has one', () => {
+  const changelog = readFileSync(join(ROOT_DIR, 'CHANGELOG.md'), 'utf8');
+  const versions = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+  const key = (v: string) => v.split('.').map((n) => n.padStart(4, '0')).join('.');
+  const need = versions.filter((v) => key(v) >= key('3.2.0'));
+  assert.ok(need.includes(appVersion()), 'VERSION is in CHANGELOG.md');
+  for (const v of need) assert.ok(RELEASE_NOTES.some((n) => n.version === v), `release note for ${v} in app/src/updates/releaseNotes.ts`);
+  for (const n of RELEASE_NOTES) {
+    assert.ok(n.title.length > 0 && n.title.length <= 160, n.version);
+    assert.match(n.body, /^- /m, n.version);
+  }
+  assert.equal(shortVersion('3.2.0'), '3.2');
+  assert.equal(shortVersion('3.2.1'), '3.2.1');
+});
+
+async function seedIn(notes: Parameters<typeof seedReleaseNotes>[0]): Promise<string[]> {
+  setConfigForTests({ ...BASE, db: { ...(BASE.db as ConfigData), name: DB } });
+  await closePool();
+  try {
+    return await seedReleaseNotes(notes);
+  } finally {
+    await closePool();
+    setConfigForTests(BASE);
+  }
+}
+
+test('release notes: a draft once, never twice, not after it was deleted, not for a version written by hand', async () => {
+  await fresh();
+  await migrate();
+  const notes = [
+    { version: '9.1.0', category: 'new' as const, title: 'Nine one', body: '- a', announce: true },
+    { version: '9.2.0', category: 'fixed' as const, title: 'Nine two', body: '- b', announce: false },
+  ];
+  // 9.2 hat der Admin schon selbst geschrieben
+  await q("INSERT INTO `db`.updates (title, body, version, category, is_published, created_at, updated_at) VALUES ('Mine', 'x', 'v9.2', 'new', 1, NOW(), NOW())");
+  assert.deepEqual(await seedIn(notes), ['9.1.0']);
+  const rows = await q("SELECT title, version, is_published, published_at, discord_announce, category FROM `db`.updates WHERE version IN ('9.1', 'v9.2') ORDER BY id");
+  assert.deepEqual(rows, [
+    { title: 'Mine', version: 'v9.2', is_published: 1, published_at: null, discord_announce: 1, category: 'new' },
+    { title: 'Nine one', version: '9.1', is_published: 0, published_at: null, discord_announce: 1, category: 'new' },
+  ]);
+  assert.deepEqual(await seedIn(notes), [], 'a second run adds nothing');
+  // Gelöscht: kommt nicht wieder
+  await q("DELETE FROM `db`.updates WHERE version = '9.1'");
+  assert.deepEqual(await seedIn(notes), []);
+  assert.equal((await q("SELECT id FROM `db`.updates WHERE version = '9.1'")).length, 0);
+  const [meta] = await q("SELECT meta_value FROM `db`.oys_meta WHERE meta_key = 'release_notes'");
+  assert.deepEqual(JSON.parse(String(meta.meta_value)), ['9.1.0', '9.2.0']);
+  // Ein neuer Eintrag kommt dazu
+  assert.deepEqual(await seedIn([...notes, { version: '9.3.0', category: 'improved', title: 'Nine three', body: '- c', announce: true }]), ['9.3.0']);
 });

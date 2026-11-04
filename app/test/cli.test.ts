@@ -462,6 +462,10 @@ test('jobs:tick runs the due jobs once; an older schema skips them and still exi
   assert.equal(r.code, 0, r.err);
   const [rows] = await admin.query<RowDataPacket[]>(`SELECT meta_value FROM \`${DB.fresh}\`.oys_meta WHERE meta_key = 'jobs'`);
   assert.equal(JSON.parse(String(rows[0].meta_value)).honeycombs.ok, true);
+  // Texte neuer Versionen für /updates liegen danach als Entwurf bereit (updates/releaseNotes.ts)
+  assert.equal(JSON.parse(String(rows[0].meta_value)).release_notes.ok, true);
+  const [drafts] = await admin.query<RowDataPacket[]>(`SELECT version, is_published FROM \`${DB.fresh}\`.updates WHERE version = '3.2'`);
+  assert.deepEqual(drafts.map((d) => [d.version, Number(d.is_published)]), [['3.2', 0]]);
   // Gleich danach: nicht fällig, nichts gemeldet
   r = await node(['jobs:tick'], DB.fresh);
   assert.equal(r.code, 0);

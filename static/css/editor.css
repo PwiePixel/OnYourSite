@@ -183,16 +183,30 @@ input[type=range].range { width: 100%; accent-color: var(--e-brand); }
 .detect.warn { color: #fbbf24; }
 .detect svg { width: 14px; height: 14px; fill: currentColor; }
 
-.add-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+/* Block-Auswahl: große Kacheln mit Icon oben, Name und kurzem Satz; 2 Spalten am Handy, bis zu 4 am Schreibtisch */
+.modal-box.wide.picker { max-width: 900px; }
+.add-search { margin-bottom: 6px; }
+.add-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 @media (min-width: 560px) { .add-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.add-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: var(--e-input); border: 1px solid var(--e-border); text-align: left; transition: all .15s; }
-.add-item:hover { border-color: rgba(99, 102, 241, .6); background: rgba(99, 102, 241, .06); }
-.add-item .ai { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; font-size: 19px; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); flex: none; }
-.add-item .ai svg { width: 18px; height: 18px; fill: currentColor; }
-.add-item b { display: block; color: #fff; font-size: 13px; font-weight: 600; }
-.add-item small { display: block; color: var(--e-muted); font-size: 11px; line-height: 1.3; }
-.add-group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--e-muted); margin: 14px 0 8px; }
-.add-group:first-child { margin-top: 0; }
+@media (min-width: 860px) { .add-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.add-item { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-height: 124px; padding: 14px; border-radius: 14px; background: var(--e-input); border: 1px solid var(--e-border); text-align: left; transition: all .15s; }
+.add-item:hover, .add-item:focus-visible { border-color: rgba(99, 102, 241, .6); background: rgba(99, 102, 241, .06); transform: translateY(-1px); }
+.add-item:focus-visible { outline: 2px solid var(--e-brand-2); outline-offset: 2px; }
+.add-item .ai { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; font-size: 26px; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); flex: none; }
+.add-item .ai svg { width: 24px; height: 24px; fill: currentColor; }
+.add-item b { display: block; color: #fff; font-size: 15px; font-weight: 600; line-height: 1.25; }
+.add-item small { display: block; color: var(--e-muted); font-size: 12.5px; line-height: 1.4; margin-top: 3px; }
+.add-group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--e-muted); margin: 18px 0 10px; }
+.add-search + .add-section .add-group { margin-top: 10px; }
+.add-section.hidden, .add-item.hidden, .add-none.hidden { display: none; }
+.add-none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 12px; color: var(--e-muted); font-size: 14px; }
+.add-none i { font-size: 28px; }
+@media (max-width: 639px) {
+  /* Am Handy fast die ganze Höhe, die Suche bleibt beim Scrollen oben */
+  .modal-box.picker { max-height: calc(100dvh - 24px); }
+  .add-search { position: sticky; top: 67px; z-index: 1; background: #0c0c0e; padding: 4px 0 8px; margin: -4px 0 0; }
+  .add-item { min-height: 132px; padding: 14px 12px; }
+}
 
 /* ---------- Design: Theme-Galerie ---------- */
 .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
