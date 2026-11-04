@@ -76,11 +76,11 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- The release system is in `main` (PR #21, squash commit `6403dfb`).
-- D1 (block reordering) is built on `feature/d1-block-reorder` (it also holds the Stage D plan): `renderBlocks()`
-  re-creates SortableJS when `renderInhalte()` rebuilt the list, SortableJS comes from `static/vendor/sortablejs/`, the
-  handle has `touch-action: none` and touch devices use Sortable's own dragging; browser flow
-  `tests/e2e/block-reorder.js`. Next: D2.
+- D1 (block reordering) is in `main` (PR #22). D2 (bigger block picker) and release 3.2.0 are on
+  `feature/d2-block-picker`: big tiles with a search in `openAddBlockModal()` (`static/js/editor.js`, `.picker` in
+  `editor.css`), browser flow `tests/e2e/block-picker.js`. Every release from 3.2 on brings its text for `/updates` in
+  `app/src/updates/releaseNotes.ts`; the job `release_notes` (`jobs:tick`) writes missing ones as drafts once
+  (`oys_meta['release_notes']`), and `release.test.ts` fails when a version has none. Next: D3 (Christmas themes) as 3.3.0.
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the

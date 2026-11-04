@@ -358,6 +358,9 @@ async function jobsTick(args: string[], io: CliIo): Promise<number> {
   const { registerHoneycombJobs } = await import('./honeycombs/job.js');
   const { tick } = await import('./jobs/registry.js');
   registerHoneycombJobs();
+  // Texte neuer Versionen für /updates als Entwürfe (updates/releaseNotes.ts)
+  const { registerReleaseNotesJob } = await import('./updates/releaseNotes.js');
+  registerReleaseNotesJob();
   // Ein älteres Schema (Version gebaut, migrate noch nicht): jede Aufgabe meldet es und es endet mit 0
   const res = await tick({ force: args.includes('--force'), log: (line) => io.out(line + '\n') });
   return res.some((r) => r.outcome === 'failed') ? 1 : 0;

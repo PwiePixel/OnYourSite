@@ -1050,19 +1050,19 @@
   function openModal(title, bodyHtml, footHtml, onMount) {
     var box = $('#modalBox');
     shareOpen = null;
-    box.classList.remove('wide');
+    box.classList.remove('wide', 'picker');
     box.innerHTML = '<div class="modal-head"><h3 id="modalTitle">' + esc(title) + '</h3><button type="button" class="icon-btn" data-close aria-label="Close"><i class="bx bx-x"></i></button></div>' +
       '<div class="modal-body">' + bodyHtml + '</div>' + (footHtml ? '<div class="modal-foot">' + footHtml + '</div>' : '');
     $('#modal').classList.remove('hidden');
     if (!modalLayer) modalLayer = UI.layer($('#modal'), { labelledBy: 'modalTitle', onEscape: closeModal });
     if (onMount) onMount(box);
     var first = $('input, textarea', box);
-    if (first) setTimeout(function () { first.focus(); }, 40);
+    if (first && !first.hasAttribute('data-nofocus')) setTimeout(function () { first.focus(); }, 40);
   }
   function closeModal() {
     $('#modal').classList.add('hidden');
     $('#modalBox').innerHTML = '';
-    $('#modalBox').classList.remove('wide');
+    $('#modalBox').classList.remove('wide', 'picker');
     shareOpen = null;
     if (modalLayer) { var l = modalLayer; modalLayer = null; l.release(); }
   }
@@ -1700,18 +1700,48 @@
     }, 60);
   }
 
+  function isTouch() { return ('ontouchstart' in window) || navigator.maxTouchPoints > 0; }
   function openAddBlockModal() {
     var groups = {};
     Object.keys(TYPES).forEach(function (k) { (groups[TYPES[k].group] = groups[TYPES[k].group] || []).push(k); });
-    var html = Object.keys(groups).map(function (g) {
-      return '<div class="add-group">' + esc(g) + '</div><div class="add-grid">' + groups[g].map(function (k) {
-        var t = TYPES[k];
-        var ic = t.brand ? brandSvg(t.brand) : '<i class="' + t.icon + '"></i>';
-        return '<button type="button" class="add-item" data-add="' + k + '" style="--c:' + t.color + '"><span class="ai">' + ic + '</span><span><b>' + esc(t.name) + '</b><small>' + esc(t.desc) + '</small></span></button>';
-      }).join('') + '</div>';
-    }).join('');
+    // Große Kacheln (Icon, Name, kurzer Satz) nach Gruppen, darüber eine Suche
+    var html = '<div class="add-search input-group"><span class="addon left"><i class="bx bx-search text-base"></i></span>' +
+      '<input class="field" id="addSearch" type="search" placeholder="Search blocks" autocomplete="off" aria-label="Search blocks"' + (isTouch() ? ' data-nofocus' : '') + '></div>' +
+      Object.keys(groups).map(function (g) {
+        return '<div class="add-section"><div class="add-group">' + esc(g) + '</div><div class="add-grid">' + groups[g].map(function (k) {
+          var t = TYPES[k];
+          var ic = t.brand ? brandSvg(t.brand) : '<i class="' + t.icon + '"></i>';
+          return '<button type="button" class="add-item" data-add="' + k + '" data-find="' + esc((t.name + ' ' + t.desc).toLowerCase()) + '" style="--c:' + t.color + '">' +
+            '<span class="ai">' + ic + '</span><span class="at"><b>' + esc(t.name) + '</b><small>' + esc(t.desc) + '</small></span></button>';
+        }).join('') + '</div></div>';
+      }).join('') +
+      '<div class="add-none hidden"><i class="bx bx-search-alt"></i>No block matches your search.</div>';
     openModal('Add block', html, '', function (box) {
-      $('.modal-body', box).addEventListener('click', function (ev) {
+      box.classList.add('wide', 'picker');
+      var body = $('.modal-body', box);
+      var search = $('#addSearch', box);
+      search.addEventListener('input', function () {
+        var q = search.value.trim().toLowerCase();
+        var any = false;
+        $$('.add-section', body).forEach(function (sec) {
+          var shown = 0;
+          $$('.add-item', sec).forEach(function (it) {
+            var hit = !q || it.dataset.find.indexOf(q) !== -1;
+            it.classList.toggle('hidden', !hit);
+            if (hit) shown++;
+          });
+          sec.classList.toggle('hidden', !shown);
+          if (shown) any = true;
+        });
+        $('.add-none', body).classList.toggle('hidden', any);
+      });
+      // Enter nimmt den ersten Treffer
+      search.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Enter' || ev.isComposing || !search.value.trim()) return;
+        var first = $$('.add-item', body).filter(function (it) { return !it.classList.contains('hidden'); })[0];
+        if (first) { ev.preventDefault(); first.click(); }
+      });
+      body.addEventListener('click', function (ev) {
         var btn = ev.target.closest('[data-add]');
         if (!btn) return;
         var b = newBlock(btn.dataset.add);
@@ -1743,7 +1773,7 @@
         handle: '.blk-drag', animation: 160, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen',
         // Geräte mit Touch: eigenes Ziehen statt Drag & Drop des Browsers (iOS Safari bricht das sonst oft ab);
         // ein paar Pixel Spielraum, damit ein Tipp auf den Griff kein Ziehen startet
-        forceFallback: ('ontouchstart' in window) || navigator.maxTouchPoints > 0, fallbackTolerance: 3,
+        forceFallback: isTouch(), fallbackTolerance: 3,
         // Beim Ziehen an den Rand scrollt der Editor mit
         scroll: true, scrollSensitivity: 80, bubbleScroll: true,
         onEnd: function () {

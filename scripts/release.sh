@@ -42,4 +42,7 @@ node -e '
     if (j.packages && j.packages[""]) j.packages[""].version = process.argv[1];
     fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
   }' "$version"
+if ! grep -q "version: '$version'" app/src/updates/releaseNotes.ts; then
+  echo "Now write the text for /updates: add an entry for '$version' to app/src/updates/releaseNotes.ts (the tests check it)."
+fi
 echo "Prepared $version: check CHANGELOG.md, commit it (e.g. \"Release $version\") and merge it into main."
