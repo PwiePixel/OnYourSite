@@ -105,13 +105,30 @@ export function applySeason(html: string, key: string): string {
   if (head === -1 || !bodyMatch || bodyMatch.index < head) return html;
   let body = bodyMatch[0];
   const cls = /\sclass="([^"]*)"/i.exec(body);
-  body = cls ? body.replace(cls[0], ' class="' + (cls[1] ? cls[1] + ' ' : '') + 'season-' + key + '"') : body.replace(/>$/, ' class="season-' + key + '">');
-  // Deko unter der Navigation (Schnee, Schein) und – als eigenes Element darüber – die Lichterkette am oberen Rand
-  const deco = '<div class="oys-season" aria-hidden="true"><span class="oys-season-1"></span><span class="oys-season-2"></span><span class="oys-season-3"></span></div>'
-    + '<div class="oys-season-lights" aria-hidden="true"></div>';
+  body = cls ? body.replace(cls[0], () => ' class="' + (cls[1] ? cls[1] + ' ' : '') + 'season-' + key + '"') : body.replace(/>$/, ' class="season-' + key + '">');
+  // Deko unter der Navigation (Schnee, Schein)
+  const deco = '<div class="oys-season" aria-hidden="true"><span class="oys-season-1"></span><span class="oys-season-2"></span><span class="oys-season-3"></span></div>';
   const link = '<link rel="stylesheet" href="' + asset(theme.css) + '">';
   const afterBody = bodyMatch.index + bodyMatch[0].length;
-  return html.slice(0, head) + link + html.slice(head, bodyMatch.index) + body + deco + html.slice(afterBody);
+  let rest = html.slice(afterBody);
+  // Schnee, der unten liegt: im ersten <footer> (Klasse oys-season-footer, die Verwehung gleich hinter dem Tag) –
+  // ohne Footer unten am Fenster
+  const footer = /<footer\b[^>]*>/i.exec(rest);
+  const drift = '<div class="oys-season-drift" aria-hidden="true"></div>';
+  if (footer) {
+    let tag = footer[0];
+    const fc = /\sclass="([^"]*)"/i.exec(tag);
+    tag = fc ? tag.replace(fc[0], () => ' class="' + (fc[1] ? fc[1] + ' ' : '') + 'oys-season-footer"') : tag.replace(/>$/, ' class="oys-season-footer">');
+    rest = rest.slice(0, footer.index) + tag + drift + rest.slice(footer.index + footer[0].length);
+  }
+  // Die Lichterkette: in der fixierten Kopfzeile ganz hinten (unter Logo und Mütze), sonst oben am Fenster
+  // Eine <nav> mit der Klasse „fixed“ (als eigenes Wort in class, nicht md:fixed oder fixed-top)
+  const nav = /<nav\b[^>]*\sclass="(?:[^"]*\s)?fixed(?:\s[^"]*)?"[^>]*>/i.exec(rest);
+  let lights = '';
+  if (nav) rest = rest.slice(0, nav.index + nav[0].length) + '<div class="oys-season-lights in-nav" aria-hidden="true"></div>' + rest.slice(nav.index + nav[0].length);
+  else lights = '<div class="oys-season-lights" aria-hidden="true"></div>';
+  const bottom = (footer ? '' : '<div class="oys-season-drift is-fixed" aria-hidden="true"></div>') + lights;
+  return html.slice(0, head) + link + html.slice(head, bodyMatch.index) + body + deco + bottom + rest;
 }
 
 // Seiten, die ein Saison-Thema bekommen (Adresse auf der Hauptseite); die 404-Seite setzt es selbst

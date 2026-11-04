@@ -76,18 +76,17 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- D1–D3 are in `main` (PR #22–#24; releases 3.2.0 and 3.3.0). The owner's next ask came first: *Admin → Seasons* and
-  release 3.4.0 are on `feature/seasons`. `app/src/seasons/seasons.ts` holds the season themes (first: `winter`,
-  CSS in `static/css/season-winter.css`: snow, frost glow, fairy lights `.oys-season-lights` above the nav, a Santa hat
-  as an SVG data address on the logo icons `.bx-hive.text-brand-500` / `.bx-hive.text-white`), the settings in `oys_meta['site_seasons']` (Off / On / Automatic with
-  month-day dates, also across the new year; winter starts as Automatic 12-01 to 01-06 until the admin saves; cached
-  15 s per process) and `applySeason()`, which adds the stylesheet,
-  the class `season-<key>` on `<body>` and the decoration. Routes mark OnYourSite's own pages with
-  `ctx.seasonPage` (`isSeasonPath()` in `app/src/app/dispatch.ts`, the 404 page in `public/notFound.ts`), and
-  `server.ts` calls `seasonalBody()` after every request; `?season_preview=<key>` shows a theme while it is off. Users'
-  pages, the editor and the admin never get it; with no theme active every page stays byte for byte as before (the
-  PHP comparisons are untouched). Admin section: `app/src/seasons/admin.ts` (`season_action=save`). Tests:
-  `app/test/seasons.test.ts`, browser flow `tests/e2e/seasons.js`. Next: D6 (`onys.me`), then D5 (docs) and D4 (beta).
+- Seasons and release 3.4.0 are in `main` (PR #25). Release 3.4.1 is on `feature/winter-lights`: the fairy lights
+  are SVG tiles (wire, sockets, bulbs; two glow groups in `::before`/`::after` blinking in turn) and snow lies at the
+  bottom – `applySeason()` gives the first `<footer>` the class `oys-season-footer` and puts `.oys-season-drift` in
+  it; pages without a footer get `.oys-season-drift.is-fixed` at the bottom of the window. The SVGs come from
+  `static/css/season-winter.css` only (no raw "#" in any data address – `seasons.test.ts` checks it).
+- Mascot draft on the same branch: Hexi the bee, three poses in `static/images/mascot/` (SVG from `tools/mascot.py`, PNG from
+  `tools/mascot-png.js`),
+  the design and the owner's open decisions in `docs/planning/designs/mascot.md` (not used on the site yet). 3.4.1
+  also has a new Santa hat (bobble on the left) that sits on top of the lights: in a fixed `<nav>` the lights are
+  its first child with `z-index: -1` (`.in-nav`), the logo icon is positioned above them. Then D6 (`onys.me`), D5
+  (docs), D4 (beta).
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the

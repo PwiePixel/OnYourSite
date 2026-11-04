@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-11-04
+
+### Changed
+- Winter season theme: the fairy lights hang on one sagging wire with real-looking sockets and bulbs, and two groups of bulbs glow up gently in turn. A new Santa hat on the OnYourSite logo – a fluffy trim, a tip that falls to the left with its bobble – sits on top of the fairy lights. Snow lies at the bottom of the page – a snow edge on the footer and drifts below it, or at the bottom of the window on pages without a footer.
+
 ## [3.4.0] - 2026-11-04
 
 ### Added

@@ -52,7 +52,27 @@ test('applying a theme: stylesheet before </head>, a class on <body>, the decora
   const out = applySeason(html, 'winter');
   assert.match(out, /<link rel="stylesheet" href="\/static\/css\/season-winter\.css\?v=[0-9a-f]{8}"><\/head>/);
   assert.match(out, /<body class="bg-black text-white season-winter"><div class="oys-season" aria-hidden="true">/);
-  assert.equal(out.replace(/<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>/, '').replace(' season-winter', '').replace(/<div class="oys-season"[^]*?<\/div><div class="oys-season-lights" aria-hidden="true"><\/div>/, ''), html);
+  assert.equal(out.replace(/<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>/, '').replace(' season-winter', '').replace(/<div class="oys-season"[^]*?<\/div><div class="oys-season-drift is-fixed" aria-hidden="true"><\/div><div class="oys-season-lights" aria-hidden="true"><\/div>/, ''), html);
+  // Mit Footer: die Verwehung liegt im ersten Footer (Klasse oys-season-footer), nicht unten am Fenster
+  const withFooter = applySeason('<html><head></head><body><main>x</main><footer class="py-12 border-t">a</footer><footer>b</footer></body></html>', 'winter');
+  assert.match(withFooter, /<footer class="py-12 border-t oys-season-footer"><div class="oys-season-drift" aria-hidden="true"><\/div>a<\/footer><footer>b<\/footer>/);
+  assert.doesNotMatch(withFooter, /is-fixed/);
+  assert.match(applySeason('<html><head></head><body><footer id="f">a</footer></body></html>', 'winter'), /<footer id="f" class="oys-season-footer"><div class="oys-season-drift"/);
+  // Mit fixierter Kopfzeile: die Kette hängt ganz vorn in ihr (hinter Logo und Mütze), nicht oben am Fenster
+  const withNav = applySeason('<html><head></head><body><nav aria-label="x" class="mt-8"></nav><nav class="fixed w-full z-50 top-0"><a>Logo</a></nav><footer>f</footer></body></html>', 'winter');
+  assert.match(withNav, /<nav class="fixed w-full z-50 top-0"><div class="oys-season-lights in-nav" aria-hidden="true"><\/div><a>Logo<\/a><\/nav>/);
+  assert.match(withNav, /<nav aria-label="x" class="mt-8"><\/nav>/, 'a nav that isn’t fixed stays as it is');
+  assert.equal((withNav.match(/oys-season-lights/g) ?? []).length, 1, 'one string of lights');
+  // Nur die Klasse „fixed“ selbst zählt – nicht md:fixed, fixed-top oder das Wort in einem anderen Attribut
+  for (const nav of ['<nav class="md:fixed top-0">', '<nav class="fixed-top">', '<nav aria-label="fixed menu" class="top-0">']) {
+    const out = applySeason('<html><head></head><body>' + nav + '</nav></body></html>', 'winter');
+    assert.doesNotMatch(out, /in-nav/, nav);
+    assert.match(out, /<div class="oys-season-lights" aria-hidden="true"><\/div>/, nav);
+  }
+  // Klassen mit $ bleiben, wie sie sind (kein Ersetzungsmuster)
+  const dollar = applySeason('<html><head></head><body class="a$&b"><footer class="x$1y">a</footer></body></html>', 'winter');
+  assert.match(dollar, /<body class="a\$&b season-winter">/);
+  assert.match(dollar, /<footer class="x\$1y oys-season-footer">/);
   // <body> ohne Klasse, mit anderen Attributen
   assert.match(applySeason('<html><head></head><body id="b" data-x="1"></body></html>', 'winter'), /<body id="b" data-x="1" class="season-winter"><div class="oys-season"/);
   // Ohne <head> oder <body>, oder ein unbekanntes Thema: unverändert
@@ -81,18 +101,48 @@ test('the snow loops without jumping: every animation ends on a whole tile', () 
 test('the Santa hat on the logo: a working SVG (no raw “#” in the data address), only on the logo icons, and the fairy lights', () => {
   const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8');
   const uris = [...css.matchAll(/url\("data:image\/svg\+xml,([^"]*)"\)/g)].map((m) => m[1]);
-  assert.equal(uris.length, 1, 'one hat');
-  // Ein rohes # beendet die Adresse (Rest = Fragment): die Mütze wäre unsichtbar
-  assert.doesNotMatch(uris[0], /#/);
-  const svg = decodeURIComponent(uris[0]);
-  assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 64 56'>[\s\S]*<\/svg>$/);
-  assert.match(svg, /fill='#dc2626'/);
+  // Ein rohes # beendet die Adresse (Rest = Fragment): die Grafik wäre unsichtbar
+  for (const u of uris) {
+    assert.doesNotMatch(u, /#/);
+    assert.match(decodeURIComponent(u), /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' [^>]*>[\s\S]*<\/svg>$/);
+  }
+  const hats = uris.filter((u) => decodeURIComponent(u).includes("viewBox='0 0 80 64'"));
+  assert.equal(hats.length, 1, 'one hat');
+  const svg = decodeURIComponent(hats[0]);
+  assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'>[\s\S]*<\/svg>$/);
+  // Rote Mütze in einem Stück, Bommel links (der Mittelpunkt liegt in der linken Hälfte), Fellrand unten
+  assert.match(svg, /stop-color='#d61f2c'/);
+  const bobble = /<circle cx='([\d.]+)' cy='([\d.]+)' r='7\.5' fill='url\(#f\)'\/>/.exec(svg);
+  assert.ok(bobble && Number(bobble[1]) < 20, 'the bobble hangs on the left');
+  assert.match(svg, /<rect x='10' y='42' width='62' height='14' rx='7' fill='url\(#f\)'\/>/);
   // Nur das Logo (Kopfzeile: text-brand-500, Anmelden/Registrieren: text-white) – nicht die gelben Honigwaben im Text
   assert.match(css, /\.season-winter \.bx-hive\.text-brand-500::after, \.season-winter \.bx-hive\.text-white::after \{/);
   assert.doesNotMatch(css, /text-yellow/);
   // Die Lichterkette liegt über der Navigation (z-50), fängt aber nichts ab und steht still ohne Bewegung
-  assert.match(css, /\.oys-season-lights \{\n {2}position: fixed; left: 0; right: 0; top: 0; height: 22px; z-index: 55; pointer-events: none;/);
-  assert.match(css, /prefers-reduced-motion: reduce\) \{\n {2}\.oys-season-1, \.oys-season-2, \.oys-season-lights \{ animation: none; \}/);
+  assert.match(css, /\.oys-season-lights \{\n {2}position: fixed; left: 0; right: 0; top: 0; height: 40px; z-index: 55; pointer-events: none;/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\n {2}\.oys-season-1, \.oys-season-2, \.oys-season-lights::before, \.oys-season-lights::after \{ animation: none; \}/);
+  // Eine Kette: Kabel und Birnen in einer Kachel, die nahtlos weiterläuft (Kabel beginnt und endet auf derselben Höhe)
+  const base = uris.map((u) => decodeURIComponent(u)).find((x) => x.includes("stroke='#0f2e1a'"));
+  assert.ok(base, 'the wire');
+  const wire = /<path d='M0 ([\d.]+) Q[\d.]+ [\d.]+ (\d+) ([\d.]+)'/.exec(base);
+  assert.ok(wire && wire[1] === wire[3], 'the wire ends where the next tile starts');
+  assert.equal((base.match(/<rect /g) ?? []).length, 8, 'four sockets (two parts each)');
+  // Zwei Gruppen blinken abwechselnd: mit „alternate“ dauert ein Hin und Zurück 2 × 2,4 s, die halbe Periode ist also
+  // 2,4 s – sanft, nie ganz aus
+  assert.match(css, /\.oys-season-lights::before \{ background-image: url\("[^"]*"\); animation: oys-season-blink 2\.4s ease-in-out infinite alternate; \}/);
+  assert.match(css, /\.oys-season-lights::after \{ background-image: url\("[^"]*"\); animation: oys-season-blink 2\.4s ease-in-out -2\.4s infinite alternate; \}/);
+  assert.match(css, /@keyframes oys-season-blink \{ 0%, 30% \{ opacity: 1; \} 100% \{ opacity: \.25; \} \}/);
+  // Das Logo leuchtet nicht (kein Schein), die Kette läuft ohne Lücke durch und liegt in der Kopfzeile hinter dem
+  // Logo – die Mütze ist darüber
+  assert.doesNotMatch(css, /mask-image|--oys-logo|\.bx-hive\.text-brand-500 \{ filter/);
+  assert.match(css, /\.oys-season-lights\.in-nav \{ position: absolute; z-index: -1; \}/);
+  assert.match(css, /\.season-winter \.bx-hive\.text-brand-500, \.season-winter \.bx-hive\.text-white \{ position: relative; z-index: 1; \}/);
+  // Schnee unten: im Footer (Platz darunter) oder unten am Fenster; fängt nichts ab
+  assert.match(css, /\.season-winter footer\.oys-season-footer \{ position: relative; padding-bottom: 84px; \}/);
+  assert.match(css, /\.oys-season-drift \{ position: absolute; left: 0; right: 0; bottom: 0; height: 60px; pointer-events: none;/);
+  assert.match(css, /\.oys-season-drift\.is-fixed \{ position: fixed;/);
+  // Beim Drucken keine Deko und kein zusätzlicher Platz im Footer
+  assert.match(css, /@media print \{[^}]*\}[^@]*\.season-winter footer\.oys-season-footer \{ padding-bottom: revert; \}[^@]*\.season-winter footer\.oys-season-footer::before \{ display: none; \}/);
 });
 
 test('the pages that get a theme', () => {
