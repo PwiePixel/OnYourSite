@@ -76,12 +76,22 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- 3.4.1 is in `main` (PR #26). Release 3.4.2 is on `feature/bea`: the mascot is called **Bea** (the owner's choice;
-  `static/images/mascot/bea-*.svg` / `.png` from `tools/mascot.py` and `tools/mascot-png.js`), wears the logo's Santa
-  hat (one source: `tools/santa_hat.py`; `seasons.test.ts` checks that the CSS hat and Bea's hat are that SVG) and
-  sits in the winter theme on the snow: `.oys-season-drift::after` in `static/css/season-winter.css` (footer bottom
-  right; fixed drift bottom right, hidden below 640px). Design and open decisions: `docs/planning/designs/mascot.md`.
-- Then D6 (`onys.me`), D5 (docs), D4 (beta).
+- Release 3.5.0 (D4, the beta) is on `feature/beta`, built on `feature/bea` (3.4.2, PR #27) – merge #27 first.
+  - `beta.<domain>` is answered by the main app (`app/src/router.ts` → `app/src/beta/routes.ts`): log in with the
+    OnYourSite account (same users table and login limits; its own session cookie on that host), the panel (what to
+    test from `oys_meta['beta_notes']`, the report form, the own reports with status and reply), a note for everyone
+    else. Access (`betaAccess()` in `app/src/beta/beta.ts`): `users.beta_at` set and a Discord ID linked – or admin.
+  - Schema step 23 `beta`: `users.beta_at/beta_by/beta_discord/beta_role/beta_role_error`, table `beta_reports`;
+    the address `beta` is reserved (a page called beta moved to the path, its owner was notified).
+  - *Admin → Beta* (`app/src/beta/admin.ts`, `beta_action=grant|revoke|retry|answer|notes`).
+  - Discord: bot action `beta.role` (feature `beta.v1`, ref `beta:<user>`), `discord-bot/src/beta.js` gives or takes
+    the role "Beta Tester" (`BETA_ROLE_ID` optional, created if missing) and answers given / removed / not_on_server;
+    `onRoleResult()` stores it. A Discord ID change in the editor (`editorApi.ts`, action `discord`) calls
+    `discordChanged()`.
+  - Tests: `app/test/beta.test.ts`, `discord-bot/test/beta.test.js`, browser flow `tests/e2e/beta.js`.
+  - Not in it: a separate beta build of the code (beta.<domain> runs the same code as the main site), a verified
+    Discord link (the Discord ID is typed in by the user; the admin sees it before adding a tester).
+- Then D6 (`onys.me`) and D5 (docs).
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user
   guide at `docs.on-your.site`, D6 the short domain `onys.me` (installer asks for it and for adding the zone to the

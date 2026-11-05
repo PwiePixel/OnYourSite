@@ -11,9 +11,11 @@ import { adminImpersonate, adminReturn } from './app/impersonate.js';
 import { appRoutes } from './app/dispatch.js';
 import { ensureSchemaOnce } from './schema.js';
 import { domainsAvailable, hostRoute } from './domains/index.js';
-import { DbUnavailableError, dbReachable } from './db.js';
+import { DbUnavailableError, dbReachable, one } from './db.js';
 import { statusHealth, statusHeartbeat, statusVerify } from './status/endpoints.js';
 import { statusDbDownHost } from './status/routes.js';
+import { betaRoutes } from './beta/routes.js';
+import { betaUrl, isBetaHost } from './beta/beta.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -73,7 +75,7 @@ export async function dispatch(ctx: Ctx): Promise<void> {
       await dbReachable();
     } catch (err) {
       // Statusseiten: ohne Datenbank ihre letzte Ausgabe bzw. die Notfall-Seite statt der allgemeinen 503-Seite
-      if (err instanceof DbUnavailableError && !isMainHost(ctx.host)) statusDbDownHost(ctx, ctx.host.slice(0, ctx.host.length - baseHost().length - 1));
+      if (err instanceof DbUnavailableError && !isMainHost(ctx.host) && !isBetaHost(ctx.host)) statusDbDownHost(ctx, ctx.host.slice(0, ctx.host.length - baseHost().length - 1));
       throw err;
     }
   }
@@ -89,12 +91,16 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   // 1. Öffentliche Endpunkte ohne Cookies (auf jeder Adresse gleich)
   if (path.startsWith('/_/')) {
     ctx.header('X-Robots-Tag', 'noindex');
+    // Ziel der Beta-Benachrichtigungen: immer der Beta-Bereich
+    if (path === '/_/beta') ctx.redirect(betaUrl('/'));
     // Statusseiten: Heartbeats (Token in der Adresse)
     if (path.startsWith('/_/hb/')) return statusHeartbeat(ctx);
     // Bestätigung einer zusätzlichen Alarm-Adresse (nur auf der Hauptadresse – so steht sie im Link der Mail)
     if (path.startsWith('/_/status/verify/') && isMainHost(host)) return statusVerify(ctx);
     return publicRoutes(ctx);
   }
+  // Beta-Bereich (beta.<domain>): eigene Seiten, Anmelden mit dem OnYourSite-Konto
+  if (isBetaHost(host)) return betaRoutes(ctx);
   // Alte Klick-Zählung
   if (path === '/track-click' && ctx.method === 'POST') return trackClick(ctx);
 
@@ -111,6 +117,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
       ctx.header('Cache-Control', 'max-age=3600');
       ctx.redirect('/' + m[1] + (ctx.queryString !== '' ? '?' + ctx.queryString : ''), 301);
     }
+    // <domain>/beta führt zum Beta-Bereich – außer eine Seite heißt so (sie zog bei der Reservierung in den Pfad-Modus)
+    if (m && m[1] === 'beta' && m[2] === undefined && !(await one("SELECT id FROM pages WHERE slug = 'beta' LIMIT 1"))) ctx.redirect(betaUrl('/'));
     if (m) return pathProfile(ctx, m[1], m[2] ?? '');
     return notFound(ctx);
   }

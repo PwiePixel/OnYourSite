@@ -21,6 +21,7 @@ import { adminCodePagesView } from '../code/adminView.js';
 import { adminStatusView } from '../status/adminView.js';
 import { statusAdminPost } from '../status/admin.js';
 import { adminSeasonsView, seasonsAdminPost } from '../seasons/admin.js';
+import { adminBetaView, betaAdminPost } from '../beta/admin.js';
 import { adminDomainsView } from '../domains/adminView.js';
 import { domainAdminPost } from '../domains/admin.js';
 import { adminUpdatesHandle } from '../updates/admin.js';
@@ -94,6 +95,11 @@ export async function adminPage(ctx: Ctx, user: Row): Promise<void> {
   // Eigene Domains (PD-5): Einstellungen, Aufträge an den Dienst, Domains prüfen, sperren, freigeben, entfernen
   if (isPost && post.domain_action !== undefined) {
     await domainAdminPost(ctx, session, post);
+  }
+
+  // Beta-Tester, ihre Meldungen und der Text für das Beta-Panel (Admin → Beta)
+  if (isPost && post.beta_action !== undefined) {
+    await betaAdminPost(ctx, session, post);
   }
 
   // Saison-Themes für die eigenen Seiten (Admin → Seasons)
@@ -263,6 +269,7 @@ async function adminViewData(ctx: Ctx, session: Session): Promise<AdminViewData>
     domainsHtml: await adminDomainsView(ctx),
     statusHtml: await adminStatusView(ctx),
     seasonsHtml: await adminSeasonsView(ctx),
+    betaHtml: await adminBetaView(ctx),
     bellHtml: await bellMarkup(ctx),
     storageHtml: adminStorageView(adminStorageData(csrf)),
   };

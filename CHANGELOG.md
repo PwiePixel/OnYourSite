@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-11-05
+
+### Added
+- **Beta area at `beta.on-your.site`**: beta testers log in with their OnYourSite account and get a beta panel – what to test right now, a form for bug reports and ideas (type, area, what happened, steps, a link) and their own reports with status and the team's reply. Everyone else sees that the area is for beta testers.
+- *Admin → Beta*: add testers by email or username (they need a linked Discord account), remove them, answer reports (status and a reply – the tester gets a notification) and write the "What to test right now" text.
+- The Discord bot gives beta testers the **Beta Tester** role (it creates the role if it's missing; `BETA_ROLE_ID` in the bot's `.env` picks an existing one) and takes it away when they leave the beta. When a tester changes their Discord ID in the editor, the role moves with it; without a Discord ID the beta area pauses for them. The admin sees whether the role was given or the member isn't on the server yet, and can try again.
+- `on-your.site/beta` leads to the beta area. A page that was called `beta` moved to `on-your.site/beta` (its owner got a notification).
+
 ## [3.4.2] - 2026-11-04
 
 ### Added

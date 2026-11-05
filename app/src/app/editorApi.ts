@@ -40,6 +40,7 @@ import { accountApi } from './accountApi.js';
 import { sendWeeklyReport } from './report.js';
 import { statusEditorApi } from '../status/editorApi.js';
 import { codeApi } from '../code/editorApi.js';
+import { discordChanged } from '../beta/beta.js';
 
 // Aktionen, die die Link-Seite eines Platzes bearbeiten (oder ihre Zahlen zeigen) – nicht, solange er eine Code-Seite zeigt
 const LINK_PAGE_ACTIONS: ReadonlySet<string> = new Set(['save', 'preview', 'address', 'stats']);
@@ -286,7 +287,8 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
 
   if (action === 'discord' && isPost) {
     const discord = jsonValueText(raw, 'discord_id', inp('discord_id') ?? '').replace(/[^0-9]/g, '');
-    await exec('UPDATE users SET discord_id = ? WHERE id = ?', [discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '', userId]);
+    // Speichern und – bei Beta-Testern – die Rolle „Beta Tester“ mit der neuen ID mitnehmen, in einem Schritt (beta/beta.ts)
+    await discordChanged(userId, discord !== '' ? (encryptData(discord.slice(0, 25)) ?? '') : '');
     ctx.json({ ok: true });
   }
 
@@ -406,7 +408,11 @@ export async function editorApi(ctx: Ctx, user: Row): Promise<void> {
         if (refused) ctx.json(refused.body, refused.status);
       }
       // Namen, die OnYourSite auf der Hauptdomain selbst benutzt (z. B. /suggestions): nur als Subdomain
-      if (mode === 'path' && reservedPaths().includes(slug)) {
+      // beta.<domain> ist der Beta-Bereich: eine Seite „beta“ (seit 3.5 im Pfad) bleibt im Pfad
+      if (mode === 'subdomain' && slug === 'beta') {
+        ctx.json({ ok: false, error: `beta.${baseAuthority()} is OnYourSite’s beta area – your page stays at ${baseAuthority()}/beta.` });
+      }
+      if (mode === 'path' && reservedPaths().includes(slug) && slug !== 'beta') {
         ctx.json({ ok: false, error: `This address is used by OnYourSite on the main domain – your page stays at ${slug}.${baseAuthority()}.` });
       }
       await exec('UPDATE pages SET address_mode = ? WHERE id = ?', [mode, page.id as Param]);

@@ -19,6 +19,13 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '3.5.0', category: 'new', title: 'The OnYourSite beta is open', announce: true,
+    body: 'Help us shape what comes next:\n\n'
+      + '- **Beta testers** try new things first at beta.on-your.site – log in with your normal OnYourSite account\n'
+      + '- **Report bugs and ideas** right there and follow what happens with them\n'
+      + '- Testers get the **Beta Tester** role on our Discord – link your Discord ID in the editor under Settings and ask the team to join',
+  },
+  {
     version: '3.4.2', category: 'new', title: 'Say hello to Bea', announce: true,
     body: 'Meet **Bea**, the OnYourSite bee:\n\n'
       + '- This winter she sits in the snow at the bottom of our pages – with a Santa hat and a warm scarf\n'

@@ -28,6 +28,8 @@ function readConfig() {
     clientId: id('DISCORD_CLIENT_ID'),
     guildId: id('GUILD_ID'),
     teamRoleId: id('TEAM_ROLE_ID'),
+    // Rolle für Beta-Tester der Webseite (optional; ohne sie nimmt oder erstellt der Bot „Beta Tester“)
+    betaRoleId: id('BETA_ROLE_ID'),
     welcomeChannelId: id('WELCOME_CHANNEL_ID'),
     welcomeRoleId: id('WELCOME_ROLE_ID'),
     rulesChannelId: id('RULES_CHANNEL_ID'),

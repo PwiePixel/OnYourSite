@@ -102,6 +102,10 @@ Everything is managed in the admin panel (`/admin`):
 
 Every update has a permanent link `/updates/<number>` – Discord posts and the feed use it, so it keeps working when older updates move to page 2. The roadmap has its own page at `/roadmap`, and `/suggestions` appears once the team turns it on under **Admin → Community**; the three pages link to each other. After the update to 3.1, the release notes of versions 2.0 to 2.2 are published on `/updates` and listed under “Shipped” while the roadmap is still empty (drafts you changed and versions you entered yourself stay as they are). The notes for 3.0 and 3.1 wait as drafts – read them and publish them with one click. Only 3.1 is announced on Discord when published; use “Post to Discord” if you want 3.0 there too.
 
+## Beta
+
+`beta.on-your.site` is the beta area: beta testers log in with their OnYourSite account (same database, same password; the session is its own on that address) and get a panel with what to test right now, a form for bug reports and ideas, and their reports with the team's status and reply. *Admin → Beta* adds and removes testers (only accounts with a linked Discord ID – the user sets it in the editor under Settings), answers reports and edits the "What to test right now" text. The Discord bot gives testers the **Beta Tester** role (feature `beta.v1`; it creates the role if needed, `BETA_ROLE_ID` in the bot's `.env` picks an existing role) and takes it away again; when a tester changes their Discord ID, the role moves with it. `on-your.site/beta` leads to the beta area. The code is in `app/src/beta/` and `discord-bot/src/beta.js`.
+
 ## Seasons
 
 *Admin → Seasons* decorates OnYourSite’s own pages for a season – the home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page; users’ pages, the editor and the admin panel stay as they are. Each theme is **Off**, **On** or **Automatic** (every year between two dates, e.g. `12-01` to `01-06`), and *Preview* opens the home page with the theme without turning it on. The first theme is **Winter** (falling snow, fairy lights along the top, a Santa hat on the logo, a frosty glow, icy blue accents; CSS only in `static/css/season-winter.css`); it starts as Automatic from December 1 to January 6. New themes are added in `app/src/seasons/seasons.ts`.
@@ -172,6 +176,7 @@ app/                   The website (Node.js 22, TypeScript, Fastify)
   src/code/            Code pages: files, limits, slots, delivery in the sandbox, Code Page Terms
   src/status/          Status pages: checker, notifier, incidents and maintenance, the public page
   src/seasons/         Season themes for OnYourSite’s own pages and Admin → Seasons
+  src/beta/            The beta area (beta.<domain>), Admin → Beta, the Beta Tester role via the bot
   src/domains/         Custom domains (Premium): host routing, records and the domain worker (Cloudflare for SaaS)
   src/notify/          Notifications for the bell
   src/community/       Discord bot connection: suggestions, support tickets, queue for the bot

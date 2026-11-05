@@ -14,10 +14,11 @@ const { startOutbox } = require('./src/outbox');
 const { registerCommands, setupCommands } = require('./src/commands');
 const { setupUpdates } = require('./src/updates');
 const { setupReport } = require('./src/report');
+const { setupBeta } = require('./src/beta');
 const { setupStatus } = require('./src/status');
 
 // Funktionen dieser Version: die Webseite gibt dem Bot nur Aufträge, die er kann
-const FEATURES = ['updates.v1', 'suggestions.v2', 'status.v1'];
+const FEATURES = ['updates.v1', 'suggestions.v2', 'status.v1', 'beta.v1'];
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -63,6 +64,7 @@ const support = setupSupport(client, cfg, site, log);
 const commands = setupCommands(cfg, site, support);
 const updates = setupUpdates(client, log);
 const status = setupStatus(client, updates);
+const beta = setupBeta(client, cfg, log);
 let outbox = null;
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -109,6 +111,8 @@ client.once(Events.ClientReady, async (ready) => {
     'status.edit': (d) => status.edit(d),
     'status.delete': (d) => status.remove(d),
     'status.alert': (d, item) => status.alert(d, item),
+    // Beta-Tester der Webseite: Rolle „Beta Tester“ geben oder nehmen
+    'beta.role': (d) => beta.role(d),
     'bot.report': async () => {
       await report.send();
       return {};

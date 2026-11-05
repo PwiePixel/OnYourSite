@@ -77,6 +77,10 @@ Both ask only for the **bot token** and the **Application ID** (Enter takes the 
 
 **Keep the settings out of the website folder.** The website never serves `/discord-bot/` or any `.env` file – but in a website folder, use the system service: its settings live in `/etc`.
 
+## Beta testers
+
+When an admin adds a beta tester on the website (*Admin → Beta*), the bot gives that member the role **Beta Tester** and takes it away when they leave the beta. It uses `BETA_ROLE_ID` from `.env` if set, otherwise a role with that name, and creates it if there is none (it needs *Manage Roles*, which the invite link includes, and its own role must be above the Beta Tester role – that's the case for a role the bot creates). Members who aren't on the server yet are shown on the website; the admin can try again once they joined.
+
 ## Files
 
 ```
