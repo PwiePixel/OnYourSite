@@ -1,19 +1,20 @@
-/* Winter: nur die Mütze auf dem Logo – seasons/seasons.ts lädt diese Datei auf allen eigenen Seiten mit Logo, solange
-   das Winter-Thema aktiv ist (die Seiten mit dem ganzen Thema laden zusätzlich season-winter.css) */
-/* Weihnachtsmütze auf dem OnYourSite-Logo – auf jeder eigenen Seite (Startseite, Anmelden, Editor, Admin, Beta), nie auf
-   den gelben Honigwaben und nie auf den Seiten der Nutzer.
-   Die Mütze ist das Bild des Inhabers (static/images/seasons/logo-hat.png – das Logo mit Mütze, die Waben herausgerechnet: wo das Fell über den Waben lag, ist
-   die Kante weich auf das Fell zurückgerechnet, die Innenseite der Mütze weiß wie auf dem Bild):
-   sie sitzt genau so auf der Wabe wie auf dem Bild (Lage und Größe in em, gemessen an der Wabe von Boxicons, die
-   0,125 – 0,875 em füllt; auf dem Bild 154 – 430 px). Die Waben kommen weiter von Boxicons und behalten so die Farbe
-   der Seite (lila bzw. weiß). Die Mütze liegt über der Lichterkette (das Logo ist positioniert, die Kette in der
-   Kopfzeile liegt dahinter) */
-.oys-logo-hat .bx-hive.text-brand-500, .oys-logo-hat .bx-hive.text-white { position: relative; z-index: 1; }
+/* Winter: das Logo mit Weihnachtsmütze – seasons/seasons.ts lädt diese Datei auf allen eigenen Seiten mit Logo, solange
+   das Winter-Thema aktiv ist (die Seiten mit dem ganzen Thema laden zusätzlich season-winter.css). Nie auf den gelben
+   Honigwaben und nie auf den Seiten der Nutzer.
+   Das Logo ist das Bild des Inhabers, unverändert: static/images/seasons/logo-winter.png (lila Waben, für das lila Logo)
+   und logo-winter-white.png (dasselbe Bild, nur die Waben weiß – für das weiße Logo). Das Symbol von Boxicons wird
+   unsichtbar und behält seinen Platz; das Bild liegt so darauf, dass seine Waben genau auf denen des Symbols sitzen
+   (Boxicons: 0,125 – 0,875 em; auf dem Bild 155 – 430 × 183 – 458 px, ausgeschnitten ab 82 × 38). Es liegt über der
+   Lichterkette (das Logo ist positioniert, die Kette in der Kopfzeile liegt dahinter) */
+.oys-logo-hat .bx-hive.text-brand-500, .oys-logo-hat .bx-hive.text-white { position: relative; z-index: 1; color: transparent; }
 .oys-logo-hat .bx-hive.text-brand-500::after, .oys-logo-hat .bx-hive.text-white::after {
-  content: ''; position: absolute; left: -.0699em; top: -.2649em; width: .8069em; height: .7202em;
-  background: url("../images/seasons/logo-hat.png") center / 100% 100% no-repeat;
+  content: ''; position: absolute; left: -.0741em; top: -.2705em; width: .9518em; height: 1.1482em;
+  background: url("../images/seasons/logo-winter.png") center / 100% 100% no-repeat;
   pointer-events: none;
 }
+.oys-logo-hat .bx-hive.text-white::after { background-image: url("../images/seasons/logo-winter-white.png"); }
 @media print {
+  .oys-logo-hat .bx-hive.text-brand-500 { color: #6366f1; }
+  .oys-logo-hat .bx-hive.text-white { color: #fff; }
   .oys-logo-hat .bx-hive::after { display: none; }
 }

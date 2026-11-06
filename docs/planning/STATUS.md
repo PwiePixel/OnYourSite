@@ -98,9 +98,9 @@ Next:
     sets `beta_site` only once the beta website answers; `BETA_PORT` stays in server.conf.
   - Also in 3.6.0: the Santa hat on every OnYourSite logo in the winter look – `static/css/season-winter-logo.css`
     (only the hat; `.oys-logo-hat`), loaded with the whole theme and alone on all other app pages and the beta panel
-    (`ctx.logoPage`, `applyLogoSeason()`); test in `app/test/seasons.test.ts`. The hat is the owner's image:
-    `static/images/seasons/logo-hat.png` (the honeycombs cut out; placed in em like on the image); Bea keeps
-    `hat_svg()` from `tools/santa_hat.py`.
+    (`ctx.logoPage`, `applyLogoSeason()`); test in `app/test/seasons.test.ts`. The winter logo is the owner's image as it is:
+    `static/images/seasons/logo-winter.png` (and `logo-winter-white.png`, honeycombs white) replaces the Boxicons
+    glyph (made transparent), its honeycombs on the glyph's; Bea keeps `hat_svg()` from `tools/santa_hat.py`.
   - Open: the branch `beta` has to be created on GitHub by the owner; schema steps on `beta` must keep their number
     for `main`; links the beta website creates (mails) point to beta.<domain>.
 - Then D6 (`onys.me`) and D5 (docs).

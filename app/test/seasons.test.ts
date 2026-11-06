@@ -114,17 +114,22 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
     assert.doesNotMatch(u, /#/);
     assert.match(decodeURIComponent(u), /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' [^>]*>[\s\S]*<\/svg>$/);
   }
-  // Die Mütze ist das Bild des Inhabers (die Waben herausgeschnitten): ein PNG mit Transparenz, auf der Wabe so wie auf
-  // der Vorlage (Wabe dort 154 – 430 px, die Mütze 82 – 380 × 38 – 304; Boxicons füllt 0,125 – 0,875 em)
-  const png = readFileSync(join(ROOT_DIR, 'static', 'images', 'seasons', 'logo-hat.png'));
-  assert.equal(png.subarray(1, 4).toString(), 'PNG');
-  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20), png[25]], [298, 266, 6], '298 × 266, RGBA');
-  const em = (px: number) => (px / 277) * 0.75;
+  // Das Logo im Winter ist das Bild des Inhabers, unverändert (lila) und mit weißen Waben (für das weiße Logo); das
+  // Symbol wird unsichtbar, das Bild liegt mit seinen Waben genau auf denen des Symbols (Bild 155 – 430 × 183 – 458 px,
+  // ausgeschnitten ab 82 × 38, 349 × 421 px; Boxicons füllt 0,125 – 0,875 em)
+  for (const f of ['logo-winter.png', 'logo-winter-white.png']) {
+    const png = readFileSync(join(ROOT_DIR, 'static', 'images', 'seasons', f));
+    assert.equal(png.subarray(1, 4).toString(), 'PNG', f);
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20), png[25]], [349, 421, 6], f + ': 349 × 421, RGBA');
+  }
+  const em = (px: number) => (px / 275) * 0.75;
   const pos = /content: ''; position: absolute; left: (-?[\d.]+)em; top: (-?[\d.]+)em; width: ([\d.]+)em; height: ([\d.]+)em;/.exec(hatCss);
-  assert.ok(pos, 'the place of the hat');
-  const want = [0.125 - em(154 - 82), 0.125 - em(182 - 38), em(298), em(266)];
+  assert.ok(pos, 'the place of the picture');
+  const want = [0.125 - em(155 - 82), 0.125 - em(183 - 38), em(349), em(421)];
   pos.slice(1).forEach((v, i) => assert.ok(Math.abs(Number(v) - want[i]) < 0.0005, `${v} ≈ ${want[i].toFixed(4)}`));
-  assert.match(hatCss, /background: url\("\.\.\/images\/seasons\/logo-hat\.png"\) center \/ 100% 100% no-repeat;/);
+  assert.match(hatCss, /background: url\("\.\.\/images\/seasons\/logo-winter\.png"\) center \/ 100% 100% no-repeat;/);
+  assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-white::after \{ background-image: url\("\.\.\/images\/seasons\/logo-winter-white\.png"\); \}/);
+  assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500, \.oys-logo-hat \.bx-hive\.text-white \{ position: relative; z-index: 1; color: transparent; \}/);
   // Nur das Logo (Kopfzeile: text-brand-500, Anmelden/Registrieren: text-white) – nicht die gelben Honigwaben im Text
   assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500::after, \.oys-logo-hat \.bx-hive\.text-white::after \{/);
   assert.doesNotMatch(css, /text-yellow/);
@@ -146,8 +151,7 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   // Logo – die Mütze ist darüber
   assert.doesNotMatch(css, /mask-image|--oys-logo|\.bx-hive\.text-brand-500 \{ filter/);
   assert.match(css, /\.oys-season-lights\.in-nav \{ position: absolute; z-index: -1; \}/);
-  assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500, \.oys-logo-hat \.bx-hive\.text-white \{ position: relative; z-index: 1; \}/);
-  assert.match(hatCss, /@media print \{\n {2}\.oys-logo-hat \.bx-hive::after \{ display: none; \}\n\}/);
+  assert.match(hatCss, /@media print \{[^@]*\.oys-logo-hat \.bx-hive::after \{ display: none; \}\n\}/);
   // Schnee unten: im Footer (Platz darunter) oder unten am Fenster; fängt nichts ab
   assert.match(css, /\.season-winter footer\.oys-season-footer \{ position: relative; padding-bottom: 160px; \}/);
   assert.match(css, /\.oys-season-drift \{ position: absolute; left: 0; right: 0; bottom: 0; height: 60px; pointer-events: none;/);

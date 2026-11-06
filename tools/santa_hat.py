@@ -1,4 +1,4 @@
-"""Die Weihnachtsmütze von Bea (die Mütze auf dem Logo ist seit 3.6 das Bild des Inhabers, static/images/seasons/logo-hat.png):
+"""Die Weihnachtsmütze von Bea (das Logo im Winter ist seit 3.6 das Bild des Inhabers, static/images/seasons/logo-winter.png):
 breiter Fellrand, rote Mütze, deren Spitze nach links umfällt, Bommel links. hat_svg() liefert das SVG (viewBox 80 × 64)."""
 import sys
 
