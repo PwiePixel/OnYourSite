@@ -14,7 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 - `install.sh --beta` sets up the beta website next to the main site (branch `beta`, its own service `onyoursite-beta`, the same database and uploads – with a backup before it changes the database); `install.sh --update` updates it too, `install.sh --beta-off` removes it. *Admin → Beta* shows which version runs there.
 
 ### Changed
-- In the winter look the OnYourSite logo wears its Santa hat **everywhere** – also in the editor, the admin area and the beta area (only the hat there, no snow). The yellow honeycombs and users' pages stay as they are.
+- A new Santa hat on the logo: a big red hat with its tip hanging down on the right, a slanted fur rim and the bobble on the left. In the winter look the OnYourSite logo wears it **everywhere** – also in the editor, the admin area and the beta area (only the hat there, no snow). The yellow honeycombs and users' pages stay as they are.
 - The beta panel moved to `beta.on-your.site/_beta/` – every other address there is the beta website (for testers) or leads to the panel.
 
 ## [3.5.0] - 2026-11-05

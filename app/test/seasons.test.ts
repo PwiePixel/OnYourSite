@@ -114,15 +114,19 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
     assert.doesNotMatch(u, /#/);
     assert.match(decodeURIComponent(u), /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' [^>]*>[\s\S]*<\/svg>$/);
   }
-  const hats = uris.filter((u) => decodeURIComponent(u).includes("viewBox='0 0 80 64'"));
+  const hats = uris.filter((u) => decodeURIComponent(u).includes("viewBox='80 30 300 280'"));
   assert.equal(hats.length, 1, 'one hat');
   const svg = decodeURIComponent(hats[0]);
-  assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'>[\s\S]*<\/svg>$/);
-  // Rote Mütze in einem Stück, Bommel links (der Mittelpunkt liegt in der linken Hälfte), Fellrand unten
-  assert.match(svg, /stop-color='#d61f2c'/);
-  const bobble = /<circle cx='([\d.]+)' cy='([\d.]+)' r='7\.5' fill='url\(#f\)'\/>/.exec(svg);
-  assert.ok(bobble && Number(bobble[1]) < 20, 'the bobble hangs on the left');
-  assert.match(svg, /<rect x='10' y='42' width='62' height='14' rx='7' fill='url\(#f\)'\/>/);
+  assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='80 30 300 280'>[\s\S]*<\/svg>$/);
+  // Nach der Vorlage: rote Mütze, Bommel links unten, der Fellrand steigt nach rechts an (sieben Kugeln)
+  assert.match(svg, /stop-color='#d81e2e'/);
+  const bobble = /<circle cx='([\d.]+)' cy='([\d.]+)' r='29' fill='url\(#f\)'\/>/.exec(svg);
+  assert.ok(bobble && Number(bobble[1]) < 150, 'the bobble hangs on the left');
+  const fur = [...svg.matchAll(/<circle cx='(\d+)' cy='(\d+)' r='2[47]'\/>/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.equal(fur.length, 7);
+  for (let i = 1; i < fur.length; i++) assert.ok(fur[i][0] > fur[i - 1][0] && fur[i][1] < fur[i - 1][1], 'the fur rises to the right');
+  // Lage und Größe am Logo wie auf der Vorlage (in em der Wabe)
+  assert.match(hatCss, /content: ''; position: absolute; left: -\.077em; top: -\.29em; width: \.815em; height: \.761em;/);
   // Nur das Logo (Kopfzeile: text-brand-500, Anmelden/Registrieren: text-white) – nicht die gelben Honigwaben im Text
   assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500::after, \.oys-logo-hat \.bx-hive\.text-white::after \{/);
   assert.doesNotMatch(css, /text-yellow/);
@@ -154,7 +158,7 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   assert.match(css, /@media print \{[^}]*\}[^@]*\.season-winter footer\.oys-season-footer \{ padding-bottom: revert; \}[^@]*\.season-winter footer\.oys-season-footer::before \{ display: none; \}/);
 });
 
-test('Bea, the OnYourSite bee: her poses, her place on the snow in the winter look, and the same Santa hat as the logo', (t) => {
+test('Bea, the OnYourSite bee: her poses, her place on the snow in the winter look, and her Santa hat', (t) => {
   const dir = join(ROOT_DIR, 'static', 'images', 'mascot');
   for (const pose of ['hello', 'winter', 'celebrate']) {
     const svg = readFileSync(join(dir, `bea-${pose}.svg`), 'utf8');
@@ -168,21 +172,22 @@ test('Bea, the OnYourSite bee: her poses, her place on the snow in the winter lo
   assert.match(css, /\.oys-season-drift::after \{\n {2}content: ''; position: absolute; right: max\(16px, 6%\); bottom: 20px; width: 128px; height: 128px; pointer-events: none;\n {2}background: url\("\.\.\/images\/mascot\/bea-winter\.svg"\)/);
   assert.match(css, /\.oys-season-drift\.is-fixed::after \{ display: none; \}/, 'not at the bottom of the window on phones');
   assert.match(css, /\.oys-season-lights::after, \.oys-season-drift::after \{ animation: none; \}/, 'Bea stands still for reduced motion');
-  // Bea trägt die Mütze vom Logo: beide kommen aus tools/santa_hat.py
+  // Beide Mützen kommen aus tools/santa_hat.py: das Logo trägt logo_hat_svg() (nach der Vorlage), Bea hat_svg()
   // Ohne python3 wird dieser Teil übersprungen (und gemeldet); jeder andere Fehler, z. B. ein kaputtes santa_hat.py, scheitert
   let python: string | null = null;
   try {
-    python = execFileSync('python3', ['-B', '-c', 'import sys; sys.path.insert(0, "tools"); from santa_hat import hat_svg; print(hat_svg(), end="")'],
+    python = execFileSync('python3', ['-B', '-c', 'import sys; sys.path.insert(0, "tools"); from santa_hat import hat_svg, logo_hat_svg; print(logo_hat_svg() + "\\n" + hat_svg(), end="")'],
       { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     t.skip('python3 is not installed – the hat comparison was skipped');
   }
   if (python !== null) {
-    const uri = /url\("data:image\/svg\+xml,(%3Csvg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'[^"]*)"\)/.exec(readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter-logo.css'), 'utf8'));
+    const [logoHat, beaHat] = python.split('\n');
+    const uri = /url\("data:image\/svg\+xml,(%3Csvg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='80 30 300 280'[^"]*)"\)/.exec(readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter-logo.css'), 'utf8'));
     assert.ok(uri, 'the hat on the logo');
-    assert.equal(decodeURIComponent(uri[1]), python, 'the hat on the logo is tools/santa_hat.py');
-    const hatPaths = python.match(/<path d='[^']+'/g) ?? [];
+    assert.equal(decodeURIComponent(uri[1]), logoHat, 'the hat on the logo is logo_hat_svg() from tools/santa_hat.py');
+    const hatPaths = beaHat.match(/<path d='[^']+'/g) ?? [];
     const bea = readFileSync(join(dir, 'bea-winter.svg'), 'utf8');
     for (const d of hatPaths) assert.ok(bea.includes(d), 'Bea wears the same hat: ' + d.slice(0, 40));
   }
