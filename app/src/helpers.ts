@@ -1,7 +1,7 @@
 // Gemeinsame Hilfsfunktionen aus lib/helpers.php und blacklist.php – gleiche Namen ohne oys_, gleiche Ergebnisse.
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { configString } from './config.js';
+import { configString, isBetaBuild } from './config.js';
 import { ROOT_DIR } from './config.js';
 import { one, type Db } from './db.js';
 import { md5Hex } from './crypto.js';
@@ -49,7 +49,8 @@ export function pageUrls(p: PageLike): { subdomain: string; path: string; custom
 // OnYourSite-Adresse nach address_mode (ohne eigene Domain) – Ziel der Weiterleitungen zwischen Subdomain und Pfad
 export function addressUrl(p: PageLike, sub = ''): string {
   const urls = pageUrls(p);
-  const url = phpStr(p.address_mode) === 'path' ? urls.path : urls.subdomain;
+  // Auf der Beta-Webseite gibt es kein name.beta.<domain>: jede Seite unter dem Pfad
+  const url = phpStr(p.address_mode) === 'path' || isBetaBuild() ? urls.path : urls.subdomain;
   return sub !== '' ? url + '/' + phpLtrim(sub, '/') : url;
 }
 // oys_page_url(): Hauptadresse – die Live-Domain, sonst die OnYourSite-Adresse

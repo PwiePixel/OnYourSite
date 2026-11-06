@@ -69,7 +69,23 @@ The website keeps running while the update is prepared:
 5. **Switching**: the code folder gets the new version and the website restarts. For a few seconds, visitors see “OnYourSite is restarting – please try again in a few seconds.”
 6. **Checking through Apache**, like a visitor: the start page, a profile page (subdomain and `on-your.site/name`), an upload, the connection of the Discord bot and the log of the website. If anything fails, the previous version comes back by itself – code, settings, Apache and the service – and the installer shows what went wrong. The backup stays.
 
-Then it updates `cloudflared` and the bot (if they are set up) and checks the protection and the timers. Settings stay as they are. If there is nothing new, it only checks that everything is set up as it should be. To try a branch: `--update --branch NAME`.
+Then it updates `cloudflared`, the bot and the beta website (if they are set up) and checks the protection and the timers. Settings stay as they are. If there is nothing new, it only checks that everything is set up as it should be. To try a branch: `--update --branch NAME`.
+
+## Beta website
+
+```bash
+sudo bash /var/www/onyoursite/server/install.sh --beta
+```
+
+Sets up the **beta website** – the pre-release from the branch `beta` – next to the main site, or brings it to the newest state of that branch. Beta testers see it at `beta.<domain>` after logging in (the beta panel is at `beta.<domain>/_beta/`). Nothing changes at Apache, the certificate or the tunnel: `beta.<domain>` already goes to the main site, which passes testers on.
+
+- The code is in `/var/www/onyoursite-beta` (always exactly the branch on GitHub), built like the main site; it runs as the service `onyoursite-beta` on `127.0.0.1`, port of the main site + 1 (`BETA_PORT=` in `/etc/onyoursite/server.conf` picks another).
+- Its `config.json` is a copy of the main settings with `beta_build: true`, `base_domain` `beta.<domain>` and its own port. The main `config.json` gets `beta_site` (port and folder) – the main site restarts once for that.
+- **Same database and uploads.** If the pre-release brings database changes, a backup is made first (`/var/backups/onyoursite/<date>-<time>-before-beta`), then they run on the real database. The main site keeps working with them.
+- Mails from the beta website use the same mail settings. Background tasks (weekly report, backups, jobs) only run for the main site.
+- `--update` updates the beta website too; a failed beta update never stops the main update. `install.sh --beta-off` removes it (the panel and the reports stay). Log: `journalctl -u onyoursite-beta -f`.
+
+There is no branch `beta` yet? Create it on GitHub from `main` (*Branches → New branch*), then run `--beta` again.
 
 ### Moving from 2.x (PHP) to 3.0 (Node.js)
 

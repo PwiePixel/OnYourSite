@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-11-06
+
+### Added
+- **Beta website**: `beta.on-your.site` now runs the next version of OnYourSite for beta testers. Log in first, then the beta panel has an **Open the website** button – the whole site in its pre-release version, with your real account and pages (the same database) and a small "Beta · Panel" note to get back. Everyone else only gets the login and the note that the area is for beta testers.
+- **Two release channels**: releases (`scripts/release.sh 3.6.0`, merged into `main`) for everyone, and pre-releases (`scripts/release.sh 3.6.0-beta.1`, on the `beta` branch) only for the beta website. GitHub publishes pre-releases as such, never as the latest release.
+- `install.sh --beta` sets up the beta website next to the main site (branch `beta`, its own service `onyoursite-beta`, the same database and uploads – with a backup before it changes the database); `install.sh --update` updates it too, `install.sh --beta-off` removes it. *Admin → Beta* shows which version runs there.
+
+### Changed
+- The beta panel moved to `beta.on-your.site/_beta/` – every other address there is the beta website (for testers) or leads to the panel.
+
 ## [3.5.0] - 2026-11-05
 
 ### Added

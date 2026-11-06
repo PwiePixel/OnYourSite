@@ -76,21 +76,28 @@ continue" below.
 | – | all others | | Open |
 
 Next:
-- Release 3.5.0 (D4, the beta) is on `feature/beta`, built on `feature/bea` (3.4.2, PR #27) – merge #27 first.
-  - `beta.<domain>` is answered by the main app (`app/src/router.ts` → `app/src/beta/routes.ts`): log in with the
-    OnYourSite account (same users table and login limits; its own session cookie on that host), the panel (what to
-    test from `oys_meta['beta_notes']`, the report form, the own reports with status and reply), a note for everyone
-    else. Access (`betaAccess()` in `app/src/beta/beta.ts`): `users.beta_at` set and a Discord ID linked – or admin.
-  - Schema step 23 `beta`: `users.beta_at/beta_by/beta_discord/beta_role/beta_role_error`, table `beta_reports`;
-    the address `beta` is reserved (a page called beta moved to the path, its owner was notified).
-  - *Admin → Beta* (`app/src/beta/admin.ts`, `beta_action=grant|revoke|retry|answer|notes`).
-  - Discord: bot action `beta.role` (feature `beta.v1`, ref `beta:<user>`), `discord-bot/src/beta.js` gives or takes
-    the role "Beta Tester" (`BETA_ROLE_ID` optional, created if missing) and answers given / removed / not_on_server;
-    `onRoleResult()` stores it. A Discord ID change in the editor (`editorApi.ts`, action `discord`) calls
-    `discordChanged()`.
-  - Tests: `app/test/beta.test.ts`, `discord-bot/test/beta.test.js`, browser flow `tests/e2e/beta.js`.
-  - Not in it: a separate beta build of the code (beta.<domain> runs the same code as the main site), a verified
-    Discord link (the Discord ID is typed in by the user; the admin sees it before adding a tester).
+- Release 3.6.0 (the beta website and two release channels) is on `feature/beta-site` (from `main` with 3.5.0).
+  - Gate: on `beta.<domain>` the main site answers first (`app/src/router.ts` → `betaGate()` in
+    `app/src/beta/site.ts`): `/_beta/…` is the panel (`app/src/beta/routes.ts`, moved there from `/`); any other
+    address goes to the beta website for logged-in testers (proxy to `127.0.0.1:<beta_site.port>`, the request body
+    from `ctx.requestBody`, HTML up to 5 MB gets the "Beta · Panel" pill), everyone else is sent to `/_beta/`. The gate
+    reads `oys_sessions` read-only – the session is shared with the beta website. No answer: a 502 note.
+  - The beta website is a second installation with `beta_build: true` (no gate, no outbox cleanup, no
+    `recordWebStart`), `base_domain` `beta.<domain>`; set up by `server/beta.sh` (through `install.sh --beta`,
+    `--beta-off`, and `--update` when `onyoursite-beta.service` exists). Main `config.json` gets
+    `beta_site { port, dir }`; *Admin → Beta* and the panel show the version from `<dir>/VERSION`.
+  - Release channels: `scripts/release.sh X.Y.Z-beta.N` (copies [Unreleased], keeps it), `scripts/release.sh X.Y.Z`
+    (drops the `X.Y.Z-beta.*` sections); `scripts/publish-releases.sh` with `GITHUB_REF_NAME` main (releases, refuses
+    a pre-release VERSION) or beta (only the current pre-release, `--prerelease`, never latest); the workflow runs on
+    `main` and `beta`. A pre-release needs the `releaseNotes.ts` entry of its release.
+  - Tests: `app/test/beta-site.test.ts`, `app/test/release-channels.test.ts`, `release.test.ts`, browser flow
+    `tests/e2e/beta.js` (starts a second site as the beta website).
+  - On the beta website every page opens by path (`addressUrl()` with `isBetaBuild()`, no redirect to the subdomain
+    in `public/routes.ts`); `betaUrl()` stays on beta.<domain>. `server/beta.sh` builds in `<dir>.next`, switches
+    after build and migration, goes back to `<dir>.previous` if the new one doesn't answer, refuses a busy port and
+    sets `beta_site` only once the beta website answers; `BETA_PORT` stays in server.conf.
+  - Open: the branch `beta` has to be created on GitHub by the owner; schema steps on `beta` must keep their number
+    for `main`; links the beta website creates (mails) point to beta.<domain>.
 - Then D6 (`onys.me`) and D5 (docs).
 - The owner's new asks are recorded as Stage D in `ROADMAP.md` §4.2a: D1 fix block reordering (phone and PC), D2 a
   bigger block picker, D3 Christmas themes, D4 the beta site `beta.on-your.site` for approved testers, D5 the user

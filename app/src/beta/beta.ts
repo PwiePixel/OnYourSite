@@ -9,12 +9,14 @@ import { exec, one, q, transaction, type Db } from '../db.js';
 import { decryptData } from '../crypto.js';
 import { baseAuthority, baseHost, scheme } from '../helpers.js';
 import { date, intval, phpStr } from '../php.js';
+import { isBetaBuild } from '../config.js';
 import { notify } from '../notify/notify.js';
 import { registerBotAction, type BotResult, type OutboxJob } from '../community/outbox.js';
 import { outboxAdd } from '../community/community.js';
 
 export const betaHost = (): string => 'beta.' + baseHost();
-export const betaUrl = (path = '/'): string => scheme() + '://beta.' + baseAuthority() + path;
+// Auf der Beta-Webseite selbst (beta_build) ist beta.<domain> schon die eigene Adresse
+export const betaUrl = (path = '/'): string => scheme() + '://' + (isBetaBuild() ? '' : 'beta.') + baseAuthority() + path;
 export const isBetaHost = (host: string): boolean => host === betaHost();
 
 export const REPORT_KINDS: Readonly<Record<string, string>> = Object.freeze({ bug: 'Bug', idea: 'Idea', other: 'Other' });

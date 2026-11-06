@@ -16,6 +16,7 @@ import { statusHealth, statusHeartbeat, statusVerify } from './status/endpoints.
 import { statusDbDownHost } from './status/routes.js';
 import { betaRoutes } from './beta/routes.js';
 import { betaUrl, isBetaHost } from './beta/beta.js';
+import { PANEL, betaGate, isBetaBuild } from './beta/site.js';
 
 export function baseAuthority(): string {
   return strtolower(configString('base_domain', 'on-your.site'));
@@ -52,6 +53,8 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   if (scheme() === 'https' && String(ctx.headers['x-forwarded-proto'] ?? '') === 'http') {
     apacheError(ctx, 301, 'https://' + ctx.hostHeader + apacheRequestUri(ctx, target.path));
   }
+  // beta.<domain>: angemeldete Tester sehen die Beta-Webseite (zweite Installation) – außer /_beta/… (das Panel)
+  if (isBetaHost(ctx.host) && (await betaGate(ctx))) ctx.halt();
   // Eigene Domains (Premium): nur wenn eingerichtet (sonst keine einzige Abfrage). Steht vor den Uploads, damit fremde
   // Dateien nie unter einer Kunden-Domain erscheinen; die Sperrliste davor gilt auch hier.
   if (domainsAvailable() && !isMainHost(ctx.host) && !ctx.host.endsWith('.' + baseHost())) return hostRoute(ctx, isAppPath);
@@ -92,14 +95,15 @@ export async function dispatch(ctx: Ctx): Promise<void> {
   if (path.startsWith('/_/')) {
     ctx.header('X-Robots-Tag', 'noindex');
     // Ziel der Beta-Benachrichtigungen: immer der Beta-Bereich
-    if (path === '/_/beta') ctx.redirect(betaUrl('/'));
+    if (path === '/_/beta') ctx.redirect(betaUrl(PANEL));
     // Statusseiten: Heartbeats (Token in der Adresse)
     if (path.startsWith('/_/hb/')) return statusHeartbeat(ctx);
     // Bestätigung einer zusätzlichen Alarm-Adresse (nur auf der Hauptadresse – so steht sie im Link der Mail)
     if (path.startsWith('/_/status/verify/') && isMainHost(host)) return statusVerify(ctx);
     return publicRoutes(ctx);
   }
-  // Beta-Bereich (beta.<domain>): eigene Seiten, Anmelden mit dem OnYourSite-Konto
+  // Beta-Bereich (beta.<domain>): das Panel unter /_beta/, Anmelden mit dem OnYourSite-Konto; jede andere Adresse
+  // führt dorthin (Tester sieht hier nur, wer gerade nicht an die Beta-Webseite weitergereicht wird)
   if (isBetaHost(host)) return betaRoutes(ctx);
   // Alte Klick-Zählung
   if (path === '/track-click' && ctx.method === 'POST') return trackClick(ctx);
@@ -118,7 +122,7 @@ export async function dispatch(ctx: Ctx): Promise<void> {
       ctx.redirect('/' + m[1] + (ctx.queryString !== '' ? '?' + ctx.queryString : ''), 301);
     }
     // <domain>/beta führt zum Beta-Bereich – außer eine Seite heißt so (sie zog bei der Reservierung in den Pfad-Modus)
-    if (m && m[1] === 'beta' && m[2] === undefined && !(await one("SELECT id FROM pages WHERE slug = 'beta' LIMIT 1"))) ctx.redirect(betaUrl('/'));
+    if (m && m[1] === 'beta' && m[2] === undefined && !isBetaBuild() && !(await one("SELECT id FROM pages WHERE slug = 'beta' LIMIT 1"))) ctx.redirect(betaUrl('/'));
     if (m) return pathProfile(ctx, m[1], m[2] ?? '');
     return notFound(ctx);
   }

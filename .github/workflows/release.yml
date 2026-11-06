@@ -1,23 +1,25 @@
 # Neue Version auf main → Git-Tag und GitHub-Release mit den Notizen aus CHANGELOG.md und einem ZIP.
 # Fehlende Releases für ältere Versionen (mit vorhandenem Tag) werden dabei nachgeholt.
+# Neue Version auf beta (X.Y.Z-beta.N) → Tag und Pre-Release – für die Beta-Webseite (server/beta.sh).
 name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     paths: [VERSION, CHANGELOG.md]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Je Branch eine eigene Reihe: ein Lauf auf beta verdrängt nie einen wartenden Lauf auf main
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
 
 jobs:
   release:
-    # Auch von Hand gestartet nur auf main (sonst bekäme ein anderer Branch das Tag)
-    if: github.ref == 'refs/heads/main'
+    # Auch von Hand gestartet nur auf main und beta (sonst bekäme ein anderer Branch das Tag)
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

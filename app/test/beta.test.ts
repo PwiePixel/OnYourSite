@@ -131,39 +131,41 @@ test('the bot’s answers: not on the server, a final error, and a late answer f
 
 test('beta.<domain>: log in with the OnYourSite account; testers see the panel, others a note', async () => {
   // Ohne Anmeldung: das Anmeldeformular
-  let ctx = await req('/', { host: BETA });
+  let ctx = await req('/_beta/', { host: BETA });
   assert.equal(ctx.status, 200);
   assert.match(String(ctx.body), /<title>Log in \| OnYourSite Beta<\/title>/);
-  assert.match(String(ctx.body), /<form action="\/login" method="POST"/);
+  assert.match(String(ctx.body), /<form action="\/_beta\/login" method="POST"/);
   assert.equal(ctx.header('X-Robots-Tag'), 'noindex, nofollow');
   // Falsches Passwort
   const anon = await loginSession(0);
-  ctx = await req('/login', { host: BETA, sid: anon, post: { csrf: CSRF, email: 'lea@test.de', password: 'nope' } });
-  assert.equal(ctx.header('Location'), '/');
-  assert.match(String((await req('/', { host: BETA, sid: anon })).body), /Wrong email or password\./);
+  ctx = await req('/_beta/login', { host: BETA, sid: anon, post: { csrf: CSRF, email: 'lea@test.de', password: 'nope' } });
+  assert.equal(ctx.header('Location'), '/_beta/');
+  assert.match(String((await req('/_beta/', { host: BETA, sid: anon })).body), /Wrong email or password\./);
   // Richtig: neue Sitzung; Lea ist keine Testerin
-  ctx = await req('/login', { host: BETA, sid: anon, post: { csrf: CSRF, email: 'LEA@test.de ', password: PASSWORD } });
-  assert.equal(ctx.header('Location'), '/');
+  ctx = await req('/_beta/login', { host: BETA, sid: anon, post: { csrf: CSRF, email: 'LEA@test.de ', password: PASSWORD } });
+  assert.equal(ctx.header('Location'), '/_beta/');
   const cookie = /PHPSESSID=([^;]+)/.exec(String(ctx.header('Set-Cookie')))?.[1] ?? '';
   assert.ok(cookie && cookie !== anon, 'a new session id');
-  assert.match(String((await req('/', { host: BETA, sid: cookie })).body), /For beta testers only/);
+  assert.match(String((await req('/_beta/', { host: BETA, sid: cookie })).body), /For beta testers only/);
   // Mia als Testerin: das Panel
   await grantBeta(ADMIN, MIA);
   await sql("REPLACE INTO `DB`.oys_meta (meta_key, meta_value) VALUES ('beta_notes', 'Try the new block picker.\n\nAnd the <b>winter</b> look.')");
   const mia = await loginSession(MIA);
-  const html = String((await req('/', { host: BETA, sid: mia })).body);
+  const html = String((await req('/_beta/', { host: BETA, sid: mia })).body);
   assert.match(html, /Hi Mia, thanks for testing!/);
   assert.match(html, /<p>Try the new block picker\.<\/p><p>And the &lt;b&gt;winter&lt;\/b&gt; look\.<\/p>/, 'notes as plain text');
-  assert.match(html, /<form action="\/report" method="POST"/);
+  assert.match(html, /<form action="\/_beta\/report" method="POST"/);
   assert.match(html, /You haven’t sent a report yet\./);
   // Admins dürfen immer
-  assert.match(String((await req('/', { host: BETA, sid: await loginSession(ADMIN) })).body), /thanks for testing!/);
-  // Andere Pfade: zur Startseite
-  assert.equal((await req('/whatever', { host: BETA, sid: mia })).header('Location'), '/');
+  assert.match(String((await req('/_beta/', { host: BETA, sid: await loginSession(ADMIN) })).body), /thanks for testing!/);
+  // Andere Pfade (ohne Beta-Webseite): zum Panel
+  assert.equal((await req('/whatever', { host: BETA, sid: mia })).header('Location'), '/_beta/');
+  assert.equal((await req('/', { host: BETA, sid: mia })).header('Location'), '/_beta/');
+  assert.match(html, /There’s no pre-release to try right now\./, 'no beta website set up');
   // Abmelden
-  ctx = await req('/logout', { host: BETA, sid: mia, post: { csrf: CSRF } });
-  assert.equal(ctx.header('Location'), '/');
-  assert.match(String((await req('/', { host: BETA, sid: mia })).body), /Welcome to the beta/);
+  ctx = await req('/_beta/logout', { host: BETA, sid: mia, post: { csrf: CSRF } });
+  assert.equal(ctx.header('Location'), '/_beta/');
+  assert.match(String((await req('/_beta/', { host: BETA, sid: mia })).body), /Welcome to the beta/);
   await revokeBeta(MIA);
 });
 
@@ -177,19 +179,19 @@ test('reports: checked input, saved with type, area and browser; listed with sta
 
   await grantBeta(ADMIN, MIA);
   const mia = await loginSession(MIA);
-  let ctx = await req('/report', { host: BETA, sid: mia, post: { csrf: CSRF, kind: 'idea', area: 'editor', title: 'Dark mode toggle', body: 'Please add a switch for it.', steps: '', page_url: 'https://oys.test/x' } });
-  assert.equal(ctx.header('Location'), '/#reports');
+  let ctx = await req('/_beta/report', { host: BETA, sid: mia, post: { csrf: CSRF, kind: 'idea', area: 'editor', title: 'Dark mode toggle', body: 'Please add a switch for it.', steps: '', page_url: 'https://oys.test/x' } });
+  assert.equal(ctx.header('Location'), '/_beta/#reports');
   const [row] = await sql('SELECT * FROM `DB`.beta_reports WHERE user_id = ? ORDER BY id DESC LIMIT 1', [MIA]);
   assert.deepEqual([row.kind, row.area, row.title, row.status, row.page_url], ['idea', 'editor', 'Dark mode toggle', 'open', 'https://oys.test/x']);
-  assert.match(String((await req('/', { host: BETA, sid: mia })).body), /Thanks! Your report was sent to the team\.[\s\S]*Dark mode toggle/);
+  assert.match(String((await req('/_beta/', { host: BETA, sid: mia })).body), /Thanks! Your report was sent to the team\.[\s\S]*Dark mode toggle/);
   // Falsche Eingabe
-  ctx = await req('/report', { host: BETA, sid: mia, post: { csrf: CSRF, title: 'x', body: '' } });
-  assert.equal(ctx.header('Location'), '/#report');
-  assert.match(String((await req('/', { host: BETA, sid: mia })).body), /Please give your report a short title\./);
+  ctx = await req('/_beta/report', { host: BETA, sid: mia, post: { csrf: CSRF, title: 'x', body: '' } });
+  assert.equal(ctx.header('Location'), '/_beta/#report');
+  assert.match(String((await req('/_beta/', { host: BETA, sid: mia })).body), /Please give your report a short title\./);
   // Keine Testerin: nichts gespeichert
   const lea = await loginSession(LEA);
   const before = (await sql('SELECT COUNT(*) AS n FROM `DB`.beta_reports'))[0].n;
-  await req('/report', { host: BETA, sid: lea, post: { csrf: CSRF, title: 'Sneaky report', body: 'should not be saved' } });
+  await req('/_beta/report', { host: BETA, sid: lea, post: { csrf: CSRF, title: 'Sneaky report', body: 'should not be saved' } });
   assert.equal((await sql('SELECT COUNT(*) AS n FROM `DB`.beta_reports'))[0].n, before);
   await revokeBeta(MIA);
 });
@@ -288,7 +290,7 @@ test('the Discord ID is saved together with the role jobs (one step from the edi
 
 test('the bell link /_/beta always opens the beta area; a page called beta stays on the path', async () => {
   const ctx = await req('/_/beta');
-  assert.equal(ctx.header('Location'), 'http://beta.oys.test:8080/');
+  assert.equal(ctx.header('Location'), 'http://beta.oys.test:8080/_beta/');
   const lea = await loginSession(LEA);
   const [page] = await sql("SELECT id FROM `DB`.pages WHERE slug = 'beta'");
   const sub = await runRequest(makeTestCtx({ method: 'POST', url: '/dashboard/api/address', cookies: { PHPSESSID: lea }, headers: { 'x-csrf-token': CSRF, 'content-type': 'application/json' }, rawBody: Buffer.from(JSON.stringify({ page_id: page.id, slug: 'beta', mode: 'subdomain', csrf: CSRF })) }), dispatch);

@@ -43,6 +43,11 @@ export function config<T = ConfigValue>(key: string, fallback?: T): T {
   return value as unknown as T;
 }
 
+// Diese Installation ist die Beta-Webseite (beta/site.ts; config.json der zweiten Installation von server/beta.sh)
+export function isBetaBuild(): boolean {
+  return config<unknown>('beta_build', false) === true;
+}
+
 export function configString(key: string, fallback = ''): string {
   const v = config<ConfigValue>(key, null);
   if (v === null || v === undefined || typeof v === 'object') return fallback;

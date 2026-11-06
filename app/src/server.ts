@@ -14,6 +14,7 @@ import { timeZone } from './db.js';
 import { ensureSchemaOnce } from './schema.js';
 import { recordWebStart } from './status/endpoints.js';
 import { startOutboxCleanup } from './community/outbox.js';
+import { isBetaBuild } from './beta/site.js';
 
 // PHP-Grenzen wie auf dem Server: post_max_size 20M, upload_max_filesize 16M, Apache LimitRequestBody 25M
 const POST_MAX = 20 * 1024 * 1024;
@@ -82,6 +83,7 @@ export async function buildServer(opts: { dispatch?: (ctx: Ctx) => Promise<void>
       const ctx = new Ctx({ method: req.method, url: rawUrl, headers: req.headers, peer: req.socket.remoteAddress || '' });
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       ctx.rawBody = body;
+      ctx.requestBody = body;
       // $_POST/$_FILES füllt PHP nur bei POST (PUT, PATCH, DELETE: leer, nur php://input hat den Inhalt)
       if (ctx.method === 'POST' && body.length <= POST_MAX) {
         await readBody(ctx, String(req.headers['content-type'] ?? ''), body);
@@ -192,11 +194,14 @@ if (isMain) {
     const port = Number(process.env.PORT) || configInt('node_port', 3000);
     const host = process.env.HOST || '127.0.0.1';
     await app.listen({ port, host });
-    // Stündlich: alte Aufträge des Bots und hängende Discord-Beiträge aufräumen (nur ein Prozess gleichzeitig)
-    startOutboxCleanup();
-    console.log(`OnYourSite is listening on http://${host}:${port}`);
-    // Statusseiten: Start merken (Heartbeat-Fristen beginnen danach neu); ohne Datenbank egal
-    await recordWebStart().catch(() => undefined);
+    console.log(`OnYourSite${isBetaBuild() ? ' (beta website)' : ''} is listening on http://${host}:${port}`);
+    // Hintergrundaufgaben nur in der Hauptseite – die Beta-Webseite (beta/site.ts) teilt sich nur die Datenbank
+    if (!isBetaBuild()) {
+      // Stündlich: alte Aufträge des Bots und hängende Discord-Beiträge aufräumen (nur ein Prozess gleichzeitig)
+      startOutboxCleanup();
+      // Statusseiten: Start merken (Heartbeat-Fristen beginnen danach neu); ohne Datenbank egal
+      await recordWebStart().catch(() => undefined);
+    }
   } catch (err) {
     if (err instanceof ConfigMissingError) console.error(err.message);
     else console.error(err);

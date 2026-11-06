@@ -1,6 +1,7 @@
-// beta.<domain>: Anmelden mit dem OnYourSite-Konto (dieselben Zugangsdaten, eigene Sitzung auf dieser Adresse), das
-// Beta-Panel für Tester (was gerade getestet wird, Meldung schicken, eigene Meldungen mit Status und Antwort) und ein
-// Hinweis für alle anderen. Gleiche Gestaltung wie die Anmeldeseite.
+// beta.<domain>/_beta/: Anmelden mit dem OnYourSite-Konto (dieselben Zugangsdaten, eigene Sitzung auf dieser Adresse),
+// das Beta-Panel für Tester (Knopf zur Beta-Webseite, was gerade getestet wird, Meldung schicken, eigene Meldungen mit
+// Status und Antwort) und ein Hinweis für alle anderen. Gleiche Gestaltung wie die Anmeldeseite. Jede andere Adresse auf
+// beta.<domain> reicht beta/site.ts an die Beta-Webseite weiter (Tester) oder sie führt hierher.
 import type { Ctx } from '../web/ctx.js';
 import { Session } from '../web/session.js';
 import { attemptFailed, attemptsAllowed, csrfCheck, csrfField, rateLimit } from '../web/security.js';
@@ -10,13 +11,16 @@ import { e } from '../html.js';
 import { asset, mainUrl } from '../helpers.js';
 import { date, intval, phpStr, phpTrim, strtolower, strtotime } from '../php.js';
 import { uiAssets } from '../views/partials/ui.js';
+import { PANEL, betaSitePort, betaSiteVersion } from './site.js';
 import { REPORT_AREAS, REPORT_KINDS, REPORT_STATUSES, addReport, betaAccess, betaNotes, readReport, reportsOf, type BetaAccess } from './beta.js';
 
 export async function betaRoutes(ctx: Ctx): Promise<void> {
   ctx.header('X-Robots-Tag', 'noindex, nofollow');
   ctx.header('Content-Security-Policy', "frame-ancestors 'none'");
   ctx.header('X-Frame-Options', 'DENY');
-  const path = ctx.path;
+  // Alles außerhalb des Panels: zum Panel (dort anmelden; Tester sehen danach die Beta-Webseite unter derselben Adresse)
+  if (ctx.path !== '/_beta' && !ctx.path.startsWith(PANEL)) ctx.redirect(PANEL);
+  const path = ctx.path === '/_beta' ? '/' : ctx.path.slice(PANEL.length - 1);
   const session = await Session.start(ctx);
   if (path === '/login' && ctx.method === 'POST') return betaLogin(ctx, session);
   if (path === '/logout' && ctx.method === 'POST') {
@@ -24,12 +28,12 @@ export async function betaRoutes(ctx: Ctx): Promise<void> {
       session.data = {};
       session.destroy();
     }
-    ctx.redirect('/');
+    ctx.redirect(PANEL);
   }
   const userId = intval(session.get('user_id'));
   const user = userId > 0 ? await one('SELECT * FROM users WHERE id = ?', [userId]) : null;
   if (path === '/report' && ctx.method === 'POST') return betaReport(ctx, session, user);
-  if (path !== '/') ctx.redirect('/');
+  if (path !== '/') ctx.redirect(PANEL);
   const flashError = session.take('beta_error') ?? null;
   const flashOk = session.take('beta_ok') ?? null;
   const csrf = String(await csrfField(ctx));
@@ -53,32 +57,32 @@ async function betaLogin(ctx: Ctx, session: Session): Promise<never> {
       session.regenerate();
       session.set('user_id', intval(user.id));
       await exec('UPDATE users SET last_ip = ? WHERE id = ?', [encryptData(ctx.ip) ?? null, user.id as Param]);
-      ctx.redirect('/');
+      ctx.redirect(PANEL);
     }
     await attemptFailed(ctx, loginKey, 900);
     session.set('beta_error', 'Wrong email or password.');
   }
-  return ctx.redirect('/');
+  return ctx.redirect(PANEL);
 }
 
 async function betaReport(ctx: Ctx, session: Session, user: Row | null): Promise<never> {
-  if (!user || betaAccess(user) !== 'ok') return ctx.redirect('/');
+  if (!user || betaAccess(user) !== 'ok') return ctx.redirect(PANEL);
   if (!csrfCheck(ctx, ctx.post.csrf ?? null)) {
     session.set('beta_error', 'Your session has expired. Please try again.');
-    return ctx.redirect('/');
+    return ctx.redirect(PANEL);
   }
   const report = readReport(ctx.post as Record<string, unknown>, phpStr(ctx.headers['user-agent'] ?? ''));
   if (typeof report === 'string') {
     session.set('beta_error', report);
-    return ctx.redirect('/#report');
+    return ctx.redirect(PANEL + '#report');
   }
   if (!(await rateLimit('beta-report:' + intval(user.id), 20, 3600))) {
     session.set('beta_error', 'That’s a lot of reports in a short time – please wait a few minutes.');
-    return ctx.redirect('/#report');
+    return ctx.redirect(PANEL + '#report');
   }
   await addReport(intval(user.id), report);
   session.set('beta_ok', 'Thanks! Your report was sent to the team.');
-  return ctx.redirect('/#reports');
+  return ctx.redirect(PANEL + '#reports');
 }
 
 // ---------------------------------------------------------------- Ansichten
@@ -100,7 +104,7 @@ function page(title: string, body: string): string {
     + body + '\n</body>\n</html>\n';
 }
 
-const brand = (): string => '<a href="/" class="flex items-center gap-2"><i class=\'bx bx-hive text-3xl text-brand-500\'></i>'
+const brand = (): string => '<a href="' + PANEL + '" class="flex items-center gap-2"><i class=\'bx bx-hive text-3xl text-brand-500\'></i>'
   + '<span class="font-bold text-xl text-white tracking-tight">OnYourSite</span>'
   + '<span class="ml-1 text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-300">Beta</span></a>';
 
@@ -115,7 +119,7 @@ function loginBody(csrf: string, error: unknown): string {
     + '<h1 class="text-2xl font-bold text-white text-center mb-2">Welcome to the beta</h1>'
     + '<p class="text-gray-400 text-center mb-8">Log in with your OnYourSite account.</p>'
     + notice('error', error)
-    + '<form action="/login" method="POST" class="space-y-5">' + csrf
+    + '<form action="' + PANEL + 'login" method="POST" class="space-y-5">' + csrf
     + '<div><label class="block text-sm font-medium text-gray-300 mb-2" for="beta-email">Email address</label><input id="beta-email" type="email" name="email" required autocomplete="email" placeholder="max@example.com" class="' + FIELD + '"></div>'
     + '<div><label class="block text-sm font-medium text-gray-300 mb-2" for="beta-password">Password</label><input id="beta-password" type="password" name="password" required autocomplete="current-password" placeholder="••••••••" class="' + FIELD + '"></div>'
     + '<button type="submit" class="w-full bg-white text-black hover:bg-gray-200 font-bold py-3.5 rounded-xl transition-all duration-300 mt-4">Log in</button></form>'
@@ -123,7 +127,7 @@ function loginBody(csrf: string, error: unknown): string {
     + '</div></main>';
 }
 
-const logoutForm = (csrf: string): string => '<form action="/logout" method="POST" class="m-0">' + csrf
+const logoutForm = (csrf: string): string => '<form action="' + PANEL + 'logout" method="POST" class="m-0">' + csrf
   + '<button type="submit" class="text-sm text-gray-400 hover:text-white flex items-center gap-1.5"><i class=\'bx bx-log-out text-lg\'></i> Log out</button></form>';
 
 function deniedBody(user: Row, access: BetaAccess, csrf: string): string {
@@ -139,6 +143,19 @@ function deniedBody(user: Row, access: BetaAccess, csrf: string): string {
     + '<p class="text-sm text-gray-500 mb-6">Logged in as ' + e(user.email) + '</p>'
     + '<div class="flex items-center justify-center gap-4"><a href="' + e(mainUrl('/dashboard#settings')) + '" class="bg-white text-black hover:bg-gray-200 font-semibold py-2.5 px-5 rounded-xl text-sm">Open the editor</a>' + logoutForm(csrf) + '</div>'
     + '</div></main>';
+}
+
+// Die Beta-Webseite: der nächste Stand von OnYourSite (Pre-Release), unter derselben Adresse
+function websiteCard(): string {
+  const version = betaSiteVersion();
+  const head = '<section id="beta-website" class="bg-card border border-sky-500/20 rounded-2xl p-6 flex flex-col sm:flex-row sm:items-center gap-5 justify-between">'
+    + '<div><h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-1"><i class=\'bx bx-globe text-sky-300\'></i> Beta website'
+    + (version ? ' <span class="text-[11px] font-bold tracking-wide px-2 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-300" data-beta-version>' + e(version) + '</span>' : '') + '</h2>';
+  if (betaSitePort() === 0) {
+    return head + '<p class="text-sm text-gray-400">There’s no pre-release to try right now. We’ll let you know when the next one is ready.</p></div></section>';
+  }
+  return head + '<p class="text-sm text-gray-400">The next version of OnYourSite, before everyone else gets it. It uses your real account and pages – what you change there changes for real.</p></div>'
+    + '<a href="/" class="shrink-0 bg-white text-black hover:bg-gray-200 font-bold py-3 px-6 rounded-xl transition-all text-center flex items-center justify-center gap-2" data-open-website><i class=\'bx bx-right-arrow-alt text-xl\'></i> Open the website</a></section>';
 }
 
 const badge = (status: string): string => {
@@ -160,10 +177,11 @@ function panelBody(user: Row, csrf: string, notes: string, reports: Row[], error
   o += '<section><h1 class="text-3xl font-bold text-white tracking-tight">Hi ' + e(name.split(' ')[0]) + ', thanks for testing!</h1>'
     + '<p class="text-gray-400 mt-2">Try new things on OnYourSite before everyone else and tell us what breaks or what you’d like. Every report goes straight to the team.</p></section>';
   o += notice('error', error) + notice('ok', ok);
+  o += websiteCard();
   o += '<section class="bg-card border border-bordercolor rounded-2xl p-6"><h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-3"><i class=\'bx bx-test-tube text-sky-300\'></i> What to test right now</h2>'
     + '<div class="text-gray-300 space-y-3 text-sm leading-relaxed">' + (notes ? paras(notes) : '<p class="text-gray-500">Nothing special right now – use OnYourSite as usual and tell us about anything that feels wrong.</p>') + '</div></section>';
   o += '<section id="report" class="bg-card border border-bordercolor rounded-2xl p-6"><h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-5"><i class=\'bx bx-bug text-sky-300\'></i> Send a report</h2>'
-    + '<form action="/report" method="POST" class="space-y-5">' + csrf
+    + '<form action="' + PANEL + 'report" method="POST" class="space-y-5">' + csrf
     + '<div class="grid gap-4 sm:grid-cols-2"><div><label class="block text-sm font-medium text-gray-300 mb-2" for="r-kind">Type</label><select id="r-kind" name="kind" class="' + FIELD + '">' + options(REPORT_KINDS, 'bug') + '</select></div>'
     + '<div><label class="block text-sm font-medium text-gray-300 mb-2" for="r-area">Where</label><select id="r-area" name="area" class="' + FIELD + '">' + options(REPORT_AREAS, 'other') + '</select></div></div>'
     + '<div><label class="block text-sm font-medium text-gray-300 mb-2" for="r-title">Title</label><input id="r-title" name="title" required minlength="4" maxlength="160" placeholder="e.g. The countdown block shows the wrong time" class="' + FIELD + '"></div>'

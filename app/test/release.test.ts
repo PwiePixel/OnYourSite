@@ -48,7 +48,8 @@ after(async () => {
 
 test('VERSION is a version number with its own section in CHANGELOG.md and the same number in app/package.json', () => {
   const v = appVersion();
-  assert.match(v, /^\d+\.\d+\.\d+$/);
+  // Release (main) oder Pre-Release (Branch beta, scripts/release.sh X.Y.Z-beta.N)
+  assert.match(v, /^\d+\.\d+\.\d+(-beta\.[1-9]\d*)?$/);
   assert.equal(readFileSync(join(ROOT_DIR, 'VERSION'), 'utf8'), v + '\n');
   const changelog = readFileSync(join(ROOT_DIR, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp('^## \\[' + v.replaceAll('.', '\\.') + '\\] - \\d{4}-\\d{2}-\\d{2}$', 'm'));
@@ -67,7 +68,8 @@ test('every version in CHANGELOG.md appears once, newest first, and none is empt
   assert.equal(versions[0], 'Unreleased');
   const numbers = versions.slice(1) as string[];
   assert.equal(new Set(numbers).size, numbers.length);
-  const key = (v: string) => v.split('.').map((n) => n.padStart(4, '0')).join('.');
+  // 3.6.0 > 3.6.0-beta.2 > 3.6.0-beta.1 > 3.5.0
+  const key = (v: string) => { const [rel, pre] = v.split('-beta.'); return rel.split('.').map((n) => n.padStart(4, '0')).join('.') + (pre === undefined ? '~' : '-' + pre.padStart(4, '0')); };
   assert.deepEqual([...numbers].sort((a, b) => key(b).localeCompare(key(a))), numbers);
   for (const s of sections.slice(1)) assert.match(s.split('\n').slice(1).join('\n'), /^- /m, s.split('\n')[0]);
 });
@@ -154,18 +156,20 @@ test('history: a step that fails half way leaves nothing behind, and the next st
   assert.deepEqual(rows.slice(0, 4).map((r) => [r.is_published, r.milestone_id !== null]), [[1, true], [1, true], [1, true], [1, true]]);
 });
 
-test('the Release workflow only publishes from main, also when started by hand', () => {
+test('the Release workflow only publishes from main (releases) and beta (pre-releases), also when started by hand', () => {
   const wf = readFileSync(join(ROOT_DIR, '.github', 'workflows', 'release.yml'), 'utf8');
-  assert.match(wf, /^\s+if: github\.ref == 'refs\/heads\/main'$/m);
+  assert.match(wf, /^\s+if: github\.ref == 'refs\/heads\/main' \|\| github\.ref == 'refs\/heads\/beta'$/m);
+  assert.match(wf, /^\s+branches: \[main, beta\]$/m);
 });
 
 // Jede Version ab 3.2 bringt ihren Text für /updates mit (updates/releaseNotes.ts)
 test('every version from 3.2 on has its text for /updates, and VERSION has one', () => {
   const changelog = readFileSync(join(ROOT_DIR, 'CHANGELOG.md'), 'utf8');
-  const versions = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+  assert.ok([...changelog.matchAll(/^## \[([^\]]+)\]/gm)].some((m) => m[1] === appVersion()), 'VERSION is in CHANGELOG.md');
+  // Ein Pre-Release (X.Y.Z-beta.N) bringt schon den Text seines Releases X.Y.Z mit
+  const versions = [...new Set([...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)(?:-beta\.\d+)?\]/gm)].map((m) => m[1]))];
   const key = (v: string) => v.split('.').map((n) => n.padStart(4, '0')).join('.');
   const need = versions.filter((v) => key(v) >= key('3.2.0'));
-  assert.ok(need.includes(appVersion()), 'VERSION is in CHANGELOG.md');
   for (const v of need) assert.ok(RELEASE_NOTES.some((n) => n.version === v), `release note for ${v} in app/src/updates/releaseNotes.ts`);
   for (const n of RELEASE_NOTES) {
     assert.ok(n.title.length > 0 && n.title.length <= 160, n.version);

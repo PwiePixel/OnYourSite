@@ -30,13 +30,14 @@ function testSite(defaultPort) {
   let server = null;
   let tmpDir = '';
   let log = '';
-  // Die Seite mit dem aktuellen Code (tsx src/server.ts) und einer Kopie der Einstellungen (nur für den Besitzer lesbar)
-  async function start() {
+  // Die Seite mit dem aktuellen Code (tsx src/server.ts) und einer Kopie der Einstellungen (nur für den Besitzer lesbar).
+  // opts.config: zusätzliche Einstellungen, opts.port: ein anderer Port (z. B. eine zweite Installation als Beta-Webseite)
+  async function start(opts = {}) {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oys-e2e-site-'));
     const conf = path.join(tmpDir, 'config.json');
-    fs.writeFileSync(conf, JSON.stringify({ ...cfg, base_domain: host + ':' + port }), { mode: 0o600 });
+    fs.writeFileSync(conf, JSON.stringify({ ...cfg, base_domain: host + ':' + port, ...(opts.config || {}) }), { mode: 0o600 });
     server = spawn(path.join(ROOT, 'app/node_modules/.bin/tsx'), ['src/server.ts'], {
-      cwd: path.join(ROOT, 'app'), env: { ...process.env, PORT: String(port), OYS_CONFIG: conf }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: path.join(ROOT, 'app'), env: { ...process.env, PORT: String(opts.port || port), OYS_CONFIG: conf }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', (d) => (log += d));
     server.stderr.on('data', (d) => (log += d));

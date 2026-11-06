@@ -1,5 +1,6 @@
 // Öffentliche Endpunkte unter /_/… (lib/routes_public.php) und die Profilseiten aus index.php: alte Klick-Zählung,
 // Profil im Pfad-Modus (on-your.site/name) und auf der Subdomain (name.on-your.site). Setzt KEINE Cookies.
+import { isBetaBuild } from '../config.js';
 import type { Ctx } from '../web/ctx.js';
 import { one, type Row } from '../db.js';
 import { config } from '../config.js';
@@ -348,7 +349,7 @@ export async function pathProfile(ctx: Ctx, slug: string, sub: string): Promise<
     // Hauptadresse ist die Live-Domain (mit eingeschalteter Weiterleitung) → dorthin
     if ((await forwardingDomain(page)) !== null) redirectToDomain(ctx, page, sub, true);
     // Hauptadresse ist name.on-your.site → dorthin weiterleiten
-    if (page.address_mode !== 'path') ctx.redirect(addressUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
+    if (page.address_mode !== 'path' && !isBetaBuild()) ctx.redirect(addressUrl(page as unknown as PageLike, sub) + queryPart(ctx), 302);
     return servePage(ctx, page, sub);
   }
   // Statusseiten gibt es nur unter ihrer eigenen Subdomain

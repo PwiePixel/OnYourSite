@@ -9,6 +9,8 @@ import { date, field, intval, phpStr, strtolower, strtotime, type PhpArray } fro
 import { csrfField } from '../web/security.js';
 import { schemaAtLeast, V_BETA } from '../schema.js';
 import { report } from '../discord/botReport.js';
+import { betaSitePort, betaSiteVersion, isBetaBuild } from './site.js';
+import { appVersion } from '../version.js';
 import {
   REPORT_AREAS, REPORT_KINDS, REPORT_STATUSES, answerReport, betaHost, betaNotes, betaUrl, discordOf, grantBeta, retryRole, revokeBeta,
   saveBetaNotes, type GrantResult,
@@ -67,10 +69,20 @@ export async function adminBetaView(ctx: Ctx): Promise<string> {
 
   o += '<div class="' + CARD + '"><div class="flex flex-wrap items-start justify-between gap-4"><div class="min-w-0">'
     + '<h2 class="text-lg font-semibold text-white flex items-center gap-2"><i class=\'bx bx-test-tube text-sky-300\'></i> Beta</h2>'
-    + '<p class="text-sm text-gray-400 mt-1">Beta testers log in at <a class="text-brand-400 hover:text-white" href="' + e(betaUrl('/')) + '" target="_blank" rel="noopener">' + e(betaHost()) + '</a> with their OnYourSite account and send reports from there. Every tester needs a linked Discord account – the bot gives them the <b class="text-white">Beta Tester</b> role on the Discord server (and creates the role if it’s missing).</p>'
+    + '<p class="text-sm text-gray-400 mt-1">Beta testers log in at <a class="text-brand-400 hover:text-white" href="' + e(betaUrl('/_beta/')) + '" target="_blank" rel="noopener">' + e(betaHost()) + '</a> with their OnYourSite account and send reports from there. Every tester needs a linked Discord account – the bot gives them the <b class="text-white">Beta Tester</b> role on the Discord server (and creates the role if it’s missing).</p>'
     + '</div><div class="flex gap-6 text-center"><div><p class="text-2xl font-bold text-white">' + testers.length + '</p><p class="text-xs text-gray-500">Testers</p></div><div><p class="text-2xl font-bold text-white">' + open + '</p><p class="text-xs text-gray-500">Open reports</p></div></div></div>';
   if (!rep) o += '<p class="mt-4 text-sm text-amber-300 flex items-center gap-2"><i class=\'bx bx-error\'></i> The Discord bot hasn’t reported yet – roles are given as soon as it runs.</p>';
   else if (!rep.features.includes('beta.v1')) o += '<p class="mt-4 text-sm text-amber-300 flex items-center gap-2"><i class=\'bx bx-error\'></i> The Discord bot is too old for beta roles – update it (<code>install.sh --update</code> updates the bot too). Testers can use the beta area anyway.</p>';
+  // Die Beta-Webseite (zweite Installation, Branch beta – server/beta.sh)
+  const port = betaSitePort();
+  const version = betaSiteVersion();
+  if (isBetaBuild()) {
+    o += '<p class="mt-4 text-sm flex items-center gap-2 text-sky-300" data-beta-site><i class=\'bx bx-globe\'></i> This is the beta website (version ' + e(appVersion()) + ') – manage testers and reports on the main site.</p>';
+  } else o += '<p class="mt-4 text-sm flex items-center gap-2 ' + (port ? 'text-gray-300' : 'text-gray-500') + '" data-beta-site><i class=\'bx bx-globe text-sky-300\'></i> '
+    + (port
+      ? 'Beta website: <b class="text-white">' + e(version || 'unknown version') + '</b> – testers open it from the panel. A new pre-release: push it to the <code>beta</code> branch, then <code>install.sh --beta</code>.'
+      : 'No beta website is set up – the panel works without it. Set it up on the server with <code>install.sh --beta</code> (it runs the <code>beta</code> branch next to this site, with the same database).')
+    + '</p>';
   o += '</div>\n';
 
   // Tester freischalten

@@ -51,6 +51,8 @@ export class Ctx {
   post: PhpArray = {};
   files: Record<string, UploadedFile> = {};
   rawBody: Buffer = Buffer.alloc(0);
+  // Der Inhalt der Anfrage, wie er ankam (rawBody ist nach multipart leer) – für das Beta-Tor (beta/site.ts)
+  requestBody: Buffer = Buffer.alloc(0);
   readonly cookies: Record<string, string>;
   session: Session | null = null;
   // Zwischenspeicher für diese Anfrage (z. B. der angemeldete Nutzer)
@@ -210,7 +212,10 @@ export function makeTestCtx(o: { method?: string; url: string; host?: string; he
   const ctx = new Ctx({ method: o.method ?? 'GET', url: o.url, headers, peer: o.ip ?? '127.0.0.1' });
   if (o.post) ctx.post = o.post;
   if (o.files) ctx.files = o.files;
-  if (o.rawBody) ctx.rawBody = o.rawBody;
+  if (o.rawBody) {
+    ctx.rawBody = o.rawBody;
+    ctx.requestBody = o.rawBody;
+  }
   return ctx;
 }
 

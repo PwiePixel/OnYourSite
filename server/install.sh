@@ -12,6 +12,9 @@
 #   sudo bash server/install.sh --https    Nur das Zertifikat einrichten (nach „Later“ oder bei einem neuen DNS-Anbieter)
 #   sudo bash server/install.sh --tunnel   Nur den Cloudflare-Tunnel einrichten oder reparieren
 #   sudo bash server/install.sh --reset    Alles neu: Datenbank, Uploads und Schlüssel löschen (vorher ein Backup)
+#   sudo bash server/install.sh --beta     Die Beta-Webseite (Branch beta, Pre-Releases) neben der Hauptseite einrichten
+#                                          oder aktualisieren – gleiche Datenbank, Tester sehen sie auf beta.<domain>
+#                                          (server/beta.sh); --update aktualisiert sie mit. --beta-off entfernt sie.
 #
 # Die Webseite läuft mit Node.js 22 als Dienst onyoursite-web (Benutzer www-data, nur auf 127.0.0.1); Apache nimmt die
 # Anfragen mit HTTPS an und reicht alles an Node weiter. Dazu MariaDB, ein Let’s-Encrypt-Zertifikat für die Domain und
@@ -139,6 +142,8 @@ save_conf() {
     echo "CUSTOM_DOMAINS=${CUSTOM_DOMAINS:-}"
     echo "SAAS_ORIGIN=${SAAS_ORIGIN:-}"
     echo "SAAS_TARGET=${SAAS_TARGET:-}"
+    # Beta-Webseite (--beta): ein anderer Port als der der Hauptseite + 1
+    if [ -n "$(conf_get BETA_PORT)" ]; then echo "BETA_PORT=$(conf_get BETA_PORT)"; fi
   } > "$tmp"
   mv "$tmp" "$CONF"
 }
@@ -2901,6 +2906,10 @@ update_finish() {
   domains_update || true
   save_conf
   step_bot
+  # Die Beta-Webseite (falls eingerichtet) auf den neuesten Stand des Branches beta – die Hauptseite hält nie deswegen an
+  if [ -f "$UNITS/onyoursite-beta.service" ]; then
+    bash "$CODE/server/beta.sh" update || warn "The beta website wasn’t updated – see above. The main website is fine."
+  fi
   bold "Checking the website"
   check_site
   status_window 0
@@ -2973,12 +2982,14 @@ while [ $# -gt 0 ]; do
     --tunnel) MODE=tunnel ;;
     --reset) MODE=reset ;;
     --domains) MODE=domains ;;
+    --beta) MODE=beta ;;
+    --beta-off) MODE=beta-off ;;
     --branch)
       [[ ${2:-} =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || fail "--branch needs the name of a branch."
       BRANCH=$2
       BRANCH_GIVEN=1
       shift ;;
-    *) fail "Unknown option: $1 (use --update, --https, --tunnel, --domains, --reset, --branch NAME or nothing)" ;;
+    *) fail "Unknown option: $1 (use --update, --https, --tunnel, --domains, --beta, --beta-off, --reset, --branch NAME or nothing)" ;;
   esac
   shift
 done
@@ -3055,6 +3066,11 @@ case $MODE in
       fetch_release
     fi
     update_site
+    ;;
+  beta|beta-off)
+    [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"
+    if php_live; then fail "This server still runs the PHP version – update it first: ${SUDO_HINT}bash $CODE/server/install.sh --update"; fi
+    if [ "$MODE" = beta ]; then bash "$CODE/server/beta.sh" setup; else bash "$CODE/server/beta.sh" remove; fi
     ;;
   https)
     [ -n "$OLD_DOMAIN" ] || fail "OnYourSite isn’t set up on this server yet. Run: ${SUDO_HINT}bash $CODE/server/install.sh"

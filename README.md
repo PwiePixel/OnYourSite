@@ -106,6 +106,8 @@ Every update has a permanent link `/updates/<number>` – Discord posts and the 
 
 `beta.on-your.site` is the beta area: beta testers log in with their OnYourSite account (same database, same password; the session is its own on that address) and get a panel with what to test right now, a form for bug reports and ideas, and their reports with the team's status and reply. *Admin → Beta* adds and removes testers (only accounts with a linked Discord ID – the user sets it in the editor under Settings), answers reports and edits the "What to test right now" text. The Discord bot gives testers the **Beta Tester** role (feature `beta.v1`; it creates the role if needed, `BETA_ROLE_ID` in the bot's `.env` picks an existing role) and takes it away again; when a tester changes their Discord ID, the role moves with it. `on-your.site/beta` leads to the beta area. The code is in `app/src/beta/` and `discord-bot/src/beta.js`.
 
+**The beta website.** The panel lives at `beta.on-your.site/_beta/`; every other address on `beta.on-your.site` is the **beta website** – a second installation of OnYourSite with the pre-release (branch `beta`), running next to the main site on its own port with the same database and uploads (`install.sh --beta`, see `server/README.md`). The main site is the gate: it passes logged-in testers on to the beta website (`app/src/beta/site.ts`) and adds a small "Beta · Panel" note to its pages; everyone else lands at the panel. The session is shared (the sessions table is in the same database), so testers are logged in on the beta website right away. The beta website runs with `beta_build: true` and `base_domain` `beta.on-your.site` and doesn't run background tasks. Its new schema steps change the real database at once – they keep the number they'll have on `main` (the main site skips steps it already finds). On the beta website every page opens by path (`beta.on-your.site/name` – there is no `name.beta.on-your.site`); links it creates (mails too) point to `beta.on-your.site`, so do admin work on the main site.
+
 ## Seasons
 
 *Admin → Seasons* decorates OnYourSite’s own pages for a season – the home page, log in and sign up, updates, roadmap, suggestions, the legal pages and the 404 page; users’ pages, the editor and the admin panel stay as they are. Each theme is **Off**, **On** or **Automatic** (every year between two dates, e.g. `12-01` to `01-06`), and *Preview* opens the home page with the theme without turning it on. The first theme is **Winter** (falling snow, fairy lights along the top, a Santa hat on the logo, a frosty glow, icy blue accents; CSS only in `static/css/season-winter.css`); it starts as Automatic from December 1 to January 6. New themes are added in `app/src/seasons/seasons.ts`.
@@ -200,9 +202,13 @@ scripts/               release.sh (prepare a version), publish-releases.sh (used
 
 ## Releases
 
-Every change is written down in [`CHANGELOG.md`](CHANGELOG.md) – first under **[Unreleased]**. To release a version:
+Every change is written down in [`CHANGELOG.md`](CHANGELOG.md) – first under **[Unreleased]**. There are two channels: **releases** for everyone (on `main`) and **pre-releases** for the beta website (on the branch `beta`).
 
-1. Run `scripts/release.sh 3.3.0` – it moves the entries from [Unreleased] into a new section `## [3.3.0] - YYYY-MM-DD` and writes the number into `VERSION`, `app/package.json` and `app/package-lock.json`.
+**Pre-release** (only on `beta.on-your.site`): bring the changes to the branch `beta`, run `scripts/release.sh 3.6.0-beta.1` (it copies [Unreleased] into a section `## [3.6.0-beta.1]` – [Unreleased] stays), commit it on `beta`. GitHub publishes the tag `v3.6.0-beta.1` as a *pre-release* (never "Latest"). On the server: `sudo bash /var/www/onyoursite/server/install.sh --beta`. The entry in `releaseNotes.ts` is the one of the coming release (`3.6.0`).
+
+**Release** for everyone:
+
+1. Run `scripts/release.sh 3.3.0` – it moves the entries from [Unreleased] into a new section `## [3.3.0] - YYYY-MM-DD` (and drops the sections of its pre-releases) and writes the number into `VERSION`, `app/package.json` and `app/package-lock.json`.
 2. Write the text for visitors: an entry for the version in `app/src/updates/releaseNotes.ts`. A few minutes after the update, it waits as a draft in *Admin → Updates* – publish it there (it is announced on Discord if the entry says so).
 3. Commit and merge it into `main`.
 4. GitHub creates the tag `v3.3.0` and a release with exactly these notes and the source code as a ZIP (Actions → *Release*). The installed version is shown at the bottom of the admin menu.
