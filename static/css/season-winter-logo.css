@@ -2,7 +2,8 @@
    das Winter-Thema aktiv ist (die Seiten mit dem ganzen Thema laden zusätzlich season-winter.css) */
 /* Weihnachtsmütze auf dem OnYourSite-Logo – auf jeder eigenen Seite (Startseite, Anmelden, Editor, Admin, Beta), nie auf
    den gelben Honigwaben und nie auf den Seiten der Nutzer.
-   Die Mütze ist das Bild des Inhabers (static/images/seasons/logo-hat.png – das Logo mit Mütze, die Waben herausgeschnitten):
+   Die Mütze ist das Bild des Inhabers (static/images/seasons/logo-hat.png – das Logo mit Mütze, die Waben herausgerechnet: wo das Fell über den Waben lag, ist
+   die Kante weich auf das Fell zurückgerechnet, die Innenseite der Mütze weiß wie auf dem Bild):
    sie sitzt genau so auf der Wabe wie auf dem Bild (Lage und Größe in em, gemessen an der Wabe von Boxicons, die
    0,125 – 0,875 em füllt; auf dem Bild 154 – 430 px). Die Waben kommen weiter von Boxicons und behalten so die Farbe
    der Seite (lila bzw. weiß). Die Mütze liegt über der Lichterkette (das Logo ist positioniert, die Kette in der
