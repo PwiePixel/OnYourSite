@@ -63,6 +63,8 @@ export class Ctx {
   customDomain: CustomHost | null = null;
   // Eigene Seite von OnYourSite, die ein Saison-Thema bekommen darf (seasons/seasons.ts, gesetzt von den Routen)
   seasonPage = false;
+  // Eigene Seite mit dem OnYourSite-Logo (Editor, Admin, Beta-Panel): bekommt vom Saison-Thema nur die Deko am Logo
+  logoPage = false;
 
   status = 200;
   private resHeaders: Array<[string, string]> = [];

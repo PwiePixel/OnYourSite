@@ -13,6 +13,7 @@ export interface SeasonTheme {
   name: string;
   desc: string;
   css: string; // Stylesheet unter /static/css
+  logoCss: string; // nur die Deko am Logo – auf allen eigenen Seiten (Editor, Admin, Beta-Panel …)
   mode: SeasonMode; // Vorgabe, solange der Admin für dieses Thema nichts gespeichert hat
   from: string; // Vorgabe für „automatisch“ (MM-DD)
   to: string;
@@ -23,7 +24,7 @@ export interface SeasonSetting { mode: SeasonMode; from: string; to: string }
 export const SEASONS: Readonly<Record<string, SeasonTheme>> = Object.freeze({
   winter: Object.freeze({
     name: 'Winter', desc: 'Falling snow, fairy lights along the top, a Santa hat on the logo and a frosty glow.',
-    css: '/static/css/season-winter.css', mode: 'auto', from: '12-01', to: '01-06', swatch: '#bfdbfe',
+    css: '/static/css/season-winter.css', logoCss: '/static/css/season-winter-logo.css', mode: 'auto', from: '12-01', to: '01-06', swatch: '#bfdbfe',
   }),
 });
 
@@ -105,10 +106,10 @@ export function applySeason(html: string, key: string): string {
   if (head === -1 || !bodyMatch || bodyMatch.index < head) return html;
   let body = bodyMatch[0];
   const cls = /\sclass="([^"]*)"/i.exec(body);
-  body = cls ? body.replace(cls[0], () => ' class="' + (cls[1] ? cls[1] + ' ' : '') + 'season-' + key + '"') : body.replace(/>$/, ' class="season-' + key + '">');
+  body = withBodyClass(body, 'season-' + key + ' oys-logo-hat');
   // Deko unter der Navigation (Schnee, Schein)
   const deco = '<div class="oys-season" aria-hidden="true"><span class="oys-season-1"></span><span class="oys-season-2"></span><span class="oys-season-3"></span></div>';
-  const link = '<link rel="stylesheet" href="' + asset(theme.css) + '">';
+  const link = '<link rel="stylesheet" href="' + asset(theme.css) + '"><link rel="stylesheet" href="' + asset(theme.logoCss) + '">';
   const afterBody = bodyMatch.index + bodyMatch[0].length;
   let rest = html.slice(afterBody);
   // Schnee, der unten liegt: im ersten <footer> (Klasse oys-season-footer, die Verwehung gleich hinter dem Tag) –
@@ -131,6 +132,24 @@ export function applySeason(html: string, key: string): string {
   return html.slice(0, head) + link + html.slice(head, bodyMatch.index) + body + deco + bottom + rest;
 }
 
+// Klasse(n) an das <body>-Tag hängen
+function withBodyClass(body: string, add: string): string {
+  const cls = /\sclass="([^"]*)"/i.exec(body);
+  return cls ? body.replace(cls[0], () => ' class="' + (cls[1] ? cls[1] + ' ' : '') + add + '"') : body.replace(/>$/, ' class="' + add + '">');
+}
+
+// Nur die Deko am Logo (Weihnachtsmütze): Stylesheet vor </head>, Klasse oys-logo-hat an <body> – für die eigenen Seiten
+// ohne das ganze Thema (Editor, Admin, Beta-Panel). Ohne <head>/<body> bleibt die Seite, wie sie ist.
+export function applyLogoSeason(html: string, key: string): string {
+  const theme = SEASONS[key];
+  if (!theme) return html;
+  const head = html.indexOf('</head>');
+  const bodyMatch = /<body\b[^>]*>/i.exec(html);
+  if (head === -1 || !bodyMatch || bodyMatch.index < head) return html;
+  return html.slice(0, head) + '<link rel="stylesheet" href="' + asset(theme.logoCss) + '">' + html.slice(head, bodyMatch.index)
+    + withBodyClass(bodyMatch[0], 'oys-logo-hat') + html.slice(bodyMatch.index + bodyMatch[0].length);
+}
+
 // Seiten, die ein Saison-Thema bekommen (Adresse auf der Hauptseite); die 404-Seite setzt es selbst
 const SEASON_PATHS = new Set(['/', '/login', '/register', '/updates', '/roadmap', '/suggestions', '/challenge', '/imprint', '/privacy', '/terms', '/terms/code-pages']);
 export const isSeasonPath = (path: string): boolean => SEASON_PATHS.has(path) || /^\/(updates|suggestions)\/\d+$/.test(path);
@@ -138,13 +157,13 @@ export const isSeasonPath = (path: string): boolean => SEASON_PATHS.has(path) ||
 // Nach der Antwort (server.ts): nur HTML-Seiten mit Status 200 oder 404, die als Saison-Seite markiert sind.
 // ?season_preview=<thema> zeigt ein Thema schon vorher (für den Admin; ändert nichts Gespeichertes).
 export async function seasonalBody(ctx: Ctx): Promise<void> {
-  if (!ctx.seasonPage || typeof ctx.body !== 'string' || (ctx.status !== 200 && ctx.status !== 404) || ctx.method === 'HEAD') return;
+  if (!(ctx.seasonPage || ctx.logoPage) || typeof ctx.body !== 'string' || (ctx.status !== 200 && ctx.status !== 404) || ctx.method === 'HEAD') return;
   const type = ctx.header('Content-Type');
   if (type !== undefined && !/^text\/html\b/i.test(type)) return;
   const preview = ctx.q('season_preview');
   const key = preview !== '' && Object.hasOwn(SEASONS, preview) ? preview : await activeSeason();
   if (key === null) return;
-  ctx.body = applySeason(ctx.body, key);
+  ctx.body = ctx.seasonPage ? applySeason(ctx.body, key) : applyLogoSeason(ctx.body, key);
   // Die Länge stimmt nicht mehr, falls eine Seite sie gesetzt hat
   ctx.removeHeader('Content-Length');
 }

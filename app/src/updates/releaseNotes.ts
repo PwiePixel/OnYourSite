@@ -23,7 +23,8 @@ export const RELEASE_NOTES: readonly ReleaseNote[] = [
     body: 'Beta testers now get the whole next version of OnYourSite before everyone else:\n\n'
       + '- **Log in at beta.on-your.site** and open the **beta website** from the panel – new features with your real account and pages\n'
       + '- **Report what you find** right in the beta panel and follow the team\'s replies\n'
-      + '- Everything that works well comes to on-your.site for everyone with the next release',
+      + '- Everything that works well comes to on-your.site for everyone with the next release\n'
+      + '- In the winter look, our logo now wears its Santa hat everywhere – in the editor and the admin area too',
   },
   {
     version: '3.5.0', category: 'new', title: 'The OnYourSite beta is open', announce: true,

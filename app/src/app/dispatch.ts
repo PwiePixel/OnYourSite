@@ -29,6 +29,8 @@ export async function appRoutes(ctx: Ctx): Promise<void> {
 
   // Saison-Thema (Admin → Seasons) für die eigenen Seiten; nur auf der Hauptseite, nie auf einer eigenen Domain
   if (!ctx.customDomain && isSeasonPath(path)) ctx.seasonPage = true;
+  // Alle anderen Seiten der App (Editor, Admin …): nur die Deko am Logo
+  else if (!ctx.customDomain) ctx.logoPage = true;
 
   const page = STATIC.get(path);
   if (page) return staticPage(ctx, page);

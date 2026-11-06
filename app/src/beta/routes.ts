@@ -21,6 +21,8 @@ export async function betaRoutes(ctx: Ctx): Promise<void> {
   // Alles außerhalb des Panels: zum Panel (dort anmelden; Tester sehen danach die Beta-Webseite unter derselben Adresse)
   if (ctx.path !== '/_beta' && !ctx.path.startsWith(PANEL)) ctx.redirect(PANEL);
   const path = ctx.path === '/_beta' ? '/' : ctx.path.slice(PANEL.length - 1);
+  // Saison-Thema: die Mütze auf dem Logo
+  ctx.logoPage = true;
   const session = await Session.start(ctx);
   if (path === '/login' && ctx.method === 'POST') return betaLogin(ctx, session);
   if (path === '/logout' && ctx.method === 'POST') {

@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { ROOT_DIR } from '../src/config.js';
 import {
-  applySeason, forgetSeasonCache, inWindow, isMonthDay, isSeasonPath, normalizeSettings, pickSeason, seasonalBody, SEASONS_META_KEY,
+  applyLogoSeason, applySeason, forgetSeasonCache, inWindow, isMonthDay, isSeasonPath, normalizeSettings, pickSeason, seasonalBody, SEASONS_META_KEY,
 } from '../src/seasons/seasons.js';
 import { CSRF, loginSession, runRequest, testDatabase, type TestDb } from './coreHarness.js';
 
@@ -51,9 +51,9 @@ test('settings: unknown themes and broken values fall back to the defaults; "On"
 test('applying a theme: stylesheet before </head>, a class on <body>, the decoration right after it', () => {
   const html = '<!DOCTYPE html>\n<html><head><title>x</title></head>\n<body class="bg-black text-white">\n<p>Hi</p></body></html>';
   const out = applySeason(html, 'winter');
-  assert.match(out, /<link rel="stylesheet" href="\/static\/css\/season-winter\.css\?v=[0-9a-f]{8}"><\/head>/);
-  assert.match(out, /<body class="bg-black text-white season-winter"><div class="oys-season" aria-hidden="true">/);
-  assert.equal(out.replace(/<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>/, '').replace(' season-winter', '').replace(/<div class="oys-season"[^]*?<\/div><div class="oys-season-drift is-fixed" aria-hidden="true"><\/div><div class="oys-season-lights" aria-hidden="true"><\/div>/, ''), html);
+  assert.match(out, /<link rel="stylesheet" href="\/static\/css\/season-winter\.css\?v=[0-9a-f]{8}"><link rel="stylesheet" href="\/static\/css\/season-winter-logo\.css\?v=[0-9a-f]{8}"><\/head>/);
+  assert.match(out, /<body class="bg-black text-white season-winter oys-logo-hat"><div class="oys-season" aria-hidden="true">/);
+  assert.equal(out.replace(/(<link rel="stylesheet" href="\/static\/css\/season-winter[^>]*>)+/, '').replace(' season-winter oys-logo-hat', '').replace(/<div class="oys-season"[^]*?<\/div><div class="oys-season-drift is-fixed" aria-hidden="true"><\/div><div class="oys-season-lights" aria-hidden="true"><\/div>/, ''), html);
   // Mit Footer: die Verwehung liegt im ersten Footer (Klasse oys-season-footer), nicht unten am Fenster
   const withFooter = applySeason('<html><head></head><body><main>x</main><footer class="py-12 border-t">a</footer><footer>b</footer></body></html>', 'winter');
   assert.match(withFooter, /<footer class="py-12 border-t oys-season-footer"><div class="oys-season-drift" aria-hidden="true"><\/div>a<\/footer><footer>b<\/footer>/);
@@ -72,13 +72,18 @@ test('applying a theme: stylesheet before </head>, a class on <body>, the decora
   }
   // Klassen mit $ bleiben, wie sie sind (kein Ersetzungsmuster)
   const dollar = applySeason('<html><head></head><body class="a$&b"><footer class="x$1y">a</footer></body></html>', 'winter');
-  assert.match(dollar, /<body class="a\$&b season-winter">/);
+  assert.match(dollar, /<body class="a\$&b season-winter oys-logo-hat">/);
   assert.match(dollar, /<footer class="x\$1y oys-season-footer">/);
   // <body> ohne Klasse, mit anderen Attributen
-  assert.match(applySeason('<html><head></head><body id="b" data-x="1"></body></html>', 'winter'), /<body id="b" data-x="1" class="season-winter"><div class="oys-season"/);
+  assert.match(applySeason('<html><head></head><body id="b" data-x="1"></body></html>', 'winter'), /<body id="b" data-x="1" class="season-winter oys-logo-hat"><div class="oys-season"/);
   // Ohne <head> oder <body>, oder ein unbekanntes Thema: unverändert
   for (const piece of ['<p>no page</p>', '<body><p>x</p></body>', '<html><head></head></html>']) assert.equal(applySeason(piece, 'winter'), piece);
   assert.equal(applySeason(html, 'summer'), html);
+  // Nur die Mütze (Editor, Admin, Beta-Panel): ihr Stylesheet und die Klasse – sonst nichts
+  const hatOnly = applyLogoSeason(html, 'winter');
+  assert.equal(hatOnly, html.replace('</head>', '<link rel="stylesheet" href="' + /href="([^"]*season-winter-logo[^"]*)"/.exec(out)![1] + '"></head>').replace('<body class="bg-black text-white">', '<body class="bg-black text-white oys-logo-hat">'));
+  for (const piece of ['<p>no page</p>', '<body><p>x</p></body>']) assert.equal(applyLogoSeason(piece, 'winter'), piece);
+  assert.equal(applyLogoSeason(html, 'summer'), html);
   // Keine Emojis in der Deko
   assert.doesNotMatch(out, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
 });
@@ -100,7 +105,9 @@ test('the snow loops without jumping: every animation ends on a whole tile', () 
 });
 
 test('the Santa hat on the logo: a working SVG (no raw “#” in the data address), only on the logo icons, and the fairy lights', () => {
-  const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8');
+  // Die Mütze liegt in season-winter-logo.css (auf allen eigenen Seiten), der Rest des Themas in season-winter.css
+  const hatCss = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter-logo.css'), 'utf8');
+  const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8') + hatCss;
   const uris = [...css.matchAll(/url\("data:image\/svg\+xml,([^"]*)"\)/g)].map((m) => m[1]);
   // Ein rohes # beendet die Adresse (Rest = Fragment): die Grafik wäre unsichtbar
   for (const u of uris) {
@@ -117,7 +124,7 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   assert.ok(bobble && Number(bobble[1]) < 20, 'the bobble hangs on the left');
   assert.match(svg, /<rect x='10' y='42' width='62' height='14' rx='7' fill='url\(#f\)'\/>/);
   // Nur das Logo (Kopfzeile: text-brand-500, Anmelden/Registrieren: text-white) – nicht die gelben Honigwaben im Text
-  assert.match(css, /\.season-winter \.bx-hive\.text-brand-500::after, \.season-winter \.bx-hive\.text-white::after \{/);
+  assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500::after, \.oys-logo-hat \.bx-hive\.text-white::after \{/);
   assert.doesNotMatch(css, /text-yellow/);
   // Die Lichterkette liegt über der Navigation (z-50), fängt aber nichts ab und steht still ohne Bewegung
   assert.match(css, /\.oys-season-lights \{\n {2}position: fixed; left: 0; right: 0; top: 0; height: 40px; z-index: 55; pointer-events: none;/);
@@ -137,7 +144,8 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   // Logo – die Mütze ist darüber
   assert.doesNotMatch(css, /mask-image|--oys-logo|\.bx-hive\.text-brand-500 \{ filter/);
   assert.match(css, /\.oys-season-lights\.in-nav \{ position: absolute; z-index: -1; \}/);
-  assert.match(css, /\.season-winter \.bx-hive\.text-brand-500, \.season-winter \.bx-hive\.text-white \{ position: relative; z-index: 1; \}/);
+  assert.match(hatCss, /\.oys-logo-hat \.bx-hive\.text-brand-500, \.oys-logo-hat \.bx-hive\.text-white \{ position: relative; z-index: 1; \}/);
+  assert.match(hatCss, /@media print \{\n {2}\.oys-logo-hat \.bx-hive::after \{ display: none; \}\n\}/);
   // Schnee unten: im Footer (Platz darunter) oder unten am Fenster; fängt nichts ab
   assert.match(css, /\.season-winter footer\.oys-season-footer \{ position: relative; padding-bottom: 160px; \}/);
   assert.match(css, /\.oys-season-drift \{ position: absolute; left: 0; right: 0; bottom: 0; height: 60px; pointer-events: none;/);
@@ -171,7 +179,7 @@ test('Bea, the OnYourSite bee: her poses, her place on the snow in the winter lo
     t.skip('python3 is not installed – the hat comparison was skipped');
   }
   if (python !== null) {
-    const uri = /url\("data:image\/svg\+xml,(%3Csvg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'[^"]*)"\)/.exec(css);
+    const uri = /url\("data:image\/svg\+xml,(%3Csvg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'[^"]*)"\)/.exec(readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter-logo.css'), 'utf8'));
     assert.ok(uri, 'the hat on the logo');
     assert.equal(decodeURIComponent(uri[1]), python, 'the hat on the logo is tools/santa_hat.py');
     const hatPaths = python.match(/<path d='[^']+'/g) ?? [];
@@ -275,6 +283,30 @@ test('on: the own pages, the 404 page and the preview get the theme; users’ pa
   assert.equal(foreign.seasonPage, false);
   // HEAD: kein Umbau
   assert.doesNotMatch(String((await get('/', { method: 'HEAD' })).body), HAS, 'HEAD');
+});
+
+test('the Santa hat on every OnYourSite logo: editor, admin and the beta panel get only the hat; users’ pages nothing', async () => {
+  await setSeason({ winter: { mode: 'on', from: '12-01', to: '01-06' } });
+  const HAT = /<link rel="stylesheet" href="\/static\/css\/season-winter-logo\.css[^"]*">/;
+  for (const [url, o] of [['/dashboard', { cookies: { PHPSESSID: sid } }], ['/admin', { cookies: { PHPSESSID: sid } }], ['/_beta/', { host: 'beta.oys.test:8080' }]] as const) {
+    const html = String((await get(url, o)).body);
+    assert.match(html, HAT, url);
+    assert.match(html, /<body[^>]*\boys-logo-hat\b/, url);
+    assert.doesNotMatch(html, HAS, url + ': no snow, lights or glow – only the hat');
+  }
+  // Die Seiten mit dem ganzen Thema tragen die Mütze ebenso
+  const home = String((await get('/')).body);
+  assert.match(home, HAT);
+  assert.match(home, /<body[^>]*\bseason-winter\b[^>]*\boys-logo-hat\b|<body[^>]*\boys-logo-hat\b[^>]*\bseason-winter\b/);
+  // Nutzerseiten, der Feed: nichts
+  for (const [url, o] of [['/', { host: 'mia.oys.test:8080' }], ['/mia', {}], ['/updates/feed.xml', {}]] as const) assert.doesNotMatch(String((await get(url, o)).body), HAT, url);
+  // Aus: alles wie vorher
+  await setSeason({ winter: { mode: 'off', from: '12-01', to: '01-06' } });
+  assert.doesNotMatch(String((await get('/dashboard', { cookies: { PHPSESSID: sid } })).body), /oys-logo-hat|season-winter/);
+  // Die Mütze sitzt nur auf dem Logo (lila oder weiß), nie auf den gelben Honigwaben
+  const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter-logo.css'), 'utf8');
+  assert.match(css, /\.oys-logo-hat \.bx-hive\.text-brand-500::after, \.oys-logo-hat \.bx-hive\.text-white::after \{/);
+  assert.doesNotMatch(css, /text-yellow|hc-icon/);
 });
 
 test('automatic: only inside its dates; the preview shows a theme while it is off', async () => {

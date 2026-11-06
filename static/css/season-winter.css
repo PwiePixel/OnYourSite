@@ -40,18 +40,6 @@
 @keyframes oys-season-snow { from { background-position: 0 0; } to { background-position: 300px 300px; } }
 @keyframes oys-season-snow-2 { from { background-position: 0 0; } to { background-position: -230px 230px; } }
 
-/* Weihnachtsmütze auf dem OnYourSite-Logo (Kopfzeile, Anmelden, Registrieren) – nicht auf den Honigwaben im Text.
-   Die Spitze fällt nach links, der Bommel hängt links; die Mütze liegt über der Lichterkette (das Logo ist positioniert,
-   die Kette in der Kopfzeile liegt dahinter) */
-.season-winter .bx-hive.text-brand-500, .season-winter .bx-hive.text-white { position: relative; z-index: 1; }
-.season-winter .bx-hive.text-brand-500::after, .season-winter .bx-hive.text-white::after {
-  content: ''; position: absolute; left: .14em; top: -.36em; width: .92em; height: .74em;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 64'%3E%3Cdefs%3E%3ClinearGradient id='r' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f04444'/%3E%3Cstop offset='.55' stop-color='%23d61f2c'/%3E%3Cstop offset='1' stop-color='%239f1239'/%3E%3C/linearGradient%3E%3CradialGradient id='f' cx='40%25' cy='35%25' r='75%25'%3E%3Cstop offset='0' stop-color='%23ffffff'/%3E%3Cstop offset='1' stop-color='%23dfe7f2'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cpath d='M67 47 C69 34 68 20 61 11 C53 3 40 2 30 7 C21 12 14 19 10 27 C8 31 7 35 8 38 C12 34 17 31 23 29 C21 35 18 41 17 47 Z' fill='url(%23r)'/%3E%3Cpath d='M23 29 C28 22 37 16 47 15' stroke='%237f1d1d' stroke-width='1.8' fill='none' opacity='.5' stroke-linecap='round'/%3E%3Cpath d='M61 14 C66 22 66 33 64 44' stroke='%23ffffff' stroke-width='2.4' fill='none' opacity='.25' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='40' r='7.5' fill='url(%23f)'/%3E%3Ccircle cx='5.5' cy='37.5' r='2.4' fill='%23ffffff' opacity='.9'/%3E%3Crect x='10' y='42' width='62' height='14' rx='7' fill='url(%23f)'/%3E%3Ccircle cx='15' cy='49' r='7' fill='url(%23f)'/%3E%3Ccircle cx='24' cy='47' r='7.5' fill='url(%23f)'/%3E%3Ccircle cx='34' cy='46.5' r='7.5' fill='url(%23f)'/%3E%3Ccircle cx='44' cy='46.5' r='7.5' fill='url(%23f)'/%3E%3Ccircle cx='54' cy='47' r='7.5' fill='url(%23f)'/%3E%3Ccircle cx='63' cy='48.5' r='7' fill='url(%23f)'/%3E%3Ccircle cx='69' cy='50' r='5.5' fill='url(%23f)'/%3E%3Cpath d='M12 54 C30 58 52 58 70 54' stroke='%23b8c4d6' stroke-width='1.6' fill='none' opacity='.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
-  transform: rotate(-9deg); transform-origin: 60% 90%;
-  filter: drop-shadow(0 .03em .04em rgba(0, 0, 0, .5));
-  pointer-events: none;
-}
-
 /* Lichterkette am oberen Rand: ein durchhängendes Kabel mit Fassungen und Birnen; zwei Gruppen leuchten
    abwechselnd sanft auf (::before und ::after, um eine halbe Periode – mit alternate 2,4 s – versetzt). Über der Navigation, so schmal, dass sie nichts verdeckt; nichts fängt
    Klicks ab */
@@ -105,5 +93,4 @@
   .oys-season, .oys-season-lights, .oys-season-drift { display: none; }
   .season-winter footer.oys-season-footer { padding-bottom: revert; }
   .season-winter footer.oys-season-footer::before { display: none; }
-  .season-winter .bx-hive::after { display: none; }
 }
