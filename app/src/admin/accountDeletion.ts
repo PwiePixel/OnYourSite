@@ -17,6 +17,7 @@ import { userUploadFiles } from '../content/uploads.js';
 import { uploadPath } from '../content/storage.js';
 import { releaseUserAddresses } from '../content/addresses.js';
 import { deleteUserStatus } from '../status/deletion.js';
+import { betaForgetUser } from '../beta/beta.js';
 
 export interface DeletionRun {
   // Arbeit nach dem Commit (Dateien aufräumen …) – läuft nur, wenn das Konto wirklich gelöscht wurde
@@ -98,6 +99,13 @@ registerUserDeletion({
   name: 'status',
   order: 20,
   run: (db, uid) => deleteUserStatus(db, uid),
+});
+
+// Beta: Meldungen weg, die Rolle „Beta Tester“ auf Discord nimmt der Bot (beta/beta.ts)
+registerUserDeletion({
+  name: 'beta',
+  order: 25,
+  run: (db, uid) => betaForgetUser(db, uid),
 });
 
 // Code-Seite mit Dateien

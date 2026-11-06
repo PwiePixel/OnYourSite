@@ -94,7 +94,9 @@ const RESERVED = ['login', 'logout', 'register', 'dashboard', 'admin', 'challeng
   'cron', 'lib', 'email', 'install', 'phpmailer', 'robots', 'sitemap', 'favicon', 'index', 'config', 'go', 'demo', 'impressum', 'datenschutz', 'agb', 'updates',
   'roadmap', 'changelog', 'news', 'feed', 'suggestions',
   // Statusseiten: status.<domain> ist OnYourSites eigene Statusseite, health.<domain> das Ziel der eigenen Prüfung
-  'status', 'health'];
+  'status', 'health',
+  // Beta-Bereich: beta.<domain> (beta/)
+  'beta'];
 export const reservedPaths = (): string[] => RESERVED;
 
 // Wer fragt (slugProblem): userId darf seine eigenen reservierten Adressen wieder nehmen, exceptStatusId ist die eigene

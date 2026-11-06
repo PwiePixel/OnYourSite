@@ -32,6 +32,7 @@ export const NOTIFY_TYPES: Readonly<Record<string, NotifyType>> = Object.freeze(
   status_up: { icon: 'bx-pulse', tone: 'ok', link: '/dashboard#status' },
   status_team: { icon: 'bx-shield-quarter', tone: 'warn', link: '/dashboard#status' },
   team: { icon: 'bx-shield-quarter', tone: 'warn', link: '/admin' }, // nur über notifyAdmins()
+  beta: { icon: 'bx-test-tube', tone: 'info', link: '/_/beta' }, // Beta-Bereich: freigeschaltet, Antwort auf eine Meldung
   system: { icon: 'bx-bell', tone: 'info', link: '' }, // z. B. Adresse durch eine Migration geändert
 });
 

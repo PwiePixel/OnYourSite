@@ -49,6 +49,7 @@ export const V_SHOP_STREAKS = 19; // Honigwaben: Serie je Konto (streak, streak_
 export const V_SHOP_EVENT_CODES = 20; // Honigwaben: Event-Codes des Teams (hc_codes)
 export const V_SHOP_MAIL = 21; // Honigwaben: Mails „endet bald“/„beendet“ (hc_mail_outbox, hc_accounts.mail_reminders)
 export const V_UPDATE_HISTORY = 22; // Updates: Verlauf 2.0–2.2 veröffentlichen, Entwürfe für 3.0 und 3.1 anlegen
+export const V_BETA = 23; // Beta: Tester (users.beta_*), Meldungen (beta_reports), Adresse „beta“ reserviert
 
 const OPTS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 type Row = Record<string, unknown>;
@@ -95,6 +96,7 @@ const STEPS: readonly SchemaStep[] = [
   { version: V_SHOP_EVENT_CODES, name: 'shopEventCodes', run: shopEventCodes },
   { version: V_SHOP_MAIL, name: 'shopMail', run: shopMail },
   { version: V_UPDATE_HISTORY, name: 'updateHistory', run: updateHistory },
+  { version: V_BETA, name: 'beta', run: betaTables },
 ];
 
 for (let i = 1; i < STEPS.length; i++) {
@@ -1655,5 +1657,62 @@ async function updateHistoryRows(conn: PoolConnection): Promise<void> {
     if (have.length) continue;
     await run(conn, 'INSERT INTO updates (title, body, version, category, is_published, published_at, discord_announce, created_at, updated_at) VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?)',
       [title, body, version, category, announce ? 1 : 0, now, now]);
+  }
+}
+
+// Beta-Bereich (beta.<domain>): wer testen darf (users.beta_at, vom Admin freigeschaltet), der Stand der Discord-Rolle
+// (beta_role: pending, given, not_on_server, removed, error; beta_discord: die Discord-ID, der die Rolle gegeben wurde)
+// und die Meldungen der Tester. Die Adresse beta.<domain> gehört jetzt dem Beta-Bereich: eine Link-Seite mit diesem
+// Namen zieht auf <domain>/beta um, Besitzer einer solchen Seite oder Code-Seite bekommen vorher eine Nachricht.
+async function betaTables(conn: PoolConnection): Promise<void> {
+  await addColumn(conn, 'users', 'beta_at', 'DATETIME NULL');
+  await addColumn(conn, 'users', 'beta_by', 'INT NULL');
+  await addColumn(conn, 'users', 'beta_discord', 'VARCHAR(25) NULL');
+  await addColumn(conn, 'users', 'beta_role', 'VARCHAR(16) NULL');
+  await addColumn(conn, 'users', 'beta_role_error', 'VARCHAR(200) NULL');
+  await run(conn, `CREATE TABLE IF NOT EXISTS beta_reports (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        kind VARCHAR(12) NOT NULL DEFAULT 'bug',
+        area VARCHAR(20) NOT NULL DEFAULT 'other',
+        title VARCHAR(160) NOT NULL,
+        body TEXT NOT NULL,
+        steps TEXT NULL,
+        page_url VARCHAR(500) NULL,
+        user_agent VARCHAR(300) NULL,
+        status VARCHAR(12) NOT NULL DEFAULT 'open',
+        reply TEXT NULL,
+        replied_by INT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_user (user_id, id),
+        KEY idx_status (status, id)
+    ) ${OPTS}`);
+  await conn.beginTransaction();
+  try {
+    if (!(await rows(conn, "SELECT meta_value FROM oys_meta WHERE meta_key = 'reserved_beta'")).length) {
+      const base = baseAuthority();
+      for (const r of await rows(conn, "SELECT DISTINCT user_id FROM pages WHERE slug = 'beta' AND address_mode = 'subdomain' ORDER BY user_id")) {
+        await notify(intval(r.user_id), 'system', 'Your page address changed',
+          `beta.${base} now opens OnYourSite’s beta area. Your page moved to ${base}/beta – please update links and printed QR codes that use the old address.`,
+          '/dashboard', { db: conn });
+      }
+      for (const r of await rows(conn, "SELECT DISTINCT user_id FROM code_sites WHERE slug = 'beta' ORDER BY user_id")) {
+        await notify(intval(r.user_id), 'system', 'The address of your code page changed',
+          `beta.${base} now opens OnYourSite’s beta area. Please choose another address for your code page in the editor.`,
+          '/dashboard#code', { db: conn });
+      }
+      for (const r of await rows(conn, "SELECT DISTINCT user_id FROM status_pages WHERE slug = 'beta' AND user_id IS NOT NULL ORDER BY user_id")) {
+        await notify(intval(r.user_id), 'system', 'The address of your status page changed',
+          `beta.${base} now opens OnYourSite’s beta area. Please choose another address for your status page in the editor.`,
+          '/dashboard#status', { db: conn });
+      }
+      await run(conn, "UPDATE pages SET address_mode = 'path' WHERE slug = 'beta' AND address_mode = 'subdomain'");
+      await run(conn, "INSERT INTO oys_meta (meta_key, meta_value) VALUES ('reserved_beta', ?)", [date('Y-m-d H:i:s')]);
+    }
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   }
 }

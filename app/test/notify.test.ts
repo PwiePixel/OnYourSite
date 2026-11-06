@@ -75,6 +75,7 @@ test('the type catalogue has every agreed row; lookup is exact, then the prefix,
     status_up: ['bx-pulse', 'ok', '/dashboard#status'],
     status_team: ['bx-shield-quarter', 'warn', '/dashboard#status'],
     team: ['bx-shield-quarter', 'warn', '/admin'],
+    beta: ['bx-test-tube', 'info', '/_/beta'],
     system: ['bx-bell', 'info', ''],
   };
   assert.deepEqual(Object.keys(NOTIFY_TYPES).sort(), Object.keys(expected).sort());
