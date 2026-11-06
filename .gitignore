@@ -23,3 +23,6 @@ Thumbs.db
 /app/node_modules/
 /app/dist/
 /config.json
+
+# Python (tools/*.py)
+__pycache__/

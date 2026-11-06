@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [3.4.2] - 2026-11-04
+
+### Added
+- **Bea**, the OnYourSite bee, in the winter season theme: in a Santa hat (the same as on the logo) and a scarf, she sits on the snow at the bottom right of the footer – or at the bottom right of the window on pages without a footer (not on phones there). She sways gently, never catches clicks and stands still for reduced motion.
+
+### Changed
+- The mascot is called Bea (`static/images/mascot/bea-*.svg` and `.png`); the Santa hat comes from one source, `tools/santa_hat.py`, for the logo and for Bea.
+
 ## [3.4.1] - 2026-11-04
 
 ### Changed

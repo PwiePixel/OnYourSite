@@ -68,6 +68,9 @@ async function login(page, email) {
       await page.goto(B + '/');
       await sleep(600);
       await shot(page, 'seasons-home-winter');
+      // Bea sitzt im Footer rechts auf dem Schnee
+      const bea = await page.evaluate(() => { const d = document.querySelector('footer .oys-season-drift'); return d ? getComputedStyle(d, '::after').backgroundImage : ''; });
+      ok(/bea-winter\.svg/.test(bea), 'Bea sits on the snow in the footer (' + bea.slice(0, 80) + ')');
       // Der Schnee fängt keine Klicks ab: ein Link der Startseite ist anklickbar
       const pe = await page.evaluate(() => getComputedStyle(document.querySelector('.oys-season')).pointerEvents);
       ok(pe === 'none', 'the decoration lets clicks through (' + pe + ')');
@@ -97,6 +100,32 @@ async function login(page, email) {
       ok(await page.evaluate(() => document.body.classList.contains('oys')), 'mia’s page loads');
       ok(!(await hasSnow(page)), 'a user’s page has no season theme');
       await ctx.close();
+    });
+
+    await step('Bea never covers the footer: no link or text under her at common widths', async () => {
+      for (const [w, u] of [[640, '/'], [640, '/updates'], [768, '/updates'], [1024, '/'], [1024, '/imprint'], [1280, '/'], [390, '/']]) {
+        const ctx = await browser.newContext({ viewport: { width: w, height: 800 } });
+        const page = await ctx.newPage();
+        await page.goto(B + u + '?season_preview=winter');
+        const hits = await page.evaluate(() => {
+          const drift = document.querySelector('footer .oys-season-drift');
+          if (!drift) return ['no drift'];
+          const d = drift.getBoundingClientRect();
+          const st = getComputedStyle(drift, '::after');
+          // Kasten von Bea (::after): rechts, unten, Breite und Höhe aus dem CSS, dazu 5px Wippen
+          const width = parseFloat(st.width), height = parseFloat(st.height), right = parseFloat(st.right), bottom = parseFloat(st.bottom);
+          const bea = { left: d.right - right - width, right: d.right - right, top: d.bottom - bottom - height - 5, bottom: d.bottom - bottom };
+          const out = [];
+          for (const el of document.querySelectorAll('footer a, footer p, footer span, footer li')) {
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height || el.closest('.oys-season-drift')) continue;
+            if (r.left < bea.right && r.right > bea.left && r.top < bea.bottom && r.bottom > bea.top) out.push(el.tagName + ':' + el.textContent.trim().slice(0, 30));
+          }
+          return out;
+        });
+        ok(hits.length === 0, w + 'px ' + u + ': nothing under Bea (' + hits.join(' | ') + ')');
+        await ctx.close();
+      }
     });
 
     await step('admin: "Off" takes the theme away again', async () => {

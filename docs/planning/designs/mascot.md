@@ -1,17 +1,16 @@
-# Mascot: Hexi, the OnYourSite bee
+# Mascot: Bea, the OnYourSite bee
 
-Status: second draft (3 poses, redrawn after the owner's feedback on the first one), waiting for the owner's feedback.
-Not used on the site yet.
+Status: in use in the winter season theme (since 3.4.2). Name chosen by the owner (Bea); the first name idea was
+dropped.
 
 ## Idea
 
 OnYourSite's logo is a group of honeycomb cells, and users collect **honeycombs**. A bee fits both: it builds the
 honeycombs and it is busy, friendly and a little curious – like someone building their own page.
 
-- **Name:** Hexi (from *hexagon*, the shape of a honeycomb cell). Short, easy to say in English and German.
-  Alternatives if the owner prefers: Combi, Bee-Bo, Honey.
-- **Character:** cheerful, helpful, never cheeky. Hexi explains, points the way and celebrates with the user;
-  Hexi never scolds. Speaks plain English in short sentences (when there are speech bubbles).
+- **Name:** Bea – short and friendly, sounds like "bee", easy to say in English and German.
+- **Character:** cheerful, helpful, never cheeky. Bea explains, points the way and celebrates with the user; Bea
+  never scolds. Speaks plain English in short sentences (when there are speech bubbles).
 
 ## Look
 
@@ -22,18 +21,22 @@ honeycombs and it is busy, friendly and a little curious – like someone buildi
 - Two pairs of glassy wings in the brand colours: white → light indigo, outline `#6366f1`, with a shine.
 - **Antennae end in small honeycomb cells** in brand indigo (`#a5b4fc` → `#4f46e5`) – the link to the logo.
 - A soft shadow on the ground. No text and no emoji inside the artwork.
+- In winter Bea wears **the same Santa hat as the logo** (`tools/santa_hat.py`: fluffy trim, the tip and its bobble
+  fall to the left) and a green knitted scarf around the neck.
 
-## Poses (second draft)
+## Poses
 
-| Files | Pose | Where it could be used |
+| Files | Pose | Used / could be used |
 |---|---|---|
-| `static/images/mascot/hexi-hello.svg` / `.png` | Waving | home page, sign-up done, the empty editor ("Add your first block") |
-| `static/images/mascot/hexi-winter.svg` / `.png` | Santa hat on the head (tip and bobble fall to the left, like the hat on the logo) and a green knitted scarf around the neck | the winter season theme (Admin → Seasons), holiday updates |
-| `static/images/mascot/hexi-celebrate.svg` / `.png` | Arms up, laughing, confetti and small honeycombs | a new release on `/updates`, a purchase in the shop, a streak |
+| `static/images/mascot/bea-winter.svg` / `.png` | Santa hat and scarf | **in use:** the winter season theme – Bea sits on the snow at the bottom right of the footer (on pages without a footer at the bottom right of the window; not on phones there) |
+| `static/images/mascot/bea-hello.svg` / `.png` | Waving | home page, sign-up done, the empty editor ("Add your first block") |
+| `static/images/mascot/bea-celebrate.svg` / `.png` | Arms up, laughing, confetti and small honeycombs | a new release on `/updates`, a purchase in the shop, a streak |
 
 The SVGs come from `tools/mascot.py` (`python3 tools/mascot.py static/images/mascot`), the PNGs (512 × 512,
 transparent) from `tools/mascot-png.js` (`node tools/mascot-png.js static/images/mascot`) – change the drawing in
-`tools/mascot.py`, not in the files. Each SVG has a `<title>` and `aria-label` for screen readers.
+`tools/mascot.py` (the hat in `tools/santa_hat.py`), not in the files. Each SVG has a `<title>` and `aria-label` for
+screen readers. The hat on the logo in `static/css/season-winter.css` is the same SVG as `tools/santa_hat.py`
+(`app/test/seasons.test.ts` checks it).
 
 ## Next poses (proposal)
 
@@ -45,13 +48,12 @@ transparent) from `tools/mascot-png.js` (`node tools/mascot-png.js static/images
 
 ## Rules
 
-- Hexi never covers content or buttons and is never animated so it distracts; a small bounce on hover is the most.
-- At most one Hexi per page.
+- Bea never covers content or buttons and never catches clicks; the most movement is a slow, small sway.
+- At most one Bea per page.
 - Season versions (winter, later others) only while that season theme is on.
-- Users' own pages never show Hexi (only OnYourSite's own pages, the editor and the admin).
+- Users' own pages never show Bea (only OnYourSite's own pages, the editor and the admin).
 
 ## Open decisions for the owner
 
-1. Name: Hexi – or one of the alternatives?
-2. Style: keep this outlined, softly shaded style, or a full 3D look?
-3. Where first: 404 page and the empty editor, or the winter theme on the home page?
+1. Style: keep this outlined, softly shaded style, or a full 3D look?
+2. Where next: the 404 page and the empty editor?

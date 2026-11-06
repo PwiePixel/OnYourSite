@@ -10,6 +10,7 @@ import { ensureSchema } from '../src/schema.js';
 import { loadConfig, setConfigForTests } from '../src/config.js';
 import { date } from '../src/php.js';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { ROOT_DIR } from '../src/config.js';
 import {
@@ -120,7 +121,7 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   assert.doesNotMatch(css, /text-yellow/);
   // Die Lichterkette liegt über der Navigation (z-50), fängt aber nichts ab und steht still ohne Bewegung
   assert.match(css, /\.oys-season-lights \{\n {2}position: fixed; left: 0; right: 0; top: 0; height: 40px; z-index: 55; pointer-events: none;/);
-  assert.match(css, /prefers-reduced-motion: reduce\) \{\n {2}\.oys-season-1, \.oys-season-2, \.oys-season-lights::before, \.oys-season-lights::after \{ animation: none; \}/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\n {2}\.oys-season-1, \.oys-season-2, \.oys-season-lights::before, \.oys-season-lights::after, \.oys-season-drift::after \{ animation: none; \}/);
   // Eine Kette: Kabel und Birnen in einer Kachel, die nahtlos weiterläuft (Kabel beginnt und endet auf derselben Höhe)
   const base = uris.map((u) => decodeURIComponent(u)).find((x) => x.includes("stroke='#0f2e1a'"));
   assert.ok(base, 'the wire');
@@ -138,11 +139,45 @@ test('the Santa hat on the logo: a working SVG (no raw “#” in the data addre
   assert.match(css, /\.oys-season-lights\.in-nav \{ position: absolute; z-index: -1; \}/);
   assert.match(css, /\.season-winter \.bx-hive\.text-brand-500, \.season-winter \.bx-hive\.text-white \{ position: relative; z-index: 1; \}/);
   // Schnee unten: im Footer (Platz darunter) oder unten am Fenster; fängt nichts ab
-  assert.match(css, /\.season-winter footer\.oys-season-footer \{ position: relative; padding-bottom: 84px; \}/);
+  assert.match(css, /\.season-winter footer\.oys-season-footer \{ position: relative; padding-bottom: 160px; \}/);
   assert.match(css, /\.oys-season-drift \{ position: absolute; left: 0; right: 0; bottom: 0; height: 60px; pointer-events: none;/);
   assert.match(css, /\.oys-season-drift\.is-fixed \{ position: fixed;/);
   // Beim Drucken keine Deko und kein zusätzlicher Platz im Footer
   assert.match(css, /@media print \{[^}]*\}[^@]*\.season-winter footer\.oys-season-footer \{ padding-bottom: revert; \}[^@]*\.season-winter footer\.oys-season-footer::before \{ display: none; \}/);
+});
+
+test('Bea, the OnYourSite bee: her poses, her place on the snow in the winter look, and the same Santa hat as the logo', (t) => {
+  const dir = join(ROOT_DIR, 'static', 'images', 'mascot');
+  for (const pose of ['hello', 'winter', 'celebrate']) {
+    const svg = readFileSync(join(dir, `bea-${pose}.svg`), 'utf8');
+    assert.match(svg, /^<svg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 400 400' width='400' height='400' role='img' aria-label='Bea, the OnYourSite bee, [^']+'><title>Bea, the OnYourSite bee, /);
+    const png = readFileSync(join(dir, `bea-${pose}.png`));
+    assert.equal(png.subarray(1, 4).toString(), 'PNG', pose);
+    assert.equal(png.readUInt32BE(16), 512, pose);
+  }
+  assert.doesNotMatch(readFileSync(join(dir, 'bea-winter.svg'), 'utf8'), /Hexi/);
+  const css = readFileSync(join(ROOT_DIR, 'static', 'css', 'season-winter.css'), 'utf8');
+  assert.match(css, /\.oys-season-drift::after \{\n {2}content: ''; position: absolute; right: max\(16px, 6%\); bottom: 20px; width: 128px; height: 128px; pointer-events: none;\n {2}background: url\("\.\.\/images\/mascot\/bea-winter\.svg"\)/);
+  assert.match(css, /\.oys-season-drift\.is-fixed::after \{ display: none; \}/, 'not at the bottom of the window on phones');
+  assert.match(css, /\.oys-season-lights::after, \.oys-season-drift::after \{ animation: none; \}/, 'Bea stands still for reduced motion');
+  // Bea trägt die Mütze vom Logo: beide kommen aus tools/santa_hat.py
+  // Ohne python3 wird dieser Teil übersprungen (und gemeldet); jeder andere Fehler, z. B. ein kaputtes santa_hat.py, scheitert
+  let python: string | null = null;
+  try {
+    python = execFileSync('python3', ['-B', '-c', 'import sys; sys.path.insert(0, "tools"); from santa_hat import hat_svg; print(hat_svg(), end="")'],
+      { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    t.skip('python3 is not installed – the hat comparison was skipped');
+  }
+  if (python !== null) {
+    const uri = /url\("data:image\/svg\+xml,(%3Csvg xmlns='http:\/\/www\.w3\.org\/2000\/svg' viewBox='0 0 80 64'[^"]*)"\)/.exec(css);
+    assert.ok(uri, 'the hat on the logo');
+    assert.equal(decodeURIComponent(uri[1]), python, 'the hat on the logo is tools/santa_hat.py');
+    const hatPaths = python.match(/<path d='[^']+'/g) ?? [];
+    const bea = readFileSync(join(dir, 'bea-winter.svg'), 'utf8');
+    for (const d of hatPaths) assert.ok(bea.includes(d), 'Bea wears the same hat: ' + d.slice(0, 40));
+  }
 });
 
 test('the pages that get a theme', () => {
